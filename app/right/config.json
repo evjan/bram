@@ -3,6 +3,8 @@
     "xsVerbose": true,
     "xsVerboseLogMax": 200
   },
+  "themes": ["themes/narrow.json"],
+  "defaultTheme": "narrow",
   "resources": {
     "icon.code": "resources/code.svg",
     "icon.down": "resources/down.svg",

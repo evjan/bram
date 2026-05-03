@@ -1,4 +1,4 @@
-<App>
+<App layout="horizontal">
   <DataSource id="manualSrc" url="manual.md" />
 
   <AppHeader title="XMLUI">
@@ -87,6 +87,19 @@
   </Theme>
 
   <ViewSource id="mainSrc" file="Main.xmlui" />
-  <Architecture />
+
+  <NavPanel>
+    <NavLink label="Playground" to="/" />
+    <NavLink label="Architecture" to="/architecture" />
+  </NavPanel>
+
+  <Pages fallbackPath="/">
+    <Page url="/">
+      <Playground />
+    </Page>
+    <Page url="/architecture">
+      <Architecture />
+    </Page>
+  </Pages>
 
 </App>

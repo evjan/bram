@@ -1,6 +1,6 @@
 use std::borrow::Cow;
-use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 
@@ -182,6 +182,106 @@ fn save_trace_export(filename: String, content: String, mime_type: String) -> Re
     Ok(target.display().to_string())
 }
 
+#[derive(serde::Serialize)]
+struct SessionEntry {
+    id: String,
+    mtime: u64,
+    size: u64,
+    #[serde(rename = "firstUserMessage")]
+    first_user_message: Option<String>,
+}
+
+fn sessions_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let project_root = resolve_app_root(Some(app))
+        .and_then(|app_root| app_root.parent().map(|p| p.to_path_buf()))
+        .ok_or("could not resolve project root")?;
+    let abs = project_root.canonicalize().map_err(|e| e.to_string())?;
+    let encoded = abs.to_string_lossy().replace('/', "-");
+    let home = std::env::var("HOME").map_err(|_| "no HOME")?;
+    Ok(PathBuf::from(home).join(".claude").join("projects").join(encoded))
+}
+
+fn first_user_message(path: &Path) -> std::io::Result<Option<String>> {
+    let reader = BufReader::new(std::fs::File::open(path)?);
+    for line in reader.lines() {
+        let line = line?;
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) {
+            if record.get("type").and_then(|v| v.as_str()) == Some("user") {
+                if let Some(content) = record.pointer("/message/content") {
+                    let text = match content {
+                        serde_json::Value::String(s) => s.clone(),
+                        _ => content.to_string(),
+                    };
+                    return Ok(Some(text.chars().take(120).collect()));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn list_sessions<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<SessionEntry>, String> {
+    let dir = sessions_dir(app)?;
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+        let mtime = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let size = metadata.len();
+        let first = first_user_message(&path).ok().flatten();
+        entries.push(SessionEntry { id, mtime, size, first_user_message: first });
+    }
+    entries.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    Ok(entries)
+}
+
+fn read_session<R: tauri::Runtime>(app: &AppHandle<R>, id: &str) -> Result<Vec<u8>, String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("invalid session id".to_string());
+    }
+    let dir = sessions_dir(app)?;
+    let path = dir.join(format!("{}.jsonl", id));
+    let resolved = path.canonicalize().map_err(|e| e.to_string())?;
+    let dir_canon = dir.canonicalize().map_err(|e| e.to_string())?;
+    if !resolved.starts_with(&dir_canon) {
+        return Err("path traversal".to_string());
+    }
+    std::fs::read(&resolved).map_err(|e| e.to_string())
+}
+
+fn read_latest_session<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+    let dir = sessions_dir(app)?;
+    let mut latest: Option<(PathBuf, std::time::SystemTime)> = None;
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        match &latest {
+            Some((_, t)) if modified <= *t => {}
+            _ => latest = Some((path, modified)),
+        }
+    }
+    let (path, _) = latest.ok_or("no sessions found")?;
+    std::fs::read(&path).map_err(|e| e.to_string())
+}
+
 fn mime_for(path: &std::path::Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("html") => "text/html; charset=utf-8",
@@ -206,8 +306,43 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .register_uri_scheme_protocol("xmlui", move |ctx, request| {
             let path = request.uri().path().trim_start_matches('/');
-            let app_root = resolve_app_root(Some(ctx.app_handle()))
-                .unwrap_or_else(|| PathBuf::from("."));
+            let app = ctx.app_handle();
+
+            // Special path prefix routes session-data requests through the
+            // same scheme as the static assets, avoiding cross-origin CORS.
+            if let Some(rest) = path.strip_prefix("__sessions/") {
+                let (content_type, result): (&str, Result<Vec<u8>, String>) = if rest == "list" {
+                    (
+                        "application/json; charset=utf-8",
+                        list_sessions(app).and_then(|entries| {
+                            serde_json::to_vec(&entries).map_err(|e| e.to_string())
+                        }),
+                    )
+                } else if rest == "latest" {
+                    ("text/plain; charset=utf-8", read_latest_session(app))
+                } else {
+                    ("text/plain; charset=utf-8", read_session(app, rest))
+                };
+                return match result {
+                    Ok(bytes) => tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", content_type)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(Cow::Owned(bytes))
+                        .unwrap(),
+                    Err(e) => {
+                        eprintln!("[xmlui://__sessions/{}] {}", rest, e);
+                        tauri::http::Response::builder()
+                            .status(500)
+                            .header("Content-Type", "text/plain; charset=utf-8")
+                            .header("Access-Control-Allow-Origin", "*")
+                            .body(Cow::Owned(e.into_bytes()))
+                            .unwrap()
+                    }
+                };
+            }
+
+            let app_root = resolve_app_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
             let full = app_root.join(path);
             match std::fs::read(&full) {
                 Ok(bytes) => tauri::http::Response::builder()

@@ -13,30 +13,52 @@
 
   <VStack padding="$space-6" gap="$space-6">
     <VStack gap="$space-3" when="{proposal.value}">
-      <Heading level="h2" value="{proposal.value.title}" />
-      <Text value="{proposal.value.description}" />
+      <Heading level="h2">Pending items</Heading>
+      <Text
+        when="{!proposal.value.items || proposal.value.items.length === 0}"
+        color="$textColor-secondary">
+        (none)
+      </Text>
+      <Text
+        when="{proposal.value.items && proposal.value.items.length > 0}"
+        value="{proposal.value.description}" />
       <Items data="{proposal.value.items}">
-        <HStack gap="$space-3" verticalAlignment="center">
+        <HStack gap="$space-3" verticalAlignment="start">
           <Checkbox
             initialValue="true"
             onDidChange="(v) => { unchecked = v ? unchecked.filter(id => id !== $item.id) : [...unchecked, $item.id] }" />
-          <Text width="220px" value="{$item.file}" variant="code" maxLines="1" />
-          <Text value="{$item.before}" />
-          <Text value="→" />
-          <Text value="{$item.after}" />
+          <VStack gap="$space-1" width="*">
+            <Text value="{$item.file}" variant="code" />
+            <Text value="{$item.before} → {$item.after}" />
+          </VStack>
         </HStack>
       </Items>
-      <HStack gap="$space-3" verticalAlignment="center">
+      <HStack
+        gap="$space-3"
+        verticalAlignment="center"
+        when="{proposal.value.items && proposal.value.items.length > 0}">
         <Button
           label="Approve selected ({proposal.value.items.length - unchecked.length})"
           onClick="toTurn('approved: ' + JSON.stringify(proposal.value.items.filter(i => !unchecked.includes(i.id))))" />
+        <Button
+          label="Drop selected ({proposal.value.items.length - unchecked.length})"
+          variant="outlined"
+          onClick="toTurn('drop: ' + JSON.stringify(proposal.value.items.filter(i => !unchecked.includes(i.id)).map(i => i.id)))" />
         <Text fontSize="$fontSize-sm" color="$textColor-secondary">
-          Sends the approved subset to the chat as a fresh user message.
+          Approve to act on the checked items; Drop to remove them from the worklist.
         </Text>
       </HStack>
     </VStack>
 
-    <Heading level="h2">Recent commits</Heading>
+    <HStack gap="$space-3" verticalAlignment="center">
+      <Heading level="h2">Recent commits</Heading>
+      <Button
+        icon="refresh"
+        variant="ghost"
+        size="xs"
+        tooltip="Refresh from GitHub"
+        onClick="commits.refetch()" />
+    </HStack>
     <Text fontSize="$fontSize-sm">Click a SHA to view its diff. Click the GitHub icon to open on github.com.</Text>
     <Table data="{commits.value}" width="100%">
       <Column header="SHA" width="120px">

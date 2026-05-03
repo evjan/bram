@@ -1,0 +1,30 @@
+<Component name="Toolbar">
+  <HStack width="100%" gap="$space-2" verticalAlignment="center" horizontalAlignment="end">
+    <Button
+      icon="up"
+      variant="ghost"
+      tooltip="Scroll to top"
+      onClick="window.scrollAllToTop()" />
+    <Button
+      icon="down"
+      variant="ghost"
+      tooltip="Scroll to bottom"
+      onClick="window.scrollAllToBottom()" />
+    <Button
+      icon="wrench"
+      variant="ghost"
+      tooltip="Open developer tools"
+      onClick="window.parent.postMessage({ type: 'right-pane', kind: 'open-devtools' }, '*')" />
+    <Button
+      icon="code"
+      variant="ghost"
+      tooltip="View source of Main.xmlui"
+      onClick="emitEvent('viewSource')" />
+    <Button
+      icon="help"
+      variant="ghost"
+      tooltip="Open the user manual"
+      onClick="emitEvent('viewManual')" />
+    <Inspector src="{'../vendor/xs-diff.html?v=' + window.APP_VERSION}" />
+  </HStack>
+</Component>

@@ -28,29 +28,85 @@ any non-obvious markup. Follow that here too.
 
 ## How the right pane talks back to you
 
-Three intents, all sent via `window.postMessage` to the parent shell.
-The right pane's `index.html` exposes two helpers as window globals; the
-third is a literal message:
+The right pane's `index.html` exposes helpers as window globals that
+post messages to the parent shell:
 
 | intent | from XMLUI | what the host does |
 |---|---|---|
-| inject text into your stdin | `toShell(text)` | text appears as user input on your next turn |
+| inject text the user can edit | `toShell(text)` | text + `\n` appears in your stdin; user must press Enter |
+| submit a complete user turn | `toTurn(text)` | bracketed-paste + carriage return; auto-submits as a fresh turn |
+| open an external URL | `openExternal(url)` | host opens the URL in the system browser |
 | log without bothering you | `logToHost(payload)` | recorded in cargo run stderr only — invisible to you |
-| open devtools | (the wrench icon already does it) | n/a |
+| open devtools | (wrench icon does it) | n/a |
 
-So input controls in `Main.xmlui` look like:
+Use `toTurn` for one-shot form submissions (Approve buttons, Confirm
+buttons, single-pick selectors). Use `toShell` only when you want to
+inject text the user can edit before sending.
 
 ```xml
-<Select onDidChange="(v) => toShell('branch: ' + v)">
+<Select onDidChange="(v) => toTurn('branch: ' + v)">
   <Option value="main" label="main" />
   <Option value="dev"  label="dev" />
 </Select>
 
-<Button label="Confirm" onClick="toShell('confirmed')" />
+<Button label="Confirm" onClick="toTurn('confirmed')" />
 ```
 
-The user types or clicks; you receive `[XMLUI] branch: dev` (or
-whatever you chose) as a fresh user message.
+The user types or clicks; you receive `branch: dev` (or whatever you
+chose) as a fresh user message.
+
+## Coordinating via proposal.json (canonical worklist)
+
+`app/right/resources/proposal.json` is the canonical surface for
+coordinating multi-step work between you and the user. The Playground
+page renders it as a checklist under the heading "Pending items". Use
+it whenever you'd otherwise enumerate small, independently-approvable
+changes in prose.
+
+Schema:
+
+```json
+{
+  "description": "one-line context for this batch",
+  "items": [
+    { "id": "...", "file": "...", "before": "...", "after": "..." }
+  ]
+}
+```
+
+The Playground UI:
+
+- "Pending items" heading is hard-coded; don't try to override it via JSON.
+- `description` renders only when `items` is non-empty.
+- Each item shows: checkbox (default checked) | filename (mono) | `before → after`.
+- Two action buttons (only shown when items exist):
+  - **Approve selected (N)**: sends `approved: <JSON array of full items>` via `toTurn`.
+  - **Drop selected (N)**: sends `drop: <JSON array of ids>` via `toTurn`.
+- When `items` is empty, the section shows just the heading + `(none)`.
+
+Lifecycle:
+
+1. **Propose** — write items to `proposal.json`. Each item should be
+   small, discrete, and independently rejectable. Surface dependencies
+   in `description`; don't bake them into ordering.
+2. **User triages** — unchecks anything they don't want in this round,
+   then clicks one of:
+   - *Approve selected* → you receive `approved: [...]` and execute those items.
+   - *Drop selected* → you receive `drop: [ids]` and remove them from the list without acting.
+3. **Prune** — after either action, rewrite `proposal.json` with only
+   the still-pending items, plus any newly-surfaced consequences
+   (e.g., orphans revealed by a deletion). The worklist represents
+   pending work, not history — completed items belong in commit
+   messages.
+4. **Empty state is fine** — when there's no pending work, leave
+   `proposal.json` as `{ "description": "", "items": [] }`. The
+   Playground will render the heading and a `(none)` placeholder.
+5. **Commit** when an executed batch is a meaningful unit.
+
+When *not* to use this: one-or-two-item decisions, free-text input, or
+anything where typing in chat is faster than rendering UI. The
+worklist earns its keep when prose enumeration would be tedious or the
+response ambiguous.
 
 ## Charting
 

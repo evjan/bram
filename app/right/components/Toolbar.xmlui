@@ -18,7 +18,7 @@
     <Button
       icon="code"
       variant="ghost"
-      tooltip="View source of Main.xmlui"
+      tooltip="View source of {currentSourceFile($pathname)}"
       onClick="emitEvent('viewSource')" />
     <Button
       icon="help"

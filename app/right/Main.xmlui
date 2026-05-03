@@ -32,7 +32,7 @@
     </ModalDialog>
   </Theme>
 
-  <ViewSource id="mainSrc" file="Main.xmlui" />
+  <ViewSource id="mainSrc" file="{currentSourceFile($pathname)}" />
 
   <NavPanel>
     <NavLink label="Playground" to="/" />

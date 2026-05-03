@@ -187,8 +187,7 @@ struct SessionEntry {
     id: String,
     mtime: u64,
     size: u64,
-    #[serde(rename = "firstUserMessage")]
-    first_user_message: Option<String>,
+    title: Option<String>,
 }
 
 fn sessions_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -201,26 +200,39 @@ fn sessions_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String
     Ok(PathBuf::from(home).join(".claude").join("projects").join(encoded))
 }
 
-fn first_user_message(path: &Path) -> std::io::Result<Option<String>> {
+// Best-effort label for a session: prefers the most recent custom-title record
+// (set via /rename), falls back to a snippet of the first user message.
+fn session_title(path: &Path) -> std::io::Result<Option<String>> {
     let reader = BufReader::new(std::fs::File::open(path)?);
+    let mut custom_title: Option<String> = None;
+    let mut first_user: Option<String> = None;
     for line in reader.lines() {
         let line = line?;
         if line.is_empty() {
             continue;
         }
-        if let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) {
-            if record.get("type").and_then(|v| v.as_str()) == Some("user") {
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        match record.get("type").and_then(|v| v.as_str()) {
+            Some("custom-title") => {
+                if let Some(t) = record.get("customTitle").and_then(|v| v.as_str()) {
+                    custom_title = Some(t.to_string());
+                }
+            }
+            Some("user") if first_user.is_none() => {
                 if let Some(content) = record.pointer("/message/content") {
                     let text = match content {
                         serde_json::Value::String(s) => s.clone(),
                         _ => content.to_string(),
                     };
-                    return Ok(Some(text.chars().take(120).collect()));
+                    first_user = Some(text.chars().take(120).collect());
                 }
             }
+            _ => {}
         }
     }
-    Ok(None)
+    Ok(custom_title.or(first_user))
 }
 
 fn list_sessions<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<SessionEntry>, String> {
@@ -241,8 +253,8 @@ fn list_sessions<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<SessionEnt
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let size = metadata.len();
-        let first = first_user_message(&path).ok().flatten();
-        entries.push(SessionEntry { id, mtime, size, first_user_message: first });
+        let title = session_title(&path).ok().flatten();
+        entries.push(SessionEntry { id, mtime, size, title });
     }
     entries.sort_by(|a, b| b.mtime.cmp(&a.mtime));
     Ok(entries)

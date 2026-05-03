@@ -24,10 +24,9 @@
         paddingVertical="$space-2"
         backgroundColor="$color-surface-100"
         borderBottom="1px solid $borderColor">
-        <Text width="280px" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="ID" />
+        <Text width="*" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="TITLE" />
         <Text width="160px" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="MODIFIED" />
         <Text width="80px" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="SIZE" />
-        <Text width="*" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="FIRST USER MESSAGE" />
       </HStack>
       <Items data="{sessionsList.value}">
         <VStack gap="0" borderBottom="1px solid $borderColor">
@@ -35,13 +34,12 @@
             gap="$space-3"
             paddingHorizontal="$space-3"
             paddingVertical="$space-2"
-            verticalAlignment="center">
-            <Link width="280px" onClick="expandedId = (expandedId === $item.id ? null : $item.id)" noIndicator>
-              <Text value="{$item.id}" variant="code" fontSize="$fontSize-sm" />
+            verticalAlignment="start">
+            <Link width="*" onClick="expandedId = (expandedId === $item.id ? null : $item.id)" noIndicator>
+              <Text width="100%" value="{$item.title || '(untitled)'}" />
             </Link>
             <Text width="160px" fontSize="$fontSize-sm" value="{formatDateTime(new Date($item.mtime * 1000), 'yyyy-MM-dd HH:mm')}" />
             <Text width="80px" fontSize="$fontSize-sm" value="{Math.round($item.size / 1024) + ' KB'}" />
-            <Text width="*" fontSize="$fontSize-sm" maxLines="1" value="{$item.firstUserMessage || '(no user message)'}" />
           </HStack>
 
           <VStack

@@ -5,6 +5,8 @@
   },
   "resources": {
     "icon.code": "resources/code.svg",
+    "icon.down": "resources/down.svg",
+    "icon.up": "resources/up.svg",
     "icon.wrench": "resources/wrench.svg"
   }
 }

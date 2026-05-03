@@ -1,0 +1,158 @@
+{
+  "fetchedAt": "2026-05-03",
+  "rows": [
+    {
+      "id": "myWorkDrive-Client",
+      "repo": "myWorkDrive-Client",
+      "repoUrl": "https://github.com/xmlui-org/myWorkDrive-Client",
+      "date": "2026-04-30",
+      "title": "feat: Refactor upload progress handling to optimize UI updates and improve performance",
+      "author": "anyplacecontrol",
+      "commitUrl": "https://github.com/xmlui-org/myWorkDrive-Client/commit/6b2d53a93726fc288d9c230539ee516873d489ad"
+    },
+    {
+      "id": "trace-tools",
+      "repo": "trace-tools",
+      "repoUrl": "https://github.com/xmlui-org/trace-tools",
+      "date": "2026-05-02",
+      "title": "Merge pull request #8 from xmlui-org/nsoftwarereese/fix-duplicate-button-names",
+      "author": "Jon Udell",
+      "commitUrl": "https://github.com/xmlui-org/trace-tools/commit/7157784a37e4dae1c74119e1784f71009ec9581c"
+    },
+    {
+      "id": "trello-import-demo",
+      "repo": "trello-import-demo",
+      "repoUrl": "https://github.com/xmlui-org/trello-import-demo",
+      "date": "2026-04-21",
+      "title": "Initial commit",
+      "author": "Istvan Novak",
+      "commitUrl": "https://github.com/xmlui-org/trello-import-demo/commit/8e7bb43e8f7832b4988b1356cbd1951935c57a96"
+    },
+    {
+      "id": "xmlui",
+      "repo": "xmlui",
+      "repoUrl": "https://github.com/xmlui-org/xmlui",
+      "date": "2026-05-02",
+      "title": "Docs: explain what xmlui build-lib does, link to source (#3424)",
+      "author": "Jon Udell",
+      "commitUrl": "https://github.com/xmlui-org/xmlui/commit/37963b90885a00099943549b15b5c8781cd2aecc"
+    },
+    {
+      "id": "xmlui-claude",
+      "repo": "xmlui-claude",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-claude",
+      "date": "2026-04-21",
+      "title": "feat: ensure windows compatibility (#1)",
+      "author": "Marcell Kiss",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-claude/commit/75a572615e1428432a3c4c20920f12d6eb2f1367"
+    },
+    {
+      "id": "xmlui-cli",
+      "repo": "xmlui-cli",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-cli",
+      "date": "2026-05-01",
+      "title": "Show both Claude Code and Codex MCP registration commands",
+      "author": "Jon Udell",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-cli/commit/72b1e9d25df05e39ce2dabd340f60733f8e632a3"
+    },
+    {
+      "id": "xmlui-codefence-runner",
+      "repo": "xmlui-codefence-runner",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-codefence-runner",
+      "date": "2026-03-10",
+      "title": "use hosted engine",
+      "author": "Jon Udell",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-codefence-runner/commit/41229ca13650c7919933b88cdd936ae0b26ba4c5"
+    },
+    {
+      "id": "xmlui-codex",
+      "repo": "xmlui-codex",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-codex",
+      "date": "2026-04-28",
+      "title": "Clarify Codex setup instructions in README",
+      "author": "Jon Udell",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-codex/commit/8611ce85ef2b93aece042a451b50dd8524a6c955"
+    },
+    {
+      "id": "xmlui-gmail-client",
+      "repo": "xmlui-gmail-client",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-gmail-client",
+      "date": "2026-01-16",
+      "title": "Refactor: Used MessageListener for iFrame height",
+      "author": "anyplacecontrol",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-gmail-client/commit/c2a41bc10e0c047c3701a5af782cca29ddc9507a"
+    },
+    {
+      "id": "xmlui-hello-world",
+      "repo": "xmlui-hello-world",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-hello-world",
+      "date": "2026-04-01",
+      "title": "fix: include xmlui.js in release",
+      "author": "Norbert Hajagos",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-hello-world/commit/07f44690581d9465ea9b82315be030846ce4f3c4"
+    },
+    {
+      "id": "xmlui-hello-world-trace",
+      "repo": "xmlui-hello-world-trace",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-hello-world-trace",
+      "date": "2026-04-14",
+      "title": "Standalone version",
+      "author": "captaaint",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-hello-world-trace/commit/1a8cc2101110ebf0a680a78a8a585f1d0dc05934"
+    },
+    {
+      "id": "xmlui-invoice",
+      "repo": "xmlui-invoice",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-invoice",
+      "date": "2026-04-21",
+      "title": "Switch from recharts extension to EChart with SimpleBarChart/SimpleDonutChart wrappers",
+      "author": "Jon Udell",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-invoice/commit/6324698b54da81fa23be0d6f9357f31387a95c18"
+    },
+    {
+      "id": "xmlui-islands-demo",
+      "repo": "xmlui-islands-demo",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-islands-demo",
+      "date": "2026-04-20",
+      "title": "Add explanations",
+      "author": "Istvan Novak",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-islands-demo/commit/43f2d24a8961e79a41ed1a175f2851d050b35bb9"
+    },
+    {
+      "id": "xmlui-mcp",
+      "repo": "xmlui-mcp",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-mcp",
+      "date": "2026-04-30",
+      "title": "Merge pull request #8 from xmlui-org/judell/update-xmlui-rules",
+      "author": "Jon Udell",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-mcp/commit/6cdd6c51150808f289ae1486496bd4a5e227daf5"
+    },
+    {
+      "id": "xmlui-regression",
+      "repo": "xmlui-regression",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-regression",
+      "date": "2026-04-01",
+      "title": "Add List & context menu page; fix engine aria gaps and trace-tools generator",
+      "author": "Jon Udell",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-regression/commit/58574a0cf2bd748e6172d2f631fac1e70e5a3795"
+    },
+    {
+      "id": "xmlui-test-server",
+      "repo": "xmlui-test-server",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-test-server",
+      "date": "2025-07-22",
+      "title": "Update README.md",
+      "author": "Jon Udell",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-test-server/commit/685f23f1f1ab71febfc88bfde88fc909f3cb9c89"
+    },
+    {
+      "id": "xmlui-weather",
+      "repo": "xmlui-weather",
+      "repoUrl": "https://github.com/xmlui-org/xmlui-weather",
+      "date": "2026-04-20",
+      "title": "Strip redundant string fields from trace export for ~85% size reduction",
+      "author": "Jon Udell",
+      "commitUrl": "https://github.com/xmlui-org/xmlui-weather/commit/dc8f7f4b48c07c44bfedb0f649e1e3cfd1831b41"
+    }
+  ]
+}

@@ -1,11 +1,13 @@
 use std::borrow::Cow;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
-use tauri::{ipc::Channel, State};
+use serde::{Deserialize, Serialize};
+use tauri::{ipc::Channel, AppHandle, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 struct PtyState {
     master: Box<dyn MasterPty + Send>,
@@ -15,6 +17,70 @@ struct PtyState {
 #[derive(Default)]
 struct AppState(Mutex<Option<PtyState>>);
 
+#[derive(Default)]
+struct TranscriptState(Mutex<()>);
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SessionCatalogEntry {
+    filename: String,
+    path: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    note: String,
+}
+
+const LIVE_AGENT_ECHO_TEMPLATE: &str = r#"# Session transcript
+
+_This is the raw running transcript for the current session, formatted in markdown rather than summarized as cards._
+"#;
+
+fn resolve_app_root<R: tauri::Runtime>(app: Option<&AppHandle<R>>) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(app) = app {
+        if let Ok(resource_dir) = app.path().resource_dir() {
+            candidates.push(resource_dir.join("app"));
+        }
+        if let Ok(executable_dir) = app.path().executable_dir() {
+            candidates.push(executable_dir.join("app"));
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("app"));
+            candidates.push(dir.join("../Resources/app"));
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("app"));
+        candidates.push(cwd.join("..").join("app"));
+    }
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
+fn transcript_has_turns(content: &str) -> bool {
+    content.contains("### User") || content.contains("### Agent")
+}
+
+fn ensure_parent_dir(path: &std::path::Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn agent_echo_live_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let app_root = resolve_app_root(Some(app)).ok_or("could not resolve app root")?;
+    Ok(app_root.join("right").join("live").join("AgentEcho.md"))
+}
+
+fn is_runtime_right_path(path: &Path, right_root: &Path) -> bool {
+    path.starts_with(right_root.join("live")) || path.starts_with(right_root.join("sessions"))
+}
+
 #[tauri::command]
 fn pty_spawn(
     cmd: String,
@@ -22,6 +88,7 @@ fn pty_spawn(
     cols: u16,
     rows: u16,
     on_data: Channel<Vec<u8>>,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let pty_system = native_pty_system();
@@ -38,12 +105,8 @@ fn pty_spawn(
     for a in args {
         command.arg(a);
     }
-    // Default cwd to the project root (cargo run starts in src-tauri/, so
-    // current_dir().parent() is ~/xmlui-claude-code-desktop). Fall back to
-    // $HOME if that resolution fails.
-    let project_root = std::env::current_dir()
-        .ok()
-        .and_then(|p| p.parent().map(|pp| pp.to_path_buf()));
+    let project_root = resolve_app_root(Some(&app))
+        .and_then(|app_root| app_root.parent().map(|parent| parent.to_path_buf()));
     if let Some(root) = project_root {
         command.cwd(root);
     } else if let Ok(home) = std::env::var("HOME") {
@@ -122,6 +185,129 @@ fn open_devtools(window: tauri::WebviewWindow) {
     let _ = window;
 }
 
+#[tauri::command]
+fn open_url(url: String, app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(url, None::<String>)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_trace_export(filename: String, content: String, mime_type: String) -> Result<String, String> {
+    let safe_name = filename
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '\0' => '_',
+            _ => c,
+        })
+        .collect::<String>();
+
+    let base_dir = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("Downloads"))
+        .filter(|path| path.exists())
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or("could not resolve export directory")?;
+
+    let target = base_dir.join(safe_name);
+    std::fs::write(&target, content.as_bytes()).map_err(|e| e.to_string())?;
+    eprintln!(
+        "[trace-export] wrote {} bytes as {} to {}",
+        content.len(),
+        mime_type,
+        target.display()
+    );
+    Ok(target.display().to_string())
+}
+
+#[tauri::command]
+fn append_agent_echo(
+    text: String,
+    app: AppHandle,
+    transcript_state: State<'_, TranscriptState>,
+) -> Result<(), String> {
+    let _guard = transcript_state.0.lock().unwrap();
+    let live_path = agent_echo_live_path(&app)?;
+    ensure_parent_dir(&live_path)?;
+    if !live_path.exists() {
+        std::fs::write(&live_path, LIVE_AGENT_ECHO_TEMPLATE).map_err(|e| e.to_string())?;
+    }
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&live_path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(text.as_bytes()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn rollover_agent_echo_session(
+    archive_timestamp: String,
+    created_at: String,
+    app: AppHandle,
+    transcript_state: State<'_, TranscriptState>,
+) -> Result<bool, String> {
+    let _guard = transcript_state.0.lock().unwrap();
+    let app_root = resolve_app_root(Some(&app)).ok_or("could not resolve app root")?;
+    let right_root = app_root.join("right");
+    let live_path = agent_echo_live_path(&app)?;
+    let sessions_dir = right_root.join("sessions");
+    let catalog_path = sessions_dir.join("catalog.json");
+
+    ensure_parent_dir(&live_path)?;
+    std::fs::create_dir_all(&sessions_dir).map_err(|e| e.to_string())?;
+
+    if !live_path.exists() {
+        std::fs::write(&live_path, LIVE_AGENT_ECHO_TEMPLATE).map_err(|e| e.to_string())?;
+    }
+    if !catalog_path.exists() {
+        std::fs::write(&catalog_path, "[]\n").map_err(|e| e.to_string())?;
+    }
+
+    let live_content = std::fs::read_to_string(&live_path).map_err(|e| e.to_string())?;
+    if !transcript_has_turns(&live_content) {
+        if live_content.trim() != LIVE_AGENT_ECHO_TEMPLATE.trim() {
+            std::fs::write(&live_path, LIVE_AGENT_ECHO_TEMPLATE).map_err(|e| e.to_string())?;
+        }
+        return Ok(false);
+    }
+
+    let filename = format!("AgentEcho-{}.md", archive_timestamp);
+    let archive_path = sessions_dir.join(&filename);
+    std::fs::write(&archive_path, live_content.as_bytes()).map_err(|e| e.to_string())?;
+
+    let mut catalog: Vec<SessionCatalogEntry> = serde_json::from_str(
+        &std::fs::read_to_string(&catalog_path).map_err(|e| e.to_string())?,
+    )
+    .unwrap_or_default();
+
+    let archive_rel_path = format!("sessions/{}", filename);
+    if catalog.iter().any(|entry| entry.path == archive_rel_path) {
+        std::fs::write(&live_path, LIVE_AGENT_ECHO_TEMPLATE).map_err(|e| e.to_string())?;
+        return Ok(false);
+    }
+
+    catalog.push(SessionCatalogEntry {
+        filename: filename.clone(),
+        path: archive_rel_path,
+        created_at,
+        note: "Recovered live AgentEcho transcript at session startup.".to_string(),
+    });
+
+    std::fs::write(
+        &catalog_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&catalog).map_err(|e| e.to_string())?
+        ),
+    )
+    .map_err(|e| e.to_string())?;
+    std::fs::write(&live_path, LIVE_AGENT_ECHO_TEMPLATE).map_err(|e| e.to_string())?;
+
+    Ok(true)
+}
+
 fn mime_for(path: &std::path::Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("html") => "text/html; charset=utf-8",
@@ -142,19 +328,13 @@ fn mime_for(path: &std::path::Path) -> &'static str {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // app/ lives one level up from src-tauri/, so dev cwd resolves to ../app
-    let app_root: PathBuf = std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("..")
-        .join("app");
-    let app_root_for_protocol = app_root.clone();
-    let watch_path = app_root.join("right");
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .register_uri_scheme_protocol("xmlui", move |_ctx, request| {
+        .register_uri_scheme_protocol("xmlui", move |ctx, request| {
             let path = request.uri().path().trim_start_matches('/');
-            let full = app_root_for_protocol.join(path);
+            let app_root = resolve_app_root(Some(ctx.app_handle()))
+                .unwrap_or_else(|| PathBuf::from("."));
+            let full = app_root.join(path);
             match std::fs::read(&full) {
                 Ok(bytes) => tauri::http::Response::builder()
                     .status(200)
@@ -169,18 +349,28 @@ pub fn run() {
             }
         })
         .manage(AppState::default())
+        .manage(TranscriptState::default())
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
             pty_resize,
             log_from_right_pane,
             open_devtools,
+            open_url,
+            save_trace_export,
+            append_agent_echo,
+            rollover_agent_echo_session,
         ])
         .setup(move |app| {
             use tauri::Emitter;
 
+            let Some(app_root) = resolve_app_root(Some(app.handle())) else {
+                eprintln!("[watcher] could not resolve app root");
+                return Ok(());
+            };
+            let right_root = app_root.join("right");
+            let watch_paths = vec![right_root.clone(), app_root.join("vendor")];
             let app_handle = app.handle().clone();
-            let watch_path = watch_path.clone();
             std::thread::spawn(move || {
                 use notify::{recommended_watcher, Event, EventKind, RecursiveMode, Watcher};
                 use std::sync::mpsc::channel;
@@ -194,11 +384,13 @@ pub fn run() {
                         return;
                     }
                 };
-                if let Err(e) = watcher.watch(&watch_path, RecursiveMode::Recursive) {
-                    eprintln!("[watcher] watch {:?} failed: {}", watch_path, e);
-                    return;
+                for watch_path in &watch_paths {
+                    if let Err(e) = watcher.watch(watch_path, RecursiveMode::Recursive) {
+                        eprintln!("[watcher] watch {:?} failed: {}", watch_path, e);
+                        return;
+                    }
+                    eprintln!("[watcher] watching {:?}", watch_path);
                 }
-                eprintln!("[watcher] watching {:?}", watch_path);
 
                 let mut last_emit = Instant::now() - Duration::from_secs(1);
                 for res in rx {
@@ -207,6 +399,14 @@ pub fn run() {
                         event.kind,
                         EventKind::Modify(_) | EventKind::Create(_)
                     ) {
+                        continue;
+                    }
+                    if !event.paths.is_empty()
+                        && event
+                            .paths
+                            .iter()
+                            .all(|path| is_runtime_right_path(path, &right_root))
+                    {
                         continue;
                     }
                     // Editors often write twice (atomic save). Debounce 100ms.

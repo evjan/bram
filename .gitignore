@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local launcher symlink to the current debug build
+xmlui-claude-code-desktop

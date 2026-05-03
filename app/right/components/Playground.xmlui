@@ -1,3 +1,87 @@
-<Component name="Playground">
-  <Text>Playground</Text>
+<Component name="Playground" var.selectedSha="{null}">
+  <DataSource
+    id="commits"
+    url="https://api.github.com/repos/judell/xmlui-claude-code-desktop/commits"
+    queryParams="{{ per_page: 12 }}" />
+
+  <DataSource
+    id="commitDetail"
+    url="https://api.github.com/repos/judell/xmlui-claude-code-desktop/commits/{selectedSha}"
+    when="{!!selectedSha}" />
+
+  <VStack padding="$space-6" gap="$space-4">
+    <Heading level="h2">Recent commits</Heading>
+    <Text fontSize="$fontSize-sm">Click a SHA to view its diff. Click the GitHub icon to open on github.com.</Text>
+    <Table data="{commits.value}" width="100%">
+      <Column header="SHA" width="120px">
+        <HStack gap="$space-2" verticalAlignment="center">
+          <Link onClick="selectedSha = $item.sha" noIndicator>
+            <Text value="{$item.sha.slice(0, 7)}" variant="code" />
+          </Link>
+          <Button
+            icon="link"
+            variant="ghost"
+            size="xs"
+            tooltip="Open on github.com"
+            onClick="openExternal($item.html_url)" />
+        </HStack>
+      </Column>
+      <Column header="Date" width="160px">
+        <Text value="{formatDateTime($item.commit.author.date, 'yyyy-MM-dd HH:mm')}" />
+      </Column>
+      <Column header="Subject" width="*">
+        <Text value="{$item.commit.message.split('\n')[0]}" maxLines="1" />
+      </Column>
+      <Column header="Author" width="120px">
+        <Text value="{$item.commit.author.name}" />
+      </Column>
+    </Table>
+
+    <VStack gap="$space-3" when="{!!selectedSha}">
+      <HStack gap="$space-3" verticalAlignment="center">
+        <Heading level="h3" value="Diff: {selectedSha.slice(0, 7)}" />
+        <Button
+          icon="close"
+          variant="ghost"
+          size="xs"
+          tooltip="Clear selection"
+          onClick="selectedSha = null" />
+      </HStack>
+      <Text when="{commitDetail.inProgress}">Loading…</Text>
+      <VStack gap="$space-4" when="{commitDetail.value}">
+        <Text fontSize="$fontSize-sm">
+          {commitDetail.value.commit.message.split('\n')[0]}
+          {' — '}
+          +{commitDetail.value.stats.additions} / -{commitDetail.value.stats.deletions}
+          {' across '}
+          {commitDetail.value.files.length} file(s)
+        </Text>
+        <Items data="{commitDetail.value.files}">
+          <VStack gap="0" borderTop="1px solid $borderColor" paddingTop="$space-2">
+            <HStack gap="$space-3" verticalAlignment="center" paddingBottom="$space-2">
+              <Text fontWeight="$fontWeight-bold" value="{$item.filename}" />
+              <Text color="green" value="+{$item.additions}" />
+              <Text color="red" value="-{$item.deletions}" />
+            </HStack>
+            <VStack gap="0" overflowX="auto">
+              <Items data="{$item.patch ? $item.patch.split('\n') : ['(no textual diff)']}">
+                <Text
+                  fontFamily="$fontFamily-monospace"
+                  fontSize="$fontSize-sm"
+                  paddingHorizontal="$space-2"
+                  whiteSpace="pre"
+                  backgroundColor="{
+                    $item.startsWith('@@') ? '#e0f2fe' :
+                    ($item.startsWith('+') && !$item.startsWith('+++')) ? '#dcfce7' :
+                    ($item.startsWith('-') && !$item.startsWith('---')) ? '#fee2e2' :
+                    'transparent'
+                  }"
+                  value="{$item || ' '}" />
+              </Items>
+            </VStack>
+          </VStack>
+        </Items>
+      </VStack>
+    </VStack>
+  </VStack>
 </Component>

@@ -187,21 +187,29 @@ window.addEventListener("message", (ev) => {
   }
 });
 
-// Reassigning src works cross-origin; iframe.contentWindow.location.reload()
-// is blocked because the parent shell is on tauri:// and the iframe on xmlui://.
-const RIGHT_PANE_SRC = "xmlui://localhost/index.html";
-function reloadRightPane() {
+// Right-pane base URL is provisioned by the Rust backend on startup
+// (loopback HTTP server bound to a random port). We have to ask for it
+// before we can set iframe.src or wire reload. Reassigning src works
+// cross-origin; iframe.contentWindow.location.reload() is blocked
+// because the parent shell is on tauri:// and the iframe on http://.
+const { listen } = window.__TAURI__.event;
+(async () => {
   const iframe = document.getElementById("right-pane");
   if (!iframe) return;
-  iframe.src = RIGHT_PANE_SRC + "?t=" + Date.now();
-}
-
-document
-  .getElementById("reload-right")
-  ?.addEventListener("click", reloadRightPane);
-
-// Live reload: Rust filesystem watcher emits "right-pane-reload" when files in
-// the project root (or the binary's __shell/vendor) change.
-// https://v2.tauri.app/develop/calling-frontend/#event-system
-const { listen } = window.__TAURI__.event;
-listen("right-pane-reload", reloadRightPane);
+  let base;
+  try {
+    base = await invoke("get_right_pane_url");
+  } catch (e) {
+    console.error("get_right_pane_url failed", e);
+    return;
+  }
+  const RIGHT_PANE_SRC = base + "/index.html";
+  function reloadRightPane() {
+    iframe.src = RIGHT_PANE_SRC + "?t=" + Date.now();
+  }
+  iframe.src = RIGHT_PANE_SRC;
+  document
+    .getElementById("reload-right")
+    ?.addEventListener("click", reloadRightPane);
+  listen("right-pane-reload", reloadRightPane);
+})();

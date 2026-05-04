@@ -30,7 +30,7 @@
     fullScreen="true"
     onClose="fullscreenImage = null">
     <Image
-      src="xmlui://localhost/__file?path={encodeURIComponent(fullscreenImage || '')}"
+      src="/__file?path={encodeURIComponent(fullscreenImage || '')}"
       fit="contain"
       width="100%"
       height="100%" />
@@ -132,7 +132,7 @@
                   <Items data="{$item.images}">
                     <Link onClick="fullscreenImage = $item" noIndicator>
                       <Image
-                        src="xmlui://localhost/__file?path={encodeURIComponent($item)}"
+                        src="/__file?path={encodeURIComponent($item)}"
                         maxHeight="200px"
                         fit="contain" />
                     </Link>

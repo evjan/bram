@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -18,8 +17,15 @@ struct AppState(Mutex<Option<PtyState>>);
 
 // Active project root — resolved once at startup from a CLI arg
 // (xmlui-desktop /path/to/project) or std::env::current_dir(). Read by
-// the URI handler, watcher, git/sessions/PTY commands.
+// the HTTP server, watcher, git/sessions/PTY commands.
 struct ActiveProjectState(Mutex<PathBuf>);
+
+// Base URL of the loopback HTTP server hosting the right pane. Populated
+// in setup() once the listener is bound. Service workers (used by MSW
+// and xmlui's apiInterceptor) require an http(s) secure-context origin,
+// which a custom URI scheme cannot provide — hence the move from
+// xmlui:// to http://127.0.0.1:<port>.
+struct RightPaneUrlState(Mutex<String>);
 
 fn determine_project_root() -> PathBuf {
     let args: Vec<String> = std::env::args().collect();
@@ -308,6 +314,11 @@ fn pty_resize(cols: u16, rows: u16, state: State<'_, AppState>) -> Result<(), St
 #[tauri::command]
 fn log_from_right_pane(payload: serde_json::Value) {
     eprintln!("[right-pane] {}", payload);
+}
+
+#[tauri::command]
+fn get_right_pane_url(state: State<'_, RightPaneUrlState>) -> String {
+    state.0.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -646,6 +657,131 @@ fn mime_for(path: &std::path::Path) -> &'static str {
     }
 }
 
+// Routing for the right-pane HTTP server. Returns (status, content-type, body).
+fn route_request<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    path: &str,
+    query: &str,
+) -> (u16, &'static str, Vec<u8>) {
+    if path == "__commits" {
+        return match git_log_recent(app, 30) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__commits] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    if path == "__commit" {
+        let mut sha = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("sha=") {
+                sha = percent_decode(v);
+                break;
+            }
+        }
+        return match git_commit_detail(app, &sha) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__commit sha={}] {}", sha, e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    if path == "__file" {
+        let mut file_path = String::new();
+        for pair in query.split('&') {
+            if let Some(enc) = pair.strip_prefix("path=") {
+                file_path = percent_decode(enc);
+                break;
+            }
+        }
+        let p = std::path::Path::new(&file_path);
+        return match std::fs::read(p) {
+            Ok(bytes) => (200, mime_for(p), bytes),
+            Err(e) => {
+                eprintln!("[http /__file path={}] {}", file_path, e);
+                (404, "text/plain; charset=utf-8", Vec::new())
+            }
+        };
+    }
+
+    if let Some(rest) = path.strip_prefix("__sessions/") {
+        let (content_type, result): (&'static str, Result<Vec<u8>, String>) = if rest == "list" {
+            (
+                "application/json; charset=utf-8",
+                list_sessions(app)
+                    .and_then(|entries| serde_json::to_vec(&entries).map_err(|e| e.to_string())),
+            )
+        } else if rest == "latest" {
+            ("text/plain; charset=utf-8", read_latest_session(app))
+        } else if rest == "search" {
+            let mut q = String::new();
+            let mut scope = String::from("recent");
+            for pair in query.split('&') {
+                if let Some(v) = pair.strip_prefix("q=") {
+                    q = percent_decode(v);
+                } else if let Some(v) = pair.strip_prefix("scope=") {
+                    scope = percent_decode(v);
+                }
+            }
+            let limit = if scope == "all" { usize::MAX } else { 10 };
+            (
+                "application/json; charset=utf-8",
+                search_sessions(app, &q, limit)
+                    .and_then(|entries| serde_json::to_vec(&entries).map_err(|e| e.to_string())),
+            )
+        } else {
+            ("text/plain; charset=utf-8", read_session(app, rest))
+        };
+        return match result {
+            Ok(bytes) => (200, content_type, bytes),
+            Err(e) => {
+                eprintln!("[http /__sessions/{}] {}", rest, e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    // System namespaces served from the binary's bundled app/ dir.
+    // Project-relative paths everywhere else.
+    let app_root = resolve_app_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
+    let full: PathBuf = if let Some(rest) = path.strip_prefix("__shell/") {
+        app_root.join("__shell").join(rest)
+    } else if let Some(rest) = path.strip_prefix("__vendor/") {
+        app_root.join("vendor").join(rest)
+    } else {
+        let proj = project_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
+        proj.join(path)
+    };
+    match std::fs::read(&full) {
+        Ok(bytes) => (200, mime_for(&full), bytes),
+        Err(_) => (404, "text/plain; charset=utf-8", Vec::new()),
+    }
+}
+
+fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, request: tiny_http::Request) {
+    let url = request.url().to_string();
+    let (raw_path, query) = match url.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (url.as_str(), ""),
+    };
+    let path = raw_path.trim_start_matches('/');
+    let (status, content_type, body) = route_request(app, path, query);
+
+    let response = tiny_http::Response::from_data(body)
+        .with_status_code(status)
+        .with_header(
+            tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap(),
+        )
+        .with_header(
+            tiny_http::Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap(),
+        );
+    let _ = request.respond(response);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let initial_proj = determine_project_root();
@@ -657,163 +793,9 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .register_uri_scheme_protocol("xmlui", move |ctx, request| {
-            let path = request.uri().path().trim_start_matches('/');
-            let query = request.uri().query().unwrap_or("");
-            let app = ctx.app_handle();
-
-            // Local-git commit list with pushed/unpushed flags.
-            if path == "__commits" {
-                return match git_log_recent(app, 30) {
-                    Ok(bytes) => tauri::http::Response::builder()
-                        .status(200)
-                        .header("Content-Type", "application/json; charset=utf-8")
-                        .header("Access-Control-Allow-Origin", "*")
-                        .body(Cow::Owned(bytes))
-                        .unwrap(),
-                    Err(e) => {
-                        eprintln!("[xmlui://__commits] {}", e);
-                        tauri::http::Response::builder()
-                            .status(500)
-                            .body(Cow::Owned(e.into_bytes()))
-                            .unwrap()
-                    }
-                };
-            }
-
-            // Local-git per-commit detail (mirrors GitHub API shape enough to
-            // reuse the existing inline-diff renderer).
-            if path == "__commit" {
-                let mut sha = String::new();
-                for pair in query.split('&') {
-                    if let Some(v) = pair.strip_prefix("sha=") {
-                        sha = percent_decode(v);
-                        break;
-                    }
-                }
-                return match git_commit_detail(app, &sha) {
-                    Ok(bytes) => tauri::http::Response::builder()
-                        .status(200)
-                        .header("Content-Type", "application/json; charset=utf-8")
-                        .header("Access-Control-Allow-Origin", "*")
-                        .body(Cow::Owned(bytes))
-                        .unwrap(),
-                    Err(e) => {
-                        eprintln!("[xmlui://__commit sha={}] {}", sha, e);
-                        tauri::http::Response::builder()
-                            .status(500)
-                            .body(Cow::Owned(e.into_bytes()))
-                            .unwrap()
-                    }
-                };
-            }
-
-            // Serve arbitrary local files (used by the Sessions browser to
-            // render inline image attachments inside the xmlui:// origin,
-            // since file:// can't load cross-origin).
-            if path == "__file" {
-                let mut file_path = String::new();
-                for pair in query.split('&') {
-                    if let Some(enc) = pair.strip_prefix("path=") {
-                        file_path = percent_decode(enc);
-                        break;
-                    }
-                }
-                let p = std::path::Path::new(&file_path);
-                return match std::fs::read(p) {
-                    Ok(bytes) => tauri::http::Response::builder()
-                        .status(200)
-                        .header("Content-Type", mime_for(p))
-                        .header("Access-Control-Allow-Origin", "*")
-                        .body(Cow::Owned(bytes))
-                        .unwrap(),
-                    Err(e) => {
-                        eprintln!("[xmlui://__file path={}] {}", file_path, e);
-                        tauri::http::Response::builder()
-                            .status(404)
-                            .body(Cow::Owned(Vec::new()))
-                            .unwrap()
-                    }
-                };
-            }
-
-            // Special path prefix routes session-data requests through the
-            // same scheme as the static assets, avoiding cross-origin CORS.
-            if let Some(rest) = path.strip_prefix("__sessions/") {
-                let (content_type, result): (&str, Result<Vec<u8>, String>) = if rest == "list" {
-                    (
-                        "application/json; charset=utf-8",
-                        list_sessions(app).and_then(|entries| {
-                            serde_json::to_vec(&entries).map_err(|e| e.to_string())
-                        }),
-                    )
-                } else if rest == "latest" {
-                    ("text/plain; charset=utf-8", read_latest_session(app))
-                } else if rest == "search" {
-                    let mut q = String::new();
-                    let mut scope = String::from("recent");
-                    for pair in query.split('&') {
-                        if let Some(v) = pair.strip_prefix("q=") {
-                            q = percent_decode(v);
-                        } else if let Some(v) = pair.strip_prefix("scope=") {
-                            scope = percent_decode(v);
-                        }
-                    }
-                    let limit = if scope == "all" { usize::MAX } else { 10 };
-                    (
-                        "application/json; charset=utf-8",
-                        search_sessions(app, &q, limit).and_then(|entries| {
-                            serde_json::to_vec(&entries).map_err(|e| e.to_string())
-                        }),
-                    )
-                } else {
-                    ("text/plain; charset=utf-8", read_session(app, rest))
-                };
-                return match result {
-                    Ok(bytes) => tauri::http::Response::builder()
-                        .status(200)
-                        .header("Content-Type", content_type)
-                        .header("Access-Control-Allow-Origin", "*")
-                        .body(Cow::Owned(bytes))
-                        .unwrap(),
-                    Err(e) => {
-                        eprintln!("[xmlui://__sessions/{}] {}", rest, e);
-                        tauri::http::Response::builder()
-                            .status(500)
-                            .header("Content-Type", "text/plain; charset=utf-8")
-                            .header("Access-Control-Allow-Origin", "*")
-                            .body(Cow::Owned(e.into_bytes()))
-                            .unwrap()
-                    }
-                };
-            }
-
-            // System namespaces served from the binary's bundled app/ dir.
-            // Project-relative paths everywhere else.
-            let app_root = resolve_app_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
-            let full: PathBuf = if let Some(rest) = path.strip_prefix("__shell/") {
-                app_root.join("__shell").join(rest)
-            } else if let Some(rest) = path.strip_prefix("__vendor/") {
-                app_root.join("vendor").join(rest)
-            } else {
-                let proj = project_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
-                proj.join(path)
-            };
-            match std::fs::read(&full) {
-                Ok(bytes) => tauri::http::Response::builder()
-                    .status(200)
-                    .header("Content-Type", mime_for(&full))
-                    .header("Access-Control-Allow-Origin", "*")
-                    .body(Cow::Owned(bytes))
-                    .unwrap(),
-                Err(_) => tauri::http::Response::builder()
-                    .status(404)
-                    .body(Cow::Owned(Vec::new()))
-                    .unwrap(),
-            }
-        })
         .manage(AppState::default())
         .manage(ActiveProjectState(Mutex::new(initial_proj)))
+        .manage(RightPaneUrlState(Mutex::new(String::new())))
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
@@ -823,9 +805,36 @@ pub fn run() {
             open_url,
             save_trace_export,
             git_push,
+            get_right_pane_url,
         ])
         .setup(move |app| {
             use tauri::Emitter;
+
+            #[cfg(debug_assertions)]
+            if let Some(window) = app.get_webview_window("main") {
+                window.open_devtools();
+            }
+
+            // Bind the right-pane HTTP server before anything else so the
+            // URL is available the moment the parent shell asks for it.
+            let server = tiny_http::Server::http("127.0.0.1:0")
+                .map_err(|e| format!("failed to bind right-pane http server: {}", e))?;
+            let port = server
+                .server_addr()
+                .to_ip()
+                .map(|sa| sa.port())
+                .ok_or("right-pane server bound to non-ip address")?;
+            let url = format!("http://127.0.0.1:{}", port);
+            eprintln!("[xmlui-desktop] right pane HTTP server: {}", url);
+            *app.state::<RightPaneUrlState>().0.lock().unwrap() = url;
+
+            let server_app = app.handle().clone();
+            std::thread::spawn(move || {
+                for request in server.incoming_requests() {
+                    let app = server_app.clone();
+                    std::thread::spawn(move || handle_http(&app, request));
+                }
+            });
 
             let Some(app_root) = resolve_app_root(Some(app.handle())) else {
                 eprintln!("[watcher] could not resolve app root");

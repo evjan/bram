@@ -51,26 +51,42 @@ body {
 }
 
 .pane {
-  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   height: 100%;
 }
 
 .pane-left {
+  flex: 0 0 50%;
   background: #000;
   padding: 4px;
   box-sizing: border-box;
 }
 
 .pane-right {
-  border-left: 1px solid #333;
+  flex: 1 1 0;
   background: #fff;
 }
 
 iframe.pane-right {
   border: 0;
-  border-left: 1px solid #333;
+}
+
+.splitter {
+  flex: 0 0 6px;
+  background: #333;
+  cursor: col-resize;
+  user-select: none;
+}
+
+.splitter:hover,
+.splitter.dragging {
+  background: #4a90d9;
+}
+
+/* While dragging, block iframe from swallowing pointer events. */
+body.splitter-dragging iframe.pane-right {
+  pointer-events: none;
 }
 
 .xterm {

@@ -28,6 +28,42 @@ try {
 fitAddon.fit();
 window.addEventListener("resize", () => fitAddon.fit());
 
+(() => {
+  const splitter = document.getElementById("splitter");
+  const left = document.querySelector(".pane-left");
+  const split = document.querySelector(".split");
+  if (!splitter || !left || !split) return;
+
+  const MIN_PX = 200;
+
+  splitter.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    splitter.setPointerCapture(e.pointerId);
+    splitter.classList.add("dragging");
+    document.body.classList.add("splitter-dragging");
+
+    const onMove = (ev) => {
+      const rect = split.getBoundingClientRect();
+      let x = ev.clientX - rect.left;
+      const max = rect.width - MIN_PX - splitter.offsetWidth;
+      if (x < MIN_PX) x = MIN_PX;
+      if (x > max) x = max;
+      left.style.flexBasis = x + "px";
+      fitAddon.fit();
+    };
+    const onUp = (ev) => {
+      splitter.releasePointerCapture(ev.pointerId);
+      splitter.classList.remove("dragging");
+      document.body.classList.remove("splitter-dragging");
+      splitter.removeEventListener("pointermove", onMove);
+      splitter.removeEventListener("pointerup", onUp);
+      fitAddon.fit();
+    };
+    splitter.addEventListener("pointermove", onMove);
+    splitter.addEventListener("pointerup", onUp);
+  });
+})();
+
 // PTY wiring: stdout from Rust arrives over a Channel; stdin goes via invoke.
 // https://v2.tauri.app/develop/calling-frontend/#channels
 const ptyChannel = new Channel();

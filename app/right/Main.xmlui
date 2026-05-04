@@ -12,20 +12,24 @@
   </Footer>
 
   <Theme maxWidth-ModalDialog="820px">
-    <ModalDialog id="manualDialog" title="User manual">
-      <Theme
-        marginTop-H1-markdown="0"
-        marginBottom-H1-markdown="$space-2"
-        marginTop-H2-markdown="$space-3"
-        marginBottom-H2-markdown="$space-1"
-        marginTop-H3-markdown="$space-2"
-        marginBottom-H3-markdown="$space-1"
-        marginBottom-Text-markdown="$space-1"
-        marginBottom-Ul-markdown="$space-2"
-        marginBottom-Ol-markdown="$space-2"
-        marginBottom-Li-markdown="$space-1">
-        <Markdown content="{manualSrc.value}" showHeadingAnchors="{true}" />
-      </Theme>
+    <ModalDialog id="manualDialog" title="About XMLUI Desktop">
+      <VStack gap="$space-4">
+        <Theme
+          marginTop-H1-markdown="0"
+          marginBottom-H1-markdown="$space-2"
+          marginTop-H2-markdown="$space-3"
+          marginBottom-H2-markdown="$space-1"
+          marginTop-H3-markdown="$space-2"
+          marginBottom-H3-markdown="$space-1"
+          marginBottom-Text-markdown="$space-1"
+          marginBottom-Ul-markdown="$space-2"
+          marginBottom-Ol-markdown="$space-2"
+          marginBottom-Li-markdown="$space-1">
+          <Markdown content="{manualSrc.value}" showHeadingAnchors="{true}" />
+        </Theme>
+        <Heading level="h2">Architecture</Heading>
+        <Architecture />
+      </VStack>
     </ModalDialog>
   </Theme>
 
@@ -34,7 +38,6 @@
   <NavPanel>
     <NavLink label="Workspace" to="/" />
     <NavLink label="Sessions" to="/sessions" />
-    <NavLink label="Architecture" to="/architecture" />
   </NavPanel>
 
   <Pages fallbackPath="/">
@@ -43,9 +46,6 @@
     </Page>
     <Page url="/sessions">
       <Sessions />
-    </Page>
-    <Page url="/architecture">
-      <Architecture />
     </Page>
   </Pages>
 

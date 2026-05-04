@@ -71,9 +71,6 @@
               variant="outlined"
               enabled="{!submitting}"
               onClick="markInflight(latestText); submitting = true; toTurn('drop: ' + JSON.stringify({ ids: proposal.value.items.filter(i => !unchecked.includes(i.id)).map(i => i.id), feedback: feedback.value })); feedback.setValue('')" />
-            <Text fontSize="$fontSize-sm" color="$textColor-secondary">
-              Approve to act on the checked items; Drop to remove them from the worklist.
-            </Text>
           </HStack>
         </VStack>
       </VStack>

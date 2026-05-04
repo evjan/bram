@@ -15,6 +15,23 @@ function rewriteXmluiDocUrls(text) {
     .replace(/https:\/\/docs\.xmlui\.org\//g, 'https://www.xmlui.org/docs/');
 }
 
+// XMLUI's Markdown sanitizes file:// URLs and rewrites their anchors into
+// non-clickable spans, so we can't get a working file-link out of Markdown.
+// Strip the image-source footers from the markdown text and return them as
+// a separate array; the Sessions component renders them as XMLUI Links.
+function extractImagePaths(text) {
+  if (!text) return [];
+  const paths = [];
+  const re = /\[Image: source: ([^\]]+)\]/g;
+  let m;
+  while ((m = re.exec(text)) !== null) paths.push(m[1]);
+  return paths;
+}
+function stripImagePaths(text) {
+  if (!text) return text;
+  return text.replace(/\n*\[Image: source: [^\]]+\]/g, '');
+}
+
 function lastAssistantText(jsonlText) {
   if (!jsonlText) return '';
   const lines = jsonlText.split('\n');
@@ -59,7 +76,12 @@ function sessionTurns(jsonlText) {
         .join('\n\n');
     }
     if (!text) continue;
-    turns.push({ role: r.type, text: rewriteXmluiDocUrls(text) });
+    const rewritten = rewriteXmluiDocUrls(text);
+    turns.push({
+      role: r.type,
+      text: stripImagePaths(rewritten),
+      images: extractImagePaths(rewritten)
+    });
   }
   return turns;
 }

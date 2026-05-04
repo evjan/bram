@@ -149,6 +149,17 @@ fn open_devtools(window: tauri::WebviewWindow) {
 
 #[tauri::command]
 fn open_url(url: String, app: AppHandle) -> Result<(), String> {
+    // file:// URLs aren't permitted by the opener URL allowlist; route them
+    // through open_path so the OS opens the file in its default app.
+    if let Some(rest) = url.strip_prefix("file://") {
+        // Strip an optional host (e.g. "file:///path" → host="" rest="/path";
+        // "file://localhost/path" → strip "localhost" leaving "/path").
+        let path = rest.strip_prefix("localhost").unwrap_or(rest);
+        return app
+            .opener()
+            .open_path(path.to_string(), None::<String>)
+            .map_err(|e| e.to_string());
+    }
     app.opener()
         .open_url(url, None::<String>)
         .map_err(|e| e.to_string())
@@ -294,6 +305,32 @@ fn read_latest_session<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
     std::fs::read(&path).map_err(|e| e.to_string())
 }
 
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let hex = |b: u8| -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    };
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn mime_for(path: &std::path::Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()) {
         Some("html") => "text/html; charset=utf-8",
@@ -318,7 +355,37 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .register_uri_scheme_protocol("xmlui", move |ctx, request| {
             let path = request.uri().path().trim_start_matches('/');
+            let query = request.uri().query().unwrap_or("");
             let app = ctx.app_handle();
+
+            // Serve arbitrary local files (used by the Sessions browser to
+            // render inline image attachments inside the xmlui:// origin,
+            // since file:// can't load cross-origin).
+            if path == "__file" {
+                let mut file_path = String::new();
+                for pair in query.split('&') {
+                    if let Some(enc) = pair.strip_prefix("path=") {
+                        file_path = percent_decode(enc);
+                        break;
+                    }
+                }
+                let p = std::path::Path::new(&file_path);
+                return match std::fs::read(p) {
+                    Ok(bytes) => tauri::http::Response::builder()
+                        .status(200)
+                        .header("Content-Type", mime_for(p))
+                        .header("Access-Control-Allow-Origin", "*")
+                        .body(Cow::Owned(bytes))
+                        .unwrap(),
+                    Err(e) => {
+                        eprintln!("[xmlui://__file path={}] {}", file_path, e);
+                        tauri::http::Response::builder()
+                            .status(404)
+                            .body(Cow::Owned(Vec::new()))
+                            .unwrap()
+                    }
+                };
+            }
 
             // Special path prefix routes session-data requests through the
             // same scheme as the static assets, avoiding cross-origin CORS.

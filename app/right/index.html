@@ -83,16 +83,20 @@
       // Route external (http/https) anchor clicks through openExternal so
       // Markdown links and any other <a> tags open in the system browser
       // instead of trying to navigate the Tauri WebView (which 404s).
+      // Capture phase so we run before XMLUI's Markdown-internal click
+      // handlers (which otherwise swallow external-anchor clicks).
+      // stopPropagation prevents the downstream handler from also firing.
       document.addEventListener("click", function (e) {
         var a = e.target && e.target.closest && e.target.closest("a");
         if (!a) return;
         var href = a.getAttribute("href");
         if (!href) return;
-        if (/^https?:/i.test(href)) {
+        if (/^(https?|file):/i.test(href)) {
           e.preventDefault();
+          e.stopPropagation();
           window.openExternal(href);
         }
-      });
+      }, true);
       window.scrollAllToTop = function () {
         var root = document.scrollingElement || document.documentElement || document.body;
         if (root) {

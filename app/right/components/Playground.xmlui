@@ -8,12 +8,12 @@
 
   <DataSource
     id="commits"
-    url="https://api.github.com/repos/judell/xmlui-claude-code-desktop/commits"
+    url="https://api.github.com/repos/judell/xmlui-desktop/commits"
     queryParams="{{ per_page: 12 }}" />
 
   <DataSource
     id="commitDetail"
-    url="https://api.github.com/repos/judell/xmlui-claude-code-desktop/commits/{selectedSha}"
+    url="https://api.github.com/repos/judell/xmlui-desktop/commits/{selectedSha}"
     when="{!!selectedSha}" />
 
   <VStack padding="$space-6" gap="$space-6">

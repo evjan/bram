@@ -1,15 +1,15 @@
-<Component name="Workspace" var.selectedSha="{null}" var.unchecked="{[]}" var.submitting="{!!getInflight()}">
+<Component name="Workspace" var.selectedSha="{null}" var.unchecked="{[]}" var.submitting="{!!getInflight()}" var.expandedItemId="{null}">
   <DataSource
     id="proposal"
     url="resources/proposal.json"
     pollIntervalInSeconds="2"
     onLoaded="(data) => {
-      const stored = getInflight();
-      if (!stored) return;
       const currentIds = ((data && data.items) || []).map(i => i.id).sort().join(',');
-      if (currentIds !== (stored.ids || '')) {
+      const stored = getInflight();
+      if (stored && currentIds !== (stored.ids || '')) {
         clearInflight();
         submitting = false;
+        unchecked = [];
       }
     }" />
 
@@ -41,16 +41,57 @@
           when="{proposal.value.items && proposal.value.items.length > 0}"
           value="{proposal.value.description}" />
         <Items data="{proposal.value.items}">
-          <HStack gap="$space-3" verticalAlignment="start">
-            <Checkbox
-              initialValue="true"
-              enabled="{!submitting}"
-              onDidChange="(v) => { unchecked = v ? unchecked.filter(id => id !== $item.id) : [...unchecked, $item.id] }" />
-            <VStack gap="$space-1" width="*">
-              <Text value="{$item.file}" variant="code" />
-              <Text value="{$item.before} → {$item.after}" />
+          <VStack gap="$space-1">
+            <HStack gap="$space-3" verticalAlignment="start">
+              <Checkbox
+                value="{!unchecked.includes($item.id)}"
+                enabled="{!submitting}"
+                onDidChange="(v) => { unchecked = v ? unchecked.filter(id => id !== $item.id) : [...unchecked, $item.id] }" />
+              <VStack gap="$space-1" width="*">
+                <HStack gap="$space-2" verticalAlignment="center">
+                  <Text
+                    value="{($item.status || 'applied') === 'applied' ? 'TO COMMIT' : 'TO APPLY'}"
+                    fontSize="$fontSize-xs"
+                    fontWeight="$fontWeight-bold"
+                    color="{($item.status || 'applied') === 'applied' ? '$color-success-600' : '$color-info-600'}" />
+                  <Text value="{$item.id}" fontWeight="$fontWeight-bold" />
+                  <Link
+                    when="{$item.diff}"
+                    onClick="expandedItemId = (expandedItemId === $item.id ? null : $item.id)"
+                    noIndicator>
+                    <Text
+                      value="{expandedItemId === $item.id ? 'hide diff' : 'show diff'}"
+                      fontSize="$fontSize-xs" />
+                  </Link>
+                </HStack>
+                <Text value="{$item.file}" variant="code" />
+                <Text value="{$item.before} → {$item.after}" />
+              </VStack>
+            </HStack>
+            <VStack
+              when="{expandedItemId === $item.id && $item.diff}"
+              gap="0"
+              marginLeft="$space-8"
+              padding="$space-2"
+              backgroundColor="$color-surface-50"
+              borderRadius="$borderRadius"
+              overflowX="auto">
+              <Items data="{$item.diff.split('\n')}">
+                <Text
+                  fontFamily="$fontFamily-monospace"
+                  fontSize="$fontSize-sm"
+                  paddingHorizontal="$space-2"
+                  whiteSpace="pre"
+                  backgroundColor="{
+                    $item.startsWith('@@') ? '#e0f2fe' :
+                    ($item.startsWith('+') && !$item.startsWith('+++')) ? '#dcfce7' :
+                    ($item.startsWith('-') && !$item.startsWith('---')) ? '#fee2e2' :
+                    'transparent'
+                  }"
+                  value="{$item || ' '}" />
+              </Items>
             </VStack>
-          </HStack>
+          </VStack>
         </Items>
         <VStack
           gap="$space-3"

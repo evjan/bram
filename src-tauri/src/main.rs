@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    xmlui_claude_code_desktop_lib::run()
+    xmlui_desktop_lib::run()
 }

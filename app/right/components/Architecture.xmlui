@@ -1,7 +1,7 @@
 <Component name="Architecture">
   <VStack padding="$space-4" gap="$space-4">
 
-    <Card title="xmlui-claude-code-desktop"
+    <Card title="xmlui-desktop"
           subtitle="A Tauri shell with a real PTY on the left and an XMLUI iframe on the right">
       <Text>
         The Rust backend owns the PTY, a custom xmlui:// URI scheme that serves

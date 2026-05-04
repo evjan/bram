@@ -1,5 +1,5 @@
 This is the user manual for the XMLUI surface that lives in the right pane
-of *xmlui-claude-code-desktop*. (The dialog's title bar already says
+of *xmlui-desktop*. (The dialog's title bar already says
 &ldquo;User manual&rdquo; &mdash; no in-body H1 needed.)
 
 ## What you're looking at
@@ -9,7 +9,7 @@ The window has two panes:
 - **Left pane**: a real terminal (xterm.js + a Rust PTY child) where you
   can run `claude`, `bash`, or anything else.
 - **Right pane**: this XMLUI surface. Its content lives at
-  `~/xmlui-claude-code-desktop/app/right/Main.xmlui`. Edit that file from
+  `~/xmlui-desktop/app/right/Main.xmlui`. Edit that file from
   the left pane (or anywhere) and the right pane reloads automatically.
 
 ## Closing the loop

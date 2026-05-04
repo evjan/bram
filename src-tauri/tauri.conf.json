@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "xmlui-claude-code-desktop",
+  "productName": "xmlui-desktop",
   "version": "0.1.0",
   "identifier": "info.jonudell.xmlui-claude-code-desktop",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "xmlui-claude-code-desktop",
+        "title": "xmlui-desktop",
         "width": 1400,
         "height": 900,
         "resizable": true

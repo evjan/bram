@@ -5178,7 +5178,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "xmlui-claude-code-desktop"
+name = "xmlui-desktop"
 version = "0.1.0"
 dependencies = [
  "notify",

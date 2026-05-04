@@ -745,6 +745,21 @@ fn route_request<R: tauri::Runtime>(
         };
     }
 
+    // proposal.json is the worklist convention. Treat it as always-present
+    // (empty when the project hasn't opted in) so the Workspace tool can
+    // poll without flooding devtools with 404s in guest projects.
+    if path == "resources/proposal.json" {
+        let proj = project_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
+        return match std::fs::read(proj.join(path)) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(_) => (
+                200,
+                "application/json; charset=utf-8",
+                br#"{"description":"","items":[]}"#.to_vec(),
+            ),
+        };
+    }
+
     // System namespaces served from the binary's bundled app/ dir.
     // Project-relative paths everywhere else.
     let app_root = resolve_app_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));

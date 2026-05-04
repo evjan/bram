@@ -1,10 +1,7 @@
 <App layout="horizontal">
   <DataSource id="manualSrc" url="manual.md" />
 
-  <AppHeader title="XMLUI">
-    <Text fontSize="$fontSize-sm">
-      Claude or Codex can use this app for interaction and display
-    </Text>
+  <AppHeader>
     <property name="profileMenuTemplate">
       <Toolbar onViewSource="mainSrc.open()" onViewManual="manualDialog.open()" />
     </property>

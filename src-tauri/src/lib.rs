@@ -398,6 +398,129 @@ fn session_title(path: &Path) -> std::io::Result<Option<String>> {
     Ok(custom_title.or(first_user))
 }
 
+fn message_text(record: &serde_json::Value) -> String {
+    let Some(content) = record.pointer("/message/content") else {
+        return String::new();
+    };
+    match content {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|c| {
+                if c.get("type").and_then(|v| v.as_str()) == Some("text") {
+                    c.get("text").and_then(|v| v.as_str()).map(String::from)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        _ => String::new(),
+    }
+}
+
+fn find_snippets(text: &str, q_lower: &str, max_count: usize) -> Vec<String> {
+    let half: usize = 40;
+    let text_lower = text.to_lowercase();
+    let mut snippets: Vec<String> = Vec::new();
+    let mut search_start: usize = 0;
+    while snippets.len() < max_count && search_start < text.len() {
+        let Some(rel) = text_lower[search_start..].find(q_lower) else {
+            break;
+        };
+        let abs = search_start + rel;
+        let mut s_start = abs.saturating_sub(half);
+        while s_start < text.len() && !text.is_char_boundary(s_start) {
+            s_start += 1;
+        }
+        let mut s_end = (abs + q_lower.len() + half).min(text.len());
+        while s_end > 0 && !text.is_char_boundary(s_end) {
+            s_end -= 1;
+        }
+        if s_start >= s_end {
+            break;
+        }
+        let snippet: String = text[s_start..s_end]
+            .chars()
+            .map(|c| if c.is_whitespace() { ' ' } else { c })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        snippets.push(snippet);
+        search_start = abs + q_lower.len();
+    }
+    snippets
+}
+
+fn search_sessions<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<serde_json::Value>, String> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dir = sessions_dir(app)?;
+    let q_lower = q.to_lowercase();
+
+    let mut entries: Vec<(PathBuf, std::time::SystemTime, u64)> = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        entries.push((path, modified, meta.len()));
+    }
+    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.truncate(limit);
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    for (path, modified, size) in entries {
+        let title = session_title(&path).ok().flatten();
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+        let mut all_text = String::new();
+        for line in content.lines() {
+            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let role = record.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if role != "user" && role != "assistant" {
+                continue;
+            }
+            let text = message_text(&record);
+            if !text.is_empty() {
+                all_text.push_str(&text);
+                all_text.push('\n');
+            }
+        }
+        let snippets = find_snippets(&all_text, &q_lower, 3);
+        if !snippets.is_empty() {
+            let id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            let mtime_secs = modified
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            results.push(serde_json::json!({
+                "id": id,
+                "title": title,
+                "mtime": mtime_secs,
+                "size": size,
+                "snippets": snippets,
+            }));
+        }
+    }
+    Ok(results)
+}
+
 fn list_sessions<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<SessionEntry>, String> {
     let dir = sessions_dir(app)?;
     let mut entries = Vec::new();
@@ -597,6 +720,23 @@ pub fn run() {
                     )
                 } else if rest == "latest" {
                     ("text/plain; charset=utf-8", read_latest_session(app))
+                } else if rest == "search" {
+                    let mut q = String::new();
+                    let mut scope = String::from("recent");
+                    for pair in query.split('&') {
+                        if let Some(v) = pair.strip_prefix("q=") {
+                            q = percent_decode(v);
+                        } else if let Some(v) = pair.strip_prefix("scope=") {
+                            scope = percent_decode(v);
+                        }
+                    }
+                    let limit = if scope == "all" { usize::MAX } else { 10 };
+                    (
+                        "application/json; charset=utf-8",
+                        search_sessions(app, &q, limit).and_then(|entries| {
+                            serde_json::to_vec(&entries).map_err(|e| e.to_string())
+                        }),
+                    )
                 } else {
                     ("text/plain; charset=utf-8", read_session(app, rest))
                 };

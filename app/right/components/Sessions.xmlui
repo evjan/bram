@@ -106,6 +106,14 @@
             paddingVertical="$space-3"
             backgroundColor="$color-surface-50"
             borderTop="1px dashed $borderColor">
+            <HStack horizontalAlignment="end">
+              <Button
+                icon="down"
+                variant="ghost"
+                size="xs"
+                tooltip="Scroll to bottom"
+                onClick="window.scrollAllToBottom()" />
+            </HStack>
             <Text when="{sessionContent.inProgress}">Loading…</Text>
             <Items
               when="{sessionContent.value}"
@@ -132,6 +140,14 @@
                 </VStack>
               </VStack>
             </Items>
+            <HStack horizontalAlignment="end">
+              <Button
+                icon="up"
+                variant="ghost"
+                size="xs"
+                tooltip="Scroll to top"
+                onClick="window.scrollAllToTop()" />
+            </HStack>
           </VStack>
         </VStack>
       </Items>

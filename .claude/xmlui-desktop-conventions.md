@@ -85,7 +85,12 @@ Lifecycle:
      touch `proposal.json`.
    - *Approve selected (N)* — only enabled when ≥1 item is checked.
      You receive `approved: {"items":[...], "feedback":"..."}`.
-     Execute the items in the array; respond to the optional feedback.
+     **Execute ONLY the items in that JSON array — do NOT re-read
+     `resources/proposal.json` to figure out what to do.** The user has
+     already triaged; items they unchecked are deliberately absent from
+     the array even though they're still in the file. Treat the array
+     as authoritative; treat `proposal.json` at this moment as stale.
+     Respond to the optional feedback.
    - *Drop selected (N)* — only enabled when ≥1 item is checked.
      You receive `drop: {"ids":[...], "feedback":"..."}`. Remove the
      listed ids from `proposal.json` without acting; respond to the

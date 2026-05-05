@@ -3,9 +3,68 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
 
+use include_dir::{include_dir, Dir};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use tauri::{ipc::Channel, AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
+
+// The `app/` tree is embedded in the binary at compile time so
+// release artifacts ship as a single self-contained file. We
+// deliberately do *not* reuse Tauri's asset_resolver (which also
+// embeds `app/` via frontendDist) because that resolver
+// SPA-fallbacks unknown paths to index.html — disastrous for
+// XMLUI's optional code-behind probes that legitimately 404. The
+// duplication costs ~6MB; the reliability is worth it.
+static EMBEDDED_APP: Dir = include_dir!("$CARGO_MANIFEST_DIR/../app");
+
+// Resolve a path within `app/` to (bytes, mime). When on-disk app/
+// exists, that is ground truth — a missing file is genuinely missing.
+// Only fall back to the embedded tree when there is no on-disk app/.
+fn serve_app_file<R: tauri::Runtime>(
+    app: Option<&AppHandle<R>>,
+    rel: &str,
+) -> Option<(Vec<u8>, &'static str)> {
+    if let Some(root) = resolve_app_root(app) {
+        let p = root.join(rel);
+        return std::fs::read(&p).ok().map(|bytes| (bytes, mime_for(&p)));
+    }
+    EMBEDDED_APP
+        .get_file(rel)
+        .map(|file| (file.contents().to_vec(), mime_for(std::path::Path::new(rel))))
+}
+
+// Resolve a path within `app/` to a real on-disk path. If the
+// on-disk app_root is present, returns app_root/rel directly. Else
+// extracts the embedded file into a per-binary cache dir and returns
+// that path. Used for things that need a real filesystem path —
+// bash --rcfile, etc. — not just bytes.
+fn extract_app_file<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    rel: &str,
+) -> Result<PathBuf, String> {
+    if let Some(root) = resolve_app_root(Some(app)) {
+        let p = root.join(rel);
+        return if p.exists() {
+            Ok(p)
+        } else {
+            Err(format!("on-disk app file not found: {}", p.display()))
+        };
+    }
+    let file = EMBEDDED_APP
+        .get_file(rel)
+        .ok_or_else(|| format!("embedded app file not found: {}", rel))?;
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("no cache dir: {}", e))?
+        .join("app");
+    let target = cache_root.join(rel);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&target, file.contents()).map_err(|e| e.to_string())?;
+    Ok(target)
+}
 
 struct PtyState {
     master: Box<dyn MasterPty + Send>,
@@ -243,8 +302,24 @@ fn pty_spawn(
         .map_err(|e| e.to_string())?;
 
     let mut command = CommandBuilder::new(cmd);
+    // Substitute placeholder paths under ./app/ with absolute paths into
+    // the bundled app dir, so bash's --rcfile (and any future
+    // app-relative arg) resolves correctly regardless of the project
+    // root we set as the PTY's cwd. Falls back to extracting from the
+    // embedded tree when no on-disk app/ is alongside the binary.
     for a in args {
-        command.arg(a);
+        let resolved = if let Some(rest) = a.strip_prefix("./app/") {
+            match extract_app_file(&app, rest) {
+                Ok(p) => p.to_string_lossy().into_owned(),
+                Err(e) => {
+                    eprintln!("[pty_spawn] could not resolve {}: {}", a, e);
+                    a
+                }
+            }
+        } else {
+            a
+        };
+        command.arg(resolved);
     }
     if let Some(root) = project_root(Some(&app)) {
         command.cwd(root);
@@ -324,7 +399,13 @@ fn get_right_pane_url(state: State<'_, RightPaneUrlState>) -> String {
 #[tauri::command]
 fn open_devtools(window: tauri::WebviewWindow) {
     #[cfg(debug_assertions)]
-    window.open_devtools();
+    {
+        if window.is_devtools_open() {
+            window.close_devtools();
+        } else {
+            window.open_devtools();
+        }
+    }
     #[cfg(not(debug_assertions))]
     let _ = window;
 }
@@ -657,6 +738,81 @@ fn mime_for(path: &std::path::Path) -> &'static str {
     }
 }
 
+// Markers used to identify the xmlui-desktop block inside a project's
+// CLAUDE.md. The block contains a Claude Code @-import that pulls in
+// the full conventions sidecar; future runs of run_enhance replace
+// what's between the markers without disturbing surrounding content.
+const ENHANCE_MARKER_START: &str = "<!-- xmlui-desktop:start -->";
+const ENHANCE_MARKER_END: &str = "<!-- xmlui-desktop:end -->";
+const ENHANCE_SIDECAR_REL: &str = ".claude/xmlui-desktop-conventions.md";
+
+fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+    let proj = project_root(Some(app)).ok_or("no project root")?;
+    let claude_md = proj.join("CLAUDE.md");
+    let sidecar = proj.join(ENHANCE_SIDECAR_REL);
+    let claude_md_has_marker = std::fs::read_to_string(&claude_md)
+        .map(|s| s.contains(ENHANCE_MARKER_START))
+        .unwrap_or(false);
+    let sidecar_exists = sidecar.exists();
+    let body = serde_json::json!({
+        "enhanced": claude_md_has_marker && sidecar_exists,
+        "claudeMd": claude_md_has_marker,
+        "sidecar": sidecar_exists,
+        "claudeMdPath": claude_md.display().to_string(),
+        "sidecarPath": sidecar.display().to_string(),
+    });
+    serde_json::to_vec(&body).map_err(|e| e.to_string())
+}
+
+fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+    let proj = project_root(Some(app)).ok_or("no project root")?;
+    let (conventions_bytes, _mime) = serve_app_file(Some(app), "__shell/conventions.md")
+        .ok_or_else(|| "conventions template not found".to_string())?;
+    let conventions = String::from_utf8(conventions_bytes)
+        .map_err(|e| format!("conventions template not utf-8: {}", e))?;
+
+    let sidecar_path = proj.join(ENHANCE_SIDECAR_REL);
+    if let Some(parent) = sidecar_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {}", parent.display(), e))?;
+    }
+    std::fs::write(&sidecar_path, &conventions)
+        .map_err(|e| format!("write sidecar: {}", e))?;
+
+    let claude_md_path = proj.join("CLAUDE.md");
+    let existing = std::fs::read_to_string(&claude_md_path).unwrap_or_default();
+    let block = format!(
+        "{}\n@{}\n{}",
+        ENHANCE_MARKER_START, ENHANCE_SIDECAR_REL, ENHANCE_MARKER_END
+    );
+    let new_content = if let Some(start_idx) = existing.find(ENHANCE_MARKER_START) {
+        // Replace existing block in-place.
+        let tail = &existing[start_idx..];
+        let end_offset = tail
+            .find(ENHANCE_MARKER_END)
+            .map(|i| start_idx + i + ENHANCE_MARKER_END.len())
+            .unwrap_or(existing.len());
+        let mut s = existing.clone();
+        s.replace_range(start_idx..end_offset, &block);
+        s
+    } else if existing.is_empty() {
+        format!("{}\n", block)
+    } else {
+        format!("{}\n\n{}\n", existing.trim_end(), block)
+    };
+    std::fs::write(&claude_md_path, &new_content)
+        .map_err(|e| format!("write CLAUDE.md: {}", e))?;
+
+    let body = serde_json::json!({
+        "enhanced": true,
+        "wrote": [
+            sidecar_path.display().to_string(),
+            claude_md_path.display().to_string(),
+        ],
+    });
+    serde_json::to_vec(&body).map_err(|e| e.to_string())
+}
+
 // Routing for the right-pane HTTP server. Returns (status, content-type, body).
 fn route_request<R: tauri::Runtime>(
     app: &AppHandle<R>,
@@ -745,6 +901,30 @@ fn route_request<R: tauri::Runtime>(
         };
     }
 
+    // Enhance status / action: tells the agent tools banner whether the
+    // current project has the conventions sidecar + CLAUDE.md import.
+    if path == "__enhance/status" {
+        return match enhance_status(app) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__enhance/status] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+    if path == "__enhance/run" {
+        return match run_enhance(app) {
+            Ok(bytes) => {
+                eprintln!("[http /__enhance/run] wrote sidecar + updated CLAUDE.md");
+                (200, "application/json; charset=utf-8", bytes)
+            }
+            Err(e) => {
+                eprintln!("[http /__enhance/run] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
     // proposal.json is the worklist convention. Treat it as always-present
     // (empty when the project hasn't opted in) so the Workspace tool can
     // poll without flooding devtools with 404s in guest projects.
@@ -760,19 +940,27 @@ fn route_request<R: tauri::Runtime>(
         };
     }
 
-    // System namespaces served from the binary's bundled app/ dir.
-    // Project-relative paths everywhere else.
-    let app_root = resolve_app_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
-    let full: PathBuf = if let Some(rest) = path.strip_prefix("__shell/") {
-        app_root.join("__shell").join(rest)
+    // System namespaces served from the binary's bundled app/ dir
+    // (on-disk if present, embedded otherwise).
+    let app_rel: Option<String> = if let Some(rest) = path.strip_prefix("__shell/") {
+        Some(format!("__shell/{}", rest))
     } else if let Some(rest) = path.strip_prefix("__vendor/") {
-        app_root.join("vendor").join(rest)
+        Some(format!("vendor/{}", rest))
     } else if let Some(rest) = path.strip_prefix("__tools/") {
-        app_root.join("tools").join(rest)
+        Some(format!("tools/{}", rest))
     } else {
-        let proj = project_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
-        proj.join(path)
+        None
     };
+    if let Some(rel) = app_rel {
+        return match serve_app_file(Some(app), &rel) {
+            Some((bytes, mime)) => (200, mime, bytes),
+            None => (404, "text/plain; charset=utf-8", Vec::new()),
+        };
+    }
+
+    // Project-relative paths everywhere else.
+    let proj = project_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
+    let full = proj.join(path);
     match std::fs::read(&full) {
         Ok(bytes) => (200, mime_for(&full), bytes),
         Err(_) => (404, "text/plain; charset=utf-8", Vec::new()),
@@ -827,11 +1015,6 @@ pub fn run() {
         .setup(move |app| {
             use tauri::Emitter;
 
-            #[cfg(debug_assertions)]
-            if let Some(window) = app.get_webview_window("main") {
-                window.open_devtools();
-            }
-
             // Bind the right-pane HTTP server before anything else so the
             // URL is available the moment the parent shell asks for it.
             let server = tiny_http::Server::http("127.0.0.1:0")
@@ -853,20 +1036,21 @@ pub fn run() {
                 }
             });
 
-            let Some(app_root) = resolve_app_root(Some(app.handle())) else {
-                eprintln!("[watcher] could not resolve app root");
-                return Ok(());
-            };
             let Some(proj_root) = project_root(Some(app.handle())) else {
                 eprintln!("[watcher] could not resolve project root");
                 return Ok(());
             };
-            let watch_paths = vec![
-                proj_root,
-                app_root.join("__shell"),
-                app_root.join("vendor"),
-                app_root.join("tools"),
-            ];
+            let mut watch_paths = vec![proj_root];
+            // In release artifacts the embedded app/ has no on-disk
+            // counterpart; only watch app/ paths in dev where the
+            // filesystem-watcher reload loop is meaningful.
+            if let Some(app_root) = resolve_app_root(Some(app.handle())) {
+                watch_paths.push(app_root.join("__shell"));
+                watch_paths.push(app_root.join("vendor"));
+                watch_paths.push(app_root.join("tools"));
+            } else {
+                eprintln!("[watcher] no on-disk app/; using embedded tree (no app/ reload)");
+            }
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 use notify::{recommended_watcher, Event, EventKind, RecursiveMode, Watcher};

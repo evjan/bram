@@ -2,13 +2,6 @@
   "description": "Cross-platform release artifacts for xmlui-desktop: matrix CI build, single-file binary (app/ embedded), install scripts, and a /releases page that mirrors xmlui.org/get-started's shape.",
   "items": [
     {
-      "id": "embed-app-assets",
-      "status": "proposed",
-      "file": "src-tauri/src/lib.rs (+ Cargo.toml)",
-      "before": "Loopback HTTP server reads files from the on-disk `app/` directory next to the binary",
-      "after": "Use `include_dir!` to embed `app/` into the binary at compile time. At runtime, prefer the on-disk `app/` if it exists next to the binary or one level up (preserves the local-dev filesystem-watcher reload loop); otherwise serve from the embedded tree. Tools app (`app/tools/`) gets the same treatment."
-    },
-    {
       "id": "build-workflow",
       "status": "proposed",
       "file": ".github/workflows/build.yml (new)",

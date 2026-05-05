@@ -1,8 +1,23 @@
+<Theme width-navPanel-App="$space-40">
 <App layout="vertical">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
 
   <AppHeader>
     <Text fontWeight="bold">Tools</Text>
+    <Theme paddingHorizontal-Button-sm="$space-1">
+      <HStack gap="$space-0_5">
+        <Button
+          label="A−"
+          variant="ghost"
+          tooltip="Decrease app font size"
+          onClick="window.setAppFontSize(window.getAppFontSize() - 1)" />
+        <Button
+          label="A+"
+          variant="ghost"
+          tooltip="Increase app font size"
+          onClick="window.setAppFontSize(window.getAppFontSize() + 1)" />
+      </HStack>
+    </Theme>
   </AppHeader>
 
   <NavPanel>
@@ -48,3 +63,4 @@ What setup deliberately does **not** do:
     <Page url="/architecture"><Architecture /></Page>
   </Pages>
 </App>
+</Theme>

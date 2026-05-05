@@ -75,6 +75,13 @@ term.attachCustomKeyEventHandler((ev) => {
   return true;
 });
 
+document
+  .getElementById("font-smaller")
+  ?.addEventListener("click", () => setTerminalFontSize(term.options.fontSize - 1));
+document
+  .getElementById("font-larger")
+  ?.addEventListener("click", () => setTerminalFontSize(term.options.fontSize + 1));
+
 (() => {
   const splitter = document.getElementById("splitter");
   const left = document.querySelector(".pane-left");

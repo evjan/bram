@@ -1,19 +1,4 @@
 {
-  "description": "Cross-platform release artifacts for xmlui-desktop: matrix CI build, single-file binary (app/ embedded), install scripts, and a /releases page that mirrors xmlui.org/get-started's shape.",
-  "items": [
-    {
-      "id": "build-workflow",
-      "status": "applied",
-      "file": ".github/workflows/build.yml (new)",
-      "before": "No CI; releases are produced manually from a local Mac",
-      "after": "Workflow modeled on ~/xmlui-cli's: workflow_dispatch with `tag` input, four-target matrix (linux-amd64 ubuntu-latest, macos-arm64 macos-latest, macos-intel macos-13, windows-amd64 windows-latest). Each job: rust-toolchain stable, Swatinem/rust-cache for src-tauri, apt install of webkit2gtk + friends on Linux, `cargo build` (debug — the shipping format) in src-tauri/, copy the binary out, tar.gz on Unix / zip on Windows, attach to the release. `publish-checksums` job downloads artifacts, generates SHA256SUMS, attaches it plus install.sh + install.ps1. Note: publish-checksums depends on install.sh + install.ps1 existing at repo root; trigger the workflow only after install-scripts has merged."
-    },
-    {
-      "id": "swap-releases-page-for-workflow-body",
-      "status": "applied",
-      "file": "app/tools/Main.xmlui + app/tools/components/Releases.xmlui + .github/workflows/build.yml",
-      "before": "Uncommitted: in-app /releases route (NavLink + Page + Releases.xmlui). build.yml's publish-checksums had no `body:`.",
-      "after": "Reverted /releases NavLink + Page from app/tools/Main.xmlui, deleted app/tools/components/Releases.xmlui. Added a Markdown `body:` to the publish-checksums upload step in .github/workflows/build.yml: platform-tabbed install one-liners (macOS/Linux + Windows), audit-friendly manual install, troubleshooting (PATH, Gatekeeper, update, uninstall). Visible on every GitHub release page before any install."
-    }
-  ]
+  "description": "",
+  "items": []
 }

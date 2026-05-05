@@ -1,0 +1,197 @@
+name: Build Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag for this release (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag }}
+
+  build:
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-amd64
+            ext: ""
+            archive: tar.gz
+          - os: macos-latest
+            label: macos-arm64
+            ext: ""
+            archive: tar.gz
+          - os: macos-13
+            label: macos-intel
+            ext: ""
+            archive: tar.gz
+          - os: windows-latest
+            label: windows-amd64
+            ext: .exe
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies (Tauri webkit2gtk + friends)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            curl \
+            wget \
+            file
+
+      - name: Build (debug; debug is the shipping format)
+        working-directory: src-tauri
+        run: cargo build
+
+      - name: Package (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cp src-tauri/target/debug/xmlui-desktop${{ matrix.ext }} ./xmlui-desktop${{ matrix.ext }}
+          tar -czf xmlui-desktop-${{ matrix.label }}.${{ matrix.archive }} xmlui-desktop${{ matrix.ext }}
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Copy-Item src-tauri/target/debug/xmlui-desktop${{ matrix.ext }} -Destination ./xmlui-desktop${{ matrix.ext }}
+          Compress-Archive -Path xmlui-desktop${{ matrix.ext }} -DestinationPath xmlui-desktop-${{ matrix.label }}.${{ matrix.archive }}
+
+      - name: Upload to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: xmlui-desktop-${{ matrix.label }}.${{ matrix.archive }}
+          tag_name: ${{ github.event.inputs.tag }}
+
+  publish-checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release artifacts
+        run: |
+          mkdir artifacts
+          cd artifacts
+          for asset in \
+            xmlui-desktop-linux-amd64.tar.gz \
+            xmlui-desktop-macos-arm64.tar.gz \
+            xmlui-desktop-macos-intel.tar.gz \
+            xmlui-desktop-windows-amd64.zip; do
+            curl -fsSL -o "${asset}" \
+              "https://github.com/${{ github.repository }}/releases/download/${{ github.event.inputs.tag }}/${asset}"
+          done
+
+      - name: Generate SHA256SUMS
+        working-directory: artifacts
+        run: |
+          shasum -a 256 *.tar.gz *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Checkout repository (for install scripts)
+        uses: actions/checkout@v4
+        with:
+          path: repo
+
+      - name: Append installer script hashes to SHA256SUMS
+        run: |
+          shasum -a 256 repo/install.sh | sed 's| repo/| |' >> artifacts/SHA256SUMS
+          shasum -a 256 repo/install.ps1 | sed 's| repo/| |' >> artifacts/SHA256SUMS
+          cat artifacts/SHA256SUMS
+
+      - name: Upload SHA256SUMS and installer scripts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/SHA256SUMS
+            repo/install.sh
+            repo/install.ps1
+          tag_name: ${{ github.event.inputs.tag }}
+          body: |
+            ## Install
+
+            ### macOS / Linux
+
+            ```bash
+            curl -fsSL https://github.com/judell/xmlui-desktop/releases/latest/download/install.sh | sh
+            ```
+
+            The script detects your platform, verifies the archive's SHA256 against the published `SHA256SUMS`, extracts the binary, and copies it to `/usr/local/bin` (if writable) or `~/.local/bin`. On macOS it also clears the `com.apple.quarantine` xattr. No `sudo` required.
+
+            Confirm the install:
+
+            ```bash
+            xmlui-desktop --help
+            ```
+
+            ### Windows
+
+            ```powershell
+            powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/judell/xmlui-desktop/releases/latest/download/install.ps1 | iex"
+            ```
+
+            Downloads `xmlui-desktop-windows-amd64.zip`, verifies its SHA256, extracts `xmlui-desktop.exe` to `~/bin`, and adds `~/bin` to your user `PATH`.
+
+            Confirm the install in a new PowerShell window:
+
+            ```powershell
+            xmlui-desktop --help
+            ```
+
+            ## Audit-friendly manual install
+
+            ```bash
+            # Download artifact + checksums
+            curl -fsSLO https://github.com/judell/xmlui-desktop/releases/${{ github.event.inputs.tag }}/download/SHA256SUMS
+            curl -fsSLO https://github.com/judell/xmlui-desktop/releases/${{ github.event.inputs.tag }}/download/xmlui-desktop-macos-arm64.tar.gz   # or your platform
+            shasum -a 256 -c SHA256SUMS --ignore-missing
+            tar -xzf xmlui-desktop-*.tar.gz
+            sudo mv xmlui-desktop /usr/local/bin/
+            ```
+
+            Other platforms: replace `xmlui-desktop-macos-arm64.tar.gz` with `xmlui-desktop-macos-intel.tar.gz`, `xmlui-desktop-linux-amd64.tar.gz`, or `xmlui-desktop-windows-amd64.zip`.
+
+            On macOS, if installing from a browser download instead of `curl`, also run:
+
+            ```bash
+            xattr -d com.apple.quarantine xmlui-desktop
+            ```
+
+            On Windows, use `Expand-Archive` on `xmlui-desktop-windows-amd64.zip`, then move `xmlui-desktop.exe` to a directory on your `PATH`.
+
+            ## Troubleshooting
+
+            - **`xmlui-desktop` not found on PATH.** Re-run the install script, or follow its printed PATH advice.
+            - **macOS Gatekeeper blocks first launch.** The install script clears the quarantine xattr automatically. For browser downloads, run the `xattr -d com.apple.quarantine` command above.
+            - **Update.** Re-run the install command.
+            - **Uninstall.** Delete the binary from `/usr/local/bin/xmlui-desktop`, `~/.local/bin/xmlui-desktop`, or `~/bin/xmlui-desktop.exe`.

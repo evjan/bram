@@ -18,6 +18,17 @@ running on the left.
 See [`CLAUDE.md`](./CLAUDE.md) for the conventions Claude Code follows
 when driving the right pane.
 
+
+
+
+
+
+https://github.com/user-attachments/assets/3d617d7a-f864-41f4-bc77-c6449a8c1bf2
+
+
+
+
+
 ## Build
 
 The frontend is static — no bundler, no `package.json`. The only build

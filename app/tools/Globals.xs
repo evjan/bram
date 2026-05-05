@@ -66,6 +66,7 @@ function sessionTurns(jsonlText) {
     if (r.type !== 'user' && r.type !== 'assistant') continue;
     if (!r.message || !r.message.content) continue;
     let text = '';
+    const inlineImages = [];
     const content = r.message.content;
     if (typeof content === 'string') {
       text = content;
@@ -74,13 +75,19 @@ function sessionTurns(jsonlText) {
         .filter(c => c && c.type === 'text')
         .map(c => c.text)
         .join('\n\n');
+      for (const c of content) {
+        if (c && c.type === 'image' && c.source && c.source.type === 'base64' && c.source.data) {
+          const mt = c.source.media_type || 'image/png';
+          inlineImages.push('data:' + mt + ';base64,' + c.source.data);
+        }
+      }
     }
-    if (!text) continue;
+    if (!text && inlineImages.length === 0) continue;
     const rewritten = rewriteXmluiDocUrls(text);
     turns.push({
       role: r.type,
       text: stripImagePaths(rewritten),
-      images: extractImagePaths(rewritten)
+      images: extractImagePaths(rewritten).concat(inlineImages)
     });
   }
   return turns;

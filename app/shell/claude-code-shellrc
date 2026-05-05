@@ -1,15 +1,1 @@
-_agent_echo_rollover() {
-  if command -v node >/dev/null 2>&1; then
-    node ./scripts/rollover-agent-echo.js >/dev/null 2>&1 || true
-  fi
-}
-
-claude() {
-  _agent_echo_rollover
-  command claude "$@"
-}
-
-codex() {
-  _agent_echo_rollover
-  command codex "$@"
-}
+echo "You can launch claude or codex here."

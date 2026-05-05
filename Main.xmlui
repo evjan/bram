@@ -4,17 +4,12 @@
   </AppHeader>
 
   <VStack padding="$space-6" gap="$space-4" maxWidth="640px">
-    <Heading level="h1">Welcome</Heading>
-    <Text>
-      This is the xmlui-desktop dogfood project. Open the tools drawer
-      using the bottom-toolbar `tools` button to access Workspace,
-      Sessions, and Architecture.
-    </Text>
-    <Text>
-      Point xmlui-desktop at any other XMLUI project root to use it as
-      a development surface for that project — the tools drawer
-      remains available regardless of which project loads in the right
-      pane.
-    </Text>
+    <Markdown content="# Welcome
+
+This is the xmlui-desktop project. Unless you are developing this
+project, you probably want to launch `xmlui-desktop` in a directory
+that contains your own XMLUI project. Then use the top-toolbar
+`agent tools` button to access Workspace (track pending items and
+commits) and Sessions (read/search Claude sessions)." />
   </VStack>
 </App>

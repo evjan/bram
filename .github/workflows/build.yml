@@ -7,11 +7,6 @@ on:
         description: "Tag for this release (e.g. v0.1.0)"
         required: true
         type: string
-      changelog:
-        description: "Optional curated changelog (Markdown bullets). If empty, the workflow auto-generates from git log between the previous tag and HEAD."
-        required: false
-        type: string
-        default: ""
 
 permissions:
   contents: write
@@ -28,20 +23,14 @@ jobs:
       - name: Compose release body
         env:
           TAG: ${{ github.event.inputs.tag }}
-          CURATED_CHANGELOG: ${{ github.event.inputs.changelog }}
         run: |
-          if [ -n "$CURATED_CHANGELOG" ]; then
-            CHANGELOG_HEADER="## What's new in ${TAG}"
-            CHANGELOG_BODY="$CURATED_CHANGELOG"
+          PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${TAG}\$" | head -1 || true)
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG_HEADER="## Changes since ${PREV_TAG}"
+            CHANGELOG_BODY=$(git log "${PREV_TAG}..HEAD" --pretty=format:'- %s' --no-merges)
           else
-            PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${TAG}\$" | head -1 || true)
-            if [ -n "$PREV_TAG" ]; then
-              CHANGELOG_HEADER="## Changes since ${PREV_TAG}"
-              CHANGELOG_BODY=$(git log "${PREV_TAG}..HEAD" --pretty=format:'- %s' --no-merges)
-            else
-              CHANGELOG_HEADER="## Changes"
-              CHANGELOG_BODY=$(git log HEAD --pretty=format:'- %s' --no-merges)
-            fi
+            CHANGELOG_HEADER="## Changes"
+            CHANGELOG_BODY=$(git log HEAD --pretty=format:'- %s' --no-merges)
           fi
 
           cat > release-body.md <<'INSTALL_EOF'

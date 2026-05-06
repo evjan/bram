@@ -1,4 +1,4 @@
-# xmlui-desktop
+  # xmlui-desktop
 
 A desktop app that pairs an AI coding agent with the XMLUI app it's building.
 
@@ -49,3 +49,56 @@ Tauri docs: <https://tauri.app/develop/>, <https://tauri.app/distribute/>.
 - `src-tauri/` — Rust backend (PTY for the terminal, custom `xmlui://`
   URI scheme, filesystem watcher, IPC handlers).
 - `scripts/` — auxiliary scripts.
+
+## Working with a real backend
+
+xmlui-desktop binds the right-pane HTTP server to
+`127.0.0.1:<random-port>` (it uses port `0` and lets the OS pick).
+That's fine for projects that talk only to public APIs or static
+files. It breaks when your project needs a **fixed origin** — OAuth
+callbacks, CORS allowlists, hardcoded API base URLs.
+
+> **Compatibility note.** The right pane is an iframe. Backends that
+> send `X-Frame-Options: DENY` or `Content-Security-Policy:
+> frame-ancestors 'none'` (common for security-sensitive admin UIs)
+> cannot be loaded into the right pane regardless of port. For those
+> projects, open them in a standalone browser instead.
+
+### The redirect pattern
+
+Run your frontend on a known port in a separate terminal:
+
+```
+python3 -m http.server 8080
+```
+
+Add a self-redirect at the top of your project's `index.html`:
+
+```html
+<script>
+  if (location.hostname === '127.0.0.1' && location.port !== '8080') {
+    var devQuery = location.search || '?defaultParam=value';
+    location.replace('http://localhost:8080' + location.pathname + devQuery + location.hash);
+  }
+</script>
+```
+
+Launch `xmlui-desktop` from the project root. Its iframe loads the
+random-port URL once, your script bounces it to `localhost:8080`, and
+your fixed-origin bindings line up.
+
+### URL parameters
+
+Use query strings to parameterize the frontend without rebuilding —
+e.g. `?city=santarosa` to switch tenant. The redirect above preserves
+whatever `?key=value` you launch with, or supplies a default when
+launched without one.
+
+### Working example
+
+[community-calendar](https://github.com/judell/community-calendar) uses
+this pattern for GitHub-OAuth-via-Supabase. See `xmlui/index.html` for
+the redirect snippet and
+[`docs/app-architecture.md`](https://github.com/judell/community-calendar/blob/main/docs/app-architecture.md)
+for the Supabase URL-Configuration setup that requires the fixed
+`localhost:8080/**` origin.

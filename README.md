@@ -61,8 +61,11 @@ callbacks, CORS allowlists, hardcoded API base URLs.
 > **Compatibility note.** The right pane is an iframe. Backends that
 > send `X-Frame-Options: DENY` or `Content-Security-Policy:
 > frame-ancestors 'none'` (common for security-sensitive admin UIs)
-> cannot be loaded into the right pane regardless of port. For those
-> projects, open them in a standalone browser instead.
+> cannot be loaded into the right pane regardless of port. Workarounds:
+> configure the backend's dev mode to relax those headers, or serve
+> the UI files via a permissive dev server (e.g. `npx http-server`)
+> while keeping the real backend running for API calls. Otherwise,
+> open the project in a standalone browser.
 
 ### The redirect pattern
 

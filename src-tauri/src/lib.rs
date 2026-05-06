@@ -1536,17 +1536,29 @@ pub fn run() {
                 eprintln!("[watcher] could not resolve project root");
                 return Ok(());
             };
-            let mut watch_paths = vec![proj_root];
-            // In release artifacts the embedded app/ has no on-disk
-            // counterpart; only watch app/ paths in dev where the
-            // filesystem-watcher reload loop is meaningful.
+            // Watch contract: events are emitted on two channels, NOT one.
+            //   - "right-pane-reload" fires for changes inside proj_root only;
+            //     main.js reloads the right-pane iframe alone. The agent
+            //     tools drawer is poll-driven, so it does NOT need to reload
+            //     when user-project files change. Keeping the drawer iframe
+            //     stable here prevents postMessage-into-torn-down-iframe
+            //     races on Approve/Drop clicks.
+            //   - "tools-pane-reload" fires for changes under app/__shell,
+            //     app/vendor, or app/tools; main.js reloads BOTH iframes
+            //     (the drawer's own code changed, and the right pane may
+            //     consume __shell/helpers.js too).
+            // Do not collapse these back into a single event.
+            let proj_root_path = proj_root.clone();
+            let mut tools_pane_paths: Vec<std::path::PathBuf> = Vec::new();
             if let Some(app_root) = resolve_app_root(Some(app.handle())) {
-                watch_paths.push(app_root.join("__shell"));
-                watch_paths.push(app_root.join("vendor"));
-                watch_paths.push(app_root.join("tools"));
+                tools_pane_paths.push(app_root.join("__shell"));
+                tools_pane_paths.push(app_root.join("vendor"));
+                tools_pane_paths.push(app_root.join("tools"));
             } else {
                 eprintln!("[watcher] no on-disk app/; using embedded tree (no app/ reload)");
             }
+            let mut watch_paths: Vec<std::path::PathBuf> = vec![proj_root_path.clone()];
+            watch_paths.extend(tools_pane_paths.iter().cloned());
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 use notify::{recommended_watcher, Event, EventKind, RecursiveMode, Watcher};
@@ -1594,8 +1606,18 @@ pub fn run() {
                         continue;
                     }
                     last_emit = Instant::now();
-                    eprintln!("[watcher] change detected, emitting right-pane-reload");
-                    let _ = app_handle.emit("right-pane-reload", ());
+                    // Classify: any path under a tools_pane_paths root → tools event.
+                    // Otherwise (paths only under proj_root) → right-pane-only event.
+                    let is_tools_event = event.paths.iter().any(|p| {
+                        tools_pane_paths.iter().any(|tp| p.starts_with(tp))
+                    });
+                    if is_tools_event {
+                        eprintln!("[watcher] change detected, emitting tools-pane-reload");
+                        let _ = app_handle.emit("tools-pane-reload", ());
+                    } else {
+                        eprintln!("[watcher] change detected, emitting right-pane-reload");
+                        let _ = app_handle.emit("right-pane-reload", ());
+                    }
                 }
             });
 

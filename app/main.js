@@ -308,19 +308,31 @@ const { listen } = window.__TAURI__.event;
   const RIGHT_PANE_SRC = base + "/index.html";
   const TOOLS_PANE_SRC = base + "/__tools/index.html";
   const tools = document.getElementById("tools-pane");
-  function reloadRightPane() {
+  // reloadAll: reload BOTH iframes. Used by the manual "reload xmlui app"
+  // toolbar button and by the "tools-pane-reload" watcher event (drawer
+  // code changed, both panes may consume it).
+  function reloadAll() {
     iframe.src = RIGHT_PANE_SRC + "?t=" + Date.now();
     if (tools) tools.src = TOOLS_PANE_SRC + "?t=" + Date.now();
+  }
+  // reloadRightPaneOnly: reload only the right pane. Used by the
+  // "right-pane-reload" watcher event for user-project file changes.
+  // The drawer is poll-driven so it does NOT need to reload here, and
+  // keeping it stable avoids postMessage-vs-iframe-rebuild races on
+  // Approve/Drop clicks while the agent is writing files.
+  function reloadRightPaneOnly() {
+    iframe.src = RIGHT_PANE_SRC + "?t=" + Date.now();
   }
   iframe.src = RIGHT_PANE_SRC;
   if (tools) tools.src = TOOLS_PANE_SRC;
   document
     .getElementById("reload-right")
-    ?.addEventListener("click", reloadRightPane);
+    ?.addEventListener("click", reloadAll);
   document
     .getElementById("open-devtools")
     ?.addEventListener("click", () => {
       invoke("open_devtools").catch((e) => console.error("open_devtools", e));
     });
-  listen("right-pane-reload", reloadRightPane);
+  listen("right-pane-reload", reloadRightPaneOnly);
+  listen("tools-pane-reload", reloadAll);
 })();

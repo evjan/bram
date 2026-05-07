@@ -6,10 +6,10 @@ if [ $# -ne 1 ]; then
   exit 1
 fi
 
-VERSION="$1"
+VERSION="${1#v}"
 
 if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "error: version must be N.N.N (got: $VERSION)" >&2
+  echo "error: version must be N.N.N or vN.N.N (got: $1)" >&2
   exit 1
 fi
 

@@ -105,3 +105,87 @@ the redirect snippet and
 [`docs/app-architecture.md`](https://github.com/judell/community-calendar/blob/main/docs/app-architecture.md)
 for the Supabase URL-Configuration setup that requires the fixed
 `localhost:8080/**` origin.
+
+### Auth callbacks won't reach the right pane
+
+The right-pane webview has its own browser storage, isolated from
+your system browser's storage at the same origin. That breaks any
+auth flow that hands off to the system browser and expects a session
+to come back into the webview:
+
+- **Magic links in email.** Clicking the link opens your default
+  browser, completes auth there, and stores the session in the
+  *browser's* `localStorage`. The right pane never sees it.
+- **OAuth provider redirects** that leave the webview have the same
+  shape — the callback session lands in the wrong storage.
+
+Even when the redirect script above lines the right pane up on
+`localhost:8080`, that origin's storage in the Tauri webview is a
+different store from `localhost:8080` storage in Safari or Chrome.
+
+**Workaround for email auth: send a one-time code, not a link.** If
+your backend supports OTP codes (Supabase, Auth0, Clerk, Cognito all
+do), have the user paste the code from the email into a field in
+your dialog. No callback URL, no cross-context handoff. Works
+identically in the browser and inside xmlui-desktop.
+
+For Supabase specifically:
+
+1. Add `{{ .Token }}` to the Magic Link email template (Supabase
+   dashboard → Authentication → Email Templates) so the email
+   includes the 6/8-digit code. Docs:
+   <https://supabase.com/docs/guides/auth/auth-email-templates>
+2. After `signInWithOtp`, render a code-input field and call
+   `verifyOtp({ email, token, type: 'email' })`. Docs:
+   <https://supabase.com/docs/guides/auth/auth-email-passwordless>
+3. The existing `onAuthStateChange` handler fires on `verifyOtp`
+   success — no other plumbing needed.
+
+[community-calendar](https://github.com/judell/community-calendar)
+implements this in `xmlui/components/SignInDialog.xmlui` and
+`xmlui/shell.js` (`window.signInWithEmail` + `window.verifyEmailOtp`).
+
+### DevTools
+
+Tauri uses the platform's native webview, so the DevTools you get
+inside the right pane depend on the OS:
+
+| Platform | Webview | DevTools |
+|---|---|---|
+| macOS | WKWebView | Safari Web Inspector |
+| Linux | WebKitGTK | Safari Web Inspector |
+| Windows | WebView2 (Chromium) | Chromium DevTools |
+
+To open them, **right-click inside the right pane → Inspect Element**
+in dev/debug builds (`cargo run` or `cargo tauri dev`). Release
+builds disable DevTools by default. The execution context belongs to
+the right-pane document specifically — that matters because the
+shell window (`tauri.localhost`) and the right pane have separate
+storage, so logging into one tells you nothing about the other.
+
+#### WebKit quirks worth knowing
+
+The macOS/Linux Web Inspector behaves differently from Chromium's
+DevTools in a few ways that bite when you're testing auth flows:
+
+- **`const`/`let` redeclaration throws.** Pasting `const sb = …` a
+  second time in the same console session yields *"Unexpected
+  identifier 'sb'. Expected ';' after variable declaration."*
+  Chromium silently redeclares; WebKit doesn't. Wrap repeated
+  snippets in an async IIFE (`(async () => { … })();`) so the
+  bindings are scoped to each call.
+- **Frame/context switcher is sparser.** The dropdown that picks the
+  execution context (top-level vs iframes) often won't expose every
+  frame the page contains. Right-clicking inside the frame you
+  actually want and choosing **Inspect Element** is more reliable
+  than picking it from the dropdown.
+- **Service-worker and storage panels are less complete** than
+  Chromium's. If you need to inspect IndexedDB or service-worker
+  scope details, run the same project in a regular Chrome/Edge tab
+  pointed at `localhost:8080`.
+
+If you'd rather use Chromium DevTools on macOS/Linux, you can run
+your project in a regular browser tab pointed at the same
+`localhost:8080` origin — but remember that the tab's `localStorage`
+is a separate store from the right pane's, so a session created
+there won't carry into xmlui-desktop.

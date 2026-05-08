@@ -50,6 +50,78 @@ Tauri docs: <https://tauri.app/develop/>, <https://tauri.app/distribute/>.
   URI scheme, filesystem watcher, IPC handlers).
 - `scripts/` — auxiliary scripts.
 
+## Voice input
+
+Click the 🎤 button (in the parent shell's toolbar or in the agent
+tools drawer's AppHeader) once to start recording, click again to stop.
+The transcript is sent to the agent in the terminal as a `voice: ...`
+line so it's distinguishable from typed input.
+
+xmlui-desktop spawns a local
+[`whisper-server`](https://github.com/ggml-org/whisper.cpp/tree/master/examples/server)
+on first record click and kills it on app exit. You don't manage the
+process; you just need the binary, ffmpeg, and a model file installed.
+
+### macOS — verified
+
+```bash
+brew install whisper-cpp ffmpeg
+mkdir -p ~/.local/share/whisper-models
+curl -L -o ~/.local/share/whisper-models/ggml-small.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
+```
+
+`small.en` is ~466 MB, English-only, real-time on Apple Silicon. Swap
+in a different model from the same Hugging Face repo if you want
+different size/accuracy/language. The bundled `Info.plist` declares
+`NSMicrophoneUsageDescription`, so WKWebView's `getUserMedia` triggers
+the standard macOS mic permission prompt on first use.
+
+### Linux — expected to work, untested
+
+Both pieces are available via native package managers, though the
+exact incantation depends on your distro:
+
+```bash
+# Arch
+sudo pacman -S whisper.cpp ffmpeg
+
+# Debian/Ubuntu — ffmpeg is in apt; whisper.cpp usually needs a build
+# from source: https://github.com/ggml-org/whisper.cpp#build
+sudo apt install ffmpeg
+git clone https://github.com/ggml-org/whisper.cpp && cd whisper.cpp && cmake -B build && cmake --build build -j
+
+# Or, if you have Linuxbrew:
+brew install whisper-cpp ffmpeg
+```
+
+Make sure `whisper-server` is on `PATH`. The model download path is
+the same as on macOS. WebKit2GTK supports `getUserMedia` and prompts
+via the desktop's standard mic permission flow. If something doesn't
+work, please open an issue.
+
+### Windows — best guess, untested
+
+There's no official one-line installer for whisper.cpp on Windows.
+Best guess at the rough shape:
+
+1. Grab a prebuilt release from
+   <https://github.com/ggml-org/whisper.cpp/releases> (look for an
+   x64 binary asset) and put `whisper-server.exe` somewhere on `PATH`.
+   Or build from source with CMake / Visual Studio.
+2. Install ffmpeg via Chocolatey (`choco install ffmpeg`) or Scoop
+   (`scoop install ffmpeg`).
+3. Download the model into a directory of your choice. Note: the path
+   used by the `whisper_start` Rust command is currently hardcoded to
+   `~/.local/share/whisper-models/ggml-small.en.bin`, which expands to
+   `%USERPROFILE%\.local\share\whisper-models\ggml-small.en.bin` —
+   create that path or expect to patch the const.
+
+WebView2 (Chromium) handles `getUserMedia` with the standard Windows
+microphone permission. We haven't actually tested any of this; if you
+try it, please open an issue with what worked or didn't so we can
+firm up these instructions.
+
 ## Working with a real backend
 
 xmlui-desktop binds the right-pane HTTP server to

@@ -32,6 +32,39 @@ function stripImagePaths(text) {
   return text.replace(/\n*\[Image: source: [^\]]+\]/g, '');
 }
 
+// True when the most recent textful turn in the session is a user turn —
+// i.e. the user has spoken (or a worklist button submitted via toTurn) but
+// the assistant has not yet emitted text. tool_use-only assistant records
+// and tool_result-only user records are skipped so a long tool cycle still
+// reads as "waiting".
+function isWaitingForAssistant(jsonlText) {
+  if (!jsonlText) return false;
+  const lines = jsonlText.split('\n');
+  let lastRole = null;
+  for (const line of lines) {
+    if (!line) continue;
+    let r;
+    try { r = JSON.parse(line); } catch (e) { continue; }
+    if (r.type === 'user' && r.message && r.message.content) {
+      const content = r.message.content;
+      if (Array.isArray(content) && content.length > 0 &&
+          content.every(c => c && c.type === 'tool_result')) continue;
+      lastRole = 'user';
+    } else if (r.type === 'assistant' && r.message && r.message.content) {
+      const content = r.message.content;
+      if (typeof content === 'string') {
+        lastRole = 'assistant';
+      } else if (Array.isArray(content) && content.some(c => c && c.type === 'text')) {
+        lastRole = 'assistant';
+      }
+    } else if (r.type === 'event_msg' && r.payload) {
+      if (r.payload.type === 'user_message') lastRole = 'user';
+      if (r.payload.type === 'agent_message') lastRole = 'assistant';
+    }
+  }
+  return lastRole === 'user';
+}
+
 function lastAssistantText(jsonlText) {
   if (!jsonlText) return '';
   const lines = jsonlText.split('\n');

@@ -1,0 +1,18 @@
+<Component name="Talk">
+  <DataSource
+    id="latestSession"
+    url="/__sessions/latest"
+    pollIntervalInSeconds="2" />
+
+  <VStack padding="$space-6" gap="$space-4">
+    <HStack gap="$space-3" verticalAlignment="center">
+      <Heading level="h2">Latest response</Heading>
+      <Spinner
+        when="{isWaitingForAssistant(latestSession.value)}"
+        size="sm"
+        delay="{200}" />
+    </HStack>
+    <Markdown
+      content="{lastAssistantText(latestSession.value) || '(no assistant message yet)'}" />
+  </VStack>
+</Component>

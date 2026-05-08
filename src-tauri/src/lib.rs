@@ -252,6 +252,39 @@ fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     }
 }
 
+// Shell out to `gh issue view <number> --json ...` and return the raw JSON
+// bytes. Same failure envelope as gh_issues_list — empty object on any
+// error so the frontend can render something rather than 500.
+fn gh_issue_view<R: tauri::Runtime>(app: &AppHandle<R>, number: u64) -> Result<Vec<u8>, String> {
+    let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
+    let n = number.to_string();
+    let out = std::process::Command::new("gh")
+        .current_dir(&root)
+        .args(&[
+            "issue",
+            "view",
+            &n,
+            "--json",
+            "number,title,body,state,author,createdAt,updatedAt,labels,url,comments",
+        ])
+        .output();
+    match out {
+        Ok(out) if out.status.success() => Ok(out.stdout),
+        Ok(out) => {
+            eprintln!(
+                "[gh issue view {}] non-zero exit: {}",
+                n,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            Ok(b"{}".to_vec())
+        }
+        Err(e) => {
+            eprintln!("[gh issue view {}] failed to spawn: {}", n, e);
+            Ok(b"{}".to_vec())
+        }
+    }
+}
+
 // Resolve the GitHub web URL of the configured origin remote. Used by the
 // Issues tab's "New issue" button so the frontend doesn't have to parse the
 // remote URL itself. Returns an empty string for both htmlBase and the
@@ -1488,6 +1521,26 @@ fn route_request<R: tauri::Runtime>(
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
             Err(e) => {
                 eprintln!("[http /__issues] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    if path == "__issue" {
+        let mut number: u64 = 0;
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("number=") {
+                number = percent_decode(v).parse().unwrap_or(0);
+                break;
+            }
+        }
+        if number == 0 {
+            return (400, "text/plain; charset=utf-8", b"missing number".to_vec());
+        }
+        return match gh_issue_view(app, number) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__issue number={}] {}", number, e);
                 (500, "text/plain; charset=utf-8", e.into_bytes())
             }
         };

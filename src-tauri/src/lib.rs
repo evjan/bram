@@ -217,6 +217,70 @@ fn git_log_recent<R: tauri::Runtime>(app: &AppHandle<R>, count: usize) -> Result
     serde_json::to_vec(&commits).map_err(|e| e.to_string())
 }
 
+// Shell out to `gh` to list issues for the current repo. Returns the raw
+// JSON bytes from `gh`. On any failure (gh missing, not a GitHub repo,
+// auth missing, etc) returns an empty JSON array so the frontend renders
+// a friendly empty state rather than a 500.
+fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+    let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
+    let out = std::process::Command::new("gh")
+        .current_dir(&root)
+        .args(&[
+            "issue",
+            "list",
+            "--json",
+            "number,title,state,author,createdAt,updatedAt,labels,url",
+            "--limit",
+            "50",
+            "--state",
+            "all",
+        ])
+        .output();
+    match out {
+        Ok(out) if out.status.success() => Ok(out.stdout),
+        Ok(out) => {
+            eprintln!(
+                "[gh issue list] non-zero exit: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            Ok(b"[]".to_vec())
+        }
+        Err(e) => {
+            eprintln!("[gh issue list] failed to spawn: {}", e);
+            Ok(b"[]".to_vec())
+        }
+    }
+}
+
+// Resolve the GitHub web URL of the configured origin remote. Used by the
+// Issues tab's "New issue" button so the frontend doesn't have to parse the
+// remote URL itself. Returns an empty string for both htmlBase and the
+// composed URLs when there is no GitHub remote.
+fn repo_origin_info<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+    let remote_url = git_run(app, &["remote", "get-url", "origin"])
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let html_base = remote_to_html(&remote_url);
+    let issues_url = if html_base.is_empty() {
+        String::new()
+    } else {
+        format!("{}/issues", html_base)
+    };
+    let issues_new_url = if html_base.is_empty() {
+        String::new()
+    } else {
+        format!("{}/issues/new", html_base)
+    };
+    let info = serde_json::json!({
+        "remoteUrl": remote_url,
+        "htmlBase": html_base,
+        "issuesUrl": issues_url,
+        "issuesNewUrl": issues_new_url,
+    });
+    serde_json::to_vec(&info).map_err(|e| e.to_string())
+}
+
 fn remote_to_html(remote: &str) -> String {
     let r = remote.trim().trim_end_matches(".git");
     if let Some(rest) = r.strip_prefix("git@github.com:") {
@@ -1414,6 +1478,26 @@ fn route_request<R: tauri::Runtime>(
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
             Err(e) => {
                 eprintln!("[http /__commits] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    if path == "__issues" {
+        return match gh_issues_list(app) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__issues] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    if path == "__repo/origin" {
+        return match repo_origin_info(app) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__repo/origin] {}", e);
                 (500, "text/plain; charset=utf-8", e.into_bytes())
             }
         };

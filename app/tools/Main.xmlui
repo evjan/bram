@@ -19,7 +19,7 @@
           label="{recording ? '⏹ stop' : '🎤 voice'}"
           variant="ghost"
           tooltip="Voice input — click to start, click again to send"
-          onClick="recording ? (recording = false, voiceStop(t => { if (t) toTurn('voice: ' + t); })) : (voiceStart(), navigate('/talk'), recording = true)" />
+          onClick="recording ? (recording = false, voiceStop(t => { if (t) toTurn('voice: ' + t); })) : (voiceStart(), $pathname !== '/talk' && navigate('/talk'), recording = true)" />
       </HStack>
     </Theme>
   </AppHeader>
@@ -29,6 +29,7 @@
     <NavLink label="Worklist" to="/" exact="true" />
     <NavLink label="Commits" to="/commits" />
     <NavLink label="Sessions" to="/sessions" />
+    <NavLink label="Issues" to="/issues" />
     <NavLink label="README" to="/readme" />
   </NavPanel>
 
@@ -45,6 +46,7 @@
 - **Worklist** — renders `resources/proposal.json` as a checklist of pending items the agent has proposed. You triage with checkboxes; *Approve selected* and *Drop selected* round-trip the result back to the agent as a fresh user turn (via the `toTurn` shell helper). Optional feedback typed in the box rides along with the action.
 - **Commits** — recent commits, with one-click push to origin when you are ahead.
 - **Sessions** — browse and search past agent sessions for this project. Claude Code and Codex histories are auto-detected from local transcripts.
+- **Issues** — list of open / closed GitHub issues for the current repo (via the local `gh` CLI), with a one-click button to open the New-issue page on github.com.
 - **README** — this project's README rendered for quick reference.
 
 Setting up writes:
@@ -70,6 +72,7 @@ What setup deliberately does **not** do:
     <Page url="/"><Workspace /></Page>
     <Page url="/talk"><Talk /></Page>
     <Page url="/sessions"><Sessions /></Page>
+    <Page url="/issues"><Issues /></Page>
     <Page url="/commits"><Commits /></Page>
     <Page url="/readme"><Readme /></Page>
   </Pages>

@@ -53,11 +53,27 @@ window.openExternal = function (url) {
 // attached during expression evaluation; passing a callback function as an argument
 // works, since the callback is invoked from plain JS later.
 window._voiceSession = null;
+function _voiceLog(stage, payload) {
+  try {
+    window.logToHost(
+      Object.assign(
+        { kind: "voice", stage: stage, at: new Date().toISOString() },
+        payload || {},
+      ),
+    );
+  } catch (e) {}
+}
 window.voiceStart = function () {
-  if (window._voiceSession) return;
+  if (window._voiceSession) {
+    _voiceLog("voiceStart-rejected-already-active", {
+      currentSession: window._voiceSession,
+    });
+    return;
+  }
   var requestId =
     "voice-" + Date.now() + "-" + Math.random().toString(36).slice(2);
   window._voiceSession = requestId;
+  _voiceLog("voiceStart", { requestId: requestId });
   window.parent.postMessage(
     { type: "right-pane", kind: "voice-start", requestId: requestId },
     "*",
@@ -67,20 +83,30 @@ window.voiceStop = function (callback) {
   var requestId = window._voiceSession;
   window._voiceSession = null;
   if (!requestId) {
+    _voiceLog("voiceStop-no-session");
     if (typeof callback === "function") callback("");
     return;
   }
+  _voiceLog("voiceStop", { requestId: requestId });
   function onResult(ev) {
     var data = ev && ev.data;
-    if (
-      !data ||
-      data.type !== "voice-into-result" ||
-      data.requestId !== requestId
-    ) {
+    if (!data || data.type !== "voice-into-result") return;
+    if (data.requestId !== requestId) {
+      _voiceLog("voice-into-result-mismatch", {
+        expected: requestId,
+        received: data.requestId,
+        transcriptPreview: String(data.transcript || "").slice(0, 80),
+      });
       return;
     }
     window.removeEventListener("message", onResult);
-    if (typeof callback === "function") callback(String(data.transcript || ""));
+    var transcript = String(data.transcript || "");
+    _voiceLog("voice-into-result", {
+      requestId: requestId,
+      transcriptLength: transcript.length,
+      transcriptPreview: transcript.slice(0, 80),
+    });
+    if (typeof callback === "function") callback(transcript);
   }
   window.addEventListener("message", onResult);
   window.parent.postMessage(

@@ -383,6 +383,27 @@ const { listen } = window.__TAURI__.event;
   const toolbarBtn = document.getElementById("voice-toggle");
   if (!toolbarBtn) return;
 
+  // Structured voice-pipeline logging via the existing log_from_right_pane
+  // command, so every stage shows up in cargo run stderr tagged with the
+  // session's requestId and a timestamp. See the voice-instrumentation
+  // worklist item for the rationale.
+  const voiceLog = (stage, payload) => {
+    try {
+      invoke(
+        "log_from_right_pane",
+        Object.assign(
+          { kind: "voice-host", stage, at: new Date().toISOString() },
+          payload || {},
+        ),
+      ).catch(() => {});
+    } catch (e) {}
+  };
+  // Last few transcripts (keyed by requestId) so we can detect when whisper
+  // returns a byte-for-byte duplicate of a recent response — the most
+  // suspect failure mode behind the "stuck on 'push it'" symptom.
+  const recentTranscripts = [];
+  const RECENT_TRANSCRIPT_WINDOW_MS = 60_000;
+
   let mediaRecorder = null;
   let audioChunks = [];
   let stream = null;
@@ -390,6 +411,15 @@ const { listen } = window.__TAURI__.event;
   // active === "toolbar"    → toolbar mic; transcript → pty_write
   // active === { source, requestId } → iframe round-trip; transcript → postMessage
   let active = null;
+  // Synthetic requestId for toolbar sessions — keeps log entries correlated
+  // even though the toolbar path never receives an iframe-supplied id.
+  let toolbarRequestId = null;
+  const currentRequestId = () =>
+    active === "toolbar"
+      ? toolbarRequestId
+      : active && typeof active === "object"
+        ? active.requestId
+        : null;
 
   const setToolbarState = (state) => {
     toolbarBtn.dataset.state = state;
@@ -436,6 +466,19 @@ const { listen } = window.__TAURI__.event;
   };
 
   const deliverTranscript = (transcript) => {
+    const reqId = currentRequestId();
+    const text = String(transcript || "");
+    voiceLog("deliverTranscript", {
+      requestId: reqId,
+      target:
+        active === "toolbar"
+          ? "toolbar"
+          : active && typeof active === "object"
+            ? "iframe"
+            : "none",
+      transcriptLength: text.length,
+      transcriptPreview: text.slice(0, 80),
+    });
     if (active && typeof active === "object" && active.source) {
       // iframe round-trip
       try {
@@ -443,27 +486,51 @@ const { listen } = window.__TAURI__.event;
           {
             type: "voice-into-result",
             requestId: active.requestId,
-            transcript: String(transcript || ""),
+            transcript: text,
           },
           "*",
         );
       } catch (e) {
         console.error("postMessage voice-into-result", e);
+        voiceLog("deliverTranscript-postMessage-error", {
+          requestId: reqId,
+          error: String(e),
+        });
       }
-    } else if (active === "toolbar" && transcript) {
+    } else if (active === "toolbar" && text) {
       // Prefix with "voice: " so the receiving agent (typically Claude Code)
       // can distinguish dictated content from typed input — see the
       // verbal-vs-structured guardrail in app/__shell/conventions.md.
       invoke("pty_write", {
-        data: "\x1b[200~voice: " + transcript + "\x1b[201~\r",
-      }).catch((e) => console.error("pty_write voice", e));
+        data: "\x1b[200~voice: " + text + "\x1b[201~\r",
+      }).catch((e) => {
+        console.error("pty_write voice", e);
+        voiceLog("deliverTranscript-pty-error", {
+          requestId: reqId,
+          error: String(e),
+        });
+      });
     }
     active = null;
+    toolbarRequestId = null;
     if (toolbarBtn.dataset.state !== "idle") setToolbarState("idle");
   };
 
   const startRecording = async (target) => {
+    const incomingId =
+      target === "toolbar"
+        ? "toolbar-" + Date.now() + "-" + Math.random().toString(36).slice(2)
+        : target && target.requestId;
+    voiceLog("startRecording-enter", {
+      requestId: incomingId,
+      target: target === "toolbar" ? "toolbar" : "iframe",
+      activeWas: active === null ? null : active === "toolbar" ? "toolbar" : "iframe",
+    });
     if (active) {
+      voiceLog("startRecording-rejected-busy", {
+        requestId: incomingId,
+        activeRequestId: currentRequestId(),
+      });
       // Already busy: tell the new requester nothing came of it.
       if (target && typeof target === "object" && target.source) {
         try {
@@ -481,6 +548,7 @@ const { listen } = window.__TAURI__.event;
     }
     active = target;
     const isToolbar = target === "toolbar";
+    if (isToolbar) toolbarRequestId = incomingId;
     if (isToolbar) setToolbarState("starting");
     const ready = await ensureServerRunning();
     if (!ready) {
@@ -521,35 +589,84 @@ const { listen } = window.__TAURI__.event;
       if (e.data && e.data.size > 0) audioChunks.push(e.data);
     };
     mediaRecorder.onstop = async () => {
+      const reqId = currentRequestId();
       stopStream();
       const blob = new Blob(audioChunks, { type: "audio/webm" });
       audioChunks = [];
+      voiceLog("mediaRecorder-onstop", {
+        requestId: reqId,
+        blobSize: blob.size,
+      });
       if (blob.size === 0) {
+        voiceLog("transcribe-skipped-empty-blob", { requestId: reqId });
         deliverTranscript("");
         return;
       }
       let transcript = "";
+      let httpStatus = null;
       try {
         const formData = new FormData();
         formData.append("file", blob, "recording.webm");
         formData.append("response_format", "json");
+        const reqStart = Date.now();
+        voiceLog("whisper-request", {
+          requestId: reqId,
+          blobSize: blob.size,
+        });
         const res = await fetch(WHISPER_URL, { method: "POST", body: formData });
+        httpStatus = res.status;
         if (res.ok) {
           const data = await res.json();
           transcript = (data.text || "").trim();
         } else {
           console.error("transcribe HTTP", res.status, res.statusText);
         }
+        voiceLog("whisper-response", {
+          requestId: reqId,
+          httpStatus: httpStatus,
+          elapsedMs: Date.now() - reqStart,
+          transcriptLength: transcript.length,
+          transcriptPreview: transcript.slice(0, 80),
+        });
       } catch (e) {
         console.error("transcribe", e);
+        voiceLog("whisper-error", { requestId: reqId, error: String(e) });
+      }
+      // Stale-duplicate detection: warn if whisper returned exactly the same
+      // text as a recent prior response. This is the prime suspect behind
+      // the "different utterance, same wrong transcript" bug.
+      if (transcript) {
+        const now = Date.now();
+        for (let i = recentTranscripts.length - 1; i >= 0; i--) {
+          const r = recentTranscripts[i];
+          if (now - r.at > RECENT_TRANSCRIPT_WINDOW_MS) {
+            recentTranscripts.splice(0, i + 1);
+            break;
+          }
+          if (r.text === transcript) {
+            voiceLog("whisper-duplicate-transcript", {
+              requestId: reqId,
+              previousRequestId: r.requestId,
+              ageMs: now - r.at,
+              transcriptPreview: transcript.slice(0, 80),
+            });
+            break;
+          }
+        }
+        recentTranscripts.push({ requestId: reqId, text: transcript, at: now });
       }
       deliverTranscript(transcript);
     };
     mediaRecorder.start();
+    voiceLog("mediaRecorder-start", { requestId: incomingId });
     if (isToolbar) setToolbarState("recording");
   };
 
   const stopRecording = () => {
+    voiceLog("stopRecording", {
+      requestId: currentRequestId(),
+      mediaRecorderState: mediaRecorder ? mediaRecorder.state : "null",
+    });
     if (mediaRecorder && mediaRecorder.state === "recording") {
       mediaRecorder.stop();
     }
@@ -578,8 +695,10 @@ const { listen } = window.__TAURI__.event;
     const d = ev.data;
     if (!d || d.type !== "right-pane") return;
     if (d.kind === "voice-start") {
+      voiceLog("iframe-voice-start", { requestId: d.requestId });
       startRecording({ source: ev.source, requestId: d.requestId });
     } else if (d.kind === "voice-stop") {
+      voiceLog("iframe-voice-stop", { requestId: d.requestId });
       stopRecording();
     }
   });

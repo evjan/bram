@@ -50,10 +50,7 @@
         backgroundColor="$color-surface-100"
         borderBottom="1px solid $borderColor">
         <Text width="64px" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="STATE" />
-        <Text width="60px" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="#" />
         <Text width="*" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="TITLE" />
-        <Text width="140px" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="UPDATED" />
-        <Text width="120px" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="AUTHOR" />
       </HStack>
       <Items data="{(issues.value || []).slice(0, issuesExpanded ? 999 : 10)}">
         <VStack gap="0" borderBottom="1px solid $borderColor">
@@ -69,16 +66,13 @@
                 color="{$item.state === 'OPEN' ? '$color-success-700' : '$textColor-secondary'}"
                 value="{$item.state === 'OPEN' ? 'open' : 'closed'}" />
             </HStack>
-            <Text width="60px" variant="code" value="#{$item.number}" />
             <HStack width="*" gap="$space-2" verticalAlignment="center">
               <Link
                 onClick="expandedNumber = (expandedNumber === $item.number ? null : $item.number)"
                 noIndicator>
-                <Text value="{$item.title}" maxLines="1" />
+                <Text value="#{$item.number} {$item.title}" maxLines="1" />
               </Link>
             </HStack>
-            <Text width="140px" fontSize="$fontSize-sm" value="{formatDateTime($item.updatedAt, 'yyyy-MM-dd HH:mm')}" />
-            <Text width="120px" fontSize="$fontSize-sm" value="{$item.author && $item.author.login}" />
           </HStack>
 
           <VStack

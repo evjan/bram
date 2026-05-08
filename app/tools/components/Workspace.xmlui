@@ -46,16 +46,27 @@
                     color="{($item.status || 'proposed') === 'applied' ? '$color-success-600' : '$color-info-600'}" />
                   <Text value="{$item.id}" fontWeight="$fontWeight-bold" />
                   <Link
-                    when="{$item.diff}"
                     onClick="expandedItemId = (expandedItemId === $item.id ? null : $item.id)"
                     noIndicator>
                     <Text
-                      value="{expandedItemId === $item.id ? 'hide diff' : 'show diff'}"
+                      value="{expandedItemId === $item.id ? 'hide details' : 'show details'}"
                       fontSize="$fontSize-xs" />
                   </Link>
                 </HStack>
                 <Text value="{$item.file}" variant="code" />
-                <Text value="{$item.before} → {$item.after}" />
+                <VStack
+                  when="{expandedItemId === $item.id}"
+                  gap="$space-2"
+                  paddingTop="$space-2">
+                  <VStack gap="$space-1" when="{$item.before}">
+                    <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="Before" />
+                    <Markdown content="{$item.before}" />
+                  </VStack>
+                  <VStack gap="$space-1" when="{$item.after}">
+                    <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="After" />
+                    <Markdown content="{$item.after}" />
+                  </VStack>
+                </VStack>
               </VStack>
             </HStack>
             <VStack

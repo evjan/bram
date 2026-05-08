@@ -1,4 +1,4 @@
-<Component name="Talk" var.turns="{sessionTurns(latestSession.value)}" var.escSuppressed="{false}">
+<Component name="Talk" var.turns="{sessionTurns(latestSession.value)}">
   <DataSource
     id="latestSession"
     url="/__sessions/latest"
@@ -51,31 +51,12 @@
     <HStack
       when="{isWaitingForAssistant(latestSession.value) && !escSuppressed}"
       paddingVertical="$space-3"
-      gap="$space-3"
       verticalAlignment="center">
       <Spinner size="sm" delay="{200}" />
-      <Button
-        label="Esc"
-        variant="ghost"
-        size="xs"
-        tooltip="Send Esc to interrupt"
-        onClick="(sendKeys('\x1b'), escSuppressed = true)" />
     </HStack>
 
     <StickyBox to="bottom">
-      <HStack horizontalAlignment="end" gap="$space-2" paddingVertical="$space-2">
-        <Button
-          label="Yes"
-          variant="ghost"
-          size="xs"
-          tooltip="Permission menu: choose 1 (Yes)"
-          onClick="sendKeys('1\r')" />
-        <Button
-          label="No"
-          variant="ghost"
-          size="xs"
-          tooltip="Permission menu: choose 2 (No)"
-          onClick="sendKeys('2\r')" />
+      <HStack horizontalAlignment="end" paddingVertical="$space-2">
         <Button
           icon="up"
           variant="ghost"

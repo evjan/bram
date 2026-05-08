@@ -20,6 +20,21 @@
           variant="ghost"
           tooltip="Voice input — click to start, click again to send"
           onClick="recording ? (recording = false, voiceStop(t => { if (t) toTurn('voice: ' + t); })) : (voiceStart(), $pathname !== '/talk' && navigate('/talk'), recording = true)" />
+        <Button
+          label="Yes"
+          variant="ghost"
+          tooltip="Permission menu: choose 1 (Yes)"
+          onClick="sendKeys('1\r')" />
+        <Button
+          label="No"
+          variant="ghost"
+          tooltip="Permission menu: choose 2 (No)"
+          onClick="sendKeys('2\r')" />
+        <Button
+          label="Esc"
+          variant="ghost"
+          tooltip="Send Esc to interrupt"
+          onClick="(sendKeys('\x1b'), escSuppressed = true)" />
       </HStack>
     </Theme>
   </AppHeader>

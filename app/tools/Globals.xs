@@ -1,3 +1,9 @@
+// Reactive global: when true, the Talk page hides its spinner+Esc inline
+// row (the user has already pressed Esc and the response was interrupted).
+// Reset to false by Talk's ChangeListener on the user-submission count, so
+// the next genuine submission re-enables the spinner.
+var escSuppressed = false;
+
 function currentSourceFile(pathname) {
   if (pathname === '/sessions') return 'components/Sessions.xmlui';
   if (pathname === '/') return 'components/Workspace.xmlui';

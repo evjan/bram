@@ -252,7 +252,7 @@ window.addEventListener("message", (ev) => {
         },
       }).catch(() => {});
       invoke("pty_write", {
-        data: "\x1b[200~" + turnText + "\x1b[201~\r",
+        data: "\x15\x1b[200~" + turnText + "\x1b[201~\r",
       }).catch((e) => console.error("pty_write turn", e));
       return;
     }

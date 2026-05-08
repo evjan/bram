@@ -27,8 +27,8 @@
 
   <NavPanel>
     <NavLink label="Workspace" to="/" exact="true" />
+    <NavLink label="Commits" to="/commits" />
     <NavLink label="Sessions" to="/sessions" />
-    <NavLink label="Architecture" to="/architecture" />
   </NavPanel>
 
   <VStack
@@ -65,7 +65,7 @@ What setup deliberately does **not** do:
   <Pages fallbackPath="/">
     <Page url="/"><Workspace /></Page>
     <Page url="/sessions"><Sessions /></Page>
-    <Page url="/architecture"><Architecture /></Page>
+    <Page url="/commits"><Commits /></Page>
   </Pages>
 </App>
 </Theme>

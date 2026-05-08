@@ -1,5 +1,4 @@
-<Theme width-navPanel-App="$space-40">
-<App layout="vertical">
+<App layout="vertical-sticky" var.recording="{false}">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
 
   <AppHeader>
@@ -17,10 +16,10 @@
           tooltip="Increase app font size"
           onClick="window.setAppFontSize(window.getAppFontSize() + 1)" />
         <Button
-          label="🎤 voice"
+          label="{recording ? '⏹ stop' : '🎤 voice'}"
           variant="ghost"
-          tooltip="Open Talk"
-          onClick="navigate('/talk')" />
+          tooltip="Voice input — click to start, click again to send"
+          onClick="recording ? (recording = false, voiceStop(t => { if (t) toTurn('voice: ' + t); })) : (voiceStart(), navigate('/talk'), recording = true)" />
       </HStack>
     </Theme>
   </AppHeader>
@@ -72,4 +71,3 @@ What setup deliberately does **not** do:
     <Page url="/readme"><Readme /></Page>
   </Pages>
 </App>
-</Theme>

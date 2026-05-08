@@ -1,4 +1,4 @@
-<Component name="Talk" var.turns="{sessionTurns(latestSession.value)}" var.recording="{false}">
+<Component name="Talk" var.turns="{sessionTurns(latestSession.value)}">
   <DataSource
     id="latestSession"
     url="/__sessions/latest"
@@ -23,11 +23,23 @@
           tooltip="Scroll to bottom"
           onClick="window.scrollAllToBottom()" />
         <Button
-          label="{recording ? '⏹ stop' : '🎤 voice'}"
+          label="Yes"
           variant="ghost"
           size="xs"
-          tooltip="Voice input — click to start, click again to send"
-          onClick="recording ? (recording = false, voiceStop(t => { if (t) toTurn('voice: ' + t); })) : (voiceStart(), recording = true)" />
+          tooltip="Send: yes"
+          onClick="toTurn('yes')" />
+        <Button
+          label="No"
+          variant="ghost"
+          size="xs"
+          tooltip="Send: no"
+          onClick="toTurn('no')" />
+        <Button
+          label="Esc"
+          variant="ghost"
+          size="xs"
+          tooltip="Send Esc to interrupt"
+          onClick="toShell('\x1b')" />
       </HStack>
     </StickyBox>
 

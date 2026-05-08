@@ -30,8 +30,9 @@ window.toTurn = function (text) {
       at: new Date().toISOString(),
     });
   } catch (e) {}
+  var normalized = s.replace(/\s+/g, " ").trim();
   window.parent.postMessage(
-    { type: "right-pane", kind: "to-turn", text: s },
+    { type: "right-pane", kind: "to-turn", text: normalized },
     "*",
   );
 };

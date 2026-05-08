@@ -418,8 +418,11 @@ const { listen } = window.__TAURI__.event;
         console.error("postMessage voice-into-result", e);
       }
     } else if (active === "toolbar" && transcript) {
+      // Prefix with "voice: " so the receiving agent (typically Claude Code)
+      // can distinguish dictated content from typed input — see the
+      // verbal-vs-structured guardrail in app/__shell/conventions.md.
       invoke("pty_write", {
-        data: "\x1b[200~" + transcript + "\x1b[201~\r",
+        data: "\x1b[200~voice: " + transcript + "\x1b[201~\r",
       }).catch((e) => console.error("pty_write voice", e));
     }
     active = null;

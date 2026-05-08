@@ -107,7 +107,7 @@
               label="{talkRecording ? '⏹ stop' : '🎤 talk to agent'}"
               variant="outlined"
               enabled="{!submitting}"
-              onClick="talkRecording ? (talkRecording = false, voiceStop(t => { if (t) toTurn('talk: ' + t); })) : (voiceStart(), talkRecording = true)" />
+              onClick="talkRecording ? (talkRecording = false, voiceStop(t => { if (t) toTurn('voice: ' + t); })) : (voiceStart(), talkRecording = true)" />
             <Button
               label="Approve selected ({checked.length})"
               enabled="{!submitting && checked.length > 0}"

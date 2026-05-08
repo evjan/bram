@@ -105,6 +105,17 @@ If you ever do receive `approved: {"items":[]}` or
 nothing is checked — but be defensive), treat it the same as
 `talk:` — feedback only, take no action.
 
+**Don't infer commit / drop / advance from feedback.** When the user
+says things like "looks good", "seems pretty good", "it works", or
+sends a voice-dictated test phrase that begins with `voice: ...`, do
+**not** read that as authorization to commit applied items, drop
+proposed items, or otherwise advance worklist state. Wait for the
+user to *explicitly* ask (e.g., "commit it", a structured `approved:`
+payload listing the items). Voice content arriving as `voice: ...` is
+user speech, treated the same as typed talk — informational, not an
+instruction to act on the worklist. If a verbal phrase is ambiguous,
+ask one focused question instead of acting.
+
 When *not* to use this: one-or-two-item decisions, free-text input, or
 anything where typing in chat is faster than rendering UI.
 

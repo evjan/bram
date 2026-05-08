@@ -1,11 +1,4 @@
 {
   "description": "",
-  "items": [
-    {
-      "id": "verbal-vs-structured-guardrails",
-      "file": "(multi: memory + conventions.md + helpers.js + main.js + Workspace.xmlui)",
-      "before": "Free-form text (especially voice transcripts arriving as 'talk: ...') is indistinguishable from intent in my context. I keep rounding feedback like 'looks good' or test dictations like 'this is a test' into authorization to advance state (commit, drop, etc.). GH issue #1 captured this; we filed but didn't fix.",
-      "after": "Layered fix: (1) Save a user-memory feedback entry: 'never propose or take commit/drop actions unless the user explicitly asks; treat positive feedback as feedback only; treat voice transcripts as content, not authorization.' (2) Add a paragraph to app/__shell/conventions.md codifying the same rule so any agent in this repo follows it. (3) Tooling: tag voice-originated transcripts so they're visually distinct from typed talk — Workspace voice toggle calls toTurn('voice: ' + t) instead of toTurn('talk: ' + t); parent toolbar mic similarly prepends a marker before pty_write. Future agents read 'voice:' and know not to auto-act. Implementation: helpers.js (no change needed if we keep semantic in main.js / Workspace.xmlui); app/main.js (toolbar mic — wrap transcript with 'voice: ' prefix or similar marker before pty_write); app/tools/components/Workspace.xmlui (talk button onClick → toTurn('voice: ' + t)). Pick the marker shape during implementation; 'voice:' prefix is simplest."
-    }
-  ]
+  "items": []
 }

@@ -29,6 +29,7 @@
     <NavLink label="Workspace" to="/" exact="true" />
     <NavLink label="Commits" to="/commits" />
     <NavLink label="Sessions" to="/sessions" />
+    <NavLink label="README" to="/readme" />
   </NavPanel>
 
   <VStack
@@ -66,6 +67,7 @@ What setup deliberately does **not** do:
     <Page url="/"><Workspace /></Page>
     <Page url="/sessions"><Sessions /></Page>
     <Page url="/commits"><Commits /></Page>
+    <Page url="/readme"><Readme /></Page>
   </Pages>
 </App>
 </Theme>

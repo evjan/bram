@@ -1,4 +1,12 @@
 {
-  "description": "",
-  "items": []
+  "description": "README.md was modified earlier (added a Voice input section with macOS-verified / Linux-expected / Windows-best-guess setup); approve to commit alongside or as a separate commit.",
+  "items": [
+    {
+      "id": "readme-voice-section",
+      "status": "applied",
+      "file": "README.md",
+      "before": "README had Prerequisites / Download / Build / Layout / Working with a real backend / DevTools sections. No voice setup docs.",
+      "after": "Added a 'Voice input' section between Layout and Working with a real backend. Three subsections: macOS (verified — brew install whisper-cpp ffmpeg + model download); Linux (expected to work, untested — pacman / Linuxbrew / source build); Windows (best guess, untested — prebuilt release + chocolatey ffmpeg, with explicit asks-for-an-issue if anyone tries it)."
+    }
+  ]
 }

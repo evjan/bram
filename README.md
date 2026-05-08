@@ -26,10 +26,33 @@ https://github.com/user-attachments/assets/3d617d7a-f864-41f4-bc77-c6449a8c1bf2
 
 ## Prerequisites
 
-xmlui-desktop opens an XMLUI app next to your terminal — you need a
-project for it to open. If you don't already have one, follow
-<https://xmlui.org/get-started> to scaffold one, then run
-`xmlui-desktop` from its root.
+xmlui-desktop is built around the git commit lifecycle — the Worklist
+transitions through proposed → applied → committed, the Commits tab
+reads `git log`, and the agent runs `git commit` / `git push`
+directly. Run it inside a local git repo with an XMLUI project.
+
+1. **`git`** — usually preinstalled on macOS and Linux; install via
+   your package manager if missing.
+
+2. **A local git repo with an XMLUI project.** If you have neither,
+   follow the installation steps at <https://xmlui.org/get-started>
+   — that gets you the XMLUI CLI (which includes the MCP server). If
+   you followed those instructions to completion and have created
+   `~/xmlui-weather`, remove it and instead
+   `git clone https://github.com/xmlui-org/xmlui-weather`. That gives
+   you a repo with pre-existing git history to explore in the
+   xmlui-desktop Commits pane; you can stage work items as local git
+   commits to get a feel for what that is like.
+
+3. **GitHub CLI (`gh`) — recommended.** Powers the Issues tab in the
+   agent-tools drawer and the agent's issue create / close / comment
+   operations. Install from <https://cli.github.com/> and run
+   `gh auth login` once. Without it, the Issues tab shows an empty
+   state.
+
+4. **`whisper-server` — optional.** Powers the 🎤 voice toggle in the
+   parent shell's toolbar and the agent-tools drawer's AppHeader. See
+   [Voice input](#voice-input) below for per-platform install.
 
 ## [Download the latest release →](https://github.com/judell/xmlui-desktop/releases/latest)
 

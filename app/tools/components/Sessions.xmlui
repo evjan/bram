@@ -137,8 +137,8 @@
                 icon="down"
                 variant="ghost"
                 size="xs"
-                tooltip="Scroll to bottom"
-                onClick="window.scrollAllToBottom()" />
+                tooltip="Scroll to bottom of this session"
+                onClick="scrollBookmarkIntoView('end-of-expanded-session', true)" />
             </HStack>
             <Text when="{sessionContent.inProgress && !sessionContent.loaded}">Loading…</Text>
             <Items
@@ -166,7 +166,7 @@
                 </VStack>
               </VStack>
             </Items>
-            <HStack width="100%" horizontalAlignment="end">
+            <HStack width="100%" horizontalAlignment="end" bookmark="end-of-expanded-session" scrollMarginTop="$space-16">
               <Button
                 icon="up"
                 variant="ghost"

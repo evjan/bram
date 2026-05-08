@@ -20,8 +20,18 @@ window.toShell = function (text) {
   );
 };
 window.toTurn = function (text) {
+  var s = String(text);
+  try {
+    window.logToHost({
+      kind: "to-turn",
+      stage: "source",
+      textLength: s.length,
+      textPreview: s.slice(0, 80),
+      at: new Date().toISOString(),
+    });
+  } catch (e) {}
   window.parent.postMessage(
-    { type: "right-pane", kind: "to-turn", text: String(text) },
+    { type: "right-pane", kind: "to-turn", text: s },
     "*",
   );
 };

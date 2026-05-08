@@ -240,11 +240,22 @@ window.addEventListener("message", (ev) => {
         console.error("pty_write inject", e),
       );
       return;
-    case "to-turn":
+    case "to-turn": {
+      const turnText = String(data.text ?? "");
+      invoke("log_from_right_pane", {
+        payload: {
+          kind: "to-turn",
+          stage: "sink",
+          textLength: turnText.length,
+          textPreview: turnText.slice(0, 80),
+          at: new Date().toISOString(),
+        },
+      }).catch(() => {});
       invoke("pty_write", {
-        data: "\x1b[200~" + String(data.text ?? "") + "\x1b[201~\r",
+        data: "\x1b[200~" + turnText + "\x1b[201~\r",
       }).catch((e) => console.error("pty_write turn", e));
       return;
+    }
     case "send-keys":
       invoke("pty_write", { data: String(data.text ?? "") }).catch((e) =>
         console.error("pty_write send-keys", e),

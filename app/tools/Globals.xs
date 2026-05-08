@@ -32,6 +32,33 @@ function stripImagePaths(text) {
   return text.replace(/\n*\[Image: source: [^\]]+\]/g, '');
 }
 
+// True when the latest JSONL record is an assistant tool_use without a
+// following tool_result — i.e. Claude Code is showing the numbered
+// permission prompt and waiting for approval. Used to gate the Yes/No
+// menu-navigation buttons on Talk.
+function isAtToolApproval(jsonlText) {
+  if (!jsonlText) return false;
+  const lines = jsonlText.split('\n').filter(l => l);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let r;
+    try { r = JSON.parse(lines[i]); } catch (e) { continue; }
+    if (r.type === 'assistant' && r.message && r.message.content) {
+      const content = r.message.content;
+      if (Array.isArray(content) &&
+          content.length > 0 &&
+          content.some(c => c && c.type === 'tool_use') &&
+          !content.some(c => c && c.type === 'text')) {
+        return true;
+      }
+      return false;
+    }
+    if (r.type === 'user' && r.message && r.message.content) {
+      return false;
+    }
+  }
+  return false;
+}
+
 // True when the most recent textful turn in the session is a user turn —
 // i.e. the user has spoken (or a worklist button submitted via toTurn) but
 // the assistant has not yet emitted text. tool_use-only assistant records

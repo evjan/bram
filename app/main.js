@@ -83,6 +83,34 @@ document
   ?.addEventListener("click", () => setTerminalFontSize(term.options.fontSize + 1));
 
 (() => {
+  const TERMINAL_HIDDEN_KEY = "xmlui-desktop.terminal.hidden";
+  const btn = document.getElementById("toggle-terminal");
+  if (!btn) return;
+
+  const apply = (hidden) => {
+    document.body.classList.toggle("terminal-hidden", hidden);
+    if (!hidden) {
+      // Re-measure xterm.js once the layout settles.
+      requestAnimationFrame(() => fitAddon.fit());
+    }
+  };
+
+  let initial = false;
+  try {
+    initial = localStorage.getItem(TERMINAL_HIDDEN_KEY) === "1";
+  } catch {}
+  apply(initial);
+
+  btn.addEventListener("click", () => {
+    const hidden = !document.body.classList.contains("terminal-hidden");
+    apply(hidden);
+    try {
+      localStorage.setItem(TERMINAL_HIDDEN_KEY, hidden ? "1" : "0");
+    } catch {}
+  });
+})();
+
+(() => {
   const splitter = document.getElementById("splitter");
   const left = document.querySelector(".pane-left");
   const split = document.querySelector(".split");

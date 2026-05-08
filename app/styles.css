@@ -131,6 +131,11 @@ body.splitter-dragging iframe.pane-tools {
   height: 100%;
 }
 
+body.terminal-hidden .pane-left,
+body.terminal-hidden #splitter {
+  display: none;
+}
+
 .toolbar button[data-state="recording"] {
   background: #6a1a1a;
   border-color: #e74c3c;

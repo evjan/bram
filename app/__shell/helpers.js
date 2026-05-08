@@ -37,6 +37,48 @@ window.openExternal = function (url) {
     "*",
   );
 };
+// Click-to-toggle voice. Single in-flight session per iframe.
+//   voiceStart()              — starts recording (parent records on iframe's behalf).
+//   voiceStop(callback)       — stops; callback(transcript) fires when transcript is ready.
+// XMLUI's onClick expression evaluator does not reliably execute .then() callbacks
+// attached during expression evaluation; passing a callback function as an argument
+// works, since the callback is invoked from plain JS later.
+window._voiceSession = null;
+window.voiceStart = function () {
+  if (window._voiceSession) return;
+  var requestId =
+    "voice-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+  window._voiceSession = requestId;
+  window.parent.postMessage(
+    { type: "right-pane", kind: "voice-start", requestId: requestId },
+    "*",
+  );
+};
+window.voiceStop = function (callback) {
+  var requestId = window._voiceSession;
+  window._voiceSession = null;
+  if (!requestId) {
+    if (typeof callback === "function") callback("");
+    return;
+  }
+  function onResult(ev) {
+    var data = ev && ev.data;
+    if (
+      !data ||
+      data.type !== "voice-into-result" ||
+      data.requestId !== requestId
+    ) {
+      return;
+    }
+    window.removeEventListener("message", onResult);
+    if (typeof callback === "function") callback(String(data.transcript || ""));
+  }
+  window.addEventListener("message", onResult);
+  window.parent.postMessage(
+    { type: "right-pane", kind: "voice-stop", requestId: requestId },
+    "*",
+  );
+};
 // Push local commits to origin and refetch a DataSource (typically
 // the commits list) when the push completes, so the pushed flags
 // refresh without a manual reload.

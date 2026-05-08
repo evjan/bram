@@ -448,6 +448,7 @@ struct WhisperStatusReport {
 #[tauri::command]
 fn whisper_start(
     model_path: String,
+    app: AppHandle,
     state: State<'_, WhisperState>,
 ) -> Result<u32, String> {
     let mut guard = state.0.lock().unwrap();
@@ -459,6 +460,16 @@ fn whisper_start(
         }
     }
     let model = expand_tilde(&model_path);
+    // Keep whisper-server's transcoded WAV temp files outside the
+    // watched project tree (otherwise the watcher fires right-pane-reload
+    // mid-recording).
+    let tmp_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("no cache dir: {}", e))?
+        .join("whisper");
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+    let tmp_dir_str = tmp_dir.to_string_lossy().to_string();
     let candidates = ["whisper-server", "/opt/homebrew/bin/whisper-server"];
     let mut last_err = String::new();
     for bin in &candidates {
@@ -466,13 +477,18 @@ fn whisper_start(
             .arg("-m")
             .arg(&model)
             .arg("--convert")
+            .arg("--tmp-dir")
+            .arg(&tmp_dir_str)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
         {
             Ok(child) => {
                 let pid = child.id();
-                eprintln!("[whisper] spawned {} pid={} -m {}", bin, pid, model);
+                eprintln!(
+                    "[whisper] spawned {} pid={} -m {} --tmp-dir {}",
+                    bin, pid, model, tmp_dir_str
+                );
                 *guard = Some(child);
                 return Ok(pid);
             }

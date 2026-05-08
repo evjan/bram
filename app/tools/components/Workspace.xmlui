@@ -1,4 +1,4 @@
-<Component name="Workspace" var.selectedSha="{null}" var.checked="{loadChecked()}" var.submitting="{!!getInflight()}" var.expandedItemId="{null}" var.commitsExpanded="{false}">
+<Component name="Workspace" var.selectedSha="{null}" var.checked="{loadChecked()}" var.submitting="{!!getInflight()}" var.expandedItemId="{null}" var.commitsExpanded="{false}" var.talkRecording="{false}">
   <DataSource
     id="proposal"
     url="/resources/proposal.json"
@@ -102,41 +102,27 @@
         <VStack
           gap="$space-3"
           when="{proposal.value.items && proposal.value.items.length > 0}">
-          <TextArea
-            id="talk"
-            placeholder="Talk to agent (questions, comments — no items approved or dropped)..."
-            rows="2"
-            width="*"
-            enabled="{!submitting}" />
-          <HStack>
-            <Button
-              label="Talk to agent"
-              variant="outlined"
-              enabled="{!submitting && talk.value && talk.value.trim().length > 0}"
-              onClick="toTurn('talk: ' + talk.value); talk.setValue('')" />
-          </HStack>
           <HStack gap="$space-3" verticalAlignment="center">
+            <Button
+              label="{talkRecording ? '⏹ stop' : '🎤 talk to agent'}"
+              variant="outlined"
+              enabled="{!submitting}"
+              onClick="talkRecording ? (talkRecording = false, voiceStop(t => { if (t) toTurn('talk: ' + t); })) : (voiceStart(), talkRecording = true)" />
             <Button
               label="Approve selected ({checked.length})"
               enabled="{!submitting && checked.length > 0}"
-              onClick="markInflight(proposal.value && proposal.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: proposal.value.items.filter(i => checked.includes(i.id)), feedback: feedback.value })); feedback.setValue('')" />
+              onClick="markInflight(proposal.value && proposal.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: proposal.value.items.filter(i => checked.includes(i.id)), feedback: '' }))" />
             <Button
               label="Drop selected ({checked.length})"
               variant="outlined"
               enabled="{!submitting && checked.length > 0}"
-              onClick="markInflight(proposal.value && proposal.value.items); submitting = true; toTurn('drop: ' + JSON.stringify({ ids: proposal.value.items.filter(i => checked.includes(i.id)).map(i => i.id), feedback: feedback.value })); feedback.setValue('')" />
+              onClick="markInflight(proposal.value && proposal.value.items); submitting = true; toTurn('drop: ' + JSON.stringify({ ids: proposal.value.items.filter(i => checked.includes(i.id)).map(i => i.id), feedback: '' }))" />
             <Button
               when="{submitting}"
               label="Cancel pending"
               variant="outlined"
               onClick="clearInflight(); submitting = false" />
           </HStack>
-          <TextArea
-            id="feedback"
-            placeholder="Optional extra instructions (sent along with Approve or Drop)..."
-            rows="2"
-            width="*"
-            enabled="{!submitting}" />
         </VStack>
       </VStack>
 

@@ -1,4 +1,16 @@
-<Component name="Issues" var.issuesExpanded="{false}" var.expandedNumber="{null}" var.fullscreenImage="{null}">
+<Component name="Issues"
+  var.issuesExpanded="{false}"
+  var.expandedNumber="{null}"
+  var.fullscreenImage="{null}"
+  var.sortField="updatedAt"
+  var.sortDir="desc"
+  var.sortedIssues="{(issues.value || []).slice().sort(function(a, b) {
+    const av = a[sortField] || '';
+    const bv = b[sortField] || '';
+    if (av < bv) return sortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  })}">
   <DataSource
     id="issues"
     url="/__issues"
@@ -60,10 +72,29 @@
         paddingVertical="$space-2"
         backgroundColor="$color-surface-100"
         borderBottom="1px solid $borderColor">
-        <Text width="64px" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="STATE" />
-        <Text width="*" fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary" value="TITLE" />
+        <Link
+          width="64px"
+          noIndicator
+          onClick="if (sortField === 'state') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'state'; sortDir = 'desc'; }">
+          <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
+            value="{'STATE' + (sortField === 'state' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
+        </Link>
+        <Link
+          width="*"
+          noIndicator
+          onClick="if (sortField === 'title') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'title'; sortDir = 'asc'; }">
+          <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
+            value="{'TITLE' + (sortField === 'title' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
+        </Link>
+        <Link
+          width="90px"
+          noIndicator
+          onClick="if (sortField === 'updatedAt') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'updatedAt'; sortDir = 'desc'; }">
+          <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
+            value="{'AGE' + (sortField === 'updatedAt' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
+        </Link>
       </HStack>
-      <Items data="{(issues.value || []).slice(0, issuesExpanded ? 999 : 10)}">
+      <Items data="{sortedIssues.slice(0, issuesExpanded ? 999 : 10)}">
         <VStack gap="0" borderBottom="1px solid $borderColor">
           <HStack
             gap="$space-3"
@@ -83,6 +114,9 @@
                 noIndicator>
                 <Text value="#{$item.number} {$item.title}" maxLines="1" />
               </Link>
+            </HStack>
+            <HStack width="90px" verticalAlignment="center">
+              <Text fontSize="$fontSize-sm" color="$textColor-secondary" value="{getDateUntilNow($item.updatedAt)}" />
             </HStack>
           </HStack>
 

@@ -3,8 +3,8 @@
   <DataSource id="enhanceStatus" url="/__enhance/status" />
 
   <AppHeader>
-    <Text fontWeight="bold">Tools</Text>
-    <Theme paddingHorizontal-Button-sm="$space-1">
+    <Text fontWeight="bold" fontSize="$fontSize-md">Tools</Text>
+    <Theme paddingHorizontal-Button-sm="$space-1" fontSize-Button="$fontSize-md">
       <HStack gap="$space-0_5">
         <Button
           label="A−"
@@ -31,6 +31,11 @@
           variant="ghost"
           tooltip="Permission menu: send keystroke 2"
           onClick="sendKeys('2\r')" />
+        <Button
+          label="3"
+          variant="ghost"
+          tooltip="Permission menu: send keystroke 3"
+          onClick="sendKeys('3\r')" />
         <Button
           label="Yes"
           variant="ghost"

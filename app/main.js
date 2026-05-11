@@ -214,11 +214,28 @@ term.onResize(({ cols, rows }) => {
   invoke("pty_resize", { cols, rows }).catch((e) => console.error("pty_resize", e));
 });
 
+const isWindows = navigator.userAgent.toLowerCase().includes("windows");
+const ptyShell = isWindows
+  ? {
+      cmd: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoExit",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "./app/shell/claude-code-profile.ps1",
+      ],
+    }
+  : {
+      cmd: "/bin/bash",
+      args: ["--noprofile", "--rcfile", "./app/shell/claude-code-shellrc", "-i"],
+    };
+
 (async () => {
   try {
     await invoke("pty_spawn", {
-      cmd: "/bin/bash",
-      args: ["--noprofile", "--rcfile", "./app/shell/claude-code-shellrc", "-i"],
+      ...ptyShell,
       cols: term.cols,
       rows: term.rows,
       onData: ptyChannel,

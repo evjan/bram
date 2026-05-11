@@ -22,6 +22,11 @@
           tooltip="Voice input — click to start, click again to send"
           onClick="recording ? (recording = false, voiceStop(t => { if (t) toTurn('voice: ' + t); })) : (voiceStart(), $pathname !== '/talk' && navigate('/talk'), recording = true)" />
         <Button
+          label="📸"
+          variant="ghost"
+          tooltip="Capture screenshot and send to claude"
+          onClick="captureScreenshot()" />
+        <Button
           label="1"
           variant="ghost"
           tooltip="Permission menu: send keystroke 1"

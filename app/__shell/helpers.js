@@ -57,6 +57,46 @@ window.openExternal = function (url) {
     "*",
   );
 };
+// Capture an interactive screenshot via the host (macOS: screencapture -i)
+// and inject the resulting file path into the terminal as a fresh user turn
+// so claude reads it via its Read tool. User cancellation (Esc during the
+// rect drag) is silent; other errors go to the host log.
+window.captureScreenshot = function () {
+  function deliver(path) {
+    // `@<path>` is claude-code's file-reference syntax — it attaches the
+    // file to the turn instead of swallowing the path out of prose.
+    if (path) toTurn("Read this screenshot: @" + path);
+  }
+  function report(err) {
+    var msg = String((err && err.message) || err);
+    if (msg !== "cancelled") {
+      logToHost({ kind: "screenshot", error: msg });
+    }
+  }
+
+  var invoke = getTauriInvoke();
+  if (invoke) {
+    invoke("capture_screenshot", {}).then(deliver).catch(report);
+    return;
+  }
+
+  // Cross-origin iframe: round-trip via the parent shell.
+  var requestId =
+    "screenshot-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+  function onResult(ev) {
+    var d = ev && ev.data;
+    if (!d || d.type !== "capture-screenshot-result" || d.requestId !== requestId) return;
+    window.removeEventListener("message", onResult);
+    if (d.ok) deliver(d.path);
+    else report(d.error);
+  }
+  window.addEventListener("message", onResult);
+  window.parent.postMessage(
+    { type: "right-pane", kind: "capture-screenshot", requestId: requestId },
+    "*",
+  );
+};
+
 // Click-to-toggle voice. Single in-flight session per iframe.
 //   voiceStart()              — starts recording (parent records on iframe's behalf).
 //   voiceStop(callback)       — stops; callback(transcript) fires when transcript is ready.

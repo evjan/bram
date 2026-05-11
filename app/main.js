@@ -307,6 +307,35 @@ window.addEventListener("message", (ev) => {
           }
         });
       return;
+    case "capture-screenshot":
+      invoke("capture_screenshot", {})
+        .then((path) => {
+          if (ev.source && typeof ev.source.postMessage === "function") {
+            ev.source.postMessage(
+              {
+                type: "capture-screenshot-result",
+                requestId: data.requestId,
+                ok: true,
+                path,
+              },
+              "*",
+            );
+          }
+        })
+        .catch((e) => {
+          if (ev.source && typeof ev.source.postMessage === "function") {
+            ev.source.postMessage(
+              {
+                type: "capture-screenshot-result",
+                requestId: data.requestId,
+                ok: false,
+                error: String(e?.message ?? e ?? "capture failed"),
+              },
+              "*",
+            );
+          }
+        });
+      return;
     case "save-trace-export":
       invoke("save_trace_export", {
         filename: String(data.filename ?? "xs-trace.json"),

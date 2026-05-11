@@ -713,6 +713,42 @@ fn open_url(url: String, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn capture_screenshot<R: tauri::Runtime>(app: AppHandle<R>) -> Result<String, String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        return Err("screenshot capture is currently macOS-only".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs();
+        let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+        let out = cache.join(format!("screenshot-{}.png", ts));
+
+        let status = std::process::Command::new("/usr/sbin/screencapture")
+            .arg("-i")
+            .arg(&out)
+            .status()
+            .map_err(|e| format!("failed to spawn screencapture: {}", e))?;
+        if !status.success() {
+            return Err(format!("screencapture exited with status {}", status));
+        }
+        if !out.exists() {
+            // User pressed Esc during the interactive selection.
+            return Err("cancelled".to_string());
+        }
+        eprintln!("[screenshot] wrote {}", out.display());
+        Ok(out.to_string_lossy().into_owned())
+    }
+}
+
+#[tauri::command]
 fn save_trace_export(filename: String, content: String, mime_type: String) -> Result<String, String> {
     let safe_name = filename
         .chars()
@@ -1786,6 +1822,7 @@ pub fn run() {
             open_devtools,
             open_url,
             save_trace_export,
+            capture_screenshot,
             git_push,
             get_right_pane_url,
             whisper_start,

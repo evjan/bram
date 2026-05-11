@@ -101,6 +101,38 @@ struct ActiveProjectState(Mutex<PathBuf>);
 // xmlui:// to http://127.0.0.1:<port>.
 struct RightPaneUrlState(Mutex<String>);
 
+// Windows' canonicalize() returns `\\?\C:\…` extended-length paths.
+// PowerShell tolerates them, but cmd.exe child processes don't ("UNC paths
+// are not supported. Defaulting to Windows directory.") — and silent
+// fallback to %WINDIR% means any tool that resolves its workspace from
+// cwd ends up rooted in C:\Windows. Strip the prefix unless this is a
+// genuine UNC path (`\\?\UNC\server\share\…`), which must keep it.
+fn strip_unc_prefix(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        if !rest.starts_with("UNC\\") {
+            return PathBuf::from(rest);
+        }
+    }
+    p
+}
+
+// Flatten a filesystem path into a filename-safe identifier. On Linux/macOS
+// this matches Claude Code's `~/.claude/projects/<encoded>/` scheme
+// (`/Users/foo` → `-Users-foo`). On Windows we also fold `\` and `:` so
+// `C:\Users\foo` becomes `C--Users-foo`; this is a conservative encoding
+// for our own files (agent-hint), but for claude_sessions_dir it's a
+// best-effort guess at Claude Code's Windows scheme — adjust if confirmed.
+fn encode_path_for_filename(p: &std::path::Path) -> String {
+    p.to_string_lossy()
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' => '-',
+            c => c,
+        })
+        .collect()
+}
+
 fn determine_project_root() -> PathBuf {
     let args: Vec<String> = std::env::args().collect();
     let candidate: PathBuf = if args.len() >= 2 && !args[1].starts_with('-') {
@@ -108,7 +140,8 @@ fn determine_project_root() -> PathBuf {
     } else {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     };
-    candidate.canonicalize().unwrap_or(candidate)
+    let canonical = candidate.canonicalize().unwrap_or(candidate);
+    strip_unc_prefix(canonical)
 }
 
 fn parse_cli_flags() {
@@ -753,8 +786,8 @@ struct SessionsMeta {
 
 fn active_agent_hint_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let root = project_root(Some(app)).ok_or("could not resolve project root")?;
-    let abs = root.canonicalize().map_err(|e| e.to_string())?;
-    let encoded = abs.to_string_lossy().replace('/', "-");
+    let abs = strip_unc_prefix(root.canonicalize().map_err(|e| e.to_string())?);
+    let encoded = encode_path_for_filename(&abs);
     let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
     Ok(cache_dir
         .join("agent-hints")
@@ -770,8 +803,8 @@ fn hinted_session_provider<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<Sess
 
 fn claude_sessions_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let root = project_root(Some(app)).ok_or("could not resolve project root")?;
-    let abs = root.canonicalize().map_err(|e| e.to_string())?;
-    let encoded = abs.to_string_lossy().replace('/', "-");
+    let abs = strip_unc_prefix(root.canonicalize().map_err(|e| e.to_string())?);
+    let encoded = encode_path_for_filename(&abs);
     let home = std::env::var("HOME").map_err(|_| "no HOME")?;
     Ok(PathBuf::from(home).join(".claude").join("projects").join(encoded))
 }

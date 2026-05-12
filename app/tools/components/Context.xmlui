@@ -1,0 +1,186 @@
+<Component name="Context"
+  var.selectedPath="{null}"
+  var.selectedDisplay="{null}"
+  var.selectedLine="{null}"
+  var.searchDraft=""
+  var.searchQuery="">
+
+  <DataSource id="ctxList" url="/__context/list" />
+  <DataSource
+    id="ctxFile"
+    url="/__context/file"
+    queryParams="{{ path: selectedPath }}"
+    when="{!!selectedPath}" />
+  <DataSource
+    id="ctxSearch"
+    url="/__context/search"
+    queryParams="{{ q: searchQuery }}"
+    when="{!!searchQuery &amp;&amp; searchQuery.trim().length >= 2}" />
+
+  <ChangeListener
+    listenTo="{searchDraft}"
+    debounceWaitInMs="250"
+    onDidChange="searchQuery = searchDraft" />
+
+  <HStack gap="$space-4" padding="$space-4" height="100%"
+    onInit="registerContextMemorySelector((basename) => { let f = ((ctxList.value &amp;&amp; ctxList.value.memory) || []).find((x) => x.display === basename); if (f) { selectedPath = f.path; selectedDisplay = f.display; selectedLine = null; } })"
+    onCleanup="clearContextMemorySelector()">
+    <VStack width="280px" gap="$space-4" overflowY="auto">
+      <HStack gap="$space-2" verticalAlignment="center">
+        <Button
+          label="✕"
+          variant="ghost"
+          size="xs"
+          tooltip="Clear search"
+          onClick="searchBox.setValue(''); searchDraft = ''; searchQuery = ''" />
+        <TextBox
+          id="searchBox"
+          placeholder="Search..."
+          width="*"
+          initialValue="{searchDraft}"
+          onDidChange="(v) => { searchDraft = v }" />
+      </HStack>
+
+      <VStack
+        gap="$space-3"
+        when="{searchQuery &amp;&amp; searchQuery.trim().length >= 2 &amp;&amp; ctxSearch.value &amp;&amp; ctxSearch.value.results}">
+        <Text
+          when="{ctxSearch.value.results.length === 0}"
+          color="$textColor-secondary"
+          fontSize="$fontSize-sm">
+          No matches.
+        </Text>
+        <Items data="{ctxSearch.value.results}">
+          <VStack gap="$space-1" var.filePath="{$item.path}" var.fileDisplay="{$item.display}">
+            <Link
+              onClick="selectedPath = filePath; selectedDisplay = fileDisplay; selectedLine = null"
+              noIndicator="true">
+              <Text
+                value="{fileDisplay}"
+                fontFamily="$fontFamily-monospace"
+                fontSize="$fontSize-sm"
+                fontWeight="$fontWeight-bold" />
+            </Link>
+            <Items data="{$item.hits}">
+              <Link
+                onClick="selectedPath = filePath; selectedDisplay = fileDisplay; selectedLine = $item.line"
+                noIndicator="true">
+                <HStack gap="$space-2">
+                  <Text value="{$item.line}" fontSize="$fontSize-xs" color="$textColor-secondary" />
+                  <Text value="{$item.snippet}" fontSize="$fontSize-xs" whiteSpace="nowrap" textOverflow="ellipsis" overflow="hidden" />
+                </HStack>
+              </Link>
+            </Items>
+          </VStack>
+        </Items>
+        <Text
+          when="{ctxSearch.value.truncated}"
+          color="$textColor-secondary"
+          fontSize="$fontSize-xs">
+          (first 50 hits)
+        </Text>
+      </VStack>
+
+      <VStack gap="$space-1" when="{(!searchQuery || searchQuery.trim().length &lt; 2) &amp;&amp; ctxList.value && ctxList.value.project && ctxList.value.project.length > 0}">
+        <Heading level="h4">Project</Heading>
+        <Items data="{ctxList.value.project}">
+          <Link
+            onClick="selectedPath = $item.path; selectedDisplay = $item.display; selectedLine = null"
+            noIndicator="true">
+            <Text
+              value="{$item.display}"
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-sm"
+              fontWeight="{selectedPath === $item.path ? '$fontWeight-bold' : '$fontWeight-normal'}" />
+          </Link>
+        </Items>
+      </VStack>
+
+      <VStack gap="$space-1" when="{(!searchQuery || searchQuery.trim().length &lt; 2) &amp;&amp; ctxList.value && ctxList.value.memory && ctxList.value.memory.length > 0}">
+        <Heading level="h4">Memory</Heading>
+        <Items data="{ctxList.value.memory}">
+          <Link
+            onClick="selectedPath = $item.path; selectedDisplay = $item.display; selectedLine = null"
+            noIndicator="true">
+            <Text
+              value="{$item.display}"
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-sm"
+              fontWeight="{selectedPath === $item.path ? '$fontWeight-bold' : '$fontWeight-normal'}" />
+          </Link>
+        </Items>
+      </VStack>
+
+      <VStack gap="$space-1" when="{(!searchQuery || searchQuery.trim().length &lt; 2) &amp;&amp; ctxList.value && ctxList.value.hooks && ctxList.value.hooks.length > 0}">
+        <Heading level="h4">Hooks</Heading>
+        <Items data="{ctxList.value.hooks}">
+          <Link
+            onClick="selectedPath = $item.path; selectedDisplay = $item.display; selectedLine = null"
+            noIndicator="true">
+            <Text
+              value="{$item.display}"
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-sm"
+              fontWeight="{selectedPath === $item.path ? '$fontWeight-bold' : '$fontWeight-normal'}" />
+          </Link>
+        </Items>
+      </VStack>
+
+      <VStack gap="$space-1" when="{(!searchQuery || searchQuery.trim().length &lt; 2) &amp;&amp; ctxList.value && ctxList.value.settings && ctxList.value.settings.length > 0}">
+        <Heading level="h4">Settings</Heading>
+        <Items data="{ctxList.value.settings}">
+          <Link
+            onClick="selectedPath = $item.path; selectedDisplay = $item.display; selectedLine = null"
+            noIndicator="true">
+            <Text
+              value="{$item.display}"
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-sm"
+              fontWeight="{selectedPath === $item.path ? '$fontWeight-bold' : '$fontWeight-normal'}" />
+          </Link>
+        </Items>
+      </VStack>
+    </VStack>
+
+    <VStack width="*" gap="$space-2" overflowY="auto">
+      <Text when="{!selectedPath}" color="$textColor-secondary">(select a file)</Text>
+      <VStack when="{selectedPath}" gap="$space-2">
+        <Text value="{selectedPath}" variant="code" fontSize="$fontSize-xs" color="$textColor-secondary" />
+        <VStack when="{selectedLine}" gap="$space-1">
+          <Link onClick="selectedLine = null" noIndicator="true">
+            <Text value="↥ Show full file" fontSize="$fontSize-xs" />
+          </Link>
+          <Items data="{snippetAroundLine(ctxFile.value &amp;&amp; ctxFile.value.content, selectedLine, 6)}">
+            <HStack
+              gap="$space-2"
+              backgroundColor="{$item.isMatch ? '$color-warn-100' : 'transparent'}"
+              padding="$space-0_5">
+              <Text
+                value="{$item.line}"
+                fontFamily="$fontFamily-monospace"
+                fontSize="$fontSize-xs"
+                color="$textColor-secondary"
+                width="40px"
+                textAlign="right" />
+              <Text
+                value="{$item.text}"
+                fontFamily="$fontFamily-monospace"
+                fontSize="$fontSize-sm"
+                whiteSpace="pre"
+                fontWeight="{$item.isMatch ? '$fontWeight-bold' : '$fontWeight-normal'}" />
+            </HStack>
+          </Items>
+        </VStack>
+        <Markdown
+          when="{!selectedLine &amp;&amp; selectedDisplay &amp;&amp; selectedDisplay.endsWith('.md')}"
+          content="{ctxFile.value &amp;&amp; ctxFile.value.content}" />
+        <Text
+          when="{!selectedLine &amp;&amp; selectedDisplay &amp;&amp; !selectedDisplay.endsWith('.md')}"
+          fontFamily="$fontFamily-monospace"
+          fontSize="$fontSize-sm"
+          whiteSpace="pre"
+          value="{ctxFile.value &amp;&amp; ctxFile.value.content}" />
+      </VStack>
+    </VStack>
+  </HStack>
+</Component>

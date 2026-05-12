@@ -4,6 +4,23 @@
 // the next genuine submission re-enables the spinner.
 var escSuppressed = false;
 
+// Slice a file's content into a grep -C style window around a 1-indexed
+// target line. Returns [{ line, text, isMatch }, ...]. Used by Context.xmlui
+// to render search-hit snippets without re-fetching from the server.
+function snippetAroundLine(content, line, context) {
+  if (!content || !line) return [];
+  const lines = content.split('\n');
+  const target = line - 1;
+  const ctx = context || 6;
+  const start = Math.max(0, target - ctx);
+  const end = Math.min(lines.length, target + ctx + 1);
+  const slice = [];
+  for (let i = start; i < end; i++) {
+    slice.push({ line: i + 1, text: lines[i] || '', isMatch: i === target });
+  }
+  return slice;
+}
+
 function currentSourceFile(pathname) {
   if (pathname === '/sessions') return 'components/Sessions.xmlui';
   if (pathname === '/') return 'components/Workspace.xmlui';

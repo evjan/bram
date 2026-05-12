@@ -113,8 +113,9 @@
     <NavLink label="Talk" to="/talk" />
     <NavLink label="Worklist" to="/" exact="true" />
     <NavLink label="Commits" to="/commits" />
-    <NavLink label="Sessions" to="/sessions" />
     <NavLink label="Issues" to="/issues" />
+    <NavLink label="Sessions" to="/sessions" />
+    <NavLink label="Context" to="/context" />
     <NavLink label="README" to="/readme" />
   </NavPanel>
 
@@ -130,8 +131,8 @@
 - **Talk** — live transcript of the current session, with alternating user / assistant turns and a spinner that shows while you wait for a reply. Click 🎤 voice in the AppHeader to dictate from any tab; clicking it again sends the transcript as a fresh user turn. Pasted screenshots render inline as clickable thumbnails (click for fullscreen).
 - **Worklist** — renders `resources/worklist.json` as a checklist of pending items the agent has proposed. You triage with checkboxes; *Talk to agent*, *Approve selected*, and *Drop selected* round-trip the result back to the agent as a fresh user turn (via the `toTurn` shell helper). Optional feedback typed in the box rides along with the action.
 - **Commits** — recent commits, with one-click push to origin when you are ahead.
-- **Sessions** — browse and search past agent sessions for this project. Claude Code and Codex histories are auto-detected from local transcripts.
 - **Issues** — list of open / closed GitHub issues for the current repo (via the local `gh` CLI), with a one-click button to open the New-issue page on github.com. Click an issue to expand its body inline; pasted screenshots render as clickable thumbnails.
+- **Sessions** — browse and search past agent sessions for this project. Claude Code and Codex histories are auto-detected from local transcripts.
 - **README** — this project's README rendered for quick reference.
 
 Setting up writes:
@@ -157,6 +158,7 @@ What setup deliberately does **not** do:
     <Page url="/"><Workspace /></Page>
     <Page url="/talk"><Talk /></Page>
     <Page url="/sessions"><Sessions /></Page>
+    <Page url="/context"><Context /></Page>
     <Page url="/issues"><Issues /></Page>
     <Page url="/commits"><Commits /></Page>
     <Page url="/readme"><Readme /></Page>

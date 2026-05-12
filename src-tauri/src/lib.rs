@@ -1789,6 +1789,201 @@ fn merge_worklist_guard_into_settings(settings_path: &Path) -> Result<bool, Stri
     Ok(true)
 }
 
+// MVP scope (#9): four categories — Project (CLAUDE.md + one-hop @-imports),
+// Memory (~/.claude/projects/<encoded>/memory/), Hooks (.claude/hooks/*),
+// Settings (.claude/settings(.local).json). No transitive @-import resolution.
+
+struct ContextFile {
+    category: &'static str,
+    path: PathBuf,
+    display: String,
+    kind: Option<&'static str>,
+}
+
+fn collect_context_files<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<ContextFile> {
+    let mut out: Vec<ContextFile> = Vec::new();
+    let Some(proj_root) = project_root(Some(app)) else {
+        return out;
+    };
+
+    let claude_md = proj_root.join("CLAUDE.md");
+    if claude_md.exists() {
+        out.push(ContextFile {
+            category: "project",
+            path: claude_md.clone(),
+            display: "CLAUDE.md".to_string(),
+            kind: Some("claude-md"),
+        });
+        if let Ok(content) = std::fs::read_to_string(&claude_md) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                let import_path = match trimmed.strip_prefix('@') {
+                    Some(p) if !p.is_empty() && !p.starts_with(char::is_whitespace) => p,
+                    _ => continue,
+                };
+                let abs = proj_root.join(import_path);
+                if abs.exists() {
+                    out.push(ContextFile {
+                        category: "project",
+                        path: abs,
+                        display: import_path.to_string(),
+                        kind: Some("import"),
+                    });
+                }
+            }
+        }
+    }
+
+    if let Some(home) = home_dir() {
+        let memory_dir = home
+            .join(".claude")
+            .join("projects")
+            .join(encode_path_for_filename(&proj_root))
+            .join("memory");
+        if memory_dir.is_dir() {
+            let mut paths: Vec<PathBuf> = std::fs::read_dir(&memory_dir)
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.is_file())
+                .collect();
+            paths.sort();
+            for path in paths {
+                let display = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                out.push(ContextFile {
+                    category: "memory",
+                    path,
+                    display,
+                    kind: None,
+                });
+            }
+        }
+    }
+
+    let hooks_dir = proj_root.join(".claude").join("hooks");
+    if hooks_dir.is_dir() {
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&hooks_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        paths.sort();
+        for path in paths {
+            let display = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            out.push(ContextFile {
+                category: "hooks",
+                path,
+                display,
+                kind: None,
+            });
+        }
+    }
+
+    let claude_dir = proj_root.join(".claude");
+    for name in ["settings.json", "settings.local.json"] {
+        let path = claude_dir.join(name);
+        if path.exists() {
+            out.push(ContextFile {
+                category: "settings",
+                path,
+                display: name.to_string(),
+                kind: None,
+            });
+        }
+    }
+
+    out
+}
+
+// Group the flat ContextFile list into category buckets for the Context tab's
+// left-pane list. Each item is { path, display, kind? }.
+fn context_list<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
+    use serde_json::json;
+    let mut project: Vec<serde_json::Value> = Vec::new();
+    let mut memory: Vec<serde_json::Value> = Vec::new();
+    let mut hooks: Vec<serde_json::Value> = Vec::new();
+    let mut settings: Vec<serde_json::Value> = Vec::new();
+    for f in collect_context_files(app) {
+        let mut item = json!({
+            "path": f.path.to_string_lossy(),
+            "display": f.display,
+        });
+        if let Some(k) = f.kind {
+            item["kind"] = json!(k);
+        }
+        match f.category {
+            "project" => project.push(item),
+            "memory" => memory.push(item),
+            "hooks" => hooks.push(item),
+            "settings" => settings.push(item),
+            _ => {}
+        }
+    }
+    json!({
+        "project": project,
+        "memory": memory,
+        "hooks": hooks,
+        "settings": settings,
+    })
+}
+
+// Case-insensitive substring search across the same file set as
+// context_list. Returns groups of { path, display, category, hits: [{ line,
+// snippet }] }. Capped at 50 total hits to keep payloads bounded.
+fn context_search<R: tauri::Runtime>(app: &AppHandle<R>, q: &str) -> serde_json::Value {
+    use serde_json::json;
+    let needle = q.trim().to_lowercase();
+    if needle.is_empty() {
+        return json!({ "results": [] });
+    }
+    const MAX_HITS: usize = 50;
+    let mut total_hits = 0usize;
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    for file in collect_context_files(app) {
+        if total_hits >= MAX_HITS {
+            break;
+        }
+        let content = match std::fs::read_to_string(&file.path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let mut hits: Vec<serde_json::Value> = Vec::new();
+        for (i, line) in content.lines().enumerate() {
+            if total_hits >= MAX_HITS {
+                break;
+            }
+            if line.to_lowercase().contains(&needle) {
+                let snippet: String = line.trim().chars().take(200).collect();
+                hits.push(json!({
+                    "line": i + 1,
+                    "snippet": snippet,
+                }));
+                total_hits += 1;
+            }
+        }
+        if !hits.is_empty() {
+            results.push(json!({
+                "category": file.category,
+                "path": file.path.to_string_lossy(),
+                "display": file.display,
+                "hits": hits,
+            }));
+        }
+    }
+    json!({ "results": results, "truncated": total_hits >= MAX_HITS })
+}
+
 fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     let proj = project_root(Some(app)).ok_or("no project root")?;
     let claude_md = proj.join("CLAUDE.md");
@@ -1911,6 +2106,43 @@ fn route_request<R: tauri::Runtime>(
     path: &str,
     query: &str,
 ) -> (u16, &'static str, Vec<u8>) {
+    if path == "__context/list" {
+        let body = serde_json::to_vec(&context_list(app)).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    if path == "__context/search" {
+        let mut q = String::new();
+        for pair in query.split('&') {
+            if let Some(enc) = pair.strip_prefix("q=") {
+                q = percent_decode(enc);
+                break;
+            }
+        }
+        let body = serde_json::to_vec(&context_search(app, &q)).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    if path == "__context/file" {
+        let mut file_path = String::new();
+        for pair in query.split('&') {
+            if let Some(enc) = pair.strip_prefix("path=") {
+                file_path = percent_decode(enc);
+                break;
+            }
+        }
+        let p = std::path::Path::new(&file_path);
+        let result = match std::fs::read_to_string(p) {
+            Ok(content) => serde_json::json!({ "content": content }),
+            Err(e) => {
+                eprintln!("[http /__context/file path={}] {}", file_path, e);
+                serde_json::json!({ "content": "", "error": e.to_string() })
+            }
+        };
+        let body = serde_json::to_vec(&result).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
     if path == "__right-pane-info" {
         #[derive(serde::Serialize)]
         struct RightPaneInfo<'a> {

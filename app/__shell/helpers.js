@@ -262,6 +262,21 @@ window.pruneChecked = function (validIds) {
 // Markdown links and any other <a> tags open in the system browser
 // instead of trying to navigate the Tauri WebView (which 404s). Capture
 // phase so we run before XMLUI's Markdown-internal click handlers.
+//
+// Also routes relative *.md anchors (the MEMORY.md cross-references like
+// `[foo.md](memory/foo.md)`) to a callback installed via
+// registerContextMemorySelector below. We can't intercept these from
+// XMLUI's onClick — the event handler cache deep-clones args, so the DOM
+// target / preventDefault are gone by the time the XMLUI expression runs.
+// And we can't install the window callback from XMLUI either — the
+// scripting engine doesn't expose `window`.
+var __contextMemorySelector = null;
+window.registerContextMemorySelector = function (fn) {
+  __contextMemorySelector = typeof fn === "function" ? fn : null;
+};
+window.clearContextMemorySelector = function () {
+  __contextMemorySelector = null;
+};
 document.addEventListener("click", function (e) {
   var a = e.target && e.target.closest && e.target.closest("a");
   if (!a) return;
@@ -271,6 +286,20 @@ document.addEventListener("click", function (e) {
     e.preventDefault();
     e.stopPropagation();
     window.openExternal(href);
+    return;
+  }
+  if (href.indexOf("://") === -1 && /\.md(?:[?#].*)?$/i.test(href)) {
+    if (typeof __contextMemorySelector === "function") {
+      e.preventDefault();
+      e.stopPropagation();
+      var m = href.match(/([^\/?#]+\.md)(?:[?#]|$)/i);
+      var basename = m ? m[1] : "";
+      try {
+        __contextMemorySelector(basename);
+      } catch (err) {
+        logToHost({ kind: "memory-link-error", error: String(err && err.message || err) });
+      }
+    }
   }
 }, true);
 window.scrollAllToTop = function () {

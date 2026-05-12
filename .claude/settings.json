@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Write(./resources/worklist.json)",
+      "Edit(./resources/worklist.json)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {

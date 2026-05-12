@@ -167,15 +167,66 @@ callbacks, CORS allowlists, hardcoded API base URLs.
 > while keeping the real backend running for API calls. Otherwise,
 > open the project in a standalone browser.
 
-### The redirect pattern
+### Declare a project server (`.xmlui-desktop.json`)
 
-Run your frontend on a known port in a separate terminal:
+Add `.xmlui-desktop.json` at the project root:
 
+```json
+{
+  "server": {
+    "command": "python3 -m http.server 8080",
+    "cwd": "xmlui",
+    "port": 8080,
+    "path": "/"
+  }
+}
 ```
-python3 -m http.server 8080
-```
 
-Add a self-redirect at the top of your project's `index.html`:
+| field | meaning |
+|---|---|
+| `command` | shell command to bring up the project's server. Run via `sh -c` (Unix) or `cmd /C` (Windows). |
+| `cwd` | working directory for the command, relative to the project root. Optional; defaults to the project root. |
+| `port` | TCP port the iframe should target. xmlui-desktop probes this port at startup. |
+| `path` | URL path appended to `http://localhost:<port>` for the iframe. Optional; defaults to `/`. |
+
+At startup, xmlui-desktop:
+
+- probes `127.0.0.1:<port>`. If it's already listening, it logs a notice
+  and reuses the running server (useful when you start the server
+  manually for log visibility);
+- otherwise spawns `command` in `cwd`, with stdout/stderr forwarded to
+  xmlui-desktop's own stderr (prefixed `[server]`);
+- waits up to 5s for the port to come up, then points the right-pane
+  iframe at `http://localhost:<port><path>`. The iframe retries once on
+  load error to absorb the case where the server takes a moment to bind;
+- on app exit, kills the spawned child.
+
+The agent-tools drawer continues to load from xmlui-desktop's internal
+loopback server regardless of this setting.
+
+The app-under-test does not need to be an XMLUI app — `.xmlui-desktop.json`
+is xmlui-desktop's own config file, separate from XMLUI's `config.json`.
+
+### URL parameters
+
+Use query strings to parameterize the frontend without rebuilding —
+e.g. `?city=santarosa` to switch tenant. Pass them on the command line
+to your server's command or bake them into `path` (e.g.
+`"path": "/?city=santarosa"`).
+
+### Working example
+
+[community-calendar](https://github.com/judell/community-calendar) uses
+`.xmlui-desktop.json` for GitHub-OAuth-via-Supabase development. See
+[`docs/app-architecture.md`](https://github.com/judell/community-calendar/blob/main/docs/app-architecture.md)
+for the Supabase URL-Configuration setup that requires the fixed
+`localhost:8080/**` origin.
+
+### Fallback: the redirect pattern
+
+If you can't add a config file (e.g. you're working in a repo you
+don't own), you can still target a fixed origin by adding a
+self-redirect at the top of the project's `index.html`:
 
 ```html
 <script>
@@ -186,25 +237,12 @@ Add a self-redirect at the top of your project's `index.html`:
 </script>
 ```
 
-Launch `xmlui-desktop` from the project root. Its iframe loads the
-random-port URL once, your script bounces it to `localhost:8080`, and
-your fixed-origin bindings line up.
-
-### URL parameters
-
-Use query strings to parameterize the frontend without rebuilding —
-e.g. `?city=santarosa` to switch tenant. The redirect above preserves
-whatever `?key=value` you launch with, or supplies a default when
-launched without one.
-
-### Working example
-
-[community-calendar](https://github.com/judell/community-calendar) uses
-this pattern for GitHub-OAuth-via-Supabase. See `xmlui/index.html` for
-the redirect snippet and
-[`docs/app-architecture.md`](https://github.com/judell/community-calendar/blob/main/docs/app-architecture.md)
-for the Supabase URL-Configuration setup that requires the fixed
-`localhost:8080/**` origin.
+Run your frontend on a known port in a separate terminal
+(`python3 -m http.server 8080`) and launch xmlui-desktop from the
+project root. Its iframe loads the random-port URL once, your script
+bounces it to `localhost:8080`. `.xmlui-desktop.json` is the preferred
+mechanism — it auto-spawns the server, surfaces logs, and doesn't
+pollute the project's HTML.
 
 ### Auth callbacks won't reach the right pane
 

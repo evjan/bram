@@ -102,12 +102,64 @@ fn expand_tilde(p: &str) -> String {
 // the HTTP server, watcher, git/sessions/PTY commands.
 struct ActiveProjectState(Mutex<PathBuf>);
 
-// Base URL of the loopback HTTP server hosting the right pane. Populated
-// in setup() once the listener is bound. Service workers (used by MSW
-// and xmlui's apiInterceptor) require an http(s) secure-context origin,
-// which a custom URI scheme cannot provide — hence the move from
-// xmlui:// to http://127.0.0.1:<port>.
-struct RightPaneUrlState(Mutex<String>);
+// URLs for the two iframes. `tools` is always the internal loopback
+// (xmlui-desktop's own server, serving /__tools/index.html, /__shell/*,
+// embedded assets, git/issues endpoints, etc.). `right_pane` is either
+// the same internal loopback (default) or an external URL when the
+// project's .xmlui-desktop.json declares a `server` block — see
+// load_project_config / SpawnedServerState. Splitting them lets the
+// drawer keep loading from the internal origin while the right pane
+// targets a project-managed server.
+//
+// Service workers (used by MSW and xmlui's apiInterceptor) require an
+// http(s) secure-context origin, which a custom URI scheme cannot
+// provide — hence the move from xmlui:// to http://127.0.0.1:<port>.
+struct PaneUrlsState(Mutex<PaneUrls>);
+
+#[derive(Default, Clone)]
+struct PaneUrls {
+    right_pane: String,
+    tools: String,
+    // Internal-loopback URL used when no project server is declared, or as
+    // the fallback target after the server block is removed from
+    // .xmlui-desktop.json at runtime. Set once at startup.
+    default_right_pane: String,
+}
+
+// Project-level config read from .xmlui-desktop.json at the project
+// root. Distinct from XMLUI's own config.json (the app-under-test
+// isn't necessarily an XMLUI app). All fields optional.
+#[derive(Default, Clone, serde::Deserialize)]
+struct ProjectConfig {
+    #[serde(default)]
+    server: Option<ServerConfig>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct ServerConfig {
+    command: String,
+    #[serde(default)]
+    cwd: Option<String>,
+    port: u16,
+    #[serde(default = "default_server_path")]
+    path: String,
+}
+
+fn default_server_path() -> String {
+    "/".to_string()
+}
+
+// Lifecycle owner for an optional project-server child spawned per
+// .xmlui-desktop.json. Killed on ExitRequested, or on hot-reload when the
+// declared command/cwd/port changes. Carries the spawn-time config so the
+// reload path can diff against the new file and decide whether to respawn.
+struct SpawnedServer {
+    child: std::process::Child,
+    config: ServerConfig,
+}
+
+#[derive(Default)]
+struct SpawnedServerState(Mutex<Option<SpawnedServer>>);
 
 // Windows' canonicalize() returns `\\?\C:\…` extended-length paths.
 // PowerShell tolerates them, but cmd.exe child processes don't ("UNC paths
@@ -577,6 +629,258 @@ fn pty_resize(cols: u16, rows: u16, state: State<'_, AppState>) -> Result<(), St
         .map_err(|e| e.to_string())
 }
 
+// --- Project-server (.xmlui-desktop.json) ---------------------------------
+
+fn load_project_config(root: &Path) -> Option<ProjectConfig> {
+    let path = root.join(".xmlui-desktop.json");
+    let bytes = std::fs::read(&path).ok()?;
+    match serde_json::from_slice::<ProjectConfig>(&bytes) {
+        Ok(cfg) => {
+            eprintln!("[project-config] loaded {}", path.display());
+            Some(cfg)
+        }
+        Err(e) => {
+            eprintln!(
+                "[project-config] failed to parse {}: {}",
+                path.display(),
+                e
+            );
+            None
+        }
+    }
+}
+
+fn is_port_listening(port: u16) -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
+}
+
+// Distinguishes a healthy reuse candidate from a wedged orphan. A bare TCP
+// connect is not enough — a python -m http.server that was reparented to
+// launchd after its xmlui-desktop parent died accepts connects but never
+// returns a response. Setup uses this to decide whether to reuse, log a
+// loud warning, or spawn fresh.
+enum PortStatus {
+    Live,
+    Unresponsive(String),
+    NotListening,
+}
+
+fn probe_port_http(port: u16, path: &str) -> PortStatus {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
+        Ok(s) => s,
+        Err(_) => return PortStatus::NotListening,
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+    let req_path = {
+        let p = path.split('?').next().unwrap_or("/");
+        if p.is_empty() { "/" } else { p }
+    };
+    let req = format!(
+        "GET {} HTTP/1.0\r\nHost: localhost:{}\r\nConnection: close\r\n\r\n",
+        req_path, port
+    );
+    if let Err(e) = stream.write_all(req.as_bytes()) {
+        return PortStatus::Unresponsive(format!("write failed: {}", e));
+    }
+    let mut buf = [0u8; 64];
+    match stream.read(&mut buf) {
+        Ok(0) => PortStatus::Unresponsive("empty reply".into()),
+        Ok(n) => {
+            if buf[..n].starts_with(b"HTTP/") {
+                PortStatus::Live
+            } else {
+                let preview = String::from_utf8_lossy(&buf[..n.min(40)]).to_string();
+                PortStatus::Unresponsive(format!("non-HTTP reply: {:?}", preview))
+            }
+        }
+        Err(e) => PortStatus::Unresponsive(format!("read failed: {}", e)),
+    }
+}
+
+// Spawn the project's server per ServerConfig. Returns the Child on
+// success. stdout/stderr are piped and forwarded to xmlui-desktop's
+// stderr with a `[server]` prefix. Caller is responsible for waiting
+// on the port and storing the Child in state.
+fn spawn_project_server(
+    cfg: &ServerConfig,
+    project_root: &Path,
+) -> Result<std::process::Child, String> {
+    let cwd = match cfg.cwd.as_deref() {
+        Some(rel) => project_root.join(rel),
+        None => project_root.to_path_buf(),
+    };
+    if !cwd.is_dir() {
+        return Err(format!("cwd does not exist: {}", cwd.display()));
+    }
+
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = std::process::Command::new("cmd");
+        c.arg("/C").arg(&cfg.command);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(&cfg.command);
+        c
+    };
+
+    let mut child = command
+        .current_dir(&cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to spawn `{}`: {}", cfg.command, e))?;
+
+    let pid = child.id();
+    eprintln!(
+        "[server] spawned pid={} cwd={} cmd={}",
+        pid,
+        cwd.display(),
+        cfg.command
+    );
+
+    if let Some(stdout) = child.stdout.take() {
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                eprintln!("[server] {}", line);
+            }
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                eprintln!("[server] {}", line);
+            }
+        });
+    }
+
+    Ok(child)
+}
+
+// Block until the port answers or the timeout elapses. Returns true if
+// the port came up. Used after spawn_project_server so we can warn (but
+// not fail) if the server is taking longer than expected; the iframe
+// loads eagerly and retries on its own.
+fn wait_for_port(port: u16, total_ms: u64) -> bool {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_millis(total_ms);
+    while Instant::now() < deadline {
+        if is_port_listening(port) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+// Reconcile xmlui-desktop's runtime state with .xmlui-desktop.json after the
+// file changes on disk. Kills the prior project-server child only when its
+// command/cwd/port no longer match the file; otherwise we keep the running
+// process and just refresh path/query. Always updates PaneUrlsState and emits
+// right-pane-reload so main.js re-fetches the URL. Port changes do respawn,
+// but the iframe origin shifts — service workers (XMLUI's apiInterceptor,
+// MSW) won't rebind cleanly, so we log a warning telling the user to restart.
+fn handle_project_config_reload<R: tauri::Runtime>(
+    app_handle: &AppHandle<R>,
+    proj_root: &Path,
+) {
+    use tauri::Emitter;
+
+    let new_cfg = load_project_config(proj_root);
+    let new_server = new_cfg.as_ref().and_then(|c| c.server.as_ref()).cloned();
+
+    let mut spawned = false;
+    let mut port_changed = false;
+    {
+        let state = app_handle.state::<SpawnedServerState>();
+        let mut guard = state.0.lock().unwrap();
+        let needs_respawn = match (&new_server, guard.as_ref()) {
+            (Some(new), Some(cur)) => {
+                new.command != cur.config.command
+                    || new.cwd != cur.config.cwd
+                    || new.port != cur.config.port
+            }
+            (Some(_), None) => true,
+            (None, Some(_)) => true,
+            (None, None) => false,
+        };
+        if needs_respawn {
+            if let Some(mut cur) = guard.take() {
+                port_changed = new_server.as_ref().map(|n| n.port) != Some(cur.config.port);
+                let pid = cur.child.id();
+                let _ = cur.child.kill();
+                let _ = cur.child.wait();
+                eprintln!("[server] killed pid={} on config reload", pid);
+            }
+            if let Some(cfg) = new_server.as_ref() {
+                match spawn_project_server(cfg, proj_root) {
+                    Ok(child) => {
+                        *guard = Some(SpawnedServer {
+                            child,
+                            config: cfg.clone(),
+                        });
+                        spawned = true;
+                    }
+                    Err(e) => eprintln!("[server] respawn failed: {}", e),
+                }
+            }
+        }
+    }
+
+    if spawned {
+        if let Some(cfg) = new_server.as_ref() {
+            if !wait_for_port(cfg.port, 5000) {
+                eprintln!(
+                    "[server] WARNING: respawned port {} did not come up within 5s; right-pane iframe will retry",
+                    cfg.port
+                );
+            } else {
+                eprintln!("[server] respawned; port {} is up", cfg.port);
+            }
+        }
+    }
+
+    if port_changed {
+        eprintln!(
+            "[server] WARNING: port changed via .xmlui-desktop.json; service workers were bound to the old origin and will not rebind cleanly — restart xmlui-desktop to fully apply"
+        );
+    }
+
+    let new_right_pane_url = match new_server.as_ref() {
+        Some(cfg) => format!("http://localhost:{}{}", cfg.port, cfg.path),
+        None => {
+            app_handle
+                .state::<PaneUrlsState>()
+                .0
+                .lock()
+                .unwrap()
+                .default_right_pane
+                .clone()
+        }
+    };
+    {
+        let state = app_handle.state::<PaneUrlsState>();
+        let mut urls = state.0.lock().unwrap();
+        urls.right_pane = new_right_pane_url.clone();
+    }
+    eprintln!(
+        "[project-config] reloaded; right-pane URL -> {}",
+        new_right_pane_url
+    );
+    let _ = app_handle.emit("right-pane-reload", ());
+}
+
 #[derive(serde::Serialize)]
 struct WhisperStatusReport {
     running: bool,
@@ -617,6 +921,8 @@ fn whisper_start(
             .arg("--convert")
             .arg("--tmp-dir")
             .arg(&tmp_dir_str)
+            .arg("--port")
+            .arg("18080")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -624,7 +930,7 @@ fn whisper_start(
             Ok(child) => {
                 let pid = child.id();
                 eprintln!(
-                    "[whisper] spawned {} pid={} -m {} --tmp-dir {}",
+                    "[whisper] spawned {} pid={} --port 18080 -m {} --tmp-dir {}",
                     bin, pid, model, tmp_dir_str
                 );
                 *guard = Some(child);
@@ -679,8 +985,13 @@ fn log_from_right_pane(payload: serde_json::Value) {
 }
 
 #[tauri::command]
-fn get_right_pane_url(state: State<'_, RightPaneUrlState>) -> String {
-    state.0.lock().unwrap().clone()
+fn get_right_pane_url(state: State<'_, PaneUrlsState>) -> String {
+    state.0.lock().unwrap().right_pane.clone()
+}
+
+#[tauri::command]
+fn get_tools_pane_url(state: State<'_, PaneUrlsState>) -> String {
+    state.0.lock().unwrap().tools.clone()
 }
 
 #[tauri::command]
@@ -1294,6 +1605,24 @@ fn read_latest_session<R: tauri::Runtime>(
     std::fs::read(&session.path).map_err(|e| e.to_string())
 }
 
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        let c = *b;
+        let unreserved = c.is_ascii_alphanumeric()
+            || c == b'-'
+            || c == b'_'
+            || c == b'.'
+            || c == b'~';
+        if unreserved {
+            out.push(c as char);
+        } else {
+            out.push_str(&format!("%{:02X}", c));
+        }
+    }
+    out
+}
+
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -1582,6 +1911,31 @@ fn route_request<R: tauri::Runtime>(
     path: &str,
     query: &str,
 ) -> (u16, &'static str, Vec<u8>) {
+    if path == "__error" {
+        let mut reason = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("reason=") {
+                reason = percent_decode(v);
+                break;
+            }
+        }
+        let escape = |s: &str| -> String {
+            s.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+        };
+        let html = format!(
+            "<!doctype html><meta charset=utf-8><title>xmlui-desktop: project server unavailable</title>\
+             <style>body{{font-family:system-ui,-apple-system,sans-serif;padding:32px;background:#1e1e1e;color:#e0e0e0;line-height:1.5}}\
+             h1{{color:#ff7a7a;margin:0 0 16px;font-size:18px}}p{{margin:8px 0}}code{{background:#333;color:#e0e0e0;padding:2px 6px;border-radius:4px;font-family:Menlo,Monaco,monospace}}</style>\
+             <h1>xmlui-desktop: project server unavailable</h1>\
+             <p>{}</p>",
+            escape(&reason)
+        );
+        return (200, "text/html; charset=utf-8", html.into_bytes());
+    }
+
     if path == "__commits" {
         return match git_log_recent(app, 30) {
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
@@ -1819,8 +2173,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .manage(WhisperState::default())
+        .manage(SpawnedServerState::default())
         .manage(ActiveProjectState(Mutex::new(initial_proj)))
-        .manage(RightPaneUrlState(Mutex::new(String::new())))
+        .manage(PaneUrlsState(Mutex::new(PaneUrls::default())))
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
@@ -1832,6 +2187,7 @@ pub fn run() {
             capture_screenshot,
             git_push,
             get_right_pane_url,
+            get_tools_pane_url,
             whisper_start,
             whisper_stop,
             whisper_status,
@@ -1848,9 +2204,84 @@ pub fn run() {
                 .to_ip()
                 .map(|sa| sa.port())
                 .ok_or("right-pane server bound to non-ip address")?;
-            let url = format!("http://127.0.0.1:{}", port);
-            eprintln!("[xmlui-desktop] right pane HTTP server: {}", url);
-            *app.state::<RightPaneUrlState>().0.lock().unwrap() = url;
+            let internal_origin = format!("http://127.0.0.1:{}", port);
+            eprintln!("[xmlui-desktop] internal HTTP server: {}", internal_origin);
+            let tools_url = format!("{}/__tools/index.html", internal_origin);
+
+            // .xmlui-desktop.json may declare an external server for the
+            // right pane. The tools-pane URL always points at the internal
+            // loopback (so the drawer keeps working regardless).
+            let project_cfg = project_root(Some(app.handle()))
+                .as_deref()
+                .and_then(load_project_config);
+            let default_right_pane = format!("{}/index.html", internal_origin);
+            let right_pane_url = if let Some(cfg) = project_cfg.as_ref().and_then(|c| c.server.as_ref()) {
+                let external = format!("http://localhost:{}{}", cfg.port, cfg.path);
+                match probe_port_http(cfg.port, &cfg.path) {
+                    PortStatus::Live => {
+                        eprintln!(
+                            "[server] port {} is live (HTTP responsive); reusing (skipping spawn of `{}`)",
+                            cfg.port, cfg.command
+                        );
+                        external
+                    }
+                    PortStatus::Unresponsive(reason) => {
+                        eprintln!(
+                            "[server] port {} is in use but unresponsive ({}); refusing to reuse",
+                            cfg.port, reason
+                        );
+                        eprintln!(
+                            "[server] HINT: a previous server is likely wedged. Run `lsof -i :{}` to find the pid, then kill it and restart xmlui-desktop.",
+                            cfg.port
+                        );
+                        // Surface the problem in the iframe instead of letting it
+                        // hang on a blank load. /__error is served by the internal
+                        // loopback so the user sees text immediately.
+                        format!(
+                            "{}/__error?reason={}",
+                            internal_origin,
+                            percent_encode(&format!(
+                                "Port {} is in use but unresponsive ({}). The previous xmlui-desktop session likely left an orphan process. Run `lsof -i :{}` and kill the listed pid, then restart xmlui-desktop.",
+                                cfg.port, reason, cfg.port
+                            ))
+                        )
+                    }
+                    PortStatus::NotListening => {
+                        if let Some(root) = project_root(Some(app.handle())) {
+                            match spawn_project_server(cfg, &root) {
+                                Ok(child) => {
+                                    *app.state::<SpawnedServerState>().0.lock().unwrap() =
+                                        Some(SpawnedServer {
+                                            child,
+                                            config: cfg.clone(),
+                                        });
+                                    if !wait_for_port(cfg.port, 5000) {
+                                        eprintln!(
+                                            "[server] WARNING: port {} did not come up within 5s; right-pane iframe will retry",
+                                            cfg.port
+                                        );
+                                    } else {
+                                        eprintln!("[server] port {} is up", cfg.port);
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("[server] spawn failed: {} — falling back to internal URL", e);
+                                }
+                            }
+                        }
+                        external
+                    }
+                }
+            } else {
+                default_right_pane.clone()
+            };
+            eprintln!("[xmlui-desktop] right pane URL: {}", right_pane_url);
+            eprintln!("[xmlui-desktop] tools pane URL: {}", tools_url);
+            *app.state::<PaneUrlsState>().0.lock().unwrap() = PaneUrls {
+                right_pane: right_pane_url,
+                tools: tools_url,
+                default_right_pane,
+            };
 
             let server_app = app.handle().clone();
             std::thread::spawn(move || {
@@ -1910,8 +2341,28 @@ pub fn run() {
                 }
 
                 let mut last_emit = Instant::now() - Duration::from_secs(1);
+                let mut last_config_emit = Instant::now() - Duration::from_secs(1);
                 for res in rx {
                     let Ok(event) = res else { continue };
+
+                    // .xmlui-desktop.json gets its own dispatch: we have to
+                    // process it on any event kind (editors atomic-save via
+                    // rename, which arrives as Create or Remove rather than
+                    // Modify), and its handler may need to respawn the
+                    // project server before reloading the iframe.
+                    let is_config_event = event.paths.iter().any(|p| {
+                        p.file_name().map_or(false, |n| n == ".xmlui-desktop.json")
+                    });
+                    if is_config_event {
+                        if last_config_emit.elapsed() < Duration::from_millis(300) {
+                            continue;
+                        }
+                        last_config_emit = Instant::now();
+                        eprintln!("[project-config] change detected");
+                        handle_project_config_reload(&app_handle, &proj_root_path);
+                        continue;
+                    }
+
                     if !matches!(
                         event.kind,
                         EventKind::Modify(_) | EventKind::Create(_)
@@ -1955,13 +2406,25 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                let state = app.state::<WhisperState>();
-                let mut guard = state.0.lock().unwrap();
-                if let Some(mut child) = guard.take() {
-                    let pid = child.id();
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    eprintln!("[whisper] killed pid={} on exit", pid);
+                {
+                    let state = app.state::<WhisperState>();
+                    let mut guard = state.0.lock().unwrap();
+                    if let Some(mut child) = guard.take() {
+                        let pid = child.id();
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        eprintln!("[whisper] killed pid={} on exit", pid);
+                    }
+                }
+                {
+                    let state = app.state::<SpawnedServerState>();
+                    let mut guard = state.0.lock().unwrap();
+                    if let Some(mut spawned) = guard.take() {
+                        let pid = spawned.child.id();
+                        let _ = spawned.child.kill();
+                        let _ = spawned.child.wait();
+                        eprintln!("[server] killed pid={} on exit", pid);
+                    }
                 }
             }
         });

@@ -388,32 +388,55 @@ const { listen } = window.__TAURI__.event;
 (async () => {
   const iframe = document.getElementById("right-pane");
   if (!iframe) return;
-  let base;
+  let RIGHT_PANE_SRC, TOOLS_PANE_SRC;
   try {
-    base = await invoke("get_right_pane_url");
+    [RIGHT_PANE_SRC, TOOLS_PANE_SRC] = await Promise.all([
+      invoke("get_right_pane_url"),
+      invoke("get_tools_pane_url"),
+    ]);
   } catch (e) {
-    console.error("get_right_pane_url failed", e);
+    console.error("get_*_pane_url failed", e);
     return;
   }
-  const RIGHT_PANE_SRC = base + "/index.html";
-  const TOOLS_PANE_SRC = base + "/__tools/index.html";
   const tools = document.getElementById("tools-pane");
+  // Cache-bust by appending t=<now>. RIGHT_PANE_SRC may already contain
+  // a path (e.g. http://localhost:8080/) but no query string — we
+  // document `path` in .xmlui-desktop.json as path-only, so `?` is safe.
+  const bust = (u) => u + (u.includes("?") ? "&" : "?") + "t=" + Date.now();
   // reloadAll: reload BOTH iframes. Used by the manual "reload xmlui app"
   // toolbar button and by the "tools-pane-reload" watcher event (drawer
   // code changed, both panes may consume it).
   function reloadAll() {
-    iframe.src = RIGHT_PANE_SRC + "?t=" + Date.now();
-    if (tools) tools.src = TOOLS_PANE_SRC + "?t=" + Date.now();
+    iframe.src = bust(RIGHT_PANE_SRC);
+    if (tools) tools.src = bust(TOOLS_PANE_SRC);
   }
   // reloadRightPaneOnly: reload only the right pane. Used by the
-  // "right-pane-reload" watcher event for user-project file changes.
-  // The drawer is poll-driven so it does NOT need to reload here, and
-  // keeping it stable avoids postMessage-vs-iframe-rebuild races on
-  // Approve/Drop clicks while the agent is writing files.
-  function reloadRightPaneOnly() {
-    iframe.src = RIGHT_PANE_SRC + "?t=" + Date.now();
+  // "right-pane-reload" watcher event for user-project file changes AND
+  // for .xmlui-desktop.json hot-reload (path/query updates). We re-fetch
+  // the URL each time instead of reusing the captured one so config edits
+  // are picked up. The drawer is poll-driven so it does NOT need to reload
+  // here, and keeping it stable avoids postMessage-vs-iframe-rebuild races
+  // on Approve/Drop clicks while the agent is writing files.
+  async function reloadRightPaneOnly() {
+    try {
+      RIGHT_PANE_SRC = await invoke("get_right_pane_url");
+    } catch (e) {
+      console.error("get_right_pane_url failed", e);
+    }
+    iframe.src = bust(RIGHT_PANE_SRC);
   }
+  // Single-shot retry: if the right-pane iframe hasn't fired `load`
+  // within 1.5s, the project-managed server (from .xmlui-desktop.json)
+  // is probably still starting up — connection is stuck. Bust and try
+  // once more. Iframes fire `load` even for error pages, so this
+  // specifically catches the "still connecting" state. `error` is not
+  // reliable for iframes; we don't bother listening for it.
+  let loaded = false;
+  iframe.addEventListener("load", () => { loaded = true; });
   iframe.src = RIGHT_PANE_SRC;
+  setTimeout(() => {
+    if (!loaded) iframe.src = bust(RIGHT_PANE_SRC);
+  }, 1500);
   if (tools) tools.src = TOOLS_PANE_SRC;
   document
     .getElementById("reload-right")
@@ -431,7 +454,7 @@ const { listen } = window.__TAURI__.event;
 // iframes (Workspace, etc.) drive the same recorder via voice-start/voice-stop
 // messages. Auto-starts whisper-server on first record click.
 (() => {
-  const WHISPER_HOST = "http://127.0.0.1:8080";
+  const WHISPER_HOST = "http://127.0.0.1:18080";
   const WHISPER_URL = WHISPER_HOST + "/inference";
   const MODEL_PATH = "~/.local/share/whisper-models/ggml-small.en.bin";
   const READY_TIMEOUT_MS = 15000;

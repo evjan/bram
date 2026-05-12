@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 
 use include_dir::{include_dir, Dir};
@@ -261,6 +261,82 @@ fn git_run<R: tauri::Runtime>(app: &AppHandle<R>, args: &[&str]) -> Result<Strin
         return Err(String::from_utf8_lossy(&out.stderr).into_owned());
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+// Update-availability check. Fetched once from GitHub at first request and
+// cached for the process lifetime — repeat hits are cheap and we don't
+// want to thrash the API's 60/hr anonymous limit. `XMLUI_DESKTOP_FAKE_CURRENT`
+// substitutes the env value for CARGO_PKG_VERSION so the banner UI can be
+// exercised ahead of an actual release: `XMLUI_DESKTOP_FAKE_CURRENT=0.0.1 cargo run`.
+#[derive(serde::Serialize, Clone)]
+struct AppInfo {
+    current: String,
+    latest: Option<String>,
+    has_update: bool,
+    release_url: Option<String>,
+}
+
+static APP_INFO_CACHE: OnceLock<Mutex<Option<AppInfo>>> = OnceLock::new();
+
+fn compare_versions(current: &str, latest: &str) -> bool {
+    let parse = |s: &str| -> Vec<u32> {
+        s.split('.').filter_map(|x| x.parse::<u32>().ok()).collect()
+    };
+    parse(latest) > parse(current)
+}
+
+fn fetch_app_info() -> AppInfo {
+    let current = std::env::var("XMLUI_DESKTOP_FAKE_CURRENT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+
+    // curl ships on macOS / Linux / Windows 10+; avoids pulling in an HTTP
+    // dependency for a single, tolerant-of-failure fetch.
+    let output = std::process::Command::new("curl")
+        .args([
+            "-sf",
+            "-m", "5",
+            "-H", "User-Agent: xmlui-desktop",
+            "-H", "Accept: application/vnd.github+json",
+            "https://api.github.com/repos/judell/xmlui-desktop/releases/latest",
+        ])
+        .output();
+
+    let bytes = match output {
+        Ok(o) if o.status.success() => o.stdout,
+        _ => return AppInfo { current, latest: None, has_update: false, release_url: None },
+    };
+
+    let v: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return AppInfo { current, latest: None, has_update: false, release_url: None },
+    };
+
+    let tag = v.get("tag_name").and_then(|x| x.as_str()).unwrap_or("");
+    let latest_str = tag.trim_start_matches('v').to_string();
+    if latest_str.is_empty() {
+        return AppInfo { current, latest: None, has_update: false, release_url: None };
+    }
+    let release_url = v.get("html_url").and_then(|x| x.as_str()).map(String::from);
+    let has_update = compare_versions(&current, &latest_str);
+    AppInfo {
+        current,
+        latest: Some(latest_str),
+        has_update,
+        release_url,
+    }
+}
+
+fn get_app_info() -> AppInfo {
+    let cache = APP_INFO_CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = cache.lock().unwrap();
+    if let Some(cached) = guard.as_ref() {
+        return cached.clone();
+    }
+    let info = fetch_app_info();
+    *guard = Some(info.clone());
+    info
 }
 
 fn git_log_recent<R: tauri::Runtime>(app: &AppHandle<R>, count: usize) -> Result<Vec<u8>, String> {
@@ -2140,6 +2216,12 @@ fn route_request<R: tauri::Runtime>(
             }
         };
         let body = serde_json::to_vec(&result).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    if path == "__app-info" {
+        let info = get_app_info();
+        let body = serde_json::to_vec(&info).unwrap_or_default();
         return (200, "application/json; charset=utf-8", body);
     }
 

@@ -1,8 +1,9 @@
 <Theme width-navPanel-App="$space-28">
-<App layout="vertical-sticky" var.recording="{false}" var.rightPaneSize="(measuring…)"
+<App layout="vertical-sticky" var.recording="{false}" var.rightPaneSize="(measuring…)" var.updateBannerDismissed="{false}"
   onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height)">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
+  <DataSource id="appInfo" url="/__app-info" />
 
   <ModalDialog id="urlInfoDialog" title="Right-pane info">
     <VStack gap="$space-3">
@@ -20,6 +21,21 @@
       <VStack gap="$space-1" marginTop="$space-2">
         <Text fontWeight="bold">Screen size</Text>
         <Text fontFamily="$fontFamily-monospace" value="{rightPaneSize}" />
+      </VStack>
+
+      <VStack when="{appInfo.value}" gap="$space-1" marginTop="$space-2">
+        <Text fontWeight="bold">Version</Text>
+        <HStack gap="$space-2">
+          <Text>current:</Text>
+          <Text fontFamily="$fontFamily-monospace">{appInfo.value.current}</Text>
+        </HStack>
+        <HStack gap="$space-2" when="{appInfo.value.latest}">
+          <Text>latest:</Text>
+          <Text fontFamily="$fontFamily-monospace">{appInfo.value.latest}</Text>
+        </HStack>
+        <Text when="{appInfo.value.has_update}" color="$color-warn-600" fontSize="$fontSize-sm">
+          A newer release is available.
+        </Text>
       </VStack>
 
       <VStack when="{rpInfo.value &amp;&amp; rpInfo.value.spawned}" gap="$space-1" marginTop="$space-2">
@@ -52,6 +68,28 @@
       </VStack>
     </VStack>
   </ModalDialog>
+
+  <HStack
+    when="{appInfo.value &amp;&amp; appInfo.value.has_update &amp;&amp; !updateBannerDismissed}"
+    backgroundColor="$color-warn-100"
+    padding="$space-2"
+    gap="$space-3"
+    verticalAlignment="center">
+    <Text fontSize="$fontSize-sm">
+      Version {appInfo.value.latest} is available. (Current: {appInfo.value.current}.)
+    </Text>
+    <Button
+      label="Download"
+      size="xs"
+      onClick="appInfo.value.release_url &amp;&amp; openExternal(appInfo.value.release_url)" />
+    <SpaceFiller />
+    <Button
+      label="✕"
+      variant="ghost"
+      size="xs"
+      tooltip="Dismiss for this session"
+      onClick="updateBannerDismissed = true" />
+  </HStack>
 
   <AppHeader>
     <Theme paddingHorizontal-Button-sm="$space-1" fontSize-Button="$fontSize-md">

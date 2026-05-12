@@ -292,6 +292,18 @@ Cutting a new release:
 It's fine to leave `#[cfg(debug_assertions)]` gates in code (e.g.,
 `open_devtools`) — they work in the only build we ship.
 
+### Testing the update banner
+
+The `/__app-info` route reads the current version from
+`CARGO_PKG_VERSION` and compares it against the latest GitHub release.
+To exercise the banner UI before actually cutting a new release, launch
+with `XMLUI_DESKTOP_FAKE_CURRENT=0.0.1 cargo run` — the env var
+substitutes for the real package version in both the comparison and the
+response's `current` field, so `has_update` flips to `true` against
+whatever the real GitHub latest is, and the banner renders. The result
+is cached per process, so set the env var before launch and restart to
+re-test with a different fake value.
+
 ## Compressing screencasts for the README
 
 GitHub README videos are capped at ~10 MiB. Screencasts of

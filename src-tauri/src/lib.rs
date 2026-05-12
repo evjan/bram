@@ -278,6 +278,12 @@ struct AppInfo {
 
 static APP_INFO_CACHE: OnceLock<Mutex<Option<AppInfo>>> = OnceLock::new();
 
+// Cache of the "currently live" Claude session JSONL path and its mtime.
+// Updated by latest_claude_session_path with hysteresis so the choice
+// doesn't oscillate when claude touches an old session file.
+static LIVE_CLAUDE_SESSION: OnceLock<Mutex<Option<(PathBuf, std::time::SystemTime)>>> =
+    OnceLock::new();
+
 fn compare_versions(current: &str, latest: &str) -> bool {
     let parse = |s: &str| -> Vec<u32> {
         s.split('.').filter_map(|x| x.parse::<u32>().ok()).collect()
@@ -1641,17 +1647,33 @@ fn list_sessions<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,
 ) -> Result<Vec<SessionEntry>, String> {
-    let (_, sessions) = sessions_for_provider(app, preferred)?;
+    let (provider, sessions) = sessions_for_provider(app, preferred)?;
+    // For Claude sessions, mark the live one using the same hysteresis-
+    // backed picker that the Talk pane uses. For Codex (or anything else),
+    // fall back to "newest mtime" via idx == 0.
+    let live_claude_id: Option<String> = match provider {
+        SessionProvider::Claude => latest_claude_session_path(app)
+            .ok()
+            .flatten()
+            .and_then(|p| p.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string())),
+        _ => None,
+    };
     Ok(sessions
         .into_iter()
         .enumerate()
-        .map(|(idx, session)| SessionEntry {
-            id: session.id,
-            mtime: session.mtime,
-            size: session.size,
-            title: session.title,
-            provider: session.provider,
-            current: idx == 0,
+        .map(|(idx, session)| {
+            let current = match &live_claude_id {
+                Some(live_id) => session.id == *live_id,
+                None => idx == 0,
+            };
+            SessionEntry {
+                id: session.id,
+                mtime: session.mtime,
+                size: session.size,
+                title: session.title,
+                provider: session.provider,
+                current,
+            }
         })
         .collect())
 }
@@ -1694,7 +1716,8 @@ fn latest_claude_session_path<R: tauri::Runtime>(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.to_string()),
     };
-    let mut best: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    // Collect every jsonl with its mtime in one pass.
+    let mut all: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     for entry in entries {
         let Ok(entry) = entry else { continue };
         let path = entry.path();
@@ -1703,13 +1726,60 @@ fn latest_claude_session_path<R: tauri::Runtime>(
         }
         let Ok(metadata) = entry.metadata() else { continue };
         let Ok(mtime) = metadata.modified() else { continue };
-        match best {
-            None => best = Some((mtime, path)),
-            Some((bt, _)) if mtime > bt => best = Some((mtime, path)),
-            _ => {}
-        }
+        all.push((mtime, path));
     }
-    Ok(best.map(|(_, p)| p))
+    if all.is_empty() {
+        return Ok(None);
+    }
+    // Raw best = newest mtime.
+    let (raw_best_mtime, raw_best_path) = all
+        .iter()
+        .max_by_key(|(t, _)| *t)
+        .cloned()
+        .expect("non-empty");
+    // Hysteresis: prefer the previously-chosen path unless it's clearly stale.
+    let cache_cell = LIVE_CLAUDE_SESSION.get_or_init(|| Mutex::new(None));
+    let mut cached = cache_cell.lock().map_err(|e| e.to_string())?;
+    let chosen: PathBuf = match cached.as_ref() {
+        Some((cached_path, _)) => {
+            // Look up the cached path's current mtime in our scan.
+            let cached_now = all.iter().find(|(_, p)| p == cached_path).map(|(t, _)| *t);
+            match cached_now {
+                None => {
+                    // (a) cached path no longer exists → switch.
+                    raw_best_path.clone()
+                }
+                Some(cached_mtime) => {
+                    let now = std::time::SystemTime::now();
+                    let cached_age = now
+                        .duration_since(cached_mtime)
+                        .unwrap_or_else(|_| std::time::Duration::from_secs(0));
+                    let raw_age = now
+                        .duration_since(raw_best_mtime)
+                        .unwrap_or_else(|_| std::time::Duration::from_secs(0));
+                    let different = &raw_best_path != cached_path;
+                    let cond_b = cached_age > std::time::Duration::from_secs(30)
+                        && raw_best_mtime > cached_mtime;
+                    let cond_c = raw_age < std::time::Duration::from_secs(5)
+                        && cached_age > std::time::Duration::from_secs(5);
+                    if different && (cond_b || cond_c) {
+                        raw_best_path.clone()
+                    } else {
+                        cached_path.clone()
+                    }
+                }
+            }
+        }
+        None => raw_best_path.clone(),
+    };
+    // Record current mtime for the chosen path (could be raw_best or cached).
+    let chosen_mtime = all
+        .iter()
+        .find(|(_, p)| p == &chosen)
+        .map(|(t, _)| *t)
+        .unwrap_or(raw_best_mtime);
+    *cached = Some((chosen.clone(), chosen_mtime));
+    Ok(Some(chosen))
 }
 
 // Tail variant: return only the last N records of the JSONL. Lets Talk

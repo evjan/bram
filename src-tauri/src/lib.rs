@@ -135,7 +135,7 @@ struct ProjectConfig {
     server: Option<ServerConfig>,
 }
 
-#[derive(Clone, serde::Deserialize)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct ServerConfig {
     command: String,
     #[serde(default)]
@@ -1911,6 +1911,26 @@ fn route_request<R: tauri::Runtime>(
     path: &str,
     query: &str,
 ) -> (u16, &'static str, Vec<u8>) {
+    if path == "__right-pane-info" {
+        #[derive(serde::Serialize)]
+        struct RightPaneInfo<'a> {
+            url: &'a str,
+            default_right_pane: &'a str,
+            spawned: Option<&'a ServerConfig>,
+        }
+        let pane_state = app.state::<PaneUrlsState>();
+        let urls = pane_state.0.lock().unwrap();
+        let spawn_state = app.state::<SpawnedServerState>();
+        let spawned_guard = spawn_state.0.lock().unwrap();
+        let info = RightPaneInfo {
+            url: &urls.right_pane,
+            default_right_pane: &urls.default_right_pane,
+            spawned: spawned_guard.as_ref().map(|s| &s.config),
+        };
+        let body = serde_json::to_vec(&info).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
     if path == "__error" {
         let mut reason = String::new();
         for pair in query.split('&') {

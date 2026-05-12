@@ -1,26 +1,4 @@
 {
-  "description": "Issue #5 follow-up: community-calendar repo changes that enable + correct the new .xmlui-desktop.json pattern. Commit together against ~/community-calendar — the .xmlui-desktop.json file lands with the corrected path/no-cwd shape (5+8 merge), and the redirect snippet is removed from xmlui/index.html.",
-  "items": [
-    {
-      "id": "cc-add-config",
-      "status": "applied",
-      "file": "~/community-calendar/.xmlui-desktop.json",
-      "before": "(file did not exist)",
-      "after": "Created with { \"server\": { \"command\": \"python3 -m http.server 8080\", \"cwd\": \"xmlui\", \"port\": 8080, \"path\": \"/?city=santarosa&images=preview\" } }. Baked the dev query (city + images) into `path` to preserve the behavior the old redirect snippet provided as default."
-    },
-    {
-      "id": "cc-remove-redirect",
-      "status": "applied",
-      "file": "~/community-calendar/xmlui/index.html",
-      "before": "<script>if (location.hostname === '127.0.0.1' && location.port !== '8080') { ... location.replace('http://localhost:8080' + …) }</script>",
-      "after": "Removed the redirect snippet. xmlui-desktop now targets localhost:8080 directly via .xmlui-desktop.json; GitHub Pages production deploy never hits 127.0.0.1 so removal is safe there."
-    },
-    {
-      "id": "cc-fix-config-path",
-      "status": "applied",
-      "file": "~/community-calendar/.xmlui-desktop.json",
-      "before": "{ \"server\": { \"command\": \"python3 -m http.server 8080\", \"cwd\": \"xmlui\", \"port\": 8080, \"path\": \"/?city=santarosa&images=preview\" } }",
-      "after": "{ \"server\": { \"command\": \"python3 -m http.server 8080\", \"port\": 8080, \"path\": \"/xmlui/index.html?city=santarosa&images=preview\" } } — dropped `cwd` so the server runs at the project root, and targets `/xmlui/index.html` so the page-relative `../categories.json` / `../cities.json` / `../source_priority.json` XHRs in shell.js resolve to project-root JSON files (matches the URL shape that worked outside Tauri). Commit alongside cc-add-config."
-    }
-  ]
+  "description": "",
+  "items": []
 }

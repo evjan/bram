@@ -1,11 +1,53 @@
 <Theme width-navPanel-App="$space-40">
 <App layout="vertical-sticky" var.recording="{false}">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
+  <DataSource id="rpInfo" url="/__right-pane-info" />
+
+  <ModalDialog id="urlInfoDialog" title="Right-pane URL">
+    <VStack gap="$space-3">
+      <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-sm">{rpInfo.value && rpInfo.value.url}</Text>
+      <HStack gap="$space-2">
+        <Button
+          label="Open in browser"
+          size="sm"
+          onClick="rpInfo.value &amp;&amp; openExternal(rpInfo.value.url)" />
+      </HStack>
+
+      <VStack when="{rpInfo.value &amp;&amp; rpInfo.value.spawned}" gap="$space-1" marginTop="$space-2">
+        <Text fontWeight="bold">Project server (.xmlui-desktop.json)</Text>
+        <HStack gap="$space-2">
+          <Text>command:</Text>
+          <Text fontFamily="$fontFamily-monospace">{rpInfo.value.spawned.command}</Text>
+        </HStack>
+        <HStack gap="$space-2" when="{rpInfo.value.spawned.cwd}">
+          <Text>cwd:</Text>
+          <Text fontFamily="$fontFamily-monospace">{rpInfo.value.spawned.cwd}</Text>
+        </HStack>
+        <HStack gap="$space-2">
+          <Text>port:</Text>
+          <Text fontFamily="$fontFamily-monospace">{rpInfo.value.spawned.port}</Text>
+        </HStack>
+        <HStack gap="$space-2">
+          <Text>path:</Text>
+          <Text fontFamily="$fontFamily-monospace">{rpInfo.value.spawned.path}</Text>
+        </HStack>
+      </VStack>
+
+      <VStack
+        when="{rpInfo.value &amp;&amp; !rpInfo.value.spawned &amp;&amp; rpInfo.value.url === rpInfo.value.default_right_pane}"
+        gap="$space-1"
+        marginTop="$space-2">
+        <Text fontSize="$fontSize-sm" color="$textColor-secondary">
+          No .xmlui-desktop.json declared — using the internal loopback default.
+        </Text>
+      </VStack>
+    </VStack>
+  </ModalDialog>
 
   <AppHeader>
     <Text fontWeight="bold" fontSize="$fontSize-md">Tools</Text>
     <Theme paddingHorizontal-Button-sm="$space-1" fontSize-Button="$fontSize-md">
-      <HStack gap="$space-0_5">
+      <HStack gap="$space-0_5" verticalAlignment="center">
         <Button
           label="A−"
           variant="ghost"
@@ -56,6 +98,13 @@
           variant="ghost"
           tooltip="Send Esc to interrupt"
           onClick="(sendKeys('\x1b'), escSuppressed = true)" />
+        <Theme fontSize-Button="$fontSize-lg">
+          <Button
+            label="ⓘ"
+            variant="ghost"
+            tooltip="Show right-pane URL"
+            onClick="rpInfo.refetch(); urlInfoDialog.open()" />
+        </Theme>
       </HStack>
     </Theme>
   </AppHeader>

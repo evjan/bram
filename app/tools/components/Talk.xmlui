@@ -34,7 +34,7 @@
 
   <ChangeListener
     listenTo="{pendingPoll.value &amp;&amp; pendingPoll.value.pending &amp;&amp; pendingPoll.value.pending.id}"
-    onDidChange="(c) => { try { logToHost({ kind: 'pendingPoll-transition', oldId: c.prevValue || null, newId: c.newValue || null, name: (pendingPoll.value &amp;&amp; pendingPoll.value.pending &amp;&amp; pendingPoll.value.pending.name) || null }) } catch (e) {} }" />
+    onDidChange="(c) => { try { logToHost({ kind: 'pendingPoll-transition', oldId: c.prevValue || null, newId: c.newValue || null, name: (pendingPoll.value &amp;&amp; pendingPoll.value.pending &amp;&amp; pendingPoll.value.pending.name) || null }) } catch (e) {}; if (window.wasPinnedToBottom()) window.scrollAllToBottom() }" />
 
   <ChangeListener
     listenTo="{turns.filter(t => t.role === 'user' && !t.text.startsWith('[Request interrupted')).length}"

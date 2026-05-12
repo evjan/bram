@@ -129,9 +129,13 @@ sends a voice-dictated test phrase that begins with `voice: ...`, do
 proposed items, or otherwise advance worklist state. Wait for the
 user to *explicitly* ask (e.g., "commit it", a structured `approved:`
 payload listing the items). Voice content arriving as `voice: ...` is
-user speech, treated the same as typed talk — informational, not an
-instruction to act on the worklist. If a verbal phrase is ambiguous,
-ask one focused question instead of acting.
+user speech, treated the same as typed talk — informational with
+respect to *worklist state advancement only*. Direct task requests
+delivered by voice — `voice: create foo.txt`, `voice: fix the bug in
+X`, `voice: explain Y` — are acted on the same as if typed. The
+prefix is a transport marker (the user dictated instead of typed); it
+is not a refusal trigger. If a verbal phrase is ambiguous, ask one
+focused question instead of acting.
 
 **Hold the commit while a related TO APPLY item is in flight.** When
 the worklist contains both a TO COMMIT item and a TO APPLY item that

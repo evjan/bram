@@ -188,6 +188,30 @@ function lastAssistantText(jsonlText) {
 // (`voice: `, `talk: `) so spoken / typed content reads as plain text;
 // summarize structured `approved:` / `drop:` payloads to a one-line
 // glyph + count instead of dumping JSON. Anything else passes through.
+// Has any user turn in `turns` arrived whose text (after stripping
+// the `voice:` / `talk:` prefix) matches `pending`? Used by the Talk
+// pane to clear pendingUserText only after the real turn lands —
+// avoids the race where an unrelated turns.length bump fires before
+// the optimistic text is set.
+function pendingMatchesTurn(turns, pending) {
+  if (!pending || !turns) return false;
+  // Normalize whitespace on both sides — toTurn() collapses /\s+/g to a
+  // single space before submitting to the PTY, so the JSONL turn has
+  // normalized text while pendingUserText holds the raw STT transcript.
+  // Strict === on the raw transcript would mismatch on stray double
+  // spaces, newlines, etc.
+  const target = pending.replace(/\s+/g, ' ').trim();
+  for (const t of turns) {
+    if (t.role !== 'user') continue;
+    const stripped = (t.text || '')
+      .replace(/^(voice|talk):\s*/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (stripped === target) return true;
+  }
+  return false;
+}
+
 function formatUserTurnForTranscript(text) {
   if (!text) return '';
   const stripped = text.replace(/^(voice|talk):\s*/, '');

@@ -2,13 +2,6 @@
   "description": "Talk-pane perf investigation, remaining items. talk-clear-pending-on-jsonl-match has been refined twice and still has intermittent repro; latest tweak normalizes whitespace on both sides of the match. talk-scroll-on-pending-appear is new and not yet exercised.",
   "items": [
     {
-      "id": "talk-clear-pending-on-jsonl-match",
-      "status": "applied",
-      "file": "app/tools/components/Talk.xmlui + app/tools/Globals.xs",
-      "before": "The optimistic 'You' card (pendingUserText) is cleared by a ChangeListener on turns.length (Talk.xmlui:43-45). Race: when STT latency lets some unrelated JSONL write bump turns.length BEFORE handleVoiceTranscript sets pendingUserText, the listener fires for that bump (no-op, pendingUserText is empty), then pendingUserText gets set, and nothing future fires the listener until the NEXT turn arrives. Result: duplicate 'You' card persists in the UI — top is the real turn, bottom is the stuck optimistic copy. Reproduced multiple times this session with screenshots.",
-      "after": "Replaced the turns.length listener with one keyed on lastJsonl that calls a helper pendingMatchesTurn(turns, pendingUserText) (added to Globals.xs). The listener handler computes sessionTurns(c.newValue) inline so it doesn't rely on the reactive `turns` var being up-to-date when it fires. Added a display-side guard on the optimistic VStack's `when` so it hides immediately if a matching turn is present, even before pendingUserText clears. Matcher normalizes whitespace on both sides since toTurn() collapses /\\s+/g before submitting. Diagnostic pendingMatch logs left in for ongoing intermittent repro. Bug needs more verification — has 'worked' on a test only to reappear later. Strip diagnostics before commit."
-    },
-    {
       "id": "talk-scroll-on-pending-appear",
       "status": "applied",
       "file": "app/tools/components/Talk.xmlui",

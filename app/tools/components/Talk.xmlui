@@ -41,8 +41,8 @@
     onDidChange="(c) => { if (c.newValue) lastJsonl = c.newValue }" />
 
   <ChangeListener
-    listenTo="{turns.length}"
-    onDidChange="pendingUserText = ''" />
+    listenTo="{lastJsonl}"
+    onDidChange="(c) => { if (pendingUserText &amp;&amp; pendingMatchesTurn(sessionTurns(c.newValue || lastJsonl), pendingUserText)) pendingUserText = '' }" />
 
 
   <ModalDialog
@@ -246,7 +246,7 @@
     </Items>
 
     <VStack
-      when="{pendingUserText}"
+      when="{pendingUserText &amp;&amp; !pendingMatchesTurn(turns, pendingUserText)}"
       gap="$space-1"
       padding="$space-3"
       borderRadius="$borderRadius"

@@ -1861,6 +1861,7 @@ fn read_latest_session_pending<R: tauri::Runtime>(
     let text = String::from_utf8_lossy(&tail);
     // Walk newest-first. Stop at the first assistant or user record.
     let mut pending: Option<serde_json::Value> = None;
+    let mut last_break_reason: &'static str = "no-record";
     for line in text.lines().rev() {
         let line = line.trim();
         if line.is_empty() {
@@ -1878,6 +1879,7 @@ fn read_latest_session_pending<R: tauri::Runtime>(
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_array());
         if typ == "user" || content.is_none() {
+            last_break_reason = if typ == "user" { "user-first" } else { "no-array-content" };
             break;
         }
         let arr = content.unwrap();
@@ -1888,6 +1890,7 @@ fn read_latest_session_pending<R: tauri::Runtime>(
             .iter()
             .any(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_use"));
         if has_text || !has_tool_use {
+            last_break_reason = if has_text { "has-text" } else { "no-tool-use" };
             break;
         }
         // First tool_use is the one being prompted about.
@@ -1897,8 +1900,20 @@ fn read_latest_session_pending<R: tauri::Runtime>(
                 break;
             }
         }
+        last_break_reason = if pending.is_some() { "tool-use-found" } else { "no-tool-use-in-array" };
         break;
     }
+    // Always log the outcome (cheap; helps diagnose missing-menu reports).
+    let tool_name = pending.as_ref()
+        .and_then(|p| p.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("");
+    eprintln!(
+        "[pending-endpoint] reason={} tool={} tail_bytes={}",
+        last_break_reason,
+        tool_name,
+        file_size - read_from,
+    );
     let body = serde_json::json!({ "pending": pending });
     let result = serde_json::to_vec(&body).map_err(|e| e.to_string());
     let elapsed = _start.elapsed();

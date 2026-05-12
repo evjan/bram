@@ -1861,8 +1861,13 @@ fn read_latest_session_pending<R: tauri::Runtime>(
     let mut tail = Vec::with_capacity((file_size - read_from) as usize);
     file.read_to_end(&mut tail).map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&tail);
-    // Walk newest-first. Stop at the first assistant or user record.
+    // Walk newest-first. Collect tool_result.tool_use_id values from user
+    // records into `resolved`, then when we find an assistant record with
+    // tool_use blocks, return the FIRST unresolved one. This handles the
+    // multi-tool-batch case: claude proposes A+B in one turn, user approves
+    // A, tool_result A is the latest user record but B is still pending.
     let mut pending: Option<serde_json::Value> = None;
+    let mut resolved: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut last_break_reason: &'static str = "no-record";
     for line in text.lines().rev() {
         let line = line.trim();
@@ -1880,8 +1885,32 @@ fn read_latest_session_pending<R: tauri::Runtime>(
             .get("message")
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_array());
-        if typ == "user" || content.is_none() {
-            last_break_reason = if typ == "user" { "user-first" } else { "no-array-content" };
+        if typ == "user" {
+            // Collect tool_result.tool_use_id from this user record and
+            // keep walking back. A user record with NO tool_result content
+            // (a genuine user message) means there's no pending tool
+            // because the user has already responded — break.
+            let Some(arr) = content else {
+                last_break_reason = "user-no-content";
+                break;
+            };
+            let mut had_tool_result = false;
+            for c in arr {
+                if c.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
+                    had_tool_result = true;
+                    if let Some(id) = c.get("tool_use_id").and_then(|v| v.as_str()) {
+                        resolved.insert(id.to_string());
+                    }
+                }
+            }
+            if !had_tool_result {
+                last_break_reason = "user-no-tool-result";
+                break;
+            }
+            continue;
+        }
+        if content.is_none() {
+            last_break_reason = "assistant-no-content";
             break;
         }
         let arr = content.unwrap();
@@ -1892,17 +1921,26 @@ fn read_latest_session_pending<R: tauri::Runtime>(
             .iter()
             .any(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_use"));
         if has_text || !has_tool_use {
-            last_break_reason = if has_text { "has-text" } else { "no-tool-use" };
+            last_break_reason = if has_text { "assistant-has-text" } else { "assistant-no-tool-use" };
             break;
         }
-        // First tool_use is the one being prompted about.
+        // Return the first tool_use whose id is NOT in `resolved`.
         for c in arr {
-            if c.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                pending = Some(c.clone());
-                break;
+            if c.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                continue;
             }
+            let id = c.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if resolved.contains(id) {
+                continue;
+            }
+            pending = Some(c.clone());
+            break;
         }
-        last_break_reason = if pending.is_some() { "tool-use-found" } else { "no-tool-use-in-array" };
+        last_break_reason = if pending.is_some() {
+            "tool-use-found"
+        } else {
+            "all-tools-resolved"
+        };
         break;
     }
     // Always log the outcome (cheap; helps diagnose missing-menu reports).

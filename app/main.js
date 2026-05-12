@@ -150,13 +150,17 @@ document
 // is open; the splitter is `display: none` when the .hidden class is set).
 (() => {
   const hSplitter = document.getElementById("h-splitter");
-  const tools = document.getElementById("tools-pane");
   const column = document.querySelector(".right-column");
-  if (!hSplitter || !tools || !column) return;
+  if (!hSplitter || !column) return;
 
   const MIN_PX = 80;
 
   hSplitter.addEventListener("pointerdown", (e) => {
+    // Re-query the tools iframe on each drag — swapToolsIframe replaces
+    // it on every watcher reload, and a captured reference from IIFE
+    // boot would point at a detached node.
+    const tools = document.getElementById("tools-pane");
+    if (!tools) return;
     e.preventDefault();
     hSplitter.setPointerCapture(e.pointerId);
     hSplitter.classList.add("dragging");

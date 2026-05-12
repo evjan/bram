@@ -438,6 +438,27 @@ function turnsLooselyEqual(a, b) {
   return true;
 }
 
+// Return the last N turns, reusing the previous result by reference when
+// every visible turn is still the same object. `sessionTurns` already
+// preserves stable refs across polls, so on a steady-state idle session
+// every element of `prev` and `cur` matches and we hand back the same
+// array — XMLUI's Items can then skip remounting the visible list.
+function visibleTurns(turns, n) {
+  if (!turns || !n) return visibleTurns._cacheValue || [];
+  const start = Math.max(0, turns.length - n);
+  const prev = visibleTurns._cacheValue;
+  if (prev && prev.length === turns.length - start) {
+    let same = true;
+    for (let i = 0; i < prev.length; i++) {
+      if (prev[i] !== turns[start + i]) { same = false; break; }
+    }
+    if (same) return prev;
+  }
+  const out = turns.slice(start);
+  visibleTurns._cacheValue = out;
+  return out;
+}
+
 function sessionTurns(jsonlText) {
   // Sticky empty: during a refetch the DataSource value can briefly be
   // null/undefined. Returning [] would blank the transcript and cause a

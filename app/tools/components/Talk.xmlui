@@ -13,7 +13,7 @@
   <DataSource
     id="pendingPoll"
     url="/__sessions/latest-pending"
-    pollIntervalInSeconds="1"
+    pollIntervalInSeconds="2"
     structuralSharing="false" />
   <ChangeListener
     listenTo="{sessionMeta.value &amp;&amp; sessionMeta.value.size}"
@@ -160,7 +160,7 @@
   </ModalDialog>
 
   <VStack padding="$space-6" gap="$space-3"
-    onInit="onTalkSessionChange(() => sessionTick = sessionTick + 1)">
+    onInit="onTalkSessionChange(() => sessionTick = sessionTick + 1); try { logToHost({ kind: 'talk-mount', at: new Date().toISOString() }) } catch (e) {}">
     <StickyBox to="top">
       <HStack gap="$space-3" verticalAlignment="center" paddingVertical="$space-2">
         <Heading level="h2">Transcript</Heading>
@@ -182,7 +182,7 @@
         value="{showAll ? ('Show all (' + (turns.length - turnLimit) + ' earlier)') : 'Show earlier turns'}" />
     </Link>
 
-    <Items data="{turns.slice(-turnLimit)}">
+    <Items data="{visibleTurns(turns, turnLimit)}">
       <VStack
         gap="$space-1"
         padding="$space-3"

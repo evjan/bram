@@ -1769,8 +1769,11 @@ fn read_latest_session_tail<R: tauri::Runtime>(
 
 // Detect whether the latest session has a pending tool_use awaiting
 // permission. Returns JSON describing the tool, or `{"pending":null}`
-// when not pending. Reads only the last ~64KB of the file so it's
-// cheap to poll aggressively (drives Talk's approval-menu render).
+// when not pending. Reads only the last ~8KB of the file so it's cheap
+// to poll aggressively (drives Talk's approval-menu render). Pending
+// detection only needs the most recent record or two; 64KB was enough
+// to cover even very long tool_use blocks but most are far smaller, so
+// 8KB is a much better default.
 fn read_latest_session_pending<R: tauri::Runtime>(
     app: &AppHandle<R>,
     _preferred: Option<SessionProvider>,
@@ -1780,7 +1783,7 @@ fn read_latest_session_pending<R: tauri::Runtime>(
     let path = latest_claude_session_path(app)?.ok_or("no sessions found")?;
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
     let file_size = file.metadata().map_err(|e| e.to_string())?.len();
-    let want: u64 = 64 * 1024;
+    let want: u64 = 8 * 1024;
     let read_from = file_size.saturating_sub(want);
     file.seek(SeekFrom::Start(read_from)).map_err(|e| e.to_string())?;
     let mut tail = Vec::with_capacity((file_size - read_from) as usize);

@@ -388,22 +388,32 @@ document.addEventListener("click", function (e) {
     }
   }
 }, true);
+function _refreshScrollables() {
+  var nodes = document.querySelectorAll("*");
+  var found = [];
+  for (var i = 0; i < nodes.length; i += 1) {
+    var el = nodes[i];
+    if (el && el.scrollHeight > el.clientHeight + 8) {
+      found.push(el);
+    }
+  }
+  window._scrollables = found;
+  return found;
+}
+
 window.scrollAllToTop = function () {
   var root = document.scrollingElement || document.documentElement || document.body;
   if (root) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
-
-  var nodes = document.querySelectorAll("*");
-  for (var i = 0; i < nodes.length; i += 1) {
-    var el = nodes[i];
+  var list = window._scrollables || _refreshScrollables();
+  for (var i = 0; i < list.length; i += 1) {
+    var el = list[i];
     if (!el) continue;
-    if (el.scrollHeight > el.clientHeight + 8) {
-      try {
-        el.scrollTo({ top: 0, behavior: "smooth" });
-      } catch (e) {
-        el.scrollTop = 0;
-      }
+    try {
+      el.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (e) {
+      el.scrollTop = 0;
     }
   }
 };
@@ -416,19 +426,9 @@ window.scrollAllToBottom = function () {
   // on a deep DOM is expensive when fired on every poll cycle. The list rarely
   // changes — when it does, the worst case is a missed inner scroll until the
   // next page load.
-  if (!window._scrollables) {
-    var nodes = document.querySelectorAll("*");
-    var found = [];
-    for (var i = 0; i < nodes.length; i += 1) {
-      var el = nodes[i];
-      if (el && el.scrollHeight > el.clientHeight + 8) {
-        found.push(el);
-      }
-    }
-    window._scrollables = found;
-  }
-  for (var j = 0; j < window._scrollables.length; j += 1) {
-    var sc = window._scrollables[j];
+  var list = window._scrollables || _refreshScrollables();
+  for (var j = 0; j < list.length; j += 1) {
+    var sc = list[j];
     if (!sc) continue;
     try {
       sc.scrollTo({ top: sc.scrollHeight, behavior: "smooth" });
@@ -603,14 +603,19 @@ window.addEventListener("message", async (event) => {
     // Pin to bottom every animation frame for ~1.5s — long enough for
     // XMLUI to finish rendering the expanded diff content, which can
     // span many frames. Each pin is instant (no smooth animation that
-    // would fight a still-growing layout).
+    // would fight a still-growing layout). The scrollable element list
+    // is cached; doing querySelectorAll('*') per RAF stalled the main
+    // thread on transcripts with many Markdown turns.
     var deadline = Date.now() + 1500;
+    var t0 = (typeof performance !== 'undefined') ? performance.now() : 0;
+    var frames = 0;
+    var list = window._scrollables || (typeof _refreshScrollables === 'function' ? _refreshScrollables() : []);
     function pin() {
+      frames += 1;
       var root = document.scrollingElement || document.documentElement || document.body;
       if (root) root.scrollTop = root.scrollHeight;
-      var nodes = document.querySelectorAll("*");
-      for (var i = 0; i < nodes.length; i += 1) {
-        var el = nodes[i];
+      for (var i = 0; i < list.length; i += 1) {
+        var el = list[i];
         if (el && el.scrollHeight > el.clientHeight + 8) {
           try { el.scrollTop = el.scrollHeight; } catch (e) {}
         }
@@ -618,7 +623,17 @@ window.addEventListener("message", async (event) => {
     }
     function loop() {
       pin();
-      if (Date.now() < deadline) requestAnimationFrame(loop);
+      if (Date.now() < deadline) {
+        requestAnimationFrame(loop);
+      } else if (t0) {
+        try {
+          window.logToHost({
+            kind: 'scrollAfterDomUpdate',
+            frames: frames,
+            ms: Math.round(performance.now() - t0),
+          });
+        } catch (e) {}
+      }
     }
     loop();
   };

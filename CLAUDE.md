@@ -55,13 +55,13 @@ inject text the user can edit before sending.
 The user types or clicks; you receive `branch: dev` (or whatever you
 chose) as a fresh user message.
 
-## Coordinating via proposal.json (canonical worklist)
+## Coordinating via worklist.json (canonical worklist)
 
-`resources/proposal.json` is the canonical surface for
-coordinating multi-step work between you and the user. The Playground
-page renders it as a checklist under the heading "Pending items". Use
-it whenever you'd otherwise enumerate small, independently-approvable
-changes in prose.
+`resources/worklist.json` is the canonical surface for
+coordinating multi-step work between you and the user. The Worklist
+tab in the agent-tools drawer renders it as a checklist under the
+heading "Worklist". Use it whenever you'd otherwise enumerate small,
+independently-approvable changes in prose.
 
 Schema:
 
@@ -74,9 +74,9 @@ Schema:
 }
 ```
 
-The Playground UI:
+The Worklist tab UI:
 
-- "Pending items" heading is hard-coded; don't try to override it via JSON.
+- "Worklist" heading is hard-coded; don't try to override it via JSON.
 - `description` renders only when `items` is non-empty.
 - Each item shows: checkbox (default checked) | filename (mono) | `before → after`.
 - Two action buttons (only shown when items exist):
@@ -86,21 +86,21 @@ The Playground UI:
 
 Lifecycle:
 
-1. **Propose** — write items to `proposal.json`. Each item should be
+1. **Propose** — write items to `worklist.json`. Each item should be
    small, discrete, and independently rejectable. Surface dependencies
    in `description`; don't bake them into ordering.
 2. **User triages** — unchecks anything they don't want in this round,
    then clicks one of:
    - *Approve selected* → you receive `approved: [...]` and execute those items.
    - *Drop selected* → you receive `drop: [ids]` and remove them from the list without acting.
-3. **Prune** — after either action, rewrite `proposal.json` with only
+3. **Prune** — after either action, rewrite `worklist.json` with only
    the still-pending items, plus any newly-surfaced consequences
    (e.g., orphans revealed by a deletion). The worklist represents
    pending work, not history — completed items belong in commit
    messages.
 4. **Empty state is fine** — when there's no pending work, leave
-   `proposal.json` as `{ "description": "", "items": [] }`. The
-   Playground will render the heading and a `(none)` placeholder.
+   `worklist.json` as `{ "description": "", "items": [] }`. The
+   Worklist tab will render the heading and a `(none)` placeholder.
 5. **Commit** when an executed batch is a meaningful unit.
 
 When *not* to use this: one-or-two-item decisions, free-text input, or

@@ -1674,17 +1674,17 @@ fn mime_for(path: &std::path::Path) -> &'static str {
 const ENHANCE_MARKER_START: &str = "<!-- xmlui-desktop:start -->";
 const ENHANCE_MARKER_END: &str = "<!-- xmlui-desktop:end -->";
 const ENHANCE_SIDECAR_REL: &str = ".claude/xmlui-desktop-conventions.md";
-const ENHANCE_HOOK_SCRIPT_REL: &str = ".claude/hooks/proposal-guard.py";
+const ENHANCE_HOOK_SCRIPT_REL: &str = ".claude/hooks/worklist-guard.py";
 const ENHANCE_SETTINGS_REL: &str = ".claude/settings.json";
-const ENHANCE_HOOK_BUNDLE_REL: &str = "__shell/proposal-guard.py";
-const ENHANCE_HOOK_COMMAND: &str = "$CLAUDE_PROJECT_DIR/.claude/hooks/proposal-guard.py";
+const ENHANCE_HOOK_BUNDLE_REL: &str = "__shell/worklist-guard.py";
+const ENHANCE_HOOK_COMMAND: &str = "$CLAUDE_PROJECT_DIR/.claude/hooks/worklist-guard.py";
 // Presence of this file in the project root means the project IS the
 // xmlui-desktop source repo (it bundles the conventions). enhance_status
 // treats it as a valid sidecar location; run_enhance skips the parts
 // that would otherwise self-overwrite the source.
 const ENHANCE_SOURCE_BUNDLE_REL: &str = "app/__shell/conventions.md";
 
-fn settings_has_proposal_guard_hook(settings_path: &Path) -> bool {
+fn settings_has_worklist_guard_hook(settings_path: &Path) -> bool {
     let content = match std::fs::read_to_string(settings_path) {
         Ok(s) => s,
         Err(_) => return false,
@@ -1706,7 +1706,7 @@ fn settings_has_proposal_guard_hook(settings_path: &Path) -> bool {
                         hs.iter().any(|h| {
                             h.get("command")
                                 .and_then(|c| c.as_str())
-                                .map(|s| s.contains("proposal-guard.py"))
+                                .map(|s| s.contains("worklist-guard.py"))
                                 .unwrap_or(false)
                         })
                     })
@@ -1717,9 +1717,9 @@ fn settings_has_proposal_guard_hook(settings_path: &Path) -> bool {
 }
 
 // Idempotent merge: append a PreToolUse hook entry referencing
-// proposal-guard.py to settings.json, preserving other keys. Returns
+// worklist-guard.py to settings.json, preserving other keys. Returns
 // Ok(true) if the entry was added, Ok(false) if it was already present.
-fn merge_proposal_guard_into_settings(settings_path: &Path) -> Result<bool, String> {
+fn merge_worklist_guard_into_settings(settings_path: &Path) -> Result<bool, String> {
     let existing = std::fs::read_to_string(settings_path).unwrap_or_default();
     let mut value: serde_json::Value = if existing.trim().is_empty() {
         serde_json::json!({})
@@ -1762,7 +1762,7 @@ fn merge_proposal_guard_into_settings(settings_path: &Path) -> Result<bool, Stri
                 hs.iter().any(|h| {
                     h.get("command")
                         .and_then(|c| c.as_str())
-                        .map(|s| s.contains("proposal-guard.py"))
+                        .map(|s| s.contains("worklist-guard.py"))
                         .unwrap_or(false)
                 })
             })
@@ -1801,7 +1801,7 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     // Source repo treats the bundle itself as the canonical sidecar.
     let sidecar_exists = sidecar.exists() || proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
     let hook_script_exists = hook_script.exists();
-    let hook_registered = settings_has_proposal_guard_hook(&settings);
+    let hook_registered = settings_has_worklist_guard_hook(&settings);
     let body = serde_json::json!({
         "enhanced": claude_md_has_marker && sidecar_exists && hook_script_exists && hook_registered,
         "claudeMd": claude_md_has_marker,
@@ -1844,7 +1844,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
 
     // Proposal-guard hook script (idempotent — same content on re-run).
     let (hook_bytes, _mime) = serve_app_file(Some(app), ENHANCE_HOOK_BUNDLE_REL)
-        .ok_or_else(|| "proposal-guard.py bundle not found".to_string())?;
+        .ok_or_else(|| "worklist-guard.py bundle not found".to_string())?;
     let hook_path = proj.join(ENHANCE_HOOK_SCRIPT_REL);
     if let Some(parent) = hook_path.parent() {
         std::fs::create_dir_all(parent)
@@ -1866,7 +1866,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
 
     // Register hook in settings.json (idempotent merge).
     let settings_path = proj.join(ENHANCE_SETTINGS_REL);
-    merge_proposal_guard_into_settings(&settings_path)?;
+    merge_worklist_guard_into_settings(&settings_path)?;
     wrote.push(settings_path.display().to_string());
 
     // CLAUDE.md marker block — skipped on the source repo.
@@ -2117,10 +2117,10 @@ fn route_request<R: tauri::Runtime>(
         };
     }
 
-    // proposal.json is the worklist convention. Treat it as always-present
+    // worklist.json is the worklist convention. Treat it as always-present
     // (empty when the project hasn't opted in) so the Workspace tool can
     // poll without flooding devtools with 404s in guest projects.
-    if path == "resources/proposal.json" {
+    if path == "resources/worklist.json" {
         let proj = project_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
         return match std::fs::read(proj.join(path)) {
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),

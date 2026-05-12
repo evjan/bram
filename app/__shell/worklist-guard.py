@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: enforce the two-stage worklist flow for resources/proposal.json.
+"""PreToolUse hook: enforce the two-stage worklist flow for resources/worklist.json.
 
 Block Write/Edit operations that remove an item with status "proposed" (or
 unset) unless the user's most recent transcript message authorized that
@@ -67,7 +67,7 @@ def main():
 
     ti = payload.get("tool_input", {})
     fp = ti.get("file_path", "")
-    if not fp.endswith("/resources/proposal.json") or not os.path.exists(fp):
+    if not fp.endswith("/resources/worklist.json") or not os.path.exists(fp):
         sys.exit(0)
 
     with open(fp) as f:
@@ -100,7 +100,7 @@ def main():
     if violations:
         bad = ", ".join(f'"{r}" (status={s})' for r, s in violations)
         print(
-            f"Blocked: removing {bad} from resources/proposal.json without "
+            f"Blocked: removing {bad} from resources/worklist.json without "
             f"going through the two-stage flow.\n"
             f"  - 'proposed' must transition to 'applied' (re-add the item) "
             f"before pruning.\n"

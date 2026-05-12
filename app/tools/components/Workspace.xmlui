@@ -1,7 +1,7 @@
 <Component name="Workspace" var.checked="{loadChecked()}" var.submitting="{!!getInflight()}" var.expandedItemId="{null}">
   <DataSource
-    id="proposal"
-    url="/resources/proposal.json"
+    id="worklist"
+    url="/resources/worklist.json"
     pollIntervalInSeconds="2"
     onLoaded="(data) => {
       const items = (data && data.items) || [];
@@ -19,18 +19,18 @@
     }" />
 
   <VStack padding="$space-6" gap="$space-6">
-    <VStack gap="$space-3" when="{proposal.value}">
+    <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3" opacity="{submitting ? 0.3 : 1}">
         <Heading level="h2">Worklist</Heading>
         <Text
-          when="{!proposal.value.items || proposal.value.items.length === 0}"
+          when="{!worklist.value.items || worklist.value.items.length === 0}"
           color="$textColor-secondary">
           (none)
         </Text>
         <Text
-          when="{proposal.value.items && proposal.value.items.length > 0}"
-          value="{proposal.value.description}" />
-        <Items data="{proposal.value.items}">
+          when="{worklist.value.items && worklist.value.items.length > 0}"
+          value="{worklist.value.description}" />
+        <Items data="{worklist.value.items}">
           <VStack gap="$space-1">
             <HStack gap="$space-3" verticalAlignment="start">
               <Checkbox
@@ -100,17 +100,17 @@
         </Items>
         <VStack
           gap="$space-3"
-          when="{proposal.value.items && proposal.value.items.length > 0}">
+          when="{worklist.value.items && worklist.value.items.length > 0}">
           <HStack gap="$space-3" verticalAlignment="center">
             <Button
               label="Approve selected ({checked.length})"
               enabled="{!submitting && checked.length > 0}"
-              onClick="markInflight(proposal.value && proposal.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: proposal.value.items.filter(i => checked.includes(i.id)), feedback: '' }))" />
+              onClick="markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: worklist.value.items.filter(i => checked.includes(i.id)), feedback: '' }))" />
             <Button
               label="Drop selected ({checked.length})"
               variant="outlined"
               enabled="{!submitting && checked.length > 0}"
-              onClick="markInflight(proposal.value && proposal.value.items); submitting = true; toTurn('drop: ' + JSON.stringify({ ids: proposal.value.items.filter(i => checked.includes(i.id)).map(i => i.id), feedback: '' }))" />
+              onClick="markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('drop: ' + JSON.stringify({ ids: worklist.value.items.filter(i => checked.includes(i.id)).map(i => i.id), feedback: '' }))" />
             <Button
               when="{submitting}"
               label="Cancel pending"

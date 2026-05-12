@@ -20,7 +20,7 @@ marker-block in CLAUDE.md.
 
 - Write `.claude/xmlui-desktop-conventions.md` containing the portable
   subset of xmlui-desktop's `app/__shell/conventions.md` (right-pane
-  purpose, `toShell`/`toTurn` helper table, `proposal.json` schema +
+  purpose, `toShell`/`toTurn` helper table, `worklist.json` schema +
   lifecycle, charting via `<EChart>`, drawer hosts Worklist / Sessions).
   Skip repo-internal bits (files-to-edit lists, architecture pointer to
   `~/.agents/scout/`).
@@ -34,7 +34,7 @@ marker-block in CLAUDE.md.
 ## Why
 
 Without conventions guidance, an agent in a guest project doesn't know
-`toShell`/`toTurn` exist, doesn't know `proposal.json` conventions,
+`toShell`/`toTurn` exist, doesn't know `worklist.json` conventions,
 doesn't know about the drawer. The sidecar pattern keeps the user's
 `CLAUDE.md` uncluttered while still giving every Claude Code session in
 that project the context.

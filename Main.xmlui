@@ -29,7 +29,7 @@ that contains your own XMLUI project. Then use the top-toolbar
   user / assistant turns, spinner while waiting). The drawer's pinned
   AppHeader has 🎤 voice — click from any tab to dictate.
 - **Worklist** — pending items the agent has proposed
-  (`resources/proposal.json`); approve or drop with one click.
+  (`resources/worklist.json`); approve or drop with one click.
 - **Commits** — recent commits with one-click push.
 - **Sessions** — read/search past Claude and Codex transcripts.
 - **README** — this project's README for quick reference." />

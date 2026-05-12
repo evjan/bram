@@ -36,9 +36,9 @@ multi-step flows), edit `Main.xmlui` (or a file under `components/`)
 so the right pane renders it. A filesystem watcher reloads the iframe
 automatically — you don't need to ask the user to refresh.
 
-## Coordinate via proposal.json
+## Coordinate via worklist.json
 
-`resources/proposal.json` is the canonical surface for multi-step
+`resources/worklist.json` is the canonical surface for multi-step
 coordination between you and the user. The Worklist tab in the agent
 tools drawer renders it as a checklist under "Worklist".
 
@@ -68,7 +68,7 @@ the user is being asked to approve:
   do not prune yet.
 - `"applied"` → badge **TO COMMIT**. The change is on disk and you're
   asking the user to approve a `git commit`. After they approve,
-  create the commit and prune the item from `proposal.json`. Push is
+  create the commit and prune the item from `worklist.json`. Push is
   decided separately via the "Push N unpushed commits" button.
 
 Default to the two-stage flow: every approved `proposed` item should
@@ -81,14 +81,14 @@ When you first add items, default to omitting the status (or setting
 `"proposed"`). Don't pre-mark things as `"applied"` unless the change
 is genuinely already on disk.
 
-You do not need to create `resources/proposal.json` in advance — when
+You do not need to create `resources/worklist.json` in advance — when
 the file is missing, xmlui-desktop serves an empty default and the
 Worklist tab shows *(none)*. Just write to the file the first time
 you actually have items to propose; xmlui-desktop will create it.
 
 Lifecycle:
 
-1. **Propose** — write items to `resources/proposal.json`. Each item
+1. **Propose** — write items to `resources/worklist.json`. Each item
    should be small, discrete, and independently rejectable. Writing
    items to the file does **not** mean they are approved — it means
    you are *asking* the user to approve them.
@@ -98,20 +98,20 @@ Lifecycle:
      `talk: <text>` as a fresh user turn. The user is asking a
      question or giving feedback with **no items approved and none
      dropped**. Respond to the message; do not edit files, do not
-     touch `proposal.json`.
+     touch `worklist.json`.
    - *Approve selected (N)* — only enabled when ≥1 item is checked.
      You receive `approved: {"items":[...], "feedback":"..."}`.
      **Execute ONLY the items in that JSON array — do NOT re-read
-     `resources/proposal.json` to figure out what to do.** The user has
+     `resources/worklist.json` to figure out what to do.** The user has
      already triaged; items they unchecked are deliberately absent from
      the array even though they're still in the file. Treat the array
-     as authoritative; treat `proposal.json` at this moment as stale.
+     as authoritative; treat `worklist.json` at this moment as stale.
      Respond to the optional feedback.
    - *Drop selected (N)* — only enabled when ≥1 item is checked.
      You receive `drop: {"ids":[...], "feedback":"..."}`. Remove the
-     listed ids from `proposal.json` without acting; respond to the
+     listed ids from `worklist.json` without acting; respond to the
      optional feedback.
-3. **Prune** — after either action, rewrite `resources/proposal.json`
+3. **Prune** — after either action, rewrite `resources/worklist.json`
    with only the still-pending items. The worklist is *pending* work,
    not history; completed items belong in commit messages.
 4. **Empty state is fine** — leave it as `{ "description": "", "items": [] }`.
@@ -148,7 +148,7 @@ anything where typing in chat is faster than rendering UI.
 
 ### When to route through the worklist
 
-Default to proposing items in `resources/proposal.json` whenever a
+Default to proposing items in `resources/worklist.json` whenever a
 change spans more than one file, or has more than ~2 discrete
 sub-edits in a single file, even after the user has verbally said
 "do it". The two-stage proposed→applied flow lets the user uncheck
@@ -159,15 +159,15 @@ edited directly.
 ### Test Worklist UX through the worklist itself
 
 When a change touches the Worklist UX itself (Approve/Drop button
-states, gray-out behavior, feedback flow, proposal-pruning), prefer
+states, gray-out behavior, feedback flow, worklist-pruning), prefer
 to surface it as a pending item even when the diff is already on
 disk. Approving the item then exercises the new behavior end-to-end
-— your file rewrites, the proposal pruning, the Talk-page update —
+— your file rewrites, the worklist pruning, the Talk-page update —
 which is the actual test.
 
 **Hook enforcement.** xmlui-desktop installs a PreToolUse hook at
-`.claude/hooks/proposal-guard.py` that validates Write/Edit operations
-on `resources/proposal.json`. If you remove an item without an explicit
+`.claude/hooks/worklist-guard.py` that validates Write/Edit operations
+on `resources/worklist.json`. If you remove an item without an explicit
 `drop:` authorization in the user's last message, the harness rejects
 the write with a stderr message explaining the violation. Read it; the
 hook is the convention's enforcement mechanism, not a bug to work

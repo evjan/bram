@@ -200,8 +200,8 @@ window.addEventListener("message", function (event) {
   _gitPushPending = null;
 });
 // In-flight marker that persists across iframe reloads. At click
-// time we snapshot the current proposal's item IDs; the XMLUI side
-// clears the flag whenever proposal.json's items differ from that
+// time we snapshot the current worklist's item IDs; the XMLUI side
+// clears the flag whenever worklist.json's items differ from that
 // snapshot — works on the initial fetch too (so refresh recovers
 // from a stale flag), not just on refetches.
 window.markInflight = function (items) {
@@ -245,7 +245,7 @@ window.saveChecked = function (ids) {
   } catch (e) {}
 };
 // Drop ids from saved selection that no longer appear in the live
-// proposal (executed/dropped). Returns the pruned array.
+// worklist (executed/dropped). Returns the pruned array.
 window.pruneChecked = function (validIds) {
   try {
     var current = window.loadChecked();

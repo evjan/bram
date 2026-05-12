@@ -110,9 +110,13 @@ window.openExternal = function (url) {
 // rect drag) is silent; other errors go to the host log.
 window.captureScreenshot = function () {
   function deliver(path) {
-    // `@<path>` is claude-code's file-reference syntax — it attaches the
-    // file to the turn instead of swallowing the path out of prose.
-    if (path) toTurn("Read this screenshot: @" + path);
+    // Dual format: `@<path>` is claude-code's file-reference syntax (tells
+    // the model to use its Read tool), and `[Image: source: <path>]` is
+    // the marker Talk's extractImagePaths matches to render a thumbnail.
+    // stripImagePaths removes the marker from the visible text, so the
+    // displayed user turn shows "Read this screenshot: @path" plus the
+    // inline thumbnail below.
+    if (path) toTurn("Read this screenshot: @" + path + "\n[Image: source: " + path + "]");
   }
   function report(err) {
     var msg = String((err && err.message) || err);

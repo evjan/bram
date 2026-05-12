@@ -62,7 +62,8 @@ function rewriteXmluiDocUrls(text) {
 // XMLUI's Markdown sanitizes file:// URLs and rewrites their anchors into
 // non-clickable spans, so we can't get a working file-link out of Markdown.
 // Strip the image-source footers from the markdown text and return them as
-// a separate array; the Sessions component renders them as XMLUI Links.
+// a separate array; the Talk component renders them as inline thumbnails
+// and Sessions as XMLUI Links.
 function extractImagePaths(text) {
   if (!text) return [];
   const paths = [];
@@ -557,6 +558,12 @@ function sessionTurns(jsonlText) {
     }
     if (!role) continue;
     if (entries.length === 0 && inlineImages.length === 0) continue;
+    // Capture image paths from the ORIGINAL text before stripping — strip
+    // and extract operate on the same patterns, so we have to read before
+    // we clean. (Was previously running extract on already-stripped text,
+    // which made the [Image: source: ...] fallback dead code.)
+    const originalJoined = entries.filter(e => e.kind === 'text').map(e => e.text).join('\n\n');
+    const pathsFromText = extractImagePaths(originalJoined);
     // Apply text rewrites + strip image-path footers from text entries.
     for (const e of entries) {
       if (e.kind === 'text') {
@@ -566,14 +573,14 @@ function sessionTurns(jsonlText) {
     const textJoined = entries.filter(e => e.kind === 'text').map(e => e.text).join('\n\n');
     // Skip user turns that are pure image-path bookkeeping (preserved from prior behavior).
     if (role === 'user' && inlineImages.length === 0 && entries.every(e => e.kind === 'text')
-        && /^(\[Image: source: [^\]]+\]\s*)+$/.test(textJoined.trim())) continue;
+        && /^(\[Image: source: [^\]]+\]\s*)+$/.test(originalJoined.trim())) continue;
     // After tool_result filtering, a user turn may have nothing left.
     if (entries.length === 0 && inlineImages.length === 0) continue;
     turns.push({
       role,
       text: textJoined,
       entries,
-      images: inlineImages.length > 0 ? inlineImages : extractImagePaths(textJoined),
+      images: inlineImages.length > 0 ? inlineImages : pathsFromText,
     });
   }
   // Structural-share with the previous result: for each turn that's

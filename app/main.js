@@ -446,12 +446,50 @@ const { listen } = window.__TAURI__.event;
   // a path (e.g. http://localhost:8080/) but no query string — we
   // document `path` in .xmlui-desktop.json as path-only, so `?` is safe.
   const bust = (u) => u + (u.includes("?") ? "&" : "?") + "t=" + Date.now();
+  // Double-buffer swap for the tools iframe so reloads don't flash a
+  // blank frame. Create a new iframe off-screen, wait for `load`, then
+  // promote it (replace the old in the DOM with the new, inheriting the
+  // id/class/style so the rest of the parent shell keeps working). A
+  // single-flight guard prevents overlapping swaps; the debounced
+  // watcher emits at most one reload per 500ms anyway.
+  let toolsSwapping = false;
+  function swapToolsIframe(newSrc) {
+    const oldTools = document.getElementById("tools-pane");
+    if (!oldTools) return;
+    const parent = oldTools.parentElement;
+    if (!parent || toolsSwapping) return;
+    toolsSwapping = true;
+
+    const newTools = document.createElement("iframe");
+    newTools.setAttribute("allow", oldTools.getAttribute("allow") || "");
+    // Load off-screen so the user never sees the blank intermediate
+    // state. Tiny size keeps it from affecting layout.
+    newTools.style.cssText =
+      "position:absolute;visibility:hidden;left:-99999px;top:0;width:1px;height:1px;";
+
+    function onLoad() {
+      newTools.removeEventListener("load", onLoad);
+      // Promote: inherit the live class/style and the id, then replace
+      // in the same DOM position. The toggle-tools button keeps working
+      // because it queries by id on each click.
+      newTools.className = oldTools.className;
+      newTools.style.cssText = oldTools.style.cssText;
+      newTools.id = "tools-pane";
+      parent.replaceChild(newTools, oldTools);
+      toolsSwapping = false;
+    }
+    newTools.addEventListener("load", onLoad);
+    parent.appendChild(newTools);
+    newTools.src = newSrc;
+  }
   // reloadAll: reload BOTH iframes. Used by the manual "reload xmlui app"
   // toolbar button and by the "tools-pane-reload" watcher event (drawer
-  // code changed, both panes may consume it).
+  // code changed, both panes may consume it). Right pane swaps src in
+  // place (the user's project app handles its own loading state); tools
+  // pane goes through swapToolsIframe to avoid the flash.
   function reloadAll() {
     iframe.src = bust(RIGHT_PANE_SRC);
-    if (tools) tools.src = bust(TOOLS_PANE_SRC);
+    swapToolsIframe(bust(TOOLS_PANE_SRC));
   }
   // reloadRightPaneOnly: reload only the right pane. Used by the
   // "right-pane-reload" watcher event for user-project file changes AND

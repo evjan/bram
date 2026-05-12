@@ -4,6 +4,26 @@
 // the next genuine submission re-enables the spinner.
 var escSuppressed = false;
 
+// Optimistic-UI bridge: when the user submits text via voice or the
+// Talk input box, the terminal sees it instantly but Claude Code may
+// take a moment to write the corresponding user record to JSONL. Talk
+// reads this var to render a temporary "You" turn + spinner so the user
+// has immediate visual confirmation. Cleared in Talk by a ChangeListener
+// that fires when turns.length grows (the real record has arrived).
+var pendingUserText = '';
+
+// Voice transcript callback. Inlining this in Main.xmlui's voice button
+// onClick — with a nested `{ if (t) { ... } }` block inside an arrow
+// function passed to voiceStop — confuses XMLUI's expression parser
+// and silently breaks voice. Centralizing here as a named function keeps
+// the markup as a single function reference.
+function handleVoiceTranscript(t) {
+  if (t) {
+    pendingUserText = t;
+    toTurn('voice: ' + t);
+  }
+}
+
 // Slice a file's content into a grep -C style window around a 1-indexed
 // target line. Returns [{ line, text, isMatch }, ...]. Used by Context.xmlui
 // to render search-hit snippets without re-fetching from the server.
@@ -23,7 +43,8 @@ function snippetAroundLine(content, line, context) {
 
 function currentSourceFile(pathname) {
   if (pathname === '/sessions') return 'components/Sessions.xmlui';
-  if (pathname === '/') return 'components/Workspace.xmlui';
+  if (pathname === '/') return 'components/Talk.xmlui';
+  if (pathname === '/worklist') return 'components/Workspace.xmlui';
   return 'Main.xmlui';
 }
 
@@ -291,6 +312,39 @@ function extractToolResult(block, maxLines) {
   return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
 }
 
+// Find a tool entry by id across all turns. Used by Talk to render the
+// open-tool modal — we keep `openToolId` as the source of truth and
+// derive the entry from it on each render.
+function findToolInTurns(turns, toolId) {
+  if (!turns || !toolId) return null;
+  for (const t of turns) {
+    if (!t || !t.entries) continue;
+    for (const e of t.entries) {
+      if (e && e.kind === 'tool' && e.id === toolId) return e;
+    }
+  }
+  return null;
+}
+
+// Walk the turns list in reverse to find the most recent Edit /
+// MultiEdit tool entry; used by Talk to auto-expand the newest edit so
+// its color-coded diff is visible without a click. Returns the tool's
+// id, or null if no edit has happened yet.
+function latestEditToolId(turns) {
+  if (!turns) return null;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i];
+    if (!t || !t.entries) continue;
+    for (let j = t.entries.length - 1; j >= 0; j--) {
+      const e = t.entries[j];
+      if (e && e.kind === 'tool' && (e.name === 'Edit' || e.name === 'MultiEdit')) {
+        return e.id;
+      }
+    }
+  }
+  return null;
+}
+
 // When the agent is paused waiting on a tool-use permission decision
 // (same state isAtToolApproval flags), return a description of the
 // menu we can render in Talk: tool name + summary + the standard three
@@ -357,8 +411,39 @@ function getToolDetail(jsonlText, toolId) {
   return { input: input || {}, result };
 }
 
+// Shallow turn equality: enough to tell "unchanged turn" from
+// "changed/new" without doing a full JSON.stringify. Used by sessionTurns
+// to preserve object refs for stable turns so XMLUI's Items doesn't
+// re-mount the whole list on every poll.
+function turnsLooselyEqual(a, b) {
+  if (!a || !b) return false;
+  if (a.role !== b.role) return false;
+  if (a.text !== b.text) return false;
+  const ae = a.entries || [], be = b.entries || [];
+  if (ae.length !== be.length) return false;
+  for (let i = 0; i < ae.length; i++) {
+    const x = ae[i], y = be[i];
+    if (!x || !y) return false;
+    if (x.kind !== y.kind) return false;
+    if (x.kind === 'text') {
+      if (x.text !== y.text) return false;
+    } else {
+      // tool: id is stable, errored/result may change between polls
+      if (x.id !== y.id) return false;
+      if (!!x.errored !== !!y.errored) return false;
+    }
+  }
+  const ai = a.images || [], bi = b.images || [];
+  if (ai.length !== bi.length) return false;
+  return true;
+}
+
 function sessionTurns(jsonlText) {
-  if (!jsonlText) return [];
+  // Sticky empty: during a refetch the DataSource value can briefly be
+  // null/undefined. Returning [] would blank the transcript and cause a
+  // dramatic flash; instead, hold the last result until the new value
+  // arrives.
+  if (!jsonlText) return sessionTurns._cacheValue || [];
   // Function-property memoization: skip the reparse when the polled
   // JSONL hasn't changed since last call. Identity comparison is enough
   // because the DataSource hands us a fresh string only when the file
@@ -441,6 +526,21 @@ function sessionTurns(jsonlText) {
       entries,
       images: inlineImages.length > 0 ? inlineImages : extractImagePaths(textJoined),
     });
+  }
+  // Structural-share with the previous result: for each turn that's
+  // structurally equal to the previous turn at the same index, reuse
+  // the previous reference. XMLUI's reactivity treats reference
+  // equality as "unchanged", so the Items in Talk skips re-mounting
+  // those turns — eliminating the per-poll flash. JSONL is append-only
+  // in practice, so the first N-K turns are typically identical and
+  // only the last few are new or growing.
+  const prev = sessionTurns._cacheValue || [];
+  for (let i = 0; i < turns.length && i < prev.length; i++) {
+    if (turnsLooselyEqual(turns[i], prev[i])) {
+      turns[i] = prev[i];
+    } else {
+      break;
+    }
   }
   sessionTurns._cacheKey = jsonlText;
   sessionTurns._cacheValue = turns;

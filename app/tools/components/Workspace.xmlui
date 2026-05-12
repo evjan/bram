@@ -111,6 +111,7 @@
               variant="outlined"
               enabled="{!submitting && checked.length > 0}"
               onClick="markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('drop: ' + JSON.stringify({ ids: worklist.value.items.filter(i => checked.includes(i.id)).map(i => i.id), feedback: '' }))" />
+            <Spinner when="{submitting}" size="sm" />
             <Button
               when="{submitting}"
               label="Cancel pending"

@@ -580,6 +580,37 @@ window.addEventListener("message", async (event) => {
   window.wasPinnedToBottom = function () {
     return window._talkPinned !== false;
   };
+  // Used by Talk's auto-expand-latest-edit hook. The expansion grows
+  // the DOM after the scroll-to-bottom listener has already run, so we
+  // capture the pre-expand pin state and re-scroll multiple times as
+  // the layout settles (two RAFs aren't enough — XMLUI renders the
+  // expanded diff over several frames). Instant scrolls — smooth ones
+  // overlap and fight each other.
+  window.scrollAfterDomUpdate = function () {
+    var wasPinned = window.wasPinnedToBottom();
+    if (!wasPinned) return;
+    // Pin to bottom every animation frame for ~1.5s — long enough for
+    // XMLUI to finish rendering the expanded diff content, which can
+    // span many frames. Each pin is instant (no smooth animation that
+    // would fight a still-growing layout).
+    var deadline = Date.now() + 1500;
+    function pin() {
+      var root = document.scrollingElement || document.documentElement || document.body;
+      if (root) root.scrollTop = root.scrollHeight;
+      var nodes = document.querySelectorAll("*");
+      for (var i = 0; i < nodes.length; i += 1) {
+        var el = nodes[i];
+        if (el && el.scrollHeight > el.clientHeight + 8) {
+          try { el.scrollTop = el.scrollHeight; } catch (e) {}
+        }
+      }
+    }
+    function loop() {
+      pin();
+      if (Date.now() < deadline) requestAnimationFrame(loop);
+    }
+    loop();
+  };
 })();
 
 // Surface JS errors and lifecycle events to the host log channel.

@@ -1681,6 +1681,125 @@ fn read_latest_session<R: tauri::Runtime>(
     std::fs::read(&session.path).map_err(|e| e.to_string())
 }
 
+// Tail variant: return only the last N records of the JSONL. Lets Talk
+// poll aggressively without round-tripping the entire (multi-MB) file.
+// Uses a seek-from-EOF, read-backward-in-chunks loop so server cost is
+// proportional to N, not file size.
+fn read_latest_session_tail<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+    lines: usize,
+) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let (_, sessions) = sessions_for_provider(app, preferred)?;
+    let session = sessions.first().ok_or("no sessions found")?;
+    let mut file = std::fs::File::open(&session.path).map_err(|e| e.to_string())?;
+    let file_size = file
+        .metadata()
+        .map_err(|e| e.to_string())?
+        .len();
+    if file_size == 0 || lines == 0 {
+        return Ok(Vec::new());
+    }
+    // Need `lines + 1` newlines walking back from EOF to delimit `lines`
+    // records (the +1 accounts for the trailing newline of the previous
+    // record). If the file has fewer newlines we just start at offset 0.
+    let target_newlines = lines + 1;
+    let chunk_size: u64 = 64 * 1024;
+    let mut buf = vec![0u8; chunk_size as usize];
+    let mut pos: u64 = file_size;
+    let mut newlines_seen: usize = 0;
+    let mut start_offset: u64 = 0;
+    while pos > 0 {
+        let read_size = chunk_size.min(pos);
+        pos -= read_size;
+        file.seek(SeekFrom::Start(pos)).map_err(|e| e.to_string())?;
+        file.read_exact(&mut buf[..read_size as usize])
+            .map_err(|e| e.to_string())?;
+        let mut done = false;
+        for i in (0..read_size as usize).rev() {
+            if buf[i] == b'\n' {
+                newlines_seen += 1;
+                if newlines_seen >= target_newlines {
+                    start_offset = pos + i as u64 + 1;
+                    done = true;
+                    break;
+                }
+            }
+        }
+        if done {
+            break;
+        }
+    }
+    file.seek(SeekFrom::Start(start_offset)).map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity((file_size - start_offset) as usize);
+    file.read_to_end(&mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+// Detect whether the latest session has a pending tool_use awaiting
+// permission. Returns JSON describing the tool, or `{"pending":null}`
+// when not pending. Reads only the last ~64KB of the file so it's
+// cheap to poll aggressively (drives Talk's approval-menu render).
+fn read_latest_session_pending<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let (_, sessions) = sessions_for_provider(app, preferred)?;
+    let session = sessions.first().ok_or("no sessions found")?;
+    let mut file = std::fs::File::open(&session.path).map_err(|e| e.to_string())?;
+    let file_size = file.metadata().map_err(|e| e.to_string())?.len();
+    let want: u64 = 64 * 1024;
+    let read_from = file_size.saturating_sub(want);
+    file.seek(SeekFrom::Start(read_from)).map_err(|e| e.to_string())?;
+    let mut tail = Vec::with_capacity((file_size - read_from) as usize);
+    file.read_to_end(&mut tail).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&tail);
+    // Walk newest-first. Stop at the first assistant or user record.
+    let mut pending: Option<serde_json::Value> = None;
+    for line in text.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(r) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let typ = r.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if typ != "assistant" && typ != "user" {
+            continue;
+        }
+        let content = r
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array());
+        if typ == "user" || content.is_none() {
+            break;
+        }
+        let arr = content.unwrap();
+        let has_text = arr
+            .iter()
+            .any(|c| c.get("type").and_then(|t| t.as_str()) == Some("text"));
+        let has_tool_use = arr
+            .iter()
+            .any(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_use"));
+        if has_text || !has_tool_use {
+            break;
+        }
+        // First tool_use is the one being prompted about.
+        for c in arr {
+            if c.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                pending = Some(c.clone());
+                break;
+            }
+        }
+        break;
+    }
+    let body = serde_json::json!({ "pending": pending });
+    serde_json::to_vec(&body).map_err(|e| e.to_string())
+}
+
 // Cheap variant for polling: just the file size + mtime. Lets Talk
 // detect changes without re-fetching the full (multi-MB) JSONL each
 // tick. The frontend then bumps a cache-busting param to trigger a
@@ -2409,6 +2528,24 @@ fn route_request<R: tauri::Runtime>(
             ("text/plain; charset=utf-8", read_latest_session(app, provider))
         } else if rest == "latest-meta" {
             ("application/json; charset=utf-8", read_latest_session_meta(app, provider))
+        } else if rest == "latest-pending" {
+            ("application/json; charset=utf-8", read_latest_session_pending(app, provider))
+        } else if rest == "latest-tail" {
+            // ?lines=N → last N records. ?lines=all (or absent) → full file.
+            let mut lines_param: Option<String> = None;
+            for pair in query.split('&') {
+                if let Some(v) = pair.strip_prefix("lines=") {
+                    lines_param = Some(percent_decode(v));
+                }
+            }
+            let body = match lines_param.as_deref() {
+                Some("all") | None => read_latest_session(app, provider),
+                Some(s) => match s.parse::<usize>() {
+                    Ok(n) => read_latest_session_tail(app, provider, n),
+                    Err(_) => read_latest_session(app, provider),
+                },
+            };
+            ("text/plain; charset=utf-8", body)
         } else if rest == "content" {
             ("text/plain; charset=utf-8", read_session(app, &session_id, provider))
         } else if rest == "search" {
@@ -2717,8 +2854,31 @@ pub fn run() {
                 let mut last_emit = Instant::now() - Duration::from_secs(1);
                 let mut last_config_emit = Instant::now() - Duration::from_secs(1);
                 let mut last_session_emit = Instant::now() - Duration::from_secs(1);
-                for res in rx {
-                    let Ok(event) = res else { continue };
+                // Debounce tools-pane reloads: defer the emit until 500ms
+                // after the last tools-pane event, so a rapid burst of
+                // saves coalesces into a single reload (single flash
+                // instead of N). Other channels stay immediate.
+                let tools_debounce = Duration::from_millis(500);
+                let mut pending_tools_since: Option<Instant> = None;
+                use std::sync::mpsc::RecvTimeoutError;
+                loop {
+                    let res = rx.recv_timeout(Duration::from_millis(100));
+                    // Always check the pending tools emit before processing
+                    // the new event — a recv_timeout wake with no event is
+                    // the typical trigger for firing a deferred reload.
+                    if let Some(since) = pending_tools_since {
+                        if since.elapsed() >= tools_debounce {
+                            eprintln!("[watcher] change detected, emitting tools-pane-reload (debounced)");
+                            let _ = app_handle.emit("tools-pane-reload", ());
+                            pending_tools_since = None;
+                        }
+                    }
+                    let event = match res {
+                        Ok(Ok(ev)) => ev,
+                        Ok(Err(_)) => continue,
+                        Err(RecvTimeoutError::Timeout) => continue,
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    };
 
                     // Claude Code session JSONL changes get their own
                     // dispatch. The Talk pane subscribes to talk-session-changed
@@ -2785,8 +2945,9 @@ pub fn run() {
                         tools_pane_paths.iter().any(|tp| p.starts_with(tp))
                     });
                     if is_tools_event {
-                        eprintln!("[watcher] change detected, emitting tools-pane-reload");
-                        let _ = app_handle.emit("tools-pane-reload", ());
+                        // Defer the emit; pending_tools_since either starts
+                        // the debounce window or resets it on burst writes.
+                        pending_tools_since = Some(Instant::now());
                     } else {
                         eprintln!("[watcher] change detected, emitting right-pane-reload");
                         let _ = app_handle.emit("right-pane-reload", ());

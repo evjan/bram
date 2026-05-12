@@ -151,6 +151,7 @@
           variant="ghost"
           tooltip="Send Esc to interrupt"
           onClick="(sendKeys('\x1b'), escSuppressed = true)" />
+        <Inspector src="{'/__vendor/xs-diff.html?v=' + window.APP_VERSION}" />
       </HStack>
     </Theme>
   </AppHeader>

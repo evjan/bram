@@ -20,10 +20,8 @@
     onDidChange="sessionTick = sessionTick + 1" />
   <DataSource
     id="latestSession"
-    url="/__sessions/latest-tail"
-    queryParams="{{ t: '' + sessionTick, lines: showAll ? 'all' : '200' }}"
+    url="/__sessions/latest-tail?lines={showAll ? 'all' : '200'}&amp;t={sessionTick}"
     dataType="text"
-    structuralSharing="false"
   />
 
   <ChangeListener

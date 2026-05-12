@@ -9,6 +9,23 @@
 
 window._xsLogs = window._xsLogs || [];
 
+// Diagnostic: log every fetch URL to the host. Strip auth/etc — just URL.
+// Temporary instrumentation for the queryParams investigation.
+(function logFetches() {
+  if (window._fetchLogged) return;
+  window._fetchLogged = true;
+  var orig = window.fetch;
+  window.fetch = function (input, init) {
+    try {
+      var url = typeof input === "string" ? input : (input && input.url);
+      if (url && url.indexOf("/__sessions/latest-tail") !== -1) {
+        window.logToHost({ kind: "fetch-url", url: url });
+      }
+    } catch (e) {}
+    return orig.apply(this, arguments);
+  };
+})();
+
 // Persist the tools-pane route across iframe reloads. main.js reassigns
 // tools.src on every tools-pane-reload event (drawer code changed under
 // app/tools/), which drops the hash and lands the user on the default

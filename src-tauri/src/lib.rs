@@ -1698,7 +1698,9 @@ fn read_latest_session<R: tauri::Runtime>(
     app: &AppHandle<R>,
     _preferred: Option<SessionProvider>,
 ) -> Result<Vec<u8>, String> {
-    let path = latest_claude_session_path(app)?.ok_or("no sessions found")?;
+    let Some(path) = latest_claude_session_path(app)? else {
+        return Ok(Vec::new());
+    };
     std::fs::read(&path).map_err(|e| e.to_string())
 }
 
@@ -1792,7 +1794,9 @@ fn read_latest_session_tail<R: tauri::Runtime>(
     lines: usize,
 ) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
-    let path = latest_claude_session_path(app)?.ok_or("no sessions found")?;
+    let Some(path) = latest_claude_session_path(app)? else {
+        return Ok(Vec::new());
+    };
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
     let file_size = file
         .metadata()
@@ -1852,7 +1856,9 @@ fn read_latest_session_pending<R: tauri::Runtime>(
 ) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
     let _start = std::time::Instant::now();
-    let path = latest_claude_session_path(app)?.ok_or("no sessions found")?;
+    let Some(path) = latest_claude_session_path(app)? else {
+        return Ok(br#"{"pending":null}"#.to_vec());
+    };
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
     let file_size = file.metadata().map_err(|e| e.to_string())?.len();
     let want: u64 = 32 * 1024;
@@ -1973,7 +1979,9 @@ fn read_latest_session_meta<R: tauri::Runtime>(
     app: &AppHandle<R>,
     _preferred: Option<SessionProvider>,
 ) -> Result<Vec<u8>, String> {
-    let path = latest_claude_session_path(app)?.ok_or("no sessions found")?;
+    let Some(path) = latest_claude_session_path(app)? else {
+        return Ok(b"null".to_vec());
+    };
     let md = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     let mtime = md
         .modified()

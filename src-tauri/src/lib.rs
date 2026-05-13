@@ -284,6 +284,307 @@ static APP_INFO_CACHE: OnceLock<Mutex<Option<AppInfo>>> = OnceLock::new();
 static LIVE_CLAUDE_SESSION: OnceLock<Mutex<Option<(PathBuf, std::time::SystemTime)>>> =
     OnceLock::new();
 
+// Real-time detection of claude's permission menu by tapping the PTY
+// byte stream. Necessary because the JSONL file lags claude's actual
+// state by ~10-20s (claude buffers a turn's records and flushes as one
+// batch), so /__sessions/latest-pending can never see a tool_use until
+// after the user has already responded. The PTY is the only signal
+// available *while* the menu is on screen.
+//
+// PTY_TAIL holds a rolling ~8KB of the most recent PTY output bytes.
+// PTY_MENU holds the currently-displayed menu (or None). Updated from
+// the pty_spawn reader thread; cleared on pty_write (any user input
+// dismisses the menu).
+// PTY_MENU_SUPPRESSED records (tool, when_cleared) for ~2s after a
+// user-driven dismissal. Without it, the next PTY chunk arrives, the
+// detector re-scans the rolling buffer, and the *just-dismissed* menu
+// text is still in the buffer — so the detector re-fires and the agent
+// pane shows the menu briefly after click. Suppression breaks that
+// loop until either time elapses or a *different* tool's menu appears.
+static PTY_TAIL: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+static PTY_MENU: OnceLock<Mutex<Option<PtyMenu>>> = OnceLock::new();
+static PTY_MENU_SUPPRESSED: OnceLock<Mutex<Option<(String, std::time::Instant)>>> = OnceLock::new();
+
+#[derive(serde::Serialize, Clone)]
+struct PtyMenu {
+    tool: String,
+    text: String,
+}
+
+fn pty_tail_cell() -> &'static Mutex<Vec<u8>> {
+    PTY_TAIL.get_or_init(|| Mutex::new(Vec::with_capacity(8192)))
+}
+
+fn pty_menu_cell() -> &'static Mutex<Option<PtyMenu>> {
+    PTY_MENU.get_or_init(|| Mutex::new(None))
+}
+
+fn pty_menu_suppressed_cell() -> &'static Mutex<Option<(String, std::time::Instant)>> {
+    PTY_MENU_SUPPRESSED.get_or_init(|| Mutex::new(None))
+}
+
+// Update the menu detection state with a fresh chunk of PTY output.
+// Maintains a rolling 8KB tail buffer; checks for claude's menu signature
+// ("1. Yes" + "2. Yes" within proximity); transitions PTY_MENU accordingly.
+// Logs every state transition to stderr so failures-to-render can be
+// correlated against actual detector activity.
+fn pty_menu_update(chunk: &[u8]) {
+    let tail_cell = pty_tail_cell();
+    let mut tail = match tail_cell.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    tail.extend_from_slice(chunk);
+    if tail.len() > 8192 {
+        let drop = tail.len() - 8192;
+        tail.drain(..drop);
+    }
+    let mut detected = pty_menu_detect(&tail);
+    drop(tail);
+
+    // Post-click suppression: if the user just dismissed a menu for
+    // tool X, ignore detections of tool X for ~2s. The just-dismissed
+    // menu's text is still sitting in PTY_TAIL.
+    if let Some(ref new_menu) = detected {
+        if let Ok(suppressed) = pty_menu_suppressed_cell().lock() {
+            if let Some((suppressed_tool, when)) = suppressed.as_ref() {
+                if suppressed_tool == &new_menu.tool
+                    && when.elapsed() < std::time::Duration::from_secs(2)
+                {
+                    eprintln!(
+                        "[pty-menu] suppressed re-detection of tool={} ({}ms after dismissal)",
+                        new_menu.tool,
+                        when.elapsed().as_millis()
+                    );
+                    detected = None;
+                }
+            }
+        }
+    }
+
+    if let Ok(mut menu) = pty_menu_cell().lock() {
+        match (detected, menu.as_ref()) {
+            (Some(new_menu), None) => {
+                eprintln!("[pty-menu] None -> Some(tool={})", new_menu.tool);
+                *menu = Some(new_menu);
+            }
+            (Some(new_menu), Some(old)) if old.tool != new_menu.tool => {
+                eprintln!(
+                    "[pty-menu] Some(tool={}) -> Some(tool={})",
+                    old.tool, new_menu.tool
+                );
+                *menu = Some(new_menu);
+            }
+            (Some(new_menu), Some(_)) => {
+                // Same tool, no transition log; still refresh in case text changed.
+                *menu = Some(new_menu);
+            }
+            (None, Some(old)) => {
+                eprintln!("[pty-menu] Some(tool={}) -> None (buffer evicted)", old.tool);
+                *menu = None;
+            }
+            (None, None) => {}
+        }
+    }
+}
+
+// Strip ANSI escape sequences so literal-byte matchers aren't fragmented
+// by cursor-positioning / color codes that xterm.js renders correctly
+// but a byte-level scan does not. Handles the forms Claude Code's TUI
+// emits: CSI (ESC '[' params final-byte 0x40..=0x7E), OSC (ESC ']' ...
+// terminated by BEL or ESC '\\'), and plain ESC + single byte.
+fn strip_ansi(input: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        let b = input[i];
+        if b == 0x1B && i + 1 < input.len() {
+            match input[i + 1] {
+                b'[' => {
+                    let mut j = i + 2;
+                    while j < input.len() {
+                        let c = input[j];
+                        j += 1;
+                        if (0x40..=0x7E).contains(&c) {
+                            break;
+                        }
+                    }
+                    i = j;
+                    continue;
+                }
+                b']' => {
+                    let mut j = i + 2;
+                    while j < input.len() {
+                        if input[j] == 0x07 {
+                            j += 1;
+                            break;
+                        }
+                        if input[j] == 0x1B && j + 1 < input.len() && input[j + 1] == b'\\' {
+                            j += 2;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    i = j;
+                    continue;
+                }
+                _ => {
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        out.push(b);
+        i += 1;
+    }
+    out
+}
+
+// Look for claude's permission menu in the rolling tail. Pattern:
+// "1. Yes" appears, followed by "2. " within ~512 bytes (the menu's
+// options are tightly grouped). Tool name is best-effort guessed
+// from preceding context. Runs on the ANSI-stripped tail — the raw
+// bytes contain escape sequences interleaved within the visible menu
+// text, which would fragment the literal needle match.
+fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
+    let stripped = strip_ansi(tail);
+    let tail = stripped.as_slice();
+    // Anchor on the menu's selection-cursor (❯, U+276F) directly
+    // followed by "1." — appears only on the first option of a live
+    // permission menu. Looking for "1. Yes" or "1.Yes" alone doesn't
+    // work because inter-word spacing on option lines is rendered via
+    // cursor-positioning escapes (not literal spaces), so strip_ansi
+    // can leave "1.Yes" with no separator. See diagnostic captures
+    // in /tmp/pty-menu-snapshot.txt.
+    let needle1: &[u8] = b"\xe2\x9d\xaf1.";
+    let needle2: &[u8] = b"2.";
+    let header: &[u8] = b"Do you want";
+    let pos1_opt = tail.windows(needle1.len()).rposition(|w| w == needle1);
+    let pos_header = tail.windows(header.len()).rposition(|w| w == header);
+
+    let result = (|| -> Option<PtyMenu> {
+        let pos1 = pos1_opt?;
+        let after = &tail[pos1..];
+        let rel = after.windows(needle2.len()).position(|w| w == needle2)?;
+        let pos2 = pos1 + rel;
+        if pos2 - pos1 > 512 {
+            return None;
+        }
+        let start = pos1.saturating_sub(200);
+        let end = (pos2 + 200).min(tail.len());
+        let text = String::from_utf8_lossy(&tail[start..end]).into_owned();
+        let tool = pty_menu_guess_tool(&tail[..pos1]);
+        Some(PtyMenu { tool, text })
+    })();
+
+    // Diagnostic: when the menu prompt header is present but detection
+    // returned None, log what we found AND dump the full stripped tail
+    // to /tmp/pty-menu-snapshot.txt so we can iterate on the matcher.
+    if result.is_none() {
+        if let Some(h) = pos_header {
+            let pos2_after_pos1 = pos1_opt.and_then(|p1| {
+                tail[p1..]
+                    .windows(needle2.len())
+                    .position(|w| w == needle2)
+                    .map(|rel| p1 + rel)
+            });
+            let dump_end = (h + 300).min(tail.len());
+            let dump = &tail[h..dump_end];
+            let mut printable = String::new();
+            for &b in dump {
+                match b {
+                    b'\n' => printable.push_str("\\n"),
+                    b'\r' => printable.push_str("\\r"),
+                    b'\t' => printable.push_str("\\t"),
+                    0x20..=0x7E => printable.push(b as char),
+                    _ => printable.push_str(&format!("\\x{:02x}", b)),
+                }
+            }
+            eprintln!(
+                "[pty-menu-trace] miss: stripped_len={} header_at={} '1. Yes'_at={:?} '2. '_after_pos1_at={:?} after_header={:?}",
+                tail.len(),
+                h,
+                pos1_opt,
+                pos2_after_pos1,
+                printable
+            );
+            let _ = std::fs::write("/tmp/pty-menu-snapshot.txt", tail);
+        }
+    }
+
+    result
+}
+
+fn pty_menu_guess_tool(context: &[u8]) -> String {
+    let s = String::from_utf8_lossy(context);
+    for tool in &[
+        "MultiEdit", "ToolSearch", "WebFetch", "WebSearch",
+        "Bash", "Edit", "Write", "Read", "Grep", "Glob",
+    ] {
+        if s.contains(tool) {
+            return (*tool).to_string();
+        }
+    }
+    "Tool".to_string()
+}
+
+// Called from pty_write on user input. Records the dismissed menu's
+// tool name into PTY_MENU_SUPPRESSED so the detector won't immediately
+// re-fire when the next PTY chunk arrives (the dismissed text is still
+// in the rolling buffer).
+fn pty_menu_clear() {
+    let dismissed_tool: Option<String> = match pty_menu_cell().lock() {
+        Ok(mut menu) => {
+            let tool = menu.as_ref().map(|m| m.tool.clone());
+            *menu = None;
+            tool
+        }
+        Err(_) => None,
+    };
+    // Drain PTY_TAIL so the dismissed menu's bytes can't trigger a stale
+    // re-detection once PTY_MENU_SUPPRESSED expires. Only genuinely new
+    // PTY output can re-fire the detector after this point.
+    if let Ok(mut tail) = pty_tail_cell().lock() {
+        tail.clear();
+    }
+    if let Some(tool) = dismissed_tool {
+        eprintln!("[pty-menu] cleared by user input (tool={}, suppressing for 2s)", tool);
+        if let Ok(mut s) = pty_menu_suppressed_cell().lock() {
+            *s = Some((tool, std::time::Instant::now()));
+        }
+    }
+}
+
+// Hex+ASCII dump of bytes — for the /__pty-tail debug endpoint.
+fn hex_dump(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 4);
+    for (i, chunk) in bytes.chunks(16).enumerate() {
+        out.push_str(&format!("{:08x}  ", i * 16));
+        for (j, b) in chunk.iter().enumerate() {
+            out.push_str(&format!("{:02x} ", b));
+            if j == 7 {
+                out.push(' ');
+            }
+        }
+        for _ in chunk.len()..16 {
+            out.push_str("   ");
+        }
+        if chunk.len() <= 8 {
+            out.push(' ');
+        }
+        out.push_str(" |");
+        for b in chunk {
+            if (0x20..0x7f).contains(b) {
+                out.push(*b as char);
+            } else {
+                out.push('.');
+            }
+        }
+        out.push_str("|\n");
+    }
+    out
+}
+
 fn compare_versions(current: &str, latest: &str) -> bool {
     let parse = |s: &str| -> Vec<u32> {
         s.split('.').filter_map(|x| x.parse::<u32>().ok()).collect()
@@ -676,6 +977,7 @@ fn pty_spawn(
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
+                    pty_menu_update(&buf[..n]);
                     if on_data.send(buf[..n].to_vec()).is_err() {
                         break;
                     }
@@ -689,6 +991,11 @@ fn pty_spawn(
 
 #[tauri::command]
 fn pty_write(data: String, state: State<'_, AppState>) -> Result<(), String> {
+    // User input dismisses any visible permission menu. Clear before
+    // writing so the agent-pane menu disappears immediately on click.
+    if !data.is_empty() {
+        pty_menu_clear();
+    }
     let mut guard = state.0.lock().unwrap();
     let pty = guard.as_mut().ok_or("pty not started")?;
     pty.writer
@@ -2767,6 +3074,49 @@ fn route_request<R: tauri::Runtime>(
                 (500, "text/plain; charset=utf-8", e.into_bytes())
             }
         };
+    }
+
+    // PTY rolling-buffer hex dump — for debugging menu detection.
+    // Returns the last 2KB of PTY_TAIL as a hexdump (offsets, hex bytes,
+    // ASCII gutter). Use to inspect what claude actually wrote when a
+    // menu fails to render in the agent pane.
+    if path == "__pty-tail" {
+        let dump = match pty_tail_cell().lock() {
+            Ok(tail) => {
+                let n = tail.len();
+                let start = n.saturating_sub(2048);
+                hex_dump(&tail[start..])
+            }
+            Err(_) => String::from("(could not lock PTY_TAIL)\n"),
+        };
+        return (200, "text/plain; charset=utf-8", dump.into_bytes());
+    }
+
+    // strip_ansi'd view of PTY_TAIL — for inspecting exactly what the menu
+    // detector matches against. Plain UTF-8 (lossy) so a human can read it.
+    if path == "__pty-stripped" {
+        let body = match pty_tail_cell().lock() {
+            Ok(tail) => {
+                let stripped = strip_ansi(&tail);
+                String::from_utf8_lossy(&stripped).into_owned()
+            }
+            Err(_) => String::from("(could not lock PTY_TAIL)\n"),
+        };
+        return (200, "text/plain; charset=utf-8", body.into_bytes());
+    }
+
+    // PTY-tap menu detection — see pty_menu_update for rationale.
+    // Returns {"menu": {"tool":..., "text":...}} when claude is currently
+    // displaying its permission menu in the terminal, else {"menu": null}.
+    if path == "__pty-menu" {
+        let body = match pty_menu_cell().lock() {
+            Ok(menu) => match &*menu {
+                Some(m) => serde_json::json!({"menu": m}).to_string().into_bytes(),
+                None => br#"{"menu":null}"#.to_vec(),
+            },
+            Err(_) => br#"{"menu":null}"#.to_vec(),
+        };
+        return (200, "application/json; charset=utf-8", body);
     }
 
     // worklist.json is the worklist convention. Treat it as always-present

@@ -12,8 +12,8 @@
     pollIntervalInSeconds="0.5" />
   <DataSource
     id="pendingPoll"
-    url="/__sessions/latest-pending"
-    pollIntervalInSeconds="2"
+    url="/__pty-menu"
+    pollIntervalInSeconds="0.5"
     structuralSharing="false" />
   <ChangeListener
     listenTo="{sessionMeta.value &amp;&amp; sessionMeta.value.size}"
@@ -33,12 +33,12 @@
     onDidChange="if (pendingUserText &amp;&amp; window.wasPinnedToBottom()) window.scrollAllToBottom()" />
 
   <ChangeListener
-    listenTo="{pendingPoll.value &amp;&amp; pendingPoll.value.pending &amp;&amp; pendingPoll.value.pending.id}"
-    onDidChange="(c) => { try { logToHost({ kind: 'pendingPoll-transition', oldId: c.prevValue || null, newId: c.newValue || null, name: (pendingPoll.value &amp;&amp; pendingPoll.value.pending &amp;&amp; pendingPoll.value.pending.name) || null }) } catch (e) {}; if (window.wasPinnedToBottom()) window.scrollAllToBottom() }" />
+    listenTo="{pendingPoll.value &amp;&amp; pendingPoll.value.menu &amp;&amp; pendingPoll.value.menu.tool}"
+    onDidChange="(c) => { try { logToHost({ kind: 'pendingPoll-transition', oldTool: c.prevValue || null, newTool: c.newValue || null }) } catch (e) {}; if (window.wasPinnedToBottom()) window.scrollAllToBottom() }" />
 
   <ChangeListener
-    listenTo="{(isWaitingForAssistant(lastJsonl) || pendingUserText) &amp;&amp; !escSuppressed &amp;&amp; !(pendingPoll.value &amp;&amp; pendingPoll.value.pending)}"
-    onDidChange="(c) => { try { logToHost({ kind: 'spinner-state', visible: !!c.newValue, isWaiting: isWaitingForAssistant(lastJsonl), pendingUserText: !!pendingUserText, escSuppressed: escSuppressed, hasPending: !!(pendingPoll.value &amp;&amp; pendingPoll.value.pending) }) } catch (e) {} }" />
+    listenTo="{(isWaitingForAssistant(lastJsonl) || pendingUserText) &amp;&amp; !escSuppressed &amp;&amp; !(pendingPoll.value &amp;&amp; pendingPoll.value.menu)}"
+    onDidChange="(c) => { try { logToHost({ kind: 'spinner-state', visible: !!c.newValue, isWaiting: isWaitingForAssistant(lastJsonl), pendingUserText: !!pendingUserText, escSuppressed: escSuppressed, hasMenu: !!(pendingPoll.value &amp;&amp; pendingPoll.value.menu) }) } catch (e) {} }" />
 
   <ChangeListener
     listenTo="{turns.filter(t => t.role === 'user' && !t.text.startsWith('[Request interrupted')).length}"
@@ -264,16 +264,15 @@
     </VStack>
 
     <VStack
-      when="{pendingPoll.value &amp;&amp; pendingPoll.value.pending}"
+      when="{pendingPoll.value &amp;&amp; pendingPoll.value.menu}"
       gap="$space-2"
       padding="$space-3"
       borderRadius="$borderRadius"
       border="1px solid $color-warn-200"
       backgroundColor="$color-warn-50"
-      var.pendingTool="{pendingPoll.value.pending}"
-      var.pendingSummary="{toolSummary(pendingTool.name, pendingTool.input || {})}">
+      var.pendingTool="{pendingPoll.value.menu}">
       <Text fontSize="$fontSize-sm" color="$color-warn-800">
-        Claude wants to use <Text fontFamily="$fontFamily-monospace" inline="true">{pendingTool.name}</Text>{pendingSummary ? ' — ' : ''}<Text fontFamily="$fontFamily-monospace" inline="true">{pendingSummary}</Text>
+        Claude wants to use <Text fontFamily="$fontFamily-monospace" inline="true">{pendingTool.tool}</Text>
       </Text>
       <HStack gap="$space-2" wrapContent="true">
         <Button label="1. Yes" variant="outlined" size="sm" onClick="sendKeys('1\r')" />
@@ -283,7 +282,7 @@
     </VStack>
 
     <HStack
-      when="{(isWaitingForAssistant(lastJsonl) || pendingUserText) &amp;&amp; !escSuppressed &amp;&amp; !(pendingPoll.value &amp;&amp; pendingPoll.value.pending)}"
+      when="{(isWaitingForAssistant(lastJsonl) || pendingUserText) &amp;&amp; !escSuppressed &amp;&amp; !(pendingPoll.value &amp;&amp; pendingPoll.value.menu)}"
       paddingVertical="$space-3"
       verticalAlignment="center">
       <Spinner size="sm" delay="{200}" />

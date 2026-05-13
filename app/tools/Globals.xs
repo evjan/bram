@@ -41,6 +41,20 @@ function snippetAroundLine(content, line, context) {
   return slice;
 }
 
+// Reduce a (potentially huge) turn body to just the paragraphs that
+// contain the query (case-insensitive substring). Used by Sessions.xmlui
+// after a hit-snippet click so the right pane shows context around the
+// match instead of the whole turn. Returns the joined paragraphs (still
+// valid Markdown for the Markdown component).
+function paragraphsContaining(text, query) {
+  if (!text) return '';
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return text;
+  const paragraphs = text.split(/\n{2,}/);
+  const hits = paragraphs.filter((p) => p.toLowerCase().includes(q));
+  return hits.length > 0 ? hits.join('\n\n') : text;
+}
+
 function currentSourceFile(pathname) {
   if (pathname === '/sessions') return 'components/Sessions.xmlui';
   if (pathname === '/') return 'components/Talk.xmlui';

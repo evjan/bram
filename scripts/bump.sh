@@ -23,8 +23,16 @@ echo "Bumped to ${VERSION}:"
 grep "^version" src-tauri/Cargo.toml
 grep '"version"' src-tauri/tauri.conf.json
 
-git add src-tauri/Cargo.toml src-tauri/tauri.conf.json
+echo
+echo "Refreshing src-tauri/Cargo.lock (cargo build)..."
+cargo build --manifest-path src-tauri/Cargo.toml --quiet
+
+git add src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
 git commit -m "Release v${VERSION}"
+git tag "v${VERSION}"
 
 echo
-echo "Next: git push, then dispatch the Build Binaries workflow with tag v${VERSION}"
+echo "Tagged v${VERSION} locally. Next:"
+echo "  - Push commits (agent-tools 'Push' button or 'git push')"
+echo "  - Push the tag separately: git push origin v${VERSION}"
+echo "  - Dispatch the Build Binaries workflow with tag v${VERSION}"

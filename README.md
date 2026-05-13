@@ -1,26 +1,21 @@
-  # xmlui-desktop
+# xmlui-desktop
 
-A desktop app that pairs an AI coding agent with the XMLUI app it's building.
+## Who is this for?
+
+You are managing AI agents doing software development, and want to coordinate their use of git and GitHub on your behalf so the project's evolution is orderly and well-documented. You also want to search and manage git/GitHub issues and commits, as well as agent sessions and memories, in a consistent way.
+
+## What does the app do?
+
+It is a desktop app that pairs an AI coding agent with the web app it's building.
 
 - **Left pane** — a real terminal, where you run an AI coding agent
   (e.g. `claude` or `codex`).
-- **Right pane** — the project's XMLUI app (`Main.xmlui` at the repo
-  root), served via the binary's `xmlui://` URI scheme.
+- **Right pane** — the project's web app that is under development.
 - **File watcher** — as files in the project change, the right pane
   reloads automatically. No manual refresh.
 - **Agent-tools drawer** — toggle from the toolbar to open a side
   panel with Talk (live transcript), Worklist (proposed → applied →
-  committed flow), Commits, Issues, Sessions, Context, and README
-  tabs. Drives multi-step coordination between you and the agent
-  without typing in the terminal. The Context tab shows what Claude
-  Code is loading for the current project — CLAUDE.md and its
-  @-imports, the per-project memory tree, hooks, and settings — with
-  substring search and grep-style hit snippets.
-
-The two panes can also talk: XMLUI components in the right pane post
-text back into the terminal via `window.toShell` / `window.toTurn`
-helpers, so buttons, selects, and forms can become input to whatever
-agent is running on the left.
+  committed flow), Commits, Issues, Sessions, Context, and README.
 
 See [`CLAUDE.md`](./CLAUDE.md) for the conventions Claude Code follows
 when driving the right pane.
@@ -32,20 +27,10 @@ https://github.com/user-attachments/assets/3d617d7a-f864-41f4-bc77-c6449a8c1bf2
 xmlui-desktop is built around the git commit lifecycle — the Worklist
 transitions through proposed → applied → committed, the Commits tab
 reads `git log`, and the agent runs `git commit` / `git push`
-directly. Run it inside a local git repo with an XMLUI project.
+directly. Run it inside a local git repo.
 
 1. **`git`** — usually preinstalled on macOS and Linux; install via
    your package manager if missing.
-
-2. **A local git repo with an XMLUI project.** If you have neither,
-   follow the installation steps at <https://xmlui.org/get-started>
-   — that gets you the XMLUI CLI (which includes the MCP server). If
-   you followed those instructions to completion and have created
-   `~/xmlui-weather`, remove it and instead
-   `git clone https://github.com/xmlui-org/xmlui-weather`. That gives
-   you a repo with pre-existing git history to explore in the
-   xmlui-desktop Commits pane; you can stage work items as local git
-   commits to get a feel for what that is like.
 
 3. **GitHub CLI (`gh`) — recommended.** Powers the Issues tab in the
    agent-tools drawer and the agent's issue create / close / comment
@@ -58,6 +43,44 @@ directly. Run it inside a local git repo with an XMLUI project.
    [Voice input](#voice-input) below for per-platform install.
 
 ## [Download the latest release →](https://github.com/judell/xmlui-desktop/releases/latest)
+
+### Agent tools
+
+- **Talk** — live transcript of the active claude/codex session, rendered as it streams. Includes 🎤 voice dictation, scroll-to-bottom and scroll-to-top controls, and an Inspector launcher for XMLUI trace export (helps you identify and report issues with xmlui-desktop).
+
+- **Worklist** — the two-stage `proposed → applied → committed` approval surface that coordinates multi-step agent work. Each item is a small, independently approvable diff with a `before → after` summary; the agent applies on TO APPLY approval and commits only on TO COMMIT approval, never unilaterally.
+
+- **Commits** — HSplitter list of recent commits on the left, selected commit on the right. Full-history search via `git log --grep` across subject, body, and author; matched commits expand to clickable hit-row snippets, and the right pane stacks `snippetAroundLine` previews for every hit. The right-pane header is an `ExpandableItem` revealing the full commit message body. Unpushed commits surface a "Push" button that runs `git push origin`.
+
+- **Issues** — HSplitter list of GitHub issues on the left (via `gh issue list`), selected issue on the right. Search runs `gh issue list --search` and tags hits per title/body line; clicking a hit filters the right-pane body to paragraphs containing the query. The expanded issue refetches every 30s so edits made via `gh` or github.com surface without collapse-and-reopen.
+
+- **Sessions** — HSplitter list of local claude/codex JSONL sessions on the left, selected session's turns on the right. Search runs server-side across user and assistant text; hits filter the right pane to matching paragraphs. Each row has a ✕ delete (with confirm) and a ✎ rename (Claude only, via `custom-title` append); after the action, the row dims and the buttons disable until the next agent restart picks up the change.
+
+- **Context** — HSplitter view of everything claude is loading for this project: CLAUDE.md and its @-imports, the per-project memory tree, hooks, and settings. Substring search with grep-style hit snippets in the list and `snippetAroundLine` context on the right.
+
+- **README** — the rendered project README, so the agent and the user share the same source-of-truth doc.
+
+### Toolbar
+
+- **↻ reload xmlui app** — force-reload the right-pane iframe (file watcher does this automatically, but useful after edits to the parent shell).
+- **🔍 browser devtools** — open the WebView devtools for debugging the right pane.
+- **🛠 agent tools** — toggle the agent-tools drawer above.
+- **▢ terminal** — toggle the terminal pane (hide it to give the web app full width).
+- **A− / A+** — decrease / increase the terminal font size (Cmd+− / Cmd+=).
+- **🎤 voice** — toggle Whisper-based voice dictation into the terminal (Cmd+Shift+D).
+
+### Agent Toolbar
+
+Pinned across the top of the agent-tools drawer (stays reachable from any tab):
+
+- **ⓘ info** — show a right-pane info modal (URL, project-server status, "Open in browser").
+- **A− / A+** — decrease / increase the right-pane / drawer iframe font size.
+- **🎤 voice** — local-Whisper dictation; click to start, click again to send the transcript as a fresh user turn. Same engine as the parent-shell toolbar's voice button.
+- **📸 screenshot** — capture a region of the screen and attach it to the agent as an image input.
+- **1 / 2 / 3** — send numeric keystrokes for claude's permission menus (Allow once / Allow always / Deny).
+- **Yes / No** — send "yes" or "no" as a complete user turn (handy for the agent's conversational prompts).
+- **Esc** — send `Esc` to interrupt the agent mid-response.
+- **🔍 Inspector** — open the XMLUI Inspector to reproduce a UI issue and export a trace JSON for analysis.
 
 ## Build
 
@@ -168,9 +191,25 @@ Windows the 📸 button returns "screenshot capture is currently
 macOS-only"; if you want a port (e.g. via `grim` / `slurp` on Wayland
 or a PowerShell snippet on Windows), please open an issue.
 
-## Working with a real backend
+## Configuration
 
-xmlui-desktop binds the right-pane HTTP server to
+`.xmlui-desktop.json` at project root is the config file.
+
+### Startup
+
+You can specify how to launch the agent in the terminal pane.
+
+```
+{
+  "shell": {
+    "agent": "claude --continue"
+  }
+}
+```
+
+### Working with a real backend
+
+`xmlui-desktop` binds the right-pane HTTP server to
 `127.0.0.1:<random-port>` (it uses port `0` and lets the OS pick).
 That's fine for projects that talk only to public APIs or static
 files. It breaks when your project needs a **fixed origin** — OAuth
@@ -185,7 +224,7 @@ callbacks, CORS allowlists, hardcoded API base URLs.
 > while keeping the real backend running for API calls. Otherwise,
 > open the project in a standalone browser.
 
-### Declare a project server (`.xmlui-desktop.json`)
+#### Declare a project server
 
 Add `.xmlui-desktop.json` at the project root:
 
@@ -240,7 +279,7 @@ to your server's command or bake them into `path` (e.g.
 for the Supabase URL-Configuration setup that requires the fixed
 `localhost:8080/**` origin.
 
-### Fallback: the redirect pattern
+#### Fallback: the redirect pattern
 
 If you can't add a config file (e.g. you're working in a repo you
 don't own), you can still target a fixed origin by adding a
@@ -262,7 +301,7 @@ bounces it to `localhost:8080`. `.xmlui-desktop.json` is the preferred
 mechanism — it auto-spawns the server, surfaces logs, and doesn't
 pollute the project's HTML.
 
-### Auth callbacks won't reach the right pane
+#### Auth callbacks won't reach the right pane
 
 The right-pane webview has its own browser storage, isolated from
 your system browser's storage at the same origin. That breaks any

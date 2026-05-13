@@ -22,17 +22,20 @@
     debounceWaitInMs="250"
     onDidChange="searchQuery = searchDraft" />
 
-  <HStack gap="$space-4" padding="$space-4" height="100%"
-    onInit="registerContextMemorySelector((basename) => { let f = ((ctxList.value &amp;&amp; ctxList.value.memory) || []).find((x) => x.display === basename); if (f) { selectedPath = f.path; selectedDisplay = f.display; selectedLine = null; } })"
-    onCleanup="clearContextMemorySelector()">
-    <VStack width="280px" gap="$space-4" overflowY="auto">
+  <HSplitter height="100%" initialPrimarySize="40%">
+    <VStack
+      padding="$space-4"
+      gap="$space-4"
+      overflowY="auto"
+      onInit="registerContextMemorySelector((basename) => { let f = ((ctxList.value &amp;&amp; ctxList.value.memory) || []).find((x) => x.display === basename); if (f) { selectedPath = f.path; selectedDisplay = f.display; selectedLine = null; } })"
+      onCleanup="clearContextMemorySelector()">
       <HStack gap="$space-2" verticalAlignment="center">
         <Button
           label="✕"
           variant="ghost"
           size="xs"
           tooltip="Clear search"
-          onClick="searchBox.setValue(''); searchDraft = ''; searchQuery = ''" />
+          onClick="searchBox.setValue(''); searchDraft = ''; searchQuery = ''; selectedPath = null; selectedDisplay = null; selectedLine = null" />
         <TextBox
           id="searchBox"
           placeholder="Search..."
@@ -142,9 +145,8 @@
       </VStack>
     </VStack>
 
-    <VStack width="*" gap="$space-2" overflowY="auto">
-      <Text when="{!selectedPath}" color="$textColor-secondary">(select a file)</Text>
-      <VStack when="{selectedPath}" gap="$space-2">
+    <VStack when="{selectedPath}" padding="$space-4" gap="$space-2" overflowY="auto">
+      <VStack gap="$space-2">
         <Text value="{selectedPath}" variant="code" fontSize="$fontSize-xs" color="$textColor-secondary" />
         <VStack when="{selectedLine}" gap="$space-1">
           <Link onClick="selectedLine = null" noIndicator="true">
@@ -182,5 +184,5 @@
           value="{ctxFile.value &amp;&amp; ctxFile.value.content}" />
       </VStack>
     </VStack>
-  </HStack>
+  </HSplitter>
 </Component>

@@ -78,6 +78,29 @@ approves both the edit and the commit. Skip the `applied` stage only
 if the user says "apply and commit" (or similar) up front. Dropped
 items are pruned directly with no `applied` stage.
 
+**The user is the only one who commits features.** A TO COMMIT item
+sits in the working tree indefinitely until an `approved:` payload
+covering it arrives — there is no "I should go ahead and commit
+this" path short of explicit user authorization. Avoid framing in
+chat that makes a feature-level commit sound like a unilateral next
+step: don't write "Let me commit X first", "I'll commit X then
+propose Y", or "going to land this now". Frame the proposal
+instead — "Approve X to commit" or "Once you approve, I'll commit
+X" — and leave the trigger to the user. The danger of "Let me
+commit X" phrasing is that it nudges the user toward approving a
+commit they hadn't yet thought through, defeating the purpose of
+the two-stage flow.
+
+The exception is a *minor* change the user explicitly asks you to
+commit directly — a typo fix, a one-line doc tweak, a small
+correction surfaced in chat ("just commit it", "commit this
+directly, no worklist"). In that case the worklist isn't needed
+and you can stage + commit immediately. The shape of the request
+matters: an explicit "commit this" from the user is authorization;
+inferring it from "looks good" or similar feedback is not (see
+the *Don't infer commit / drop / advance from feedback* guidance
+above).
+
 When you first add items, default to omitting the status (or setting
 `"proposed"`). Don't pre-mark things as `"applied"` unless the change
 is genuinely already on disk.

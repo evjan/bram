@@ -281,6 +281,19 @@ whose existence is structural (expected entry points, conventional
 configs: empty them out and leave the file in place). When in doubt,
 ask.
 
+## Updating GitHub issues via gh
+
+For changes to an existing issue, use the `gh` CLI directly — no
+need to explore `gh issue --help`:
+
+- Edit title/body: `gh issue edit <n> --title "…" --body "…"`
+- Add a comment: `gh issue comment <n> --body "…"`
+- Change state: `gh issue close <n>` / `gh issue reopen <n>`
+
+The Issues tab polls every 30s and refetches the expanded issue's
+body + comments, so updates surface in xmlui-desktop without a
+restart.
+
 ## Citing XMLUI docs
 
 When citing an XMLUI component or howto, the canonical URL form is:

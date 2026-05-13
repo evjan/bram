@@ -2,6 +2,9 @@
   var.issuesExpanded="{false}"
   var.expandedNumber="{null}"
   var.fullscreenImage="{null}"
+  var.queryDraft=""
+  var.query=""
+  var.selectedHitLine="{null}"
   var.sortField="updatedAt"
   var.sortDir="desc"
   var.sortedIssues="{(issues.value || []).slice().sort(function(a, b) {
@@ -11,6 +14,7 @@
     if (av > bv) return sortDir === 'asc' ? 1 : -1;
     return 0;
   })}">
+
   <DataSource
     id="issues"
     url="/__issues"
@@ -24,7 +28,29 @@
     id="issueDetail"
     url="/__issue"
     queryParams="{{ number: expandedNumber }}"
+    pollIntervalInSeconds="30"
     when="{!!expandedNumber}" />
+
+  <DataSource
+    id="searchResults"
+    url="/__issues/search"
+    queryParams="{{ q: query }}"
+    when="{!!query &amp;&amp; query.trim().length >= 2}" />
+
+  <ChangeListener
+    listenTo="{queryDraft}"
+    debounceWaitInMs="250"
+    onDidChange="query = queryDraft" />
+
+  <variable
+    name="displayedIssues"
+    value="{(query &amp;&amp; query.trim().length >= 2)
+      ? ((searchResults.value &amp;&amp; searchResults.value.results) || [])
+      : sortedIssues.slice(0, issuesExpanded ? 999 : 10)}" />
+
+  <variable
+    name="selectedIssue"
+    value="{!expandedNumber ? null : ((((searchResults.value &amp;&amp; searchResults.value.results) || []).find(i => i.number === expandedNumber)) || (sortedIssues || []).find(i => i.number === expandedNumber))}" />
 
   <ModalDialog
     when="{!!fullscreenImage}"
@@ -37,134 +63,218 @@
       height="100%" />
   </ModalDialog>
 
-  <VStack padding="$space-6" gap="$space-6">
-    <HStack gap="$space-3" verticalAlignment="center">
-      <Heading level="h2">Issues</Heading>
-      <Button
-        when="{repoOrigin.value && repoOrigin.value.issuesNewUrl}"
-        label="+ New issue"
-        size="sm"
-        onClick="openExternal(repoOrigin.value.issuesNewUrl)" />
-      <Button
-        when="{repoOrigin.value && repoOrigin.value.issuesUrl}"
-        label="All on GitHub"
-        variant="outlined"
-        size="sm"
-        onClick="openExternal(repoOrigin.value.issuesUrl)" />
-    </HStack>
+  <HSplitter height="100%" initialPrimarySize="40%">
 
-    <Text
-      when="{!repoOrigin.value || !repoOrigin.value.htmlBase}"
-      color="$textColor-secondary">
-      No GitHub remote detected for this project. Add an origin remote (or run `gh repo set-default`) to populate this tab.
-    </Text>
-
-    <Text
-      when="{repoOrigin.value && repoOrigin.value.htmlBase && (!issues.value || issues.value.length === 0)}"
-      color="$textColor-secondary">
-      No issues found. (Either the repo has none, or `gh` is not installed / authenticated.)
-    </Text>
-
-    <VStack gap="0" width="100%" when="{issues.value && issues.value.length > 0}">
-      <HStack
-        gap="$space-3"
-        paddingHorizontal="$space-3"
-        paddingVertical="$space-2"
-        backgroundColor="$color-surface-100"
-        borderBottom="1px solid $borderColor">
-        <Link
-          width="64px"
-          noIndicator
-          onClick="if (sortField === 'state') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'state'; sortDir = 'desc'; }">
-          <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
-            value="{'STATE' + (sortField === 'state' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
-        </Link>
-        <Link
-          width="*"
-          noIndicator
-          onClick="if (sortField === 'title') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'title'; sortDir = 'asc'; }">
-          <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
-            value="{'TITLE' + (sortField === 'title' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
-        </Link>
-        <Link
-          width="90px"
-          noIndicator
-          onClick="if (sortField === 'updatedAt') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'updatedAt'; sortDir = 'desc'; }">
-          <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
-            value="{'AGE' + (sortField === 'updatedAt' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
-        </Link>
+    <VStack padding="$space-4" gap="$space-4" overflowY="auto">
+      <HStack gap="$space-3" verticalAlignment="center">
+        <Heading level="h2">Issues</Heading>
+        <Button
+          when="{repoOrigin.value &amp;&amp; repoOrigin.value.issuesNewUrl}"
+          label="+ New issue"
+          size="xs"
+          onClick="openExternal(repoOrigin.value.issuesNewUrl)" />
+        <Button
+          when="{repoOrigin.value &amp;&amp; repoOrigin.value.issuesUrl}"
+          label="All on GitHub"
+          variant="outlined"
+          size="xs"
+          onClick="openExternal(repoOrigin.value.issuesUrl)" />
       </HStack>
-      <Items data="{sortedIssues.slice(0, issuesExpanded ? 999 : 10)}">
-        <VStack gap="0" borderBottom="1px solid $borderColor">
-          <HStack
-            gap="$space-3"
-            paddingHorizontal="$space-3"
-            paddingVertical="$space-2"
-            verticalAlignment="center">
-            <HStack width="64px" verticalAlignment="center">
-              <Text
-                fontSize="$fontSize-sm"
-                fontWeight="$fontWeight-bold"
-                color="{$item.state === 'OPEN' ? '$color-success-700' : '$textColor-secondary'}"
-                value="{$item.state === 'OPEN' ? 'open' : 'closed'}" />
-            </HStack>
-            <HStack width="*" gap="$space-2" verticalAlignment="center">
-              <Link
-                onClick="expandedNumber = (expandedNumber === $item.number ? null : $item.number)"
-                noIndicator>
-                <Text value="#{$item.number} {$item.title}" maxLines="1" />
-              </Link>
-            </HStack>
-            <HStack width="90px" verticalAlignment="center">
-              <Text fontSize="$fontSize-sm" color="$textColor-secondary" value="{getDateUntilNow($item.updatedAt)}" />
-            </HStack>
-          </HStack>
 
-          <VStack
-            when="{expandedNumber === $item.number}"
-            gap="$space-3"
-            paddingHorizontal="$space-3"
-            paddingVertical="$space-3"
-            backgroundColor="$color-surface-50"
-            borderTop="1px dashed $borderColor">
-            <Text when="{issueDetail.inProgress}">Loading…</Text>
-            <Markdown
-              when="{issueDetail.value && issueDetail.value.body}"
-              content="{stripMarkdownImages(issueDetail.value.body)}" />
+      <HStack gap="$space-2" verticalAlignment="center">
+        <Button
+          label="✕"
+          variant="ghost"
+          size="xs"
+          tooltip="Clear search"
+          onClick="searchBox.setValue(''); queryDraft = ''; query = ''; expandedNumber = null; selectedHitLine = null" />
+        <TextBox
+          id="searchBox"
+          placeholder="Search title and body…"
+          width="*"
+          initialValue="{queryDraft}"
+          onDidChange="(v) => queryDraft = v" />
+        <Text
+          when="{searchResults.inProgress}"
+          fontSize="$fontSize-sm"
+          color="$textColor-secondary"
+          value="Searching…" />
+      </HStack>
+
+      <Text
+        when="{!repoOrigin.value || !repoOrigin.value.htmlBase}"
+        color="$textColor-secondary">
+        No GitHub remote detected for this project. Add an origin remote (or run `gh repo set-default`) to populate this tab.
+      </Text>
+
+      <Text
+        when="{(!query || query.trim().length &lt; 2) &amp;&amp; repoOrigin.value &amp;&amp; repoOrigin.value.htmlBase &amp;&amp; (!issues.value || issues.value.length === 0)}"
+        color="$textColor-secondary">
+        No issues found. (Either the repo has none, or `gh` is not installed / authenticated.)
+      </Text>
+
+      <Text
+        when="{query &amp;&amp; query.trim().length >= 2 &amp;&amp; searchResults.value &amp;&amp; (!searchResults.value.results || searchResults.value.results.length === 0) &amp;&amp; !searchResults.inProgress}"
+        color="$textColor-secondary">
+        No matches.
+      </Text>
+
+      <VStack gap="0" width="100%" when="{displayedIssues.length > 0}">
+        <HStack
+          when="{(!query || query.trim().length &lt; 2)}"
+          gap="$space-3"
+          paddingHorizontal="$space-3"
+          paddingVertical="$space-2"
+          backgroundColor="$color-surface-100"
+          borderBottom="1px solid $borderColor">
+          <Link
+            when="{!expandedNumber}"
+            width="64px"
+            noIndicator
+            onClick="if (sortField === 'state') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'state'; sortDir = 'desc'; }">
+            <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
+              value="{'STATE' + (sortField === 'state' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
+          </Link>
+          <Link
+            width="*"
+            noIndicator
+            onClick="if (sortField === 'title') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'title'; sortDir = 'asc'; }">
+            <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
+              value="{'TITLE' + (sortField === 'title' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
+          </Link>
+          <Link
+            when="{!expandedNumber}"
+            width="90px"
+            noIndicator
+            onClick="if (sortField === 'updatedAt') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'updatedAt'; sortDir = 'desc'; }">
+            <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
+              value="{'AGE' + (sortField === 'updatedAt' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
+          </Link>
+        </HStack>
+        <Items data="{displayedIssues}">
+          <VStack gap="0" borderBottom="1px solid $borderColor" var.issueNumber="{$item.number}">
+            <HStack
+              gap="$space-3"
+              paddingHorizontal="$space-3"
+              paddingVertical="$space-2"
+              verticalAlignment="center">
+              <HStack when="{!expandedNumber}" width="64px" verticalAlignment="center">
+                <Text
+                  fontSize="$fontSize-sm"
+                  fontWeight="$fontWeight-bold"
+                  color="{$item.state === 'OPEN' ? '$color-success-700' : '$textColor-secondary'}"
+                  value="{$item.state === 'OPEN' ? 'open' : 'closed'}" />
+              </HStack>
+              <HStack width="*" gap="$space-2" verticalAlignment="center">
+                <Link
+                  onClick="expandedNumber = $item.number; selectedHitLine = null"
+                  noIndicator>
+                  <Text
+                    value="#{$item.number} {$item.title}"
+                    fontWeight="{expandedNumber === $item.number ? '$fontWeight-bold' : '$fontWeight-normal'}"
+                    maxLines="1" />
+                </Link>
+              </HStack>
+              <HStack when="{!expandedNumber}" width="90px" verticalAlignment="center">
+                <Text fontSize="$fontSize-sm" color="$textColor-secondary" value="{getDateUntilNow($item.updatedAt)}" />
+              </HStack>
+            </HStack>
+
             <VStack
-              gap="$space-2"
-              when="{issueDetail.value && issueDetail.value.body && extractMarkdownImages(issueDetail.value.body).length > 0}">
-              <Items data="{extractMarkdownImages(issueDetail.value.body)}">
-                <Link onClick="fullscreenImage = $item" noIndicator>
-                  <Image
-                    src="{$item}"
-                    maxHeight="200px"
-                    fit="contain" />
+              when="{$item.hits &amp;&amp; $item.hits.length > 0}"
+              gap="0"
+              paddingHorizontal="$space-3"
+              paddingBottom="$space-2">
+              <Items data="{$item.hits}">
+                <Link
+                  onClick="expandedNumber = issueNumber; selectedHitLine = ($item.line || null)"
+                  noIndicator="true">
+                  <HStack gap="$space-2">
+                    <Text
+                      value="{$item.field}"
+                      fontSize="$fontSize-xs"
+                      color="$textColor-secondary"
+                      width="56px" />
+                    <Text
+                      value="{$item.snippet}"
+                      fontSize="$fontSize-xs"
+                      whiteSpace="nowrap"
+                      textOverflow="ellipsis"
+                      overflow="hidden" />
+                  </HStack>
                 </Link>
               </Items>
             </VStack>
-            <HStack horizontalAlignment="end">
-              <Button
-                label="Open on github.com"
-                variant="outlined"
-                size="xs"
-                onClick="openExternal($item.url)" />
-            </HStack>
           </VStack>
-        </VStack>
-      </Items>
-      <HStack
-        when="{issues.value && issues.value.length > 10}"
-        padding="$space-2"
-        horizontalAlignment="center">
-        <Link
-          onClick="issuesExpanded = !issuesExpanded"
-          noIndicator>
-          <Text
-            fontSize="$fontSize-sm"
-            value="{issuesExpanded ? 'Show fewer' : 'More (' + (issues.value.length - 10) + ' more)'}" />
-        </Link>
-      </HStack>
+        </Items>
+        <HStack
+          when="{(!query || query.trim().length &lt; 2) &amp;&amp; issues.value &amp;&amp; issues.value.length > 10}"
+          padding="$space-2"
+          horizontalAlignment="center">
+          <Link
+            onClick="issuesExpanded = !issuesExpanded"
+            noIndicator>
+            <Text
+              fontSize="$fontSize-sm"
+              value="{issuesExpanded ? 'Show fewer' : 'More (' + (issues.value.length - 10) + ' more)'}" />
+          </Link>
+        </HStack>
+        <Text
+          when="{query &amp;&amp; query.trim().length >= 2 &amp;&amp; searchResults.value &amp;&amp; searchResults.value.truncated}"
+          paddingHorizontal="$space-3"
+          paddingVertical="$space-2"
+          color="$textColor-secondary"
+          fontSize="$fontSize-xs">
+          (results truncated)
+        </Text>
+      </VStack>
     </VStack>
-  </VStack>
+
+    <VStack when="{expandedNumber}" padding="$space-4" gap="$space-3" overflowY="auto">
+      <HStack gap="$space-2" verticalAlignment="center">
+        <Text
+          when="{selectedIssue}"
+          fontSize="$fontSize-sm"
+          fontWeight="$fontWeight-bold"
+          color="{selectedIssue.state === 'OPEN' ? '$color-success-700' : '$textColor-secondary'}"
+          value="{selectedIssue.state === 'OPEN' ? 'open' : 'closed'}" />
+        <Text
+          when="{selectedIssue}"
+          fontWeight="$fontWeight-bold"
+          value="#{selectedIssue.number} {selectedIssue.title}"
+          width="*"
+          maxLines="2" />
+        <Button
+          when="{selectedIssue &amp;&amp; selectedIssue.url}"
+          icon="link"
+          variant="ghost"
+          size="xs"
+          tooltip="Open on github.com"
+          onClick="openExternal(selectedIssue.url)" />
+      </HStack>
+      <Link
+        when="{selectedHitLine &amp;&amp; query &amp;&amp; query.trim().length >= 2}"
+        onClick="selectedHitLine = null"
+        noIndicator>
+        <Text value="↥ Show full issue" fontSize="$fontSize-xs" />
+      </Link>
+      <Text when="{issueDetail.inProgress &amp;&amp; !issueDetail.loaded}">Loading…</Text>
+      <Markdown
+        when="{issueDetail.value &amp;&amp; issueDetail.value.body}"
+        content="{(selectedHitLine &amp;&amp; query &amp;&amp; query.trim().length >= 2) ? paragraphsContaining(stripMarkdownImages(issueDetail.value.body), query) : stripMarkdownImages(issueDetail.value.body)}" />
+      <VStack
+        gap="$space-2"
+        when="{issueDetail.value &amp;&amp; issueDetail.value.body &amp;&amp; extractMarkdownImages(issueDetail.value.body).length > 0}">
+        <Items data="{extractMarkdownImages(issueDetail.value.body)}">
+          <Link onClick="fullscreenImage = $item" noIndicator>
+            <Image
+              src="{$item}"
+              maxHeight="200px"
+              fit="contain" />
+          </Link>
+        </Items>
+      </VStack>
+    </VStack>
+
+  </HSplitter>
 </Component>

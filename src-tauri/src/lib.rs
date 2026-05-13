@@ -936,6 +936,113 @@ fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     }
 }
 
+// Issue search: shells out to `gh issue list --search "<q>"`, then for each
+// matched issue computes per-line hits across `title` and `body` (no comment
+// search yet — adding that requires a second `gh issue view` per hit). Same
+// shape as Commits search: { results: [{...fields, hits: [{line, snippet,
+// field}]}], truncated }. On any gh failure returns the empty envelope so
+// the frontend renders cleanly.
+fn gh_issues_search<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    query: &str,
+) -> Result<Vec<u8>, String> {
+    use serde_json::json;
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(b"{\"results\":[],\"truncated\":false}".to_vec());
+    }
+    let needle = q.to_lowercase();
+    const MAX_HITS: usize = 200;
+
+    let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
+    let out = std::process::Command::new("gh")
+        .current_dir(&root)
+        .args(&[
+            "issue",
+            "list",
+            "--search",
+            q,
+            "--json",
+            "number,title,state,author,createdAt,updatedAt,labels,url,body",
+            "--limit",
+            "50",
+            "--state",
+            "all",
+        ])
+        .output();
+    let stdout = match out {
+        Ok(out) if out.status.success() => out.stdout,
+        Ok(out) => {
+            eprintln!(
+                "[gh issue list --search] non-zero exit: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return Ok(b"{\"results\":[],\"truncated\":false}".to_vec());
+        }
+        Err(e) => {
+            eprintln!("[gh issue list --search] failed to spawn: {}", e);
+            return Ok(b"{\"results\":[],\"truncated\":false}".to_vec());
+        }
+    };
+    let issues: Vec<serde_json::Value> = match serde_json::from_slice(&stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[gh issue list --search] parse: {}", e);
+            return Ok(b"{\"results\":[],\"truncated\":false}".to_vec());
+        }
+    };
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut total_hits = 0usize;
+    let mut truncated = false;
+
+    for issue in issues {
+        if total_hits >= MAX_HITS {
+            truncated = true;
+            break;
+        }
+        let title = issue.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let body = issue.get("body").and_then(|v| v.as_str()).unwrap_or("");
+
+        let mut hits: Vec<serde_json::Value> = Vec::new();
+        if title.to_lowercase().contains(&needle) {
+            let snippet: String = title.trim().chars().take(200).collect();
+            hits.push(json!({
+                "line": 0,
+                "snippet": snippet,
+                "field": "title",
+            }));
+            total_hits += 1;
+        }
+        for (i, line) in body.lines().enumerate() {
+            if total_hits >= MAX_HITS {
+                truncated = true;
+                break;
+            }
+            if line.to_lowercase().contains(&needle) {
+                let snippet: String = line.trim().chars().take(200).collect();
+                hits.push(json!({
+                    "line": i + 1,
+                    "snippet": snippet,
+                    "field": "body",
+                }));
+                total_hits += 1;
+            }
+        }
+        if hits.is_empty() {
+            continue;
+        }
+        let mut out_issue = issue.clone();
+        if let Some(obj) = out_issue.as_object_mut() {
+            obj.insert("hits".into(), serde_json::Value::Array(hits));
+        }
+        results.push(out_issue);
+    }
+
+    serde_json::to_vec(&json!({ "results": results, "truncated": truncated }))
+        .map_err(|e| e.to_string())
+}
+
 // Shell out to `gh issue view <number> --json ...` and return the raw JSON
 // bytes. Same failure envelope as gh_issues_list — empty object on any
 // error so the frontend can render something rather than 500.
@@ -3158,6 +3265,23 @@ fn route_request<R: tauri::Runtime>(
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
             Err(e) => {
                 eprintln!("[http /__issues] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    if path == "__issues/search" {
+        let mut q = String::new();
+        for pair in query.split('&') {
+            if let Some(enc) = pair.strip_prefix("q=") {
+                q = percent_decode(enc);
+                break;
+            }
+        }
+        return match gh_issues_search(app, &q) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__issues/search q={}] {}", q, e);
                 (500, "text/plain; charset=utf-8", e.into_bytes())
             }
         };

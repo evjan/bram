@@ -1,4 +1,6 @@
 echo "You can launch claude or codex here."
+# To auto-launch one on shell start, add to .xmlui-desktop.json:
+#   { "shell": { "agent": "claude --continue" } }
 
 _xmlui_mark_agent() {
   [ -n "$XMLUI_DESKTOP_AGENT_HINT" ] || return 0

@@ -28,3 +28,6 @@ xmlui-desktop
 
 # Project-local Claude Code permissions (per-user, do not share)
 .claude/settings.local.json
+
+# Project shell-startup config (committed as a default; local edits stay local)
+.xmlui-desktop.json

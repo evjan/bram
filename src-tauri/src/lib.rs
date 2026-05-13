@@ -133,6 +133,8 @@ struct PaneUrls {
 struct ProjectConfig {
     #[serde(default)]
     server: Option<ServerConfig>,
+    #[serde(default)]
+    shell: Option<ShellConfig>,
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -143,6 +145,15 @@ struct ServerConfig {
     port: u16,
     #[serde(default = "default_server_path")]
     path: String,
+}
+
+// Optional shell-startup block. `agent` is a single command string
+// typed verbatim into the bash prompt right after pty_spawn — bash
+// parses it, so flags work: `claude --continue`, `codex resume`, etc.
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+struct ShellConfig {
+    #[serde(default)]
+    agent: Option<String>,
 }
 
 fn default_server_path() -> String {
@@ -1183,6 +1194,27 @@ fn pty_spawn(
             }
         }
     });
+
+    // Optional auto-launch: type the configured agent at the bash
+    // prompt. Bash buffers input until interactive; if it's still in
+    // rcfile init the keystrokes queue and run as the first command.
+    if let Some(root) = project_root(Some(&app)) {
+        if let Some(cfg) = load_project_config(&root) {
+            if let Some(agent) = cfg.shell.and_then(|s| s.agent) {
+                let trimmed = agent.trim();
+                if !trimmed.is_empty() {
+                    let payload = format!("{}\r", trimmed);
+                    let mut guard = state.0.lock().unwrap();
+                    if let Some(pty) = guard.as_mut() {
+                        if let Err(e) = pty.writer.write_all(payload.as_bytes()) {
+                            eprintln!("[pty_spawn] failed to write agent autostart: {}", e);
+                        }
+                        let _ = pty.writer.flush();
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }
 

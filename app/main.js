@@ -58,8 +58,52 @@ const setTerminalFontSize = (n) => {
   } catch {}
 };
 
+const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.userAgent);
+
 term.attachCustomKeyEventHandler((ev) => {
-  if (ev.type !== "keydown" || !ev.metaKey) return true;
+  if (ev.type !== "keydown") return true;
+  // Don't interfere with AltGr (Ctrl+Alt on Win/Linux produces @, |, [, ]
+  // etc. on non-US layouts).
+  if (ev.altKey) return true;
+
+  // Non-macOS terminal copy/paste:
+  //   - Plain Ctrl+C: copies the selection when one exists (Windows Terminal
+  //     behavior); falls through to xterm.js → SIGINT when there's no
+  //     selection. We avoid Ctrl+Shift+C because WebView2 owns that combo
+  //     at the native layer for the Edge "Inspect Element" devtools
+  //     accelerator, which fires before our JS handler can preventDefault.
+  //   - Ctrl+Shift+V: pastes clipboard text via the bracketed-paste path.
+  //     preventDefault stops the WebView's native paste event from also
+  //     firing — without it, xterm.js's textarea paste listener would
+  //     write the clipboard a second time.
+  if (!isMac && ev.ctrlKey && !ev.shiftKey && (ev.key === "c" || ev.key === "C")) {
+    const sel = term.getSelection();
+    if (sel) {
+      ev.preventDefault();
+      navigator.clipboard.writeText(sel).catch((e) =>
+        console.error("clipboard write", e),
+      );
+      return false;
+    }
+    // No selection: let xterm.js send ^C → SIGINT.
+  }
+  if (!isMac && ev.ctrlKey && ev.shiftKey && (ev.key === "V" || ev.key === "v")) {
+    ev.preventDefault();
+    navigator.clipboard
+      .readText()
+      .then((text) => {
+        if (!text) return;
+        invoke("pty_write", {
+          data: "\x1b[200~" + text + "\x1b[201~",
+        }).catch((e) => console.error("pty_write paste", e));
+      })
+      .catch((e) => console.error("clipboard read", e));
+    return false;
+  }
+
+  // Font-size shortcuts: Cmd on macOS, Ctrl elsewhere.
+  const mod = isMac ? ev.metaKey : ev.ctrlKey;
+  if (!mod) return true;
   if (ev.key === "=" || ev.key === "+") {
     setTerminalFontSize(term.options.fontSize + 1);
     return false;

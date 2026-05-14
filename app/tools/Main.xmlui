@@ -151,6 +151,12 @@
           variant="ghost"
           tooltip="Send Esc to interrupt"
           onClick="(sendKeys('\x1b'), escSuppressed = true)" />
+        <Button
+          when="{enhanceStatus.value && enhanceStatus.value.enhanced}"
+          icon="hat-glasses"
+          variant="ghost"
+          tooltip="Re-run agent setup (see README)"
+          onClick="window.fetch('/__enhance/run').then(() => enhanceStatus.refetch())" />
         <Inspector src="{'/__vendor/xs-diff.html?v=' + window.APP_VERSION}" />
       </HStack>
     </Theme>

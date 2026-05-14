@@ -128,10 +128,11 @@ Pinned across the top of the agent-tools drawer (stays reachable from any tab):
 - **Yes / No** — send "yes" or "no" as a complete user turn (handy for the agent's conversational prompts).
 - **Esc** — send `Esc` to interrupt the agent mid-response.
 - **🔍 Inspector** — open the XMLUI Inspector to reproduce a UI issue and export a trace JSON for analysis.
+- **Re-run setup** (hat-glasses icon, only visible once the project is already set up) — re-runs `/__enhance/run`. Idempotent; safe to invoke anytime conventions may have drifted, e.g., after upgrading xmlui-desktop. See [How Set up enforces the worklist flow](#how-set-up-enforces-the-worklist-flow) below.
 
 ### How Set up enforces the worklist flow
 
-The agent-tools drawer's **Set up** button writes a Claude Code `PreToolUse` hook into the project: `.claude/hooks/worklist-guard.py`, registered in `.claude/settings.json` to fire on `Write|Edit`. PreToolUse hooks are Claude Code's harness-level extension point — they run *before* Claude actually invokes a tool, receive a JSON payload describing the pending call on stdin, and can exit 0 to allow it, exit 2 to block it (stderr goes back to Claude as a tool error), or fail to launch (non-blocking — the tool call still proceeds, with a warning shown).
+The agent-tools drawer's **Set up** button (replaced by a hat-glasses icon in the toolbar once a project is already configured) writes a Claude Code `PreToolUse` hook into the project: `.claude/hooks/worklist-guard.py`, registered in `.claude/settings.json` to fire on `Write|Edit`. PreToolUse hooks are Claude Code's harness-level extension point — they run *before* Claude actually invokes a tool, receive a JSON payload describing the pending call on stdin, and can exit 0 to allow it, exit 2 to block it (stderr goes back to Claude as a tool error), or fail to launch (non-blocking — the tool call still proceeds, with a warning shown).
 
 `worklist-guard.py` watches Write/Edit operations targeting `resources/worklist.json`. It simulates the change, diffs items by `id`, and for any item that would disappear it checks the `status`:
 

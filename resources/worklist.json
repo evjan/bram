@@ -1,5 +1,5 @@
 {
-  "description": "Pending worklist UI work + setup-flow aftermath of the proposal→worklist rename (issue #16 follow-up).",
+  "description": "Setup-flow aftermath of the proposal→worklist rename (issue #20). Recommended order: setup-button-always-reachable → purge-proposal-guard-on-enhance → windows-hook-python-launcher. The show-diff item is unrelated; sequence at your discretion.",
   "items": [
     {
       "id": "worklist-show-diff-for-applied-items",
@@ -7,13 +7,6 @@
       "file": "app/tools/components/Workspace.xmlui",
       "before": "Worklist rows show only the before/after summary text. When an item is TO COMMIT (status: applied), the user has no in-app way to review the actual file diff before approving the commit — they have to run `git diff <file>` in the terminal or switch to another tool.",
       "after": "Add an in-row diff viewer for TO COMMIT items: an expandable section (e.g., a 'Show diff' toggle, or always-expanded code block) that renders `git diff -- <file>` for the listed file. Backed by a new Rust IPC command `git_diff_file(path) -> String` shelling out to `git diff -- <path>`, surfaced through helpers.js similar to gitPush, and rendered with a monospace code block or a syntax-highlighted diff component. Scope to TO COMMIT rows initially; TO APPLY rows have no on-disk diff yet."
-    },
-    {
-      "id": "setup-button-always-reachable",
-      "status": "proposed",
-      "file": "app/tools/Main.xmlui",
-      "before": "The 'Configure agent coordination' panel + 'Set up' button is gated on `when={enhanceStatus.value && !enhanceStatus.value.enhanced}` (Main.xmlui:173). Once all four enhance_status checks pass, the button vanishes permanently — there's no UI affordance to re-run setup when the on-disk conventions sidecar has gone stale (e.g., after a rename like proposal.json → worklist.json). Users have to delete a guarded file manually to make the button reappear. Reported in issue #16.",
-      "after": "Always render a Set up affordance. When `enhanced` is false, keep the current full panel + 'Set up' label. When `enhanced` is true, collapse the explanatory markdown behind an expander (or move it to a tooltip / info icon) and show a smaller 'Re-run setup' button that hits the same `/__enhance/run` endpoint. The endpoint is already idempotent, so re-running is safe."
     },
     {
       "id": "purge-proposal-guard-on-enhance",

@@ -1,4 +1,12 @@
 {
-  "description": "",
-  "items": []
+  "description": "Pending Windows terminal parity work.",
+  "items": [
+    {
+      "id": "windows-terminal-keybindings",
+      "status": "proposed",
+      "file": "app/main.js",
+      "before": "Terminal custom key handling only treats metaKey/Cmd as the shortcut modifier, so Windows users lack keyboard font-size shortcuts and Ctrl+Shift+C/V terminal copy/paste handling.",
+      "after": "Update the xterm.js custom key handler so non-macOS uses Ctrl for font-size shortcuts and supports Ctrl+Shift+C/V for terminal copy/paste while preserving macOS Cmd behavior. Guard against AltGr (require !ev.altKey) and only intercept Ctrl+Shift+C / Ctrl+Shift+V (leave plain Ctrl+C interrupt and plain Ctrl+V untouched)."
+    }
+  ]
 }

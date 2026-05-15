@@ -177,6 +177,62 @@ function toolSummary(name, input) {
   return name || '';
 }
 
+function parseJsonString(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch (e) {
+    return null;
+  }
+}
+
+function codexToolName(payload) {
+  if (!payload) return '';
+  if (payload.namespace) return payload.namespace.replace(/^mcp__/, '') + '.' + (payload.name || '');
+  return payload.name || '';
+}
+
+function codexToolInput(payload) {
+  if (!payload) return {};
+  if (payload.type === 'function_call') {
+    const parsed = parseJsonString(payload.arguments);
+    return parsed !== null ? parsed : (payload.arguments || {});
+  }
+  if (payload.type === 'custom_tool_call') {
+    const parsed = parseJsonString(payload.input);
+    return parsed !== null ? parsed : (payload.input || '');
+  }
+  return {};
+}
+
+function codexToolSummary(payload) {
+  if (!payload) return '';
+  const name = codexToolName(payload);
+  const input = codexToolInput(payload);
+  if (payload.name === 'exec_command' && input && typeof input === 'object' && input.cmd) {
+    return input.cmd.length > 80 ? input.cmd.slice(0, 80) + '…' : input.cmd;
+  }
+  if (payload.name === 'write_stdin' && input && typeof input === 'object') {
+    const chars = input.chars || '';
+    const session = input.session_id ? ('session ' + input.session_id) : 'stdin';
+    if (!chars) return session;
+    const label = chars === '\u001b' ? 'Esc' : chars.replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+    return session + ' ← ' + (label.length > 40 ? label.slice(0, 40) + '…' : label);
+  }
+  if (payload.name === 'apply_patch' && typeof input === 'string') {
+    const m = input.match(/\*\*\* (?:Add|Update|Delete) File: ([^\n]+)/);
+    return m ? (m[1] + ' patch') : 'patch';
+  }
+  if (name.startsWith('filesystem.') && input && typeof input === 'object' && input.path) {
+    return input.path;
+  }
+  if (name.startsWith('xmlui.') && input && typeof input === 'object') {
+    return input.path || input.component || input.query || name;
+  }
+  if (input && typeof input === 'object') return toolSummary(payload.name || name, input);
+  return name;
+}
+
 // Synthetic diff for an Edit/MultiEdit tool_use input. Returns one entry
 // per line, prefixed sign + kind so the renderer can tint accordingly.
 function editDiffLines(input) {
@@ -202,6 +258,10 @@ function writeBodyLines(input, maxLines) {
 function toolInputJsonLines(input, maxLines) {
   const cap = maxLines || 20;
   if (input === null || input === undefined) return { lines: [], remaining: 0 };
+  if (typeof input === 'string') {
+    const all = input.split('\n');
+    return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
+  }
   let json;
   try {
     json = JSON.stringify(input, null, 2);
@@ -246,7 +306,37 @@ function extractToolResult(block, maxLines) {
   return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
 }
 
-// Find a tool entry by id across all turns. Used by Talk to render the
+function extractTextResult(text, maxLines) {
+  const cap = maxLines || 20;
+  if (!text) return null;
+  const all = text.split('\n');
+  return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
+}
+
+function codexToolOutput(payload) {
+  if (!payload || (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output')) {
+    return null;
+  }
+  const raw = payload.output;
+  if (typeof raw !== 'string') return { text: '', errored: false };
+  const parsed = parseJsonString(raw);
+  if (parsed && typeof parsed === 'object') {
+    const text = typeof parsed.output === 'string'
+      ? parsed.output
+      : typeof parsed.stderr === 'string'
+        ? parsed.stderr
+        : raw;
+    const exitCode = parsed.metadata && typeof parsed.metadata.exit_code === 'number'
+      ? parsed.metadata.exit_code
+      : null;
+    return { text, errored: exitCode !== null && exitCode !== 0 };
+  }
+  const exitMatch = raw.match(/Process exited with code (\d+)/);
+  const exitCode = exitMatch ? parseInt(exitMatch[1], 10) : 0;
+  return { text: raw, errored: !!exitMatch && exitCode !== 0 };
+}
+
+// Find a tool entry by id across all turns. Used by Transcript to render the
 // open-tool modal — we keep `openToolId` as the source of truth and
 // derive the entry from it on each render.
 function findToolInTurns(turns, toolId) {
@@ -272,13 +362,22 @@ function getToolDetail(jsonlText, toolId) {
     if (!line) continue;
     let r;
     try { r = JSON.parse(line); } catch (e) { continue; }
-    if (!r.message || !r.message.content || !Array.isArray(r.message.content)) continue;
-    for (const c of r.message.content) {
-      if (!c) continue;
-      if (c.type === 'tool_use' && c.id === toolId) {
-        input = c.input || {};
-      } else if (c.type === 'tool_result' && c.tool_use_id === toolId) {
-        result = extractToolResult(c, 20);
+    if (r.message && r.message.content && Array.isArray(r.message.content)) {
+      for (const c of r.message.content) {
+        if (!c) continue;
+        if (c.type === 'tool_use' && c.id === toolId) {
+          input = c.input || {};
+        } else if (c.type === 'tool_result' && c.tool_use_id === toolId) {
+          result = extractToolResult(c, 20);
+        }
+      }
+    } else if (r.type === 'response_item' && r.payload) {
+      const p = r.payload;
+      if ((p.type === 'function_call' || p.type === 'custom_tool_call') && p.call_id === toolId) {
+        input = codexToolInput(p);
+      } else if ((p.type === 'function_call_output' || p.type === 'custom_tool_call_output') && p.call_id === toolId) {
+        const output = codexToolOutput(p);
+        result = extractTextResult(output && output.text, 20);
       }
     }
     if (input !== null && result !== null) break;
@@ -405,6 +504,29 @@ function sessionTurns(jsonlText) {
       if (r.payload.type === 'agent_message') role = 'assistant';
       const t = r.payload.message || '';
       if (t) entries.push({ kind: 'text', text: t });
+    } else if (r.type === 'response_item' && r.payload) {
+      const p = r.payload;
+      if (p.type === 'function_call' || p.type === 'custom_tool_call') {
+        role = 'assistant';
+        const entry = {
+          kind: 'tool',
+          id: p.call_id,
+          name: codexToolName(p),
+          summary: codexToolSummary(p),
+        };
+        entries.push(entry);
+        if (p.call_id) toolIndex[p.call_id] = entry;
+      } else if (p.type === 'function_call_output' || p.type === 'custom_tool_call_output') {
+        const matching = p.call_id && toolIndex[p.call_id];
+        if (matching) {
+          const output = codexToolOutput(p);
+          matching.errored = !!(output && output.errored);
+          if (output && output.text) {
+            const firstLine = output.text.split('\n')[0].slice(0, 200);
+            if (matching.errored) matching.errorText = firstLine;
+          }
+        }
+      }
     }
     if (!role) continue;
     if (entries.length === 0 && inlineImages.length === 0) continue;

@@ -1,16 +1,5 @@
 {
   "description": "Codex-themed release: provider-neutral setup core, provider-aware first-run prompting, Transcript-first drawer surface, provider-aware Context, terminal resize polish, and release-copy cleanup are in place.",
   "items": [
-    {
-      "id": "add-codex-tool-cards-to-transcript",
-      "status": "applied",
-      "files": [
-        "app/tools/Globals.xs",
-        "app/tools/components/Transcript.xmlui",
-        "README.md"
-      ],
-      "before": "Transcript already renders Claude tool_use/tool_result activity as inline tool cards with expandable details, which is one of the most useful parts of the live transcript. Codex sessions, however, are currently flattened to `event_msg` user/agent text only. The actual Codex session JSONL contains richer records such as `response_item` entries of type `function_call`, `custom_tool_call`, `function_call_output`, and `custom_tool_call_output`, with call ids, tool names, arguments, and outputs. Because `sessionTurns()` and `getToolDetail()` in `app/tools/Globals.xs` only understand Claude's `message.content` tool blocks, Codex tool activity is invisible in Transcript even though the underlying session data is present.",
-      "after": "Teach Transcript to render Codex tool activity with the same general affordances Claude already gets: inline tool cards in the turn stream, error tinting when the tool failed, and expandable detail showing arguments and output. Implementation: extend the Codex parsing path in `app/tools/Globals.xs` so `response_item` `function_call` / `custom_tool_call` records become `kind: 'tool'` entries keyed by `call_id`, and their matching `function_call_output` / `custom_tool_call_output` records enrich the same entry with result/error state. `getToolDetail()` should become provider-aware enough to recover Codex call arguments and output payloads on expand, not just Claude `tool_use` / `tool_result` blocks. `Transcript.xmlui` should keep the existing renderer shape if possible, only widening the modal/detail formatting where Codex tool payloads differ. README should update the Transcript description to say that active-session tool activity is shown for both Claude and Codex rather than implying Claude-only richness."
-    }
   ]
 }

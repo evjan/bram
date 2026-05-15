@@ -1,29 +1,3 @@
-// Reactive global: when true, the Talk page hides its spinner+Esc inline
-// row (the user has already pressed Esc and the response was interrupted).
-// Reset to false by Talk's ChangeListener on the user-submission count, so
-// the next genuine submission re-enables the spinner.
-var escSuppressed = false;
-
-// Optimistic-UI bridge: when the user submits text via voice or the
-// Talk input box, the terminal sees it instantly but Claude Code may
-// take a moment to write the corresponding user record to JSONL. Talk
-// reads this var to render a temporary "You" turn + spinner so the user
-// has immediate visual confirmation. Cleared in Talk by a ChangeListener
-// that fires when turns.length grows (the real record has arrived).
-var pendingUserText = '';
-
-// Voice transcript callback. Inlining this in Main.xmlui's voice button
-// onClick — with a nested `{ if (t) { ... } }` block inside an arrow
-// function passed to voiceStop — confuses XMLUI's expression parser
-// and silently breaks voice. Centralizing here as a named function keeps
-// the markup as a single function reference.
-function handleVoiceTranscript(t) {
-  if (t) {
-    pendingUserText = t;
-    toTurn('voice: ' + t);
-  }
-}
-
 // Slice a file's content into a grep -C style window around a 1-indexed
 // target line. Returns [{ line, text, isMatch }, ...]. Used by Context.xmlui
 // to render search-hit snippets without re-fetching from the server.
@@ -57,7 +31,7 @@ function paragraphsContaining(text, query) {
 
 function currentSourceFile(pathname) {
   if (pathname === '/sessions') return 'components/Sessions.xmlui';
-  if (pathname === '/') return 'components/Talk.xmlui';
+  if (pathname === '/') return 'components/Transcript.xmlui';
   if (pathname === '/worklist') return 'components/Workspace.xmlui';
   return 'Main.xmlui';
 }
@@ -76,7 +50,7 @@ function rewriteXmluiDocUrls(text) {
 // XMLUI's Markdown sanitizes file:// URLs and rewrites their anchors into
 // non-clickable spans, so we can't get a working file-link out of Markdown.
 // Strip the image-source footers from the markdown text and return them as
-// a separate array; the Talk component renders them as inline thumbnails
+// a separate array; the Transcript component renders them as inline thumbnails
 // and Sessions as XMLUI Links.
 function extractImagePaths(text) {
   if (!text) return [];
@@ -109,33 +83,6 @@ function stripMarkdownImages(text) {
   return text
     .replace(/\n*!\[[^\]]*\]\([^)\s]+(?:\s+"[^"]*")?\)/g, '')
     .replace(/\n*<img\b[^>]*\bsrc=["'][^"']+["'][^>]*>/gi, '');
-}
-
-// True when the latest JSONL record is an assistant tool_use without a
-// following tool_result — i.e. Claude Code is showing the numbered
-// permission prompt and waiting for approval. Used to gate the Yes/No
-// menu-navigation buttons on Talk.
-function isAtToolApproval(jsonlText) {
-  if (!jsonlText) return false;
-  const lines = jsonlText.split('\n').filter(l => l);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    let r;
-    try { r = JSON.parse(lines[i]); } catch (e) { continue; }
-    if (r.type === 'assistant' && r.message && r.message.content) {
-      const content = r.message.content;
-      if (Array.isArray(content) &&
-          content.length > 0 &&
-          content.some(c => c && c.type === 'tool_use') &&
-          !content.some(c => c && c.type === 'text')) {
-        return true;
-      }
-      return false;
-    }
-    if (r.type === 'user' && r.message && r.message.content) {
-      return false;
-    }
-  }
-  return false;
 }
 
 // True when the most recent textful turn in the session is a user turn —
@@ -171,62 +118,10 @@ function isWaitingForAssistant(jsonlText) {
   return lastRole === 'user';
 }
 
-function lastAssistantText(jsonlText) {
-  if (!jsonlText) return '';
-  const lines = jsonlText.split('\n');
-  let lastClaude = null;
-  let lastCodex = '';
-  for (const line of lines) {
-    if (!line) continue;
-    try {
-      const r = JSON.parse(line);
-      if (r.type === 'assistant' && r.message && r.message.content) {
-        lastClaude = r;
-      } else if (r.type === 'event_msg' && r.payload && r.payload.type === 'agent_message') {
-        lastCodex = r.payload.message || '';
-      }
-    } catch (e) {}
-  }
-  if (lastCodex) return rewriteXmluiDocUrls(lastCodex);
-  if (!lastClaude) return '';
-  const content = lastClaude.message.content;
-  if (typeof content === 'string') return rewriteXmluiDocUrls(content);
-  return rewriteXmluiDocUrls(
-    (Array.isArray(content) ? content : [])
-      .filter(c => c && c.type === 'text')
-      .map(c => c.text)
-      .join('\n\n')
-  );
-}
-
 // Clean a user turn for transcript display: strip protocol prefixes
 // (`voice: `, `talk: `) so spoken / typed content reads as plain text;
 // summarize structured `approved:` / `drop:` payloads to a one-line
 // glyph + count instead of dumping JSON. Anything else passes through.
-// Has any user turn in `turns` arrived whose text (after stripping
-// the `voice:` / `talk:` prefix) matches `pending`? Used by the Talk
-// pane to clear pendingUserText only after the real turn lands —
-// avoids the race where an unrelated turns.length bump fires before
-// the optimistic text is set.
-function pendingMatchesTurn(turns, pending) {
-  if (!pending || !turns) return false;
-  // Normalize whitespace on both sides — toTurn() collapses /\s+/g to a
-  // single space before submitting to the PTY, so the JSONL turn has
-  // normalized text while pendingUserText holds the raw STT transcript.
-  // Strict === on the raw transcript would mismatch on stray double
-  // spaces, newlines, etc.
-  const target = pending.replace(/\s+/g, ' ').trim();
-  for (const t of turns) {
-    if (t.role !== 'user') continue;
-    const stripped = (t.text || '')
-      .replace(/^(voice|talk):\s*/, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (stripped === target) return true;
-  }
-  return false;
-}
-
 function formatUserTurnForTranscript(text) {
   if (!text) return '';
   const stripped = text.replace(/^(voice|talk):\s*/, '');
@@ -360,65 +255,6 @@ function findToolInTurns(turns, toolId) {
     if (!t || !t.entries) continue;
     for (const e of t.entries) {
       if (e && e.kind === 'tool' && e.id === toolId) return e;
-    }
-  }
-  return null;
-}
-
-// Walk the turns list in reverse to find the most recent Edit /
-// MultiEdit tool entry; used by Talk to auto-expand the newest edit so
-// its color-coded diff is visible without a click. Returns the tool's
-// id, or null if no edit has happened yet.
-function latestEditToolId(turns) {
-  if (!turns) return null;
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const t = turns[i];
-    if (!t || !t.entries) continue;
-    for (let j = t.entries.length - 1; j >= 0; j--) {
-      const e = t.entries[j];
-      if (e && e.kind === 'tool' && (e.name === 'Edit' || e.name === 'MultiEdit')) {
-        return e.id;
-      }
-    }
-  }
-  return null;
-}
-
-// When the agent is paused waiting on a tool-use permission decision
-// (same state isAtToolApproval flags), return a description of the
-// menu we can render in Talk: tool name + summary + the standard three
-// choices that send keystrokes back to the PTY. Returns null otherwise.
-// Walks JSONL from the end so it stops as soon as it finds the
-// relevant record.
-function pendingPermissionMenu(jsonlText) {
-  if (!jsonlText) return null;
-  const lines = jsonlText.split('\n').filter(l => l);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    let r;
-    try { r = JSON.parse(lines[i]); } catch (e) { continue; }
-    if (r.type === 'assistant' && r.message && r.message.content) {
-      const content = r.message.content;
-      if (!Array.isArray(content) || content.length === 0) return null;
-      const hasText = content.some(c => c && c.type === 'text');
-      const hasToolUse = content.some(c => c && c.type === 'tool_use');
-      // tool_use + no text = pending permission. tool_use + text = the
-      // agent already explained and now there's nothing to decide.
-      if (hasText || !hasToolUse) return null;
-      const firstToolUse = content.find(c => c && c.type === 'tool_use');
-      const summary = toolSummary(firstToolUse.name, firstToolUse.input || {});
-      return {
-        toolName: firstToolUse.name,
-        toolSummary: summary,
-        toolInput: firstToolUse.input || {},
-        choices: [
-          { key: '1', label: 'Yes' },
-          { key: '2', label: "Yes, allow and don't ask again" },
-          { key: '3', label: 'No, and tell Claude what to do' },
-        ],
-      };
-    }
-    if (r.type === 'user' && r.message && r.message.content) {
-      return null;
     }
   }
   return null;
@@ -600,7 +436,7 @@ function sessionTurns(jsonlText) {
   // Structural-share with the previous result: for each turn that's
   // structurally equal to the previous turn at the same index, reuse
   // the previous reference. XMLUI's reactivity treats reference
-  // equality as "unchanged", so the Items in Talk skips re-mounting
+  // equality as "unchanged", so the Items in Transcript skips re-mounting
   // those turns — eliminating the per-poll flash. JSONL is append-only
   // in practice, so the first N-K turns are typically identical and
   // only the last few are new or growing.

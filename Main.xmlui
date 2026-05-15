@@ -26,9 +26,9 @@ that contains your own app, which might be an XMLUI app or any web
 app. Then use the top-toolbar `agent tools` button to open the
 drawer with seven views:
 
-- **Talk** — live transcript of the current agent session (alternating
-  user / assistant turns, spinner while waiting). The drawer's pinned
-  AppHeader has 🎤 voice — click from any tab to dictate.
+- **Transcript** — the current agent session's transcript
+  (user/assistant turns plus tool activity), shown as a reader rather
+  than a live control surface.
 - **Worklist** — pending items the agent has proposed
   (`resources/worklist.json`); approve or drop with one click.
 - **Commits** — recent commits with one-click push.

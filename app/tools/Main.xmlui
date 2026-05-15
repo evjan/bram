@@ -1,9 +1,12 @@
 <Theme width-navPanel-App="$space-28">
-<App layout="vertical-sticky" var.recording="{false}" var.rightPaneSize="(measuring…)" var.updateBannerDismissed="{false}"
-  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height)">
+<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissed="{false}"
+  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); $pathname !== '/' && navigate('/')">
   <DataSource id="enhanceStatus" url="/__enhance/status" pollIntervalInSeconds="2" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
   <DataSource id="appInfo" url="/__app-info" />
+  <ChangeListener
+    listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
+    onDidChange="(c) => { if (c.newValue) { if ($pathname !== '/') navigate('/'); window.scrollAllToTop(); } }" />
 
   <ModalDialog id="urlInfoDialog" title="Right-pane info">
     <VStack gap="$space-3">
@@ -112,16 +115,6 @@
           tooltip="Increase app font size"
           onClick="window.setAppFontSize(window.getAppFontSize() + 1)" />
         <Button
-          label="{recording ? '⏹ stop' : '🎤 voice'}"
-          variant="ghost"
-          tooltip="Voice input — click to start, click again to send"
-          onClick="recording ? (recording = false, voiceStop(handleVoiceTranscript)) : (voiceStart(), $pathname !== '/' && navigate('/'), recording = true)" />
-        <Button
-          label="📸"
-          variant="ghost"
-          tooltip="Capture screenshot and send to claude"
-          onClick="captureScreenshot()" />
-        <Button
           label="1"
           variant="ghost"
           tooltip="Permission menu: send keystroke 1"
@@ -150,7 +143,7 @@
           label="Esc"
           variant="ghost"
           tooltip="Send Esc to interrupt"
-          onClick="(sendKeys('\x1b'), escSuppressed = true)" />
+          onClick="sendKeys('\x1b')" />
         <Inspector src="{'/__vendor/xs-diff.html?v=' + window.APP_VERSION}" />
       </HStack>
     </Theme>
@@ -160,7 +153,7 @@
     <property name="logoTemplate">
       <Fragment/>
     </property>
-    <NavLink label="Talk" to="/" exact="true" />
+    <NavLink label="Transcript" to="/" exact="true" />
     <NavLink label="Worklist" to="/worklist" />
     <NavLink label="Commits" to="/commits" />
     <NavLink label="Issues" to="/issues" />
@@ -201,7 +194,7 @@
   </VStack>
 
   <Pages fallbackPath="/">
-    <Page url="/"><Talk /></Page>
+    <Page url="/"><Transcript activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
     <Page url="/worklist"><Workspace /></Page>
     <Page url="/sessions"><Sessions /></Page>
     <Page url="/context"><Context /></Page>

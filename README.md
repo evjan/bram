@@ -28,7 +28,7 @@ It is a desktop app that connects an agent like Claude or Codex to the app you a
   (e.g. `claude` or `codex`).
 - **Right pane** — the app that is under development in a local repo
 - **File watcher** — as files in the project change, the right pane reloads automatically
-- **Agent-tools drawer** — toggle from the toolbar to open a side panel with Talk (live transcript), Worklist (proposed → applied →
+- **Agent-tools drawer** — toggle from the toolbar to open a side panel with Transcript (current session), Worklist (proposed → applied →
   committed flow), Commits, Issues, Sessions, Context, and README.
 
 Project conventions are authored in
@@ -90,7 +90,7 @@ On some Windows 11 setups, Smart App Control may block the unsigned binary — m
 
 ### Agent tools
 
-- **Talk** — live transcript of the active claude/codex session, rendered as it streams. Includes 🎤 voice dictation, scroll-to-bottom and scroll-to-top controls, and an Inspector launcher for XMLUI trace export (helps you identify and report issues with xmlui-desktop).
+- **Transcript** — the current active-session transcript for Claude or Codex. It follows the current session and renders turns plus inline tool activity for both providers, but it is intentionally a reader, not a full realtime control surface. Use Sessions to browse/search older transcripts.
 
 - **Worklist** — the two-stage `proposed → applied → committed` approval surface that coordinates multi-step agent work. Each item is a small, independently approvable diff with a `before → after` summary; the agent applies on TO APPLY approval and commits only on TO COMMIT approval, never unilaterally.
 

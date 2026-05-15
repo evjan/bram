@@ -2,20 +2,6 @@
   "description": "Codex-themed release: provider-neutral setup core, provider-aware first-run prompting, Transcript-first drawer surface, provider-aware Context, terminal resize polish, and release-copy cleanup are in place.",
   "items": [
     {
-      "id": "rename-talk-to-transcript-and-drop-live-control-surface",
-      "status": "applied",
-      "files": [
-        "src-tauri/src/lib.rs",
-        "app/tools/Main.xmlui",
-        "app/tools/components/Transcript.xmlui",
-        "app/tools/Globals.xs",
-        "README.md",
-        "Main.xmlui"
-      ],
-      "before": "The drawer still presents a page called 'Talk', which implies live two-way interaction and real-time session control. In practice that surface is incomplete and provider-skewed: the backend endpoints behind it (`latest`, `latest-tail`, `latest-meta`, pending-tool polling) still rely on Claude-specific session discovery, and while the frontend transcript parser can digest both Claude and Codex turn formats, the live pane behavior and copy are still shaped around Claude-era assumptions. On launch the current page selection is not explicitly framed around Transcript-first usage, and when the setup prompt appears it can compete visually with whatever scroll position the transcript retained. For a Codex-themed release, this leaves an awkward mismatch: Sessions already works as the reliable cross-provider transcript browser, but Talk still advertises flaky live/realtime behavior that is not a strong Codex story.",
-      "after": "Reframe the live pane as 'Transcript' instead of 'Talk', and intentionally narrow it from a realtime control surface to a transcript reader for the active session. Keep the useful transcript rendering, but remove or de-emphasize features that imply dependable live two-way comms or tool-approval handling until those paths are solid across providers. Make the active Transcript pane work for either Claude or Codex by using provider-aware session lookup instead of Claude-only latest-session plumbing, make Transcript the active/default pane on launch, and ensure that when the setup prompt is shown the transcript view is positioned at the top so the banner is immediately visible. Update UI/docs copy to say plainly that Transcript shows the current agent session while Sessions remains the place to browse/search historical transcripts."
-    },
-    {
       "id": "make-context-provider-aware-with-codex-sources",
       "status": "applied",
       "files": [

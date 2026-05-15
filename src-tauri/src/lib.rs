@@ -306,6 +306,8 @@ static APP_INFO_CACHE: OnceLock<Mutex<Option<AppInfo>>> = OnceLock::new();
 // doesn't oscillate when claude touches an old session file.
 static LIVE_CLAUDE_SESSION: OnceLock<Mutex<Option<(PathBuf, std::time::SystemTime)>>> =
     OnceLock::new();
+static LIVE_CODEX_SESSION: OnceLock<Mutex<Option<(PathBuf, std::time::SystemTime)>>> =
+    OnceLock::new();
 
 // Real-time detection of claude's permission menu by tapping the PTY
 // byte stream. Necessary because the JSONL file lags claude's actual
@@ -2313,13 +2315,17 @@ fn list_sessions<R: tauri::Runtime>(
 ) -> Result<Vec<SessionEntry>, String> {
     let (provider, sessions) = sessions_for_provider(app, preferred)?;
     // For Claude sessions, mark the live one using the same hysteresis-
-    // backed picker that the Talk pane uses. For Codex (or anything else),
+    // backed picker that the Transcript pane uses. For Codex (or anything else),
     // fall back to "newest mtime" via idx == 0.
     let live_claude_id: Option<String> = match provider {
         SessionProvider::Claude => latest_claude_session_path(app)
             .ok()
             .flatten()
-            .and_then(|p| p.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string())),
+            .and_then(|p| {
+                p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+            }),
         _ => None,
     };
     Ok(sessions
@@ -2418,9 +2424,9 @@ fn rename_session<R: tauri::Runtime>(
 
 fn read_latest_session<R: tauri::Runtime>(
     app: &AppHandle<R>,
-    _preferred: Option<SessionProvider>,
+    preferred: Option<SessionProvider>,
 ) -> Result<Vec<u8>, String> {
-    let Some(path) = latest_claude_session_path(app)? else {
+    let Some(path) = latest_session_path(app, preferred)? else {
         return Ok(Vec::new());
     };
     std::fs::read(&path).map_err(|e| e.to_string())
@@ -2506,24 +2512,124 @@ fn latest_claude_session_path<R: tauri::Runtime>(
     Ok(Some(chosen))
 }
 
-// Tail variant: return only the last N records of the JSONL. Lets Talk
+fn latest_codex_session_path<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let project = project_root(Some(app)).ok_or("could not resolve project root")?;
+    let project_cwd = canonical_path_string(&project);
+    let home = home_dir().ok_or("no HOME or USERPROFILE")?;
+    let sessions_root = home.join(".codex").join("sessions");
+    let mut paths = Vec::new();
+    collect_codex_session_paths(&sessions_root, &mut paths)?;
+    let mut all: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for path in paths {
+        let Some((_, cwd)) = codex_session_meta(&path).map_err(|e| e.to_string())? else {
+            continue;
+        };
+        if canonical_path_string(Path::new(&cwd)) != project_cwd {
+            continue;
+        }
+        let Ok(metadata) = path.metadata() else {
+            continue;
+        };
+        let Ok(mtime) = metadata.modified() else {
+            continue;
+        };
+        all.push((mtime, path));
+    }
+    if all.is_empty() {
+        return Ok(None);
+    }
+    let (raw_best_mtime, raw_best_path) = all
+        .iter()
+        .max_by_key(|(t, _)| *t)
+        .cloned()
+        .expect("non-empty");
+    let cache_cell = LIVE_CODEX_SESSION.get_or_init(|| Mutex::new(None));
+    let mut cached = cache_cell.lock().map_err(|e| e.to_string())?;
+    let chosen: PathBuf = match cached.as_ref() {
+        Some((cached_path, _)) => {
+            let cached_now = all.iter().find(|(_, p)| p == cached_path).map(|(t, _)| *t);
+            match cached_now {
+                None => raw_best_path.clone(),
+                Some(cached_mtime) => {
+                    let now = std::time::SystemTime::now();
+                    let cached_age = now
+                        .duration_since(cached_mtime)
+                        .unwrap_or_else(|_| std::time::Duration::from_secs(0));
+                    let raw_age = now
+                        .duration_since(raw_best_mtime)
+                        .unwrap_or_else(|_| std::time::Duration::from_secs(0));
+                    let different = &raw_best_path != cached_path;
+                    let cond_b = cached_age > std::time::Duration::from_secs(30)
+                        && raw_best_mtime > cached_mtime;
+                    let cond_c = raw_age < std::time::Duration::from_secs(5)
+                        && cached_age > std::time::Duration::from_secs(5);
+                    if different && (cond_b || cond_c) {
+                        raw_best_path.clone()
+                    } else {
+                        cached_path.clone()
+                    }
+                }
+            }
+        }
+        None => raw_best_path.clone(),
+    };
+    let chosen_mtime = all
+        .iter()
+        .find(|(_, p)| p == &chosen)
+        .map(|(t, _)| *t)
+        .unwrap_or(raw_best_mtime);
+    *cached = Some((chosen.clone(), chosen_mtime));
+    Ok(Some(chosen))
+}
+
+fn latest_session_path<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let hinted = preferred.or_else(|| hinted_session_provider(app));
+    match hinted {
+        Some(SessionProvider::Claude) => latest_claude_session_path(app),
+        Some(SessionProvider::Codex) => latest_codex_session_path(app),
+        None => {
+            let claude = latest_claude_session_path(app)?;
+            let codex = latest_codex_session_path(app)?;
+            match (claude, codex) {
+                (Some(c), None) => Ok(Some(c)),
+                (None, Some(c)) => Ok(Some(c)),
+                (None, None) => Ok(None),
+                (Some(claude_path), Some(codex_path)) => {
+                    let claude_mtime = claude_path
+                        .metadata()
+                        .ok()
+                        .and_then(|md| md.modified().ok());
+                    let codex_mtime = codex_path.metadata().ok().and_then(|md| md.modified().ok());
+                    Ok(match (claude_mtime, codex_mtime) {
+                        (Some(c), Some(x)) if x >= c => Some(codex_path),
+                        _ => Some(claude_path),
+                    })
+                }
+            }
+        }
+    }
+}
+
+// Tail variant: return only the last N records of the JSONL. Lets Transcript
 // poll aggressively without round-tripping the entire (multi-MB) file.
 // Uses a seek-from-EOF, read-backward-in-chunks loop so server cost is
 // proportional to N, not file size.
 fn read_latest_session_tail<R: tauri::Runtime>(
     app: &AppHandle<R>,
-    _preferred: Option<SessionProvider>,
+    preferred: Option<SessionProvider>,
     lines: usize,
 ) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
-    let Some(path) = latest_claude_session_path(app)? else {
+    let Some(path) = latest_session_path(app, preferred)? else {
         return Ok(Vec::new());
     };
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-    let file_size = file
-        .metadata()
-        .map_err(|e| e.to_string())?
-        .len();
+    let file_size = file.metadata().map_err(|e| e.to_string())?.len();
     if file_size == 0 || lines == 0 {
         return Ok(Vec::new());
     }
@@ -2557,7 +2663,8 @@ fn read_latest_session_tail<R: tauri::Runtime>(
             break;
         }
     }
-    file.seek(SeekFrom::Start(start_offset)).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(start_offset))
+        .map_err(|e| e.to_string())?;
     let mut out = Vec::with_capacity((file_size - start_offset) as usize);
     file.read_to_end(&mut out).map_err(|e| e.to_string())?;
     Ok(out)
@@ -2693,15 +2800,15 @@ fn read_latest_session_pending<R: tauri::Runtime>(
     result
 }
 
-// Cheap variant for polling: just the file size + mtime. Lets Talk
+// Cheap variant for polling: just the file size + mtime. Lets Transcript
 // detect changes without re-fetching the full (multi-MB) JSONL each
 // tick. The frontend then bumps a cache-busting param to trigger a
 // real fetch only when size has changed.
 fn read_latest_session_meta<R: tauri::Runtime>(
     app: &AppHandle<R>,
-    _preferred: Option<SessionProvider>,
+    preferred: Option<SessionProvider>,
 ) -> Result<Vec<u8>, String> {
-    let Some(path) = latest_claude_session_path(app)? else {
+    let Some(path) = latest_session_path(app, preferred)? else {
         return Ok(b"null".to_vec());
     };
     let md = std::fs::metadata(&path).map_err(|e| e.to_string())?;
@@ -4645,8 +4752,8 @@ pub fn run() {
             // ~/.claude/projects/<encoded>/<session-id>.jsonl. Watch the
             // directory (not the file — the file rotates per session and may
             // not exist at startup). Used to push talk-session-changed events
-            // so the Talk pane sees pending tool_use prompts immediately
-            // rather than waiting on the DataSource poll.
+            // so the Transcript pane refreshes immediately instead of waiting
+            // on the next DataSource poll.
             let sessions_dir = claude_sessions_dir(&app.handle()).ok();
             let mut watch_paths: Vec<std::path::PathBuf> = vec![proj_root_path.clone()];
             watch_paths.extend(tools_pane_paths.iter().cloned());
@@ -4707,9 +4814,9 @@ pub fn run() {
                     };
 
                     // Claude Code session JSONL changes get their own
-                    // dispatch. The Talk pane subscribes to talk-session-changed
-                    // and refetches its DataSource so the approval menu
-                    // appears without waiting on the regular poll interval.
+                    // dispatch. The Transcript pane subscribes to
+                    // talk-session-changed and refetches its DataSource
+                    // without waiting on the regular poll interval.
                     let is_session_event = sessions_dir.as_ref().map_or(false, |sd| {
                         event.paths.iter().any(|p| {
                             p.starts_with(sd)

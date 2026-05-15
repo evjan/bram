@@ -1,5 +1,17 @@
 {
-  "description": "",
+  "description": "Codex worklist enforcement follow-ups: launcher refuses to start without the hook installed; seed acknowledges runtime enforcement.",
   "items": [
+    {
+      "id": "codex-launcher-require-hook",
+      "file": "app/shell/claude-code-shellrc",
+      "before": "Current codex() wrapper marks the agent hint and seeds the startup instructions if _xmlui_has_repo_setup is true. It does not check whether the codex worklist-guard hook is actually installed and registered. If a user launches codex in a repo where setup ran but the codex hook wasn't installed (e.g. older xmlui-desktop binary, manual config drift), the prose-only convention is the only protection — which is precisely the configuration we just declared unsupported.",
+      "after": "Modify the codex() wrapper to verify two preconditions before launching: (1) the user-global hook script exists at ~/.xmlui-desktop/codex-worklist-guard.py; (2) ~/.codex/config.toml contains the xmlui-desktop marker block. If either check fails, print a clear refusal message ('Codex requires the xmlui-desktop worklist guard; run Setup in xmlui-desktop to install it') and exit without launching codex. No silent degradation, no warning-then-launch — codex without the hook is treated as a setup error, not a fallback mode."
+    },
+    {
+      "id": "codex-seed-acknowledge-hook",
+      "file": "app/shell/codex-startup-instructions.md",
+      "before": "The current seed (post-loophole-fix in a4723f8) describes the convention as if compliance were optional. It says 'STOP' / 'do NOT run apply_patch' but doesn't tell codex that the runtime will actually deny the call if it tries anyway.",
+      "after": "Add one short paragraph after the gate section: 'A PreToolUse hook is installed in this codex config. If your first action on a multi-file task is apply_patch / Edit / Write / Bash without a covering worklist item, the hook will return permissionDecision:deny and your tool call will be blocked with the message: Tool call blocked by PreToolUse hook: <reason>. The hook is enforcement, the convention above is the cooperative path. Follow the convention and your work succeeds; ignore it and you will see deny messages until you propose first.' This converts the seed from polite request to documented runtime constraint."
+    }
   ]
 }

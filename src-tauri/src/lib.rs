@@ -2908,6 +2908,19 @@ const ENHANCE_CODEX_BUNDLE_REL: &str = "shell/codex-startup-instructions.md";
 const ENHANCE_HOOK_SCRIPT_REL: &str = ".claude/hooks/worklist-guard.py";
 const ENHANCE_SETTINGS_REL: &str = ".claude/settings.json";
 const ENHANCE_HOOK_BUNDLE_REL: &str = "__shell/worklist-guard.py";
+// Codex's worklist guard runs as a PreToolUse hook in codex's user-global
+// config. The bundle ships with xmlui-desktop and is copied to
+// ~/.xmlui-desktop/codex-worklist-guard.py the first time setup runs in any
+// project; the hook config registration in ~/.codex/config.toml is identical
+// across projects because the script self-detects whether the active cwd is
+// xmlui-desktop-managed (presence of resources/.worklist-authorization.json).
+const ENHANCE_CODEX_HOOK_BUNDLE_REL: &str = "shell/worklist-guard-codex.py";
+const ENHANCE_CODEX_HOOK_INSTALL_REL: &str = ".xmlui-desktop/codex-worklist-guard.py";
+const ENHANCE_CODEX_CONFIG_REL: &str = ".codex/config.toml";
+// TOML-comment markers delimit the xmlui-desktop block inside codex's
+// config.toml so re-runs can replace it without disturbing surrounding entries.
+const ENHANCE_CODEX_TOML_MARKER_START: &str = "# xmlui-desktop:start";
+const ENHANCE_CODEX_TOML_MARKER_END: &str = "# xmlui-desktop:end";
 const WORKLIST_AUTH_REL: &str = "resources/.worklist-authorization.json";
 // On Unix, the bare path runs via the script's `#!/usr/bin/env python3`
 // shebang (set executable by run_enhance under #[cfg(unix)]). On Windows
@@ -3675,12 +3688,155 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
         wrote.push(claude_md_path.display().to_string());
     }
 
+    // Codex user-global hook install. Runs unconditionally (incl. source repo)
+    // because the install is keyed to $HOME, not the project.
+    let codex_hook_install = install_codex_worklist_guard(app)?;
+    for path in &codex_hook_install.wrote {
+        wrote.push(path.clone());
+    }
+
     let body = serde_json::json!({
         "enhanced": true,
         "isSourceRepo": is_source_repo,
         "wrote": wrote,
+        "codexHookInstalled": codex_hook_install.installed,
+        "codexHookScriptPath": codex_hook_install.script_path,
+        "codexConfigPath": codex_hook_install.config_path,
+        "codexHookNeedsTrust": codex_hook_install.installed,
     });
     serde_json::to_vec(&body).map_err(|e| e.to_string())
+}
+
+struct CodexHookInstall {
+    installed: bool,
+    script_path: String,
+    config_path: String,
+    wrote: Vec<String>,
+}
+
+fn install_codex_worklist_guard<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<CodexHookInstall, String> {
+    let home = home_dir().ok_or("no HOME or USERPROFILE")?;
+    let script_path = home.join(ENHANCE_CODEX_HOOK_INSTALL_REL);
+    let config_path = home.join(ENHANCE_CODEX_CONFIG_REL);
+    let mut wrote: Vec<String> = Vec::new();
+
+    let (script_bytes, _mime) = serve_app_file(Some(app), ENHANCE_CODEX_HOOK_BUNDLE_REL)
+        .ok_or_else(|| "worklist-guard-codex.py bundle not found".to_string())?;
+    if let Some(parent) = script_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {}", parent.display(), e))?;
+    }
+    std::fs::write(&script_path, &script_bytes)
+        .map_err(|e| format!("write codex hook script: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script_path)
+            .map_err(|e| format!("stat codex hook: {}", e))?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms)
+            .map_err(|e| format!("chmod codex hook: {}", e))?;
+    }
+    wrote.push(script_path.display().to_string());
+
+    // Build the TOML block. On Windows we invoke through `py -3` for the
+    // same reason as the Claude hook; on Unix we run the script directly via
+    // its shebang. The matcher regex covers codex's canonical apply_patch +
+    // Bash and the Claude-style Write/Edit aliases codex accepts.
+    let script_str = script_path.display().to_string();
+    #[cfg(windows)]
+    let command_line = format!("py -3 \"{}\"", script_str.replace('"', "\\\""));
+    #[cfg(not(windows))]
+    let command_line = script_str.clone();
+    // Matcher covers codex's canonical apply_patch + Bash, the Claude-style
+    // Write/Edit aliases codex accepts, and any MCP tool (mcp__<server>__<tool>).
+    // The MCP surface matters: a user with [mcp_servers.filesystem] configured
+    // can route file edits through mcp__filesystem__write_text_file / edit_file
+    // and bypass apply_patch entirely. The guard script branches by tool_name
+    // and only blocks MCP calls whose names signal mutation (write/edit/create/
+    // delete/move/...).
+    //
+    // A second registration on UserPromptSubmit uses the same script to inject
+    // an additionalContext reminder at every turn in managed repos. The
+    // PreToolUse hook catches mutations at the tool boundary; the
+    // UserPromptSubmit injection is the pre-emptive nudge that aims to prevent
+    // codex from narrating intent to edit before proposing in the worklist.
+    let toml_block = format!(
+        "{start}\n\
+         [[hooks.PreToolUse]]\n\
+         matcher = \"^(apply_patch|Bash|Write|Edit|mcp__.*)$\"\n\
+         \n\
+         [[hooks.PreToolUse.hooks]]\n\
+         type = \"command\"\n\
+         command = {command_quoted}\n\
+         timeout = 10\n\
+         statusMessage = \"xmlui-desktop worklist guard\"\n\
+         \n\
+         [[hooks.UserPromptSubmit]]\n\
+         \n\
+         [[hooks.UserPromptSubmit.hooks]]\n\
+         type = \"command\"\n\
+         command = {command_quoted}\n\
+         timeout = 10\n\
+         statusMessage = \"xmlui-desktop gate reminder\"\n\
+         {end}",
+        start = ENHANCE_CODEX_TOML_MARKER_START,
+        end = ENHANCE_CODEX_TOML_MARKER_END,
+        command_quoted = toml_basic_string(&command_line),
+    );
+
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {}", parent.display(), e))?;
+    }
+    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let new_content = if let Some(start_idx) = existing.find(ENHANCE_CODEX_TOML_MARKER_START) {
+        let tail = &existing[start_idx..];
+        let end_offset = tail
+            .find(ENHANCE_CODEX_TOML_MARKER_END)
+            .map(|i| start_idx + i + ENHANCE_CODEX_TOML_MARKER_END.len())
+            .unwrap_or(existing.len());
+        let mut s = existing.clone();
+        s.replace_range(start_idx..end_offset, &toml_block);
+        s
+    } else if existing.trim().is_empty() {
+        format!("{}\n", toml_block)
+    } else {
+        format!("{}\n\n{}\n", existing.trim_end(), toml_block)
+    };
+    std::fs::write(&config_path, &new_content)
+        .map_err(|e| format!("write codex config.toml: {}", e))?;
+    wrote.push(config_path.display().to_string());
+
+    Ok(CodexHookInstall {
+        installed: true,
+        script_path: script_path.display().to_string(),
+        config_path: config_path.display().to_string(),
+        wrote,
+    })
+}
+
+// Quote a string as a TOML basic string literal — wraps in double quotes and
+// escapes backslashes / double quotes / control chars per TOML spec.
+fn toml_basic_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 // ============================================================================

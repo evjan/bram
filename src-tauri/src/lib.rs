@@ -2820,7 +2820,17 @@ fn read_latest_session_meta<R: tauri::Runtime>(
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let body = format!(r#"{{"size":{},"mtime":{}}}"#, md.len(), mtime);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let body = format!(
+        r#"{{"size":{},"mtime":{},"now":{}}}"#,
+        md.len(),
+        mtime,
+        now
+    );
     Ok(body.into_bytes())
 }
 

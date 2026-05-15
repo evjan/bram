@@ -229,7 +229,7 @@
     </Items>
 
     <HStack
-      when="{isWaitingForAssistant(lastJsonl)}"
+      when="{isWaitingForAssistant(lastJsonl) &amp;&amp; sessionMeta.value &amp;&amp; (sessionMeta.value.now - sessionMeta.value.mtime) &lt; 300000}"
       paddingVertical="$space-3"
       verticalAlignment="center">
       <Spinner size="sm" delay="{200}" />

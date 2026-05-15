@@ -4015,13 +4015,33 @@ fn route_request<R: tauri::Runtime>(
                     .and_then(|v| v.as_str())
                     .unwrap_or("proposed")
                     .to_string();
-                let file_path = item
-                    .get("file")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if status == "applied" && !file_path.is_empty() {
-                    let mut diff = git_run(app, &["diff", "--", &file_path]).unwrap_or_default();
+                if status != "applied" {
+                    continue;
+                }
+                // Item scope: prefer `files: [...]` array, fall back to the
+                // legacy single `file: <string>` for backward compat.
+                let file_paths: Vec<String> = if let Some(arr) =
+                    item.get("files").and_then(|v| v.as_array())
+                {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                } else if let Some(s) = item.get("file").and_then(|v| v.as_str()) {
+                    if s.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![s.to_string()]
+                    }
+                } else {
+                    Vec::new()
+                };
+                if file_paths.is_empty() {
+                    continue;
+                }
+                let mut combined = String::new();
+                for fp in &file_paths {
+                    let mut diff = git_run(app, &["diff", "--", fp]).unwrap_or_default();
                     if diff.is_empty() {
                         // git diff returns nothing for untracked files. Fall back
                         // to --no-index against /dev/null, which always produces
@@ -4031,16 +4051,20 @@ fn route_request<R: tauri::Runtime>(
                         if let Some(root) = project_root(Some(app)) {
                             if let Ok(out) = std::process::Command::new("git")
                                 .current_dir(&root)
-                                .args(&["diff", "--no-index", "--", "/dev/null", &file_path])
+                                .args(&["diff", "--no-index", "--", "/dev/null", fp])
                                 .output()
                             {
                                 diff = String::from_utf8_lossy(&out.stdout).into_owned();
                             }
                         }
                     }
-                    if let Some(obj) = item.as_object_mut() {
-                        obj.insert("diff".to_string(), serde_json::Value::String(diff));
+                    if !combined.is_empty() && !diff.is_empty() {
+                        combined.push('\n');
                     }
+                    combined.push_str(&diff);
+                }
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert("diff".to_string(), serde_json::Value::String(combined));
                 }
             }
         }

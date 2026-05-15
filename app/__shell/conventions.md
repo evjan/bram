@@ -60,6 +60,11 @@ Schema:
 }
 ```
 
+For items that span 2+ files, use `files: ["path/a", "path/b"]`
+instead of `file`. The TO COMMIT inline diff renders all listed
+files concatenated, so the reviewer sees the full scope of the
+change. `file` (singular) stays valid for single-file items.
+
 The `status` field controls the badge in the Worklist tab and what
 the user is being asked to approve:
 

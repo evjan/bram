@@ -100,7 +100,7 @@ On some Windows 11 setups, Smart App Control may block the unsigned binary — m
 
 - **Sessions** — HSplitter list of local claude/codex JSONL sessions on the left, selected session's turns on the right. Search runs server-side across user and assistant text; hits filter the right pane to matching paragraphs. Each row has a ✕ delete (with confirm) and a ✎ rename (Claude only, via `custom-title` append); after the action, the row dims and the buttons disable until the next agent restart picks up the change.
 
-- **Context** — HSplitter view of everything claude is loading for this project: CLAUDE.md and its @-imports, the per-project memory tree, hooks, and settings. Substring search with grep-style hit snippets in the list and `snippetAroundLine` context on the right.
+- **Context** — provider-aware HSplitter view of the active agent's durable local context sources. For Claude, that means `CLAUDE.md`, its `@`-imports, the per-project memory tree, hooks, and settings. For Codex, that means Codex-side sources such as `~/.codex/config.toml`, project-local `.codex/` files when present, memories, and rules. Substring search shows grep-style hit snippets in the list and `snippetAroundLine` context on the right.
 
 - **README** — the rendered project README, so the agent and the user share the same source-of-truth doc.
 

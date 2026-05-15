@@ -5,7 +5,7 @@
   var.searchDraft=""
   var.searchQuery="">
 
-  <DataSource id="ctxList" url="/__context/list" />
+  <DataSource id="ctxList" url="/__context/list" queryParams="{{ provider: activeProvider || '' }}" />
   <DataSource
     id="ctxFile"
     url="/__context/file"
@@ -14,21 +14,33 @@
   <DataSource
     id="ctxSearch"
     url="/__context/search"
-    queryParams="{{ q: searchQuery }}"
+    queryParams="{{ q: searchQuery, provider: activeProvider || '' }}"
     when="{!!searchQuery &amp;&amp; searchQuery.trim().length >= 2}" />
 
   <ChangeListener
     listenTo="{searchDraft}"
     debounceWaitInMs="250"
     onDidChange="searchQuery = searchDraft" />
+  <ChangeListener
+    listenTo="{activeProvider}"
+    onDidChange="selectedPath = null; selectedDisplay = null; selectedLine = null" />
 
   <HSplitter height="100%" initialPrimarySize="40%">
     <VStack
       padding="$space-4"
       gap="$space-4"
       overflowY="auto"
-      onInit="registerContextMemorySelector((basename) => { let f = ((ctxList.value &amp;&amp; ctxList.value.memory) || []).find((x) => x.display === basename); if (f) { selectedPath = f.path; selectedDisplay = f.display; selectedLine = null; } })"
+      onInit="registerContextMemorySelector((basename) => { let memorySection = ((ctxList.value &amp;&amp; ctxList.value.sections) || []).find((s) => s.key === 'memory'); let f = ((memorySection &amp;&amp; memorySection.items) || []).find((x) => x.display === basename); if (f) { selectedPath = f.path; selectedDisplay = f.display; selectedLine = null; } })"
       onCleanup="clearContextMemorySelector()">
+      <VStack gap="$space-1">
+        <Heading level="h4">Context</Heading>
+        <Text
+          when="{ctxList.value &amp;&amp; ctxList.value.summary}"
+          value="{ctxList.value.summary}"
+          fontSize="$fontSize-sm"
+          color="$textColor-secondary" />
+      </VStack>
+
       <HStack gap="$space-2" verticalAlignment="center">
         <Button
           label="✕"
@@ -84,65 +96,24 @@
         </Text>
       </VStack>
 
-      <VStack gap="$space-1" when="{(!searchQuery || searchQuery.trim().length &lt; 2) &amp;&amp; ctxList.value && ctxList.value.project && ctxList.value.project.length > 0}">
-        <Heading level="h4">Project</Heading>
-        <Items data="{ctxList.value.project}">
-          <Link
-            onClick="selectedPath = $item.path; selectedDisplay = $item.display; selectedLine = null"
-            noIndicator="true">
-            <Text
-              value="{$item.display}"
-              fontFamily="$fontFamily-monospace"
-              fontSize="$fontSize-sm"
-              fontWeight="{selectedPath === $item.path ? '$fontWeight-bold' : '$fontWeight-normal'}" />
-          </Link>
-        </Items>
-      </VStack>
-
-      <VStack gap="$space-1" when="{(!searchQuery || searchQuery.trim().length &lt; 2) &amp;&amp; ctxList.value && ctxList.value.memory && ctxList.value.memory.length > 0}">
-        <Heading level="h4">Memory</Heading>
-        <Items data="{ctxList.value.memory}">
-          <Link
-            onClick="selectedPath = $item.path; selectedDisplay = $item.display; selectedLine = null"
-            noIndicator="true">
-            <Text
-              value="{$item.display}"
-              fontFamily="$fontFamily-monospace"
-              fontSize="$fontSize-sm"
-              fontWeight="{selectedPath === $item.path ? '$fontWeight-bold' : '$fontWeight-normal'}" />
-          </Link>
-        </Items>
-      </VStack>
-
-      <VStack gap="$space-1" when="{(!searchQuery || searchQuery.trim().length &lt; 2) &amp;&amp; ctxList.value && ctxList.value.hooks && ctxList.value.hooks.length > 0}">
-        <Heading level="h4">Hooks</Heading>
-        <Items data="{ctxList.value.hooks}">
-          <Link
-            onClick="selectedPath = $item.path; selectedDisplay = $item.display; selectedLine = null"
-            noIndicator="true">
-            <Text
-              value="{$item.display}"
-              fontFamily="$fontFamily-monospace"
-              fontSize="$fontSize-sm"
-              fontWeight="{selectedPath === $item.path ? '$fontWeight-bold' : '$fontWeight-normal'}" />
-          </Link>
-        </Items>
-      </VStack>
-
-      <VStack gap="$space-1" when="{(!searchQuery || searchQuery.trim().length &lt; 2) &amp;&amp; ctxList.value && ctxList.value.settings && ctxList.value.settings.length > 0}">
-        <Heading level="h4">Settings</Heading>
-        <Items data="{ctxList.value.settings}">
-          <Link
-            onClick="selectedPath = $item.path; selectedDisplay = $item.display; selectedLine = null"
-            noIndicator="true">
-            <Text
-              value="{$item.display}"
-              fontFamily="$fontFamily-monospace"
-              fontSize="$fontSize-sm"
-              fontWeight="{selectedPath === $item.path ? '$fontWeight-bold' : '$fontWeight-normal'}" />
-          </Link>
-        </Items>
-      </VStack>
+      <Items
+        when="{(!searchQuery || searchQuery.trim().length &lt; 2) &amp;&amp; ctxList.value &amp;&amp; ctxList.value.sections}"
+        data="{ctxList.value.sections}">
+        <VStack gap="$space-1" when="{$item.items &amp;&amp; $item.items.length > 0}">
+          <Heading level="h4">{$item.label}</Heading>
+          <Items data="{$item.items}">
+            <Link
+              onClick="selectedPath = $item.path; selectedDisplay = $item.display; selectedLine = null"
+              noIndicator="true">
+              <Text
+                value="{$item.display}"
+                fontFamily="$fontFamily-monospace"
+                fontSize="$fontSize-sm"
+                fontWeight="{selectedPath === $item.path ? '$fontWeight-bold' : '$fontWeight-normal'}" />
+            </Link>
+          </Items>
+        </VStack>
+      </Items>
     </VStack>
 
     <VStack when="{selectedPath}" padding="$space-4" gap="$space-2" overflowY="auto">

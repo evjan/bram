@@ -197,7 +197,7 @@
     <Page url="/"><Transcript activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
     <Page url="/worklist"><Workspace /></Page>
     <Page url="/sessions"><Sessions /></Page>
-    <Page url="/context"><Context /></Page>
+    <Page url="/context"><Context activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
     <Page url="/issues"><Issues /></Page>
     <Page url="/commits"><Commits /></Page>
     <Page url="/readme"><Readme /></Page>

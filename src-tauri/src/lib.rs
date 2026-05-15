@@ -3095,9 +3095,10 @@ fn merge_worklist_guard_into_settings(settings_path: &Path) -> Result<bool, Stri
     Ok(true)
 }
 
-// MVP scope (#9): four categories — Project (CLAUDE.md + one-hop @-imports),
-// Memory (~/.claude/projects/<encoded>/memory/), Hooks (.claude/hooks/*),
-// Settings (.claude/settings(.local).json). No transitive @-import resolution.
+// Provider-aware Context tab. Claude shows the project-local import chain
+// plus Claude-managed memory/hooks/settings. Codex shows the durable local
+// Codex-side sources that shape behavior on this machine: config, project
+// files, memories, and rules.
 
 struct ContextFile {
     category: &'static str,
@@ -3106,7 +3107,16 @@ struct ContextFile {
     kind: Option<&'static str>,
 }
 
-fn collect_context_files<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<ContextFile> {
+fn context_provider<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> SessionProvider {
+    preferred
+        .or_else(|| hinted_session_provider(app))
+        .unwrap_or(SessionProvider::Claude)
+}
+
+fn collect_claude_context_files<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<ContextFile> {
     let mut out: Vec<ContextFile> = Vec::new();
     let Some(proj_root) = project_root(Some(app)) else {
         return out;
@@ -3212,15 +3222,128 @@ fn collect_context_files<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<ContextFi
     out
 }
 
+fn collect_codex_context_files<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<ContextFile> {
+    let mut out: Vec<ContextFile> = Vec::new();
+    let Some(proj_root) = project_root(Some(app)) else {
+        return out;
+    };
+    let Some(home) = home_dir() else {
+        return out;
+    };
+
+    let codex_dir = home.join(".codex");
+    let config_toml = codex_dir.join("config.toml");
+    if config_toml.exists() {
+        out.push(ContextFile {
+            category: "project",
+            path: config_toml,
+            display: "config.toml".to_string(),
+            kind: Some("codex-config"),
+        });
+    }
+
+    let project_dot_codex = proj_root.join(".codex");
+    if project_dot_codex.is_dir() {
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&project_dot_codex)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        paths.sort();
+        for path in paths {
+            let display = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            out.push(ContextFile {
+                category: "project",
+                path,
+                display,
+                kind: Some("project-codex"),
+            });
+        }
+    }
+
+    let memories_dir = codex_dir.join("memories");
+    if memories_dir.is_dir() {
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&memories_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        paths.sort();
+        for path in paths {
+            let display = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            out.push(ContextFile {
+                category: "memory",
+                path,
+                display,
+                kind: None,
+            });
+        }
+    }
+
+    let rules_dir = codex_dir.join("rules");
+    if rules_dir.is_dir() {
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&rules_dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.is_file())
+            .collect();
+        paths.sort();
+        for path in paths {
+            let display = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            out.push(ContextFile {
+                category: "rules",
+                path,
+                display,
+                kind: None,
+            });
+        }
+    }
+
+    out
+}
+
+fn collect_context_files<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> Vec<ContextFile> {
+    match context_provider(app, preferred) {
+        SessionProvider::Claude => collect_claude_context_files(app),
+        SessionProvider::Codex => collect_codex_context_files(app),
+    }
+}
+
 // Group the flat ContextFile list into category buckets for the Context tab's
-// left-pane list. Each item is { path, display, kind? }.
-fn context_list<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
+// left-pane list.
+fn context_list<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> serde_json::Value {
     use serde_json::json;
+    let provider = context_provider(app, preferred);
     let mut project: Vec<serde_json::Value> = Vec::new();
     let mut memory: Vec<serde_json::Value> = Vec::new();
     let mut hooks: Vec<serde_json::Value> = Vec::new();
     let mut settings: Vec<serde_json::Value> = Vec::new();
-    for f in collect_context_files(app) {
+    let mut rules: Vec<serde_json::Value> = Vec::new();
+    for f in collect_context_files(app, Some(provider)) {
         let mut item = json!({
             "path": f.path.to_string_lossy(),
             "display": f.display,
@@ -3233,30 +3356,59 @@ fn context_list<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
             "memory" => memory.push(item),
             "hooks" => hooks.push(item),
             "settings" => settings.push(item),
+            "rules" => rules.push(item),
             _ => {}
         }
     }
-    json!({
-        "project": project,
-        "memory": memory,
-        "hooks": hooks,
-        "settings": settings,
-    })
+
+    let (provider_name, summary, sections) = match provider {
+        SessionProvider::Claude => (
+            "claude",
+            "Claude Context shows the repo-local `CLAUDE.md` import chain plus Claude-managed memory, hooks, and settings for this project.",
+            vec![
+                json!({ "key": "project", "label": "Project", "items": project }),
+                json!({ "key": "memory", "label": "Memory", "items": memory }),
+                json!({ "key": "hooks", "label": "Hooks", "items": hooks }),
+                json!({ "key": "settings", "label": "Settings", "items": settings }),
+            ],
+        ),
+        SessionProvider::Codex => (
+            "codex",
+            "Codex Context shows durable Codex-side sources on this machine, such as `~/.codex/config.toml`, project-local `.codex/` files when present, memories, and rules. Codex does not use Claude's `CLAUDE.md` import chain.",
+            vec![
+                json!({ "key": "project", "label": "Project", "items": project }),
+                json!({ "key": "memory", "label": "Memories", "items": memory }),
+                json!({ "key": "rules", "label": "Rules", "items": rules }),
+            ],
+        ),
+    };
+    json!({ "provider": provider_name, "summary": summary, "sections": sections })
 }
 
 // Case-insensitive substring search across the same file set as
 // context_list. Returns groups of { path, display, category, hits: [{ line,
 // snippet }] }. Capped at 50 total hits to keep payloads bounded.
-fn context_search<R: tauri::Runtime>(app: &AppHandle<R>, q: &str) -> serde_json::Value {
+fn context_search<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+    q: &str,
+) -> serde_json::Value {
     use serde_json::json;
+    let provider = context_provider(app, preferred);
     let needle = q.trim().to_lowercase();
     if needle.is_empty() {
-        return json!({ "results": [] });
+        return json!({
+            "provider": match provider {
+                SessionProvider::Claude => "claude",
+                SessionProvider::Codex => "codex",
+            },
+            "results": []
+        });
     }
     const MAX_HITS: usize = 50;
     let mut total_hits = 0usize;
     let mut results: Vec<serde_json::Value> = Vec::new();
-    for file in collect_context_files(app) {
+    for file in collect_context_files(app, Some(provider)) {
         if total_hits >= MAX_HITS {
             break;
         }
@@ -3287,7 +3439,14 @@ fn context_search<R: tauri::Runtime>(app: &AppHandle<R>, q: &str) -> serde_json:
             }));
         }
     }
-    json!({ "results": results, "truncated": total_hits >= MAX_HITS })
+    json!({
+        "provider": match provider {
+            SessionProvider::Claude => "claude",
+            SessionProvider::Codex => "codex",
+        },
+        "results": results,
+        "truncated": total_hits >= MAX_HITS
+    })
 }
 
 fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
@@ -3996,19 +4155,28 @@ fn route_request<R: tauri::Runtime>(
     query: &str,
 ) -> (u16, &'static str, Vec<u8>) {
     if path == "__context/list" {
-        let body = serde_json::to_vec(&context_list(app)).unwrap_or_default();
+        let mut provider: Option<SessionProvider> = None;
+        for pair in query.split('&') {
+            if let Some(enc) = pair.strip_prefix("provider=") {
+                provider = SessionProvider::from_str(&percent_decode(enc));
+                break;
+            }
+        }
+        let body = serde_json::to_vec(&context_list(app, provider)).unwrap_or_default();
         return (200, "application/json; charset=utf-8", body);
     }
 
     if path == "__context/search" {
         let mut q = String::new();
+        let mut provider: Option<SessionProvider> = None;
         for pair in query.split('&') {
             if let Some(enc) = pair.strip_prefix("q=") {
                 q = percent_decode(enc);
-                break;
+            } else if let Some(enc) = pair.strip_prefix("provider=") {
+                provider = SessionProvider::from_str(&percent_decode(enc));
             }
         }
-        let body = serde_json::to_vec(&context_search(app, &q)).unwrap_or_default();
+        let body = serde_json::to_vec(&context_search(app, provider, &q)).unwrap_or_default();
         return (200, "application/json; charset=utf-8", body);
     }
 

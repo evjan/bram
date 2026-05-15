@@ -125,8 +125,7 @@ the prose of each item that moved through the transition.
 xmlui-desktop is launched against an arbitrary project, so the
 history directory is created inside that project's `resources/`.
 Each project decides independently whether to commit
-`resources/worklist-history/` or keep it gitignored. xmlui-desktop's
-own repo commits its history — see `resources/worklist-history/`.
+`resources/worklist-history/` or keep it gitignored.
 
 The choice is expressed via the project's `.gitignore` — no XMLUI
 config or runtime flag is involved. A project that wants to opt out

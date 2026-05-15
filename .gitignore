@@ -31,3 +31,7 @@ xmlui-desktop
 
 # Project shell-startup config (committed as a default; local edits stay local)
 .xmlui-desktop.json
+
+# This repo opts out of committed worklist-history snapshots for the
+# Codex-themed release; revisit whether to track them in a later release.
+resources/worklist-history/

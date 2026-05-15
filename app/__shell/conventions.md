@@ -111,9 +111,10 @@ When you first add items, default to omitting the status (or setting
 is genuinely already on disk.
 
 You do not need to create `resources/worklist.json` in advance — when
-the file is missing, xmlui-desktop serves an empty default and the
-Worklist tab shows *(none)*. Just write to the file the first time
-you actually have items to propose; xmlui-desktop will create it.
+the file is missing, xmlui-desktop serves an empty default. The
+Worklist tab can create `resources/worklist.json` (and the enclosing
+`resources/` folder if needed) the first time you opt into the
+worklist flow.
 
 Lifecycle:
 

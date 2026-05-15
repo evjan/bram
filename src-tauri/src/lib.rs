@@ -3651,6 +3651,69 @@ fn worklist_history_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf
     project_root(Some(app)).map(|p| p.join("resources").join("worklist-history"))
 }
 
+fn empty_worklist_json() -> &'static str {
+    "{\n  \"description\": \"\",\n  \"items\": []\n}\n"
+}
+
+fn worklist_doc<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
+    use serde_json::json;
+
+    let path = worklist_file(app);
+    let exists = path.as_ref().map_or(false, |p| p.is_file());
+    let resources_exists = path
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map_or(false, |p| p.is_dir());
+    let path_str = path
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut doc: serde_json::Value = path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| json!({ "description": "", "items": [] }));
+    if let Some(obj) = doc.as_object_mut() {
+        obj.insert("exists".to_string(), serde_json::Value::Bool(exists));
+        obj.insert(
+            "resourcesExists".to_string(),
+            serde_json::Value::Bool(resources_exists),
+        );
+        obj.insert("path".to_string(), serde_json::Value::String(path_str));
+        if !obj.contains_key("description") {
+            obj.insert("description".to_string(), serde_json::Value::String(String::new()));
+        }
+        if !obj.contains_key("items") {
+            obj.insert("items".to_string(), serde_json::Value::Array(Vec::new()));
+        }
+        doc
+    } else {
+        json!({
+            "description": "",
+            "items": [],
+            "exists": exists,
+            "resourcesExists": resources_exists,
+            "path": path_str,
+        })
+    }
+}
+
+fn init_worklist_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+    let path = worklist_file(app).ok_or("could not resolve project root")?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("could not resolve parent for {}", path.display()))?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {}", parent.display(), e))?;
+    if !path.exists() {
+        std::fs::write(&path, empty_worklist_json())
+            .map_err(|e| format!("write {}: {}", path.display(), e))?;
+        if let Ok(mut guard) = last_worklist_cell().lock() {
+            *guard = Some(empty_worklist_json().to_string());
+        }
+    }
+    serde_json::to_vec(&worklist_doc(app)).map_err(|e| e.to_string())
+}
+
 fn unix_now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -4527,11 +4590,7 @@ fn route_request<R: tauri::Runtime>(
     // output). The Workspace pane polls this so the TO COMMIT rows can
     // surface their pending diff inline.
     if path == "__worklist" {
-        let proj = project_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
-        let raw = std::fs::read_to_string(proj.join("resources/worklist.json"))
-            .unwrap_or_else(|_| r#"{"description":"","items":[]}"#.to_string());
-        let mut doc: serde_json::Value = serde_json::from_str(&raw)
-            .unwrap_or_else(|_| serde_json::json!({"description":"","items":[]}));
+        let mut doc = worklist_doc(app);
         if let Some(items) = doc.get_mut("items").and_then(|v| v.as_array_mut()) {
             for item in items {
                 let status = item
@@ -4594,6 +4653,13 @@ fn route_request<R: tauri::Runtime>(
         }
         let body = serde_json::to_vec(&doc).unwrap_or_default();
         return (200, "application/json; charset=utf-8", body);
+    }
+
+    if path == "__worklist/init" {
+        return match init_worklist_file(app) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => (500, "text/plain; charset=utf-8", e.into_bytes()),
+        };
     }
 
     // /__git-diff?path=<file> — plain text `git diff -- <path>` output.
@@ -4698,7 +4764,7 @@ fn route_request<R: tauri::Runtime>(
             Err(_) => (
                 200,
                 "application/json; charset=utf-8",
-                br#"{"description":"","items":[]}"#.to_vec(),
+                empty_worklist_json().as_bytes().to_vec(),
             ),
         };
     }

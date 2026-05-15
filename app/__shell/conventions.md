@@ -208,6 +208,19 @@ individual sub-edits before any code is touched. Single-file tweaks,
 typo fixes, and direct corrections to in-progress code can still be
 edited directly.
 
+### Write item prose for the future-agent reader
+
+Write item `before`/`after` prose with the future-agent reader in
+mind, not just the human triaging it today. Name alternatives
+considered and why they were rejected, not just the chosen path.
+The agent who reads this snapshot months from now does not have
+the conversation that produced it — the committed worklist history
+(see `docs/worklist-history.md`) is their only retrieval. A terse
+"add the diff viewer" leaves nothing for them to grep; an item
+that says "considered (a) embedded diff via DataSource, (b) server
+augmentation via /__worklist, (c) full-tree diff — chose (b)
+because…" is the kind of audit trail that earns its keep.
+
 ### Test Worklist UX through the worklist itself
 
 When a change touches the Worklist UX itself (Approve/Drop button

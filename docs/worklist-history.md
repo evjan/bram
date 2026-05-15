@@ -4,6 +4,34 @@ xmlui-desktop snapshots `resources/worklist.json` on every meaningful
 change, so the prose of past items survives after they've been
 committed or dropped. This document sketches how the pieces fit.
 
+## Who reads this
+
+Two audiences, weighted differently over time:
+
+- **Humans, during active triage.** While a worklist is in flight,
+  the Worklist tab and its History expander are part of the day's
+  workflow — items get reviewed, approved, dropped, renamed, and the
+  snapshots produced along the way give immediate visibility into
+  what just happened. This is the surface that earns its keep on the
+  day each item is written.
+
+- **Agents, as forensic audit trail.** Months later, a different
+  agent session — without the conversation that produced the
+  feature — needs to answer questions like "did we consider
+  audit-trail correlation here?" or "why isn't there a per-item
+  filter on the History view?" Git log keeps getting good at *what*
+  changed in a commit; it stays bad at *why* this approach was
+  chosen and what alternatives were rejected before it. That's the
+  gap the snapshot prose fills, and it's the long-tail value of the
+  whole mechanism.
+
+The implication for prose authors (agent or human): write
+`before`/`after` more for the long-tail reader than for the human
+reviewing today. Name alternatives considered, not just the chosen
+path. Be specific about constraints and reasoning. The agent
+grepping the snapshots next year has no other retrieval — the
+committed worklist history is their context.
+
 ## Flow
 
 A filesystem watcher in `src-tauri/src/lib.rs` notices writes to

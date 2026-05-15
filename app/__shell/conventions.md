@@ -235,22 +235,27 @@ disk. Approving the item then exercises the new behavior end-to-end
 — your file rewrites, the worklist pruning, the Talk-page update —
 which is the actual test.
 
-**Hook enforcement.** xmlui-desktop installs a PreToolUse hook at
-`.claude/hooks/worklist-guard.py` that validates Write/Edit operations
-on `resources/worklist.json`. If you remove an item without an explicit
-`drop:` authorization in the user's last message, the harness rejects
-the write with a stderr message explaining the violation. Read it; the
-hook is the convention's enforcement mechanism, not a bug to work
-around.
+**Enforcement layers.** xmlui-desktop records structured `approved:` /
+`drop:` payloads in `resources/.worklist-authorization.json`. That is
+the provider-neutral authorization record for worklist state changes. On
+Claude, xmlui-desktop also installs a PreToolUse hook at
+`.claude/hooks/worklist-guard.py` that validates `Write` / `Edit`
+operations on `resources/worklist.json` before the tool runs. On
+providers without a native pre-tool hook, the desktop watcher compares
+the old/new worklist snapshots and rewrites the old file back if the
+prune was not authorized. If you hit either path, read the error or
+revert message; it is the convention's enforcement mechanism, not a bug
+to work around.
 
-**Don't ask before editing the worklist.** `Write(./resources/worklist.json)`
-and `Edit(./resources/worklist.json)` are in `.claude/settings.json`'s
-`permissions.allow`, and the guard hook validates the content. There's
-no need to verbally confirm with the user before adding, advancing, or
-pruning worklist items — the channel is already approved and the hook
-will reject anything unsafe. Save the verbal back-and-forth for design
-decisions (which items to propose, what choices to bake in), not for the
-mechanical write.
+**Don't ask before editing the worklist.** On Claude, `Write(./resources/worklist.json)`
+and `Edit(./resources/worklist.json)` are allow-listed in
+`.claude/settings.json`, and the hook validates the content. On other
+providers, the local authorization record plus watcher fallback is the
+safety net. Either way, there is no need to verbally confirm with the
+user before adding, advancing, or pruning worklist items — the channel
+is already approved and unsafe removals will be rejected or reverted.
+Save the verbal back-and-forth for design decisions (which items to
+propose, what choices to bake in), not for the mechanical write.
 
 ## Right-pane helpers (opt-in, only needed for project-side hooks)
 

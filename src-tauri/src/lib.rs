@@ -80,6 +80,18 @@ struct AppState(Mutex<Option<PtyState>>);
 #[derive(Default)]
 struct WhisperState(Mutex<Option<std::process::Child>>);
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorklistAuthorizationRecord {
+    kind: String,
+    #[serde(default)]
+    ids: Vec<String>,
+    issued_at_ms: i64,
+    source: String,
+    #[serde(default)]
+    consumed_at_ms: Option<i64>,
+}
+
 // Cross-platform home directory: $HOME on Unix, %USERPROFILE% on Windows.
 // Returned as PathBuf so callers can .join() directly without re-parsing.
 fn home_dir() -> Option<PathBuf> {
@@ -1334,11 +1346,12 @@ fn pty_spawn(
 }
 
 #[tauri::command]
-fn pty_write(data: String, state: State<'_, AppState>) -> Result<(), String> {
+fn pty_write(app: AppHandle, data: String, state: State<'_, AppState>) -> Result<(), String> {
     // User input dismisses any visible permission menu. Clear before
     // writing so the agent-pane menu disappears immediately on click.
     if !data.is_empty() {
         pty_menu_clear();
+        record_worklist_authorization_from_input(&app, &data);
     }
     let mut guard = state.0.lock().unwrap();
     let pty = guard.as_mut().ok_or("pty not started")?;
@@ -2774,6 +2787,7 @@ const ENHANCE_SIDECAR_REL: &str = ".claude/xmlui-desktop-conventions.md";
 const ENHANCE_HOOK_SCRIPT_REL: &str = ".claude/hooks/worklist-guard.py";
 const ENHANCE_SETTINGS_REL: &str = ".claude/settings.json";
 const ENHANCE_HOOK_BUNDLE_REL: &str = "__shell/worklist-guard.py";
+const WORKLIST_AUTH_REL: &str = "resources/.worklist-authorization.json";
 // On Unix, the bare path runs via the script's `#!/usr/bin/env python3`
 // shebang (set executable by run_enhance under #[cfg(unix)]). On Windows
 // there's no shebang resolution and no chmod, so we invoke through the
@@ -3175,6 +3189,7 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let sidecar = proj.join(ENHANCE_SIDECAR_REL);
     let hook_script = proj.join(ENHANCE_HOOK_SCRIPT_REL);
     let settings = proj.join(ENHANCE_SETTINGS_REL);
+    let worklist_auth = proj.join(WORKLIST_AUTH_REL);
     let claude_md_has_marker = std::fs::read_to_string(&claude_md)
         .map(|s| s.contains(ENHANCE_MARKER_START))
         .unwrap_or(false);
@@ -3182,16 +3197,24 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let sidecar_exists = sidecar.exists() || proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
     let hook_script_exists = hook_script.exists();
     let hook_registered = settings_has_worklist_guard_hook(&settings);
+    let core_installed = worklist_auth.exists();
+    let claude_installed =
+        claude_md_has_marker && sidecar_exists && hook_script_exists && hook_registered;
     let body = serde_json::json!({
-        "enhanced": claude_md_has_marker && sidecar_exists && hook_script_exists && hook_registered,
+        "enhanced": core_installed && claude_installed,
+        "coreInstalled": core_installed,
+        "claudeInstalled": claude_installed,
+        "codexInstalled": core_installed,
         "claudeMd": claude_md_has_marker,
         "sidecar": sidecar_exists,
         "hookScript": hook_script_exists,
         "hookRegistered": hook_registered,
+        "fallbackMode": "watcher-revert",
         "claudeMdPath": claude_md.display().to_string(),
         "sidecarPath": sidecar.display().to_string(),
         "hookScriptPath": hook_script.display().to_string(),
         "settingsPath": settings.display().to_string(),
+        "worklistAuthPath": worklist_auth.display().to_string(),
     });
     serde_json::to_vec(&body).map_err(|e| e.to_string())
 }
@@ -3205,6 +3228,30 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
     let is_source_repo = proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
 
     let mut wrote: Vec<String> = Vec::new();
+
+    // Provider-neutral worklist authorization cache. xmlui-desktop records the
+    // latest structured `approved:` / `drop:` payload here so the desktop-side
+    // watcher can enforce the two-stage worklist policy even when the active
+    // provider has no native pre-tool hook support.
+    let worklist_auth_path = proj.join(WORKLIST_AUTH_REL);
+    if let Some(parent) = worklist_auth_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {}", parent.display(), e))?;
+    }
+    if !worklist_auth_path.exists() {
+        let core_stub = WorklistAuthorizationRecord {
+            kind: "none".to_string(),
+            ids: Vec::new(),
+            issued_at_ms: 0,
+            source: "setup".to_string(),
+            consumed_at_ms: None,
+        };
+        let serialized_core = serde_json::to_string_pretty(&core_stub)
+            .map_err(|e| format!("serialize worklist authorization stub: {}", e))?;
+        std::fs::write(&worklist_auth_path, format!("{}\n", serialized_core))
+            .map_err(|e| format!("write {}: {}", worklist_auth_path.display(), e))?;
+        wrote.push(worklist_auth_path.display().to_string());
+    }
 
     // Conventions sidecar — skipped on the source repo.
     let sidecar_path = proj.join(ENHANCE_SIDECAR_REL);
@@ -3312,6 +3359,10 @@ fn worklist_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     project_root(Some(app)).map(|p| p.join("resources").join("worklist.json"))
 }
 
+fn worklist_auth_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| p.join(WORKLIST_AUTH_REL))
+}
+
 fn worklist_history_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     project_root(Some(app)).map(|p| p.join("resources").join("worklist-history"))
 }
@@ -3379,6 +3430,183 @@ fn worklist_description(doc: &serde_json::Value) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string()
+}
+
+fn normalize_turn_submission(data: &str) -> String {
+    data.replace("\u{1b}[200~", "")
+        .replace("\u{1b}[201~", "")
+        .trim_matches(|c| c == '\r' || c == '\n')
+        .trim()
+        .to_string()
+}
+
+fn parse_worklist_authorization_message(text: &str) -> Option<WorklistAuthorizationRecord> {
+    let trimmed = text.trim();
+    for (prefix, kind) in [("approved:", "approved"), ("drop:", "drop")] {
+        let Some(rest) = trimmed.strip_prefix(prefix) else {
+            continue;
+        };
+        let value = serde_json::from_str::<serde_json::Value>(rest.trim()).ok()?;
+        let ids = if kind == "drop" {
+            value
+                .get("ids")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        } else {
+            value
+                .get("items")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.get("id").and_then(|id| id.as_str()).map(str::to_string))
+                .collect::<Vec<_>>()
+        };
+        return Some(WorklistAuthorizationRecord {
+            kind: kind.to_string(),
+            ids,
+            issued_at_ms: unix_now_ms(),
+            source: "pty-write".to_string(),
+            consumed_at_ms: None,
+        });
+    }
+    None
+}
+
+fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R>, data: &str) {
+    let normalized = normalize_turn_submission(data);
+    let Some(record) = parse_worklist_authorization_message(&normalized) else {
+        return;
+    };
+    let Some(path) = worklist_auth_file(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("[worklist-auth] create {} failed: {}", parent.display(), e);
+            return;
+        }
+    }
+    let body = match serde_json::to_string_pretty(&record) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[worklist-auth] serialize failed: {}", e);
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(&path, format!("{}\n", body)) {
+        eprintln!("[worklist-auth] write {} failed: {}", path.display(), e);
+    }
+}
+
+fn read_active_worklist_authorization<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<WorklistAuthorizationRecord> {
+    let path = worklist_auth_file(app)?;
+    let content = std::fs::read_to_string(path).ok()?;
+    let record = serde_json::from_str::<WorklistAuthorizationRecord>(&content).ok()?;
+    if record.consumed_at_ms.is_some() {
+        return None;
+    }
+    match record.kind.as_str() {
+        "approved" | "drop" => Some(record),
+        _ => None,
+    }
+}
+
+fn consume_worklist_authorization<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(path) = worklist_auth_file(app) else {
+        return;
+    };
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut record = match serde_json::from_str::<WorklistAuthorizationRecord>(&content) {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    if record.consumed_at_ms.is_some() {
+        return;
+    }
+    record.consumed_at_ms = Some(unix_now_ms());
+    let body = match serde_json::to_string_pretty(&record) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let _ = std::fs::write(&path, format!("{}\n", body));
+}
+
+fn maybe_enforce_worklist_policy<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    prior_str: &str,
+    current_str: &str,
+) -> bool {
+    let prior_doc: serde_json::Value = serde_json::from_str(prior_str).unwrap_or_default();
+    let current_doc: serde_json::Value = serde_json::from_str(current_str).unwrap_or_default();
+    let prior_items = worklist_items(&prior_doc);
+    let current_items = worklist_items(&current_doc);
+    let current_by_id: HashMap<String, &serde_json::Value> = current_items
+        .iter()
+        .filter_map(|item| worklist_item_id(item).map(|id| (id, item)))
+        .collect();
+    let auth = read_active_worklist_authorization(app);
+    let auth_ids: std::collections::HashSet<String> = auth
+        .as_ref()
+        .map(|record| record.ids.iter().cloned().collect())
+        .unwrap_or_default();
+    let mut used_drop_auth = false;
+    let mut violations: Vec<(String, String)> = Vec::new();
+
+    for item in &prior_items {
+        let Some(id) = worklist_item_id(item) else {
+            continue;
+        };
+        if current_by_id.contains_key(&id) {
+            continue;
+        }
+        let status = worklist_item_status(item).to_string();
+        if status == "applied" {
+            continue;
+        }
+        if auth.as_ref().map(|a| a.kind.as_str()) == Some("drop") && auth_ids.contains(&id) {
+            used_drop_auth = true;
+            continue;
+        }
+        violations.push((id, status));
+    }
+
+    if violations.is_empty() {
+        if used_drop_auth {
+            consume_worklist_authorization(app);
+        }
+        return true;
+    }
+
+    let Some(path) = worklist_file(app) else {
+        return false;
+    };
+    let bad = violations
+        .iter()
+        .map(|(id, status)| format!("\"{}\" (status={})", id, status))
+        .collect::<Vec<_>>()
+        .join(", " );
+    eprintln!(
+        "[worklist-enforce] reverting unauthorized removal of {} via watcher fallback; last auth kind={}",
+        bad,
+        auth.as_ref().map(|a| a.kind.as_str()).unwrap_or("none")
+    );
+    if let Err(e) = std::fs::write(&path, prior_str) {
+        eprintln!(
+            "[worklist-enforce] failed to restore {}: {}",
+            path.display(),
+            e
+        );
+        return false;
+    }
+    false
 }
 
 // Computes the diff between two worklist snapshots and renders it as a
@@ -3586,6 +3814,9 @@ fn maybe_snapshot_worklist<R: tauri::Runtime>(app: &AppHandle<R>) {
         }
     };
     if prior_str == current_str {
+        return;
+    }
+    if !maybe_enforce_worklist_policy(app, &prior_str, &current_str) {
         return;
     }
     // Always update the cache so the next change diffs against the most

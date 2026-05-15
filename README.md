@@ -31,8 +31,13 @@ It is a desktop app that connects an agent like Claude or Codex to the app you a
 - **Agent-tools drawer** — toggle from the toolbar to open a side panel with Talk (live transcript), Worklist (proposed → applied →
   committed flow), Commits, Issues, Sessions, Context, and README.
 
-See [`CLAUDE.md`](./CLAUDE.md) for the conventions Claude Code follows
-when driving the right pane.
+Project conventions are authored in
+[`app/__shell/conventions.md`](./app/__shell/conventions.md). Claude is
+bound to that file directly through `CLAUDE.md` and the installed
+`.claude` hook/config path. Codex does not yet have an equivalent
+repo-local prompt import path, so today it is governed automatically by
+the shared provider-neutral worklist/setup machinery plus local Codex
+config, memories, and rules.
 
 <img width="1379" height="857" alt="image" src="https://github.com/user-attachments/assets/51728554-ae75-4508-b70c-0716ed555479" />
 
@@ -128,18 +133,26 @@ Pinned across the top of the agent-tools drawer (stays reachable from any tab):
 - **Yes / No** — send "yes" or "no" as a complete user turn (handy for the agent's conversational prompts).
 - **Esc** — send `Esc` to interrupt the agent mid-response.
 - **🔍 Inspector** — open the XMLUI Inspector to reproduce a UI issue and export a trace JSON for analysis.
-- **Re-run setup** (hat-glasses icon, only visible once the project is already set up) — re-runs `/__enhance/run`. Idempotent; safe to invoke anytime conventions may have drifted, e.g., after upgrading xmlui-desktop. See [How Set up enforces the worklist flow](#how-set-up-enforces-the-worklist-flow) below.
+- **Re-run setup** (hat-glasses icon, only visible once the project is already set up) — re-runs `/__enhance/run`. Idempotent; safe to invoke anytime conventions may have drifted, e.g., after upgrading xmlui-desktop. See [How `conventions.md` governs both agents](#how-conventionsmd-governs-both-agents) below.
 
-### How Set up enforces the worklist flow
+### How `conventions.md` governs both agents
 
-The agent-tools drawer's **Set up** button (replaced by a hat-glasses icon in the toolbar once a project is already configured) writes a Claude Code `PreToolUse` hook into the project: `.claude/hooks/worklist-guard.py`, registered in `.claude/settings.json` to fire on `Write|Edit`. PreToolUse hooks are Claude Code's harness-level extension point — they run *before* Claude actually invokes a tool, receive a JSON payload describing the pending call on stdin, and can exit 0 to allow it, exit 2 to block it (stderr goes back to Claude as a tool error), or fail to launch (non-blocking — the tool call still proceeds, with a warning shown).
+`app/__shell/conventions.md` is the canonical project convention file.
+It governs Claude and Codex in different ways:
+
+- **Claude: direct prompt binding plus enforcement.** Setup copies that file to `.claude/xmlui-desktop-conventions.md`, adds an `@`-import block to `CLAUDE.md`, and installs the `worklist-guard.py` PreToolUse hook. A new Claude session therefore reads the conventions file directly and is also mechanically blocked from unsafe worklist edits.
+- **Codex: shared local enforcement, not full prompt binding.** Codex does not currently have a repo-local equivalent of Claude's `CLAUDE.md` import chain, so xmlui-desktop does not inject the full conventions file into every Codex session. Instead, Codex is governed automatically by the subset of those conventions that the app turns into shared local behavior, especially the worklist lifecycle and authorization rules enforced through `resources/.worklist-authorization.json` and the watcher-revert fallback.
+
+So the practical rule is: both agents are governed by the worklist
+conventions, but only Claude currently auto-loads the full
+`conventions.md` text as session instructions.
 
 `worklist-guard.py` watches Write/Edit operations targeting `resources/worklist.json`. It simulates the change, diffs items by `id`, and for any item that would disappear it checks the `status`:
 
 - `applied` (TO COMMIT) — removal allowed. Commit-then-prune is legitimate.
 - `proposed` (TO APPLY) — removal allowed **only** if the user's most recent message starts with `drop: {"ids":[...]}` listing that id.
 
-Violating writes are rejected with a "Blocked: removing X (status=proposed)..." stderr message that Claude sees and reacts to. Without the hook, the two-stage worklist flow described in `app/__shell/conventions.md` would rely entirely on the agent's discipline; the hook is what makes it physically enforceable.
+Violating writes are rejected with a "Blocked: removing X (status=proposed)..." stderr message that Claude sees and reacts to. On providers without a comparable pre-tool hook, xmlui-desktop falls back to watcher-based enforcement: it compares the old/new worklist snapshots, consults `resources/.worklist-authorization.json`, and rewrites the prior file contents back if the prune was not authorized. That fallback is later than a native hook, but it gives non-Claude providers an explicit enforcement path instead of leaving the worklist flow purely advisory.
 
 The hook is a Python script and needs Python 3 to run. On macOS and Linux it's invoked directly via its shebang (`#!/usr/bin/env python3`), so `python3` must be on PATH — almost always the case. On Windows it's invoked via `py -3 <path>`; the `py` launcher ships with the python.org installer and resolves Python via the Windows registry, independent of PATH. If Python isn't installed at all, Claude Code shows "Failed with non-blocking status code" for every Write/Edit and the validator is silently inert — writes still proceed, but the worklist guard isn't actually checking them. Install Python 3 to enable enforcement.
 

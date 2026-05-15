@@ -1,0 +1,12 @@
+{
+  "description": "First end-to-end use of the squashed worklist-history flow on this repo: cut v0.1.14.",
+  "items": [
+    {
+      "id": "release-v0.1.14",
+      "status": "proposed",
+      "file": "src-tauri/Cargo.toml",
+      "before": "Last release was v0.1.13 (commit cad4262). Since then we've landed the worklist-history feature — snapshot capture + .md changelog + augmented /__worklist + the History expander + the rename-aware hook — squashed into 879f9cd (code) and 15fe82b (docs). No version bump yet; the on-disk binary still identifies as 0.1.13.",
+      "after": "Standard release-cut per the conventions.md recipe:\n\n1. Bump version `0.1.13` → `0.1.14` in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`.\n2. `cargo build` to refresh `Cargo.lock`.\n3. Commit message: `Release v0.1.14`.\n4. Create local tag `v0.1.14` at the release commit.\n\nPushing the commits (agent-tools drawer push button), pushing the tag (`git push origin v0.1.14`), and dispatching `.github/workflows/build.yml` from the GitHub Actions UI are user-driven steps after the worklist item lands. Bumping minor instead of patch (0.2.0) is fair given the feature size — say so before approving if you'd prefer that."
+    }
+  ]
+}

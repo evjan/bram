@@ -4,15 +4,28 @@ This repo is driven through xmlui-desktop. Read this protocol before doing anyth
 
 If `.claude/xmlui-desktop-conventions.md` exists, read it now. This seed is only a summary; the file has the enforcement details, UI patterns, and edge cases. Do not skip this step.
 
-## The gate (run on every task, before any edit)
+## The gate (run on your FIRST response to any change request)
 
-Before editing any file other than `resources/worklist.json`, ask:
+The gate fires on the *first substantive response* to a change request, not on the `apply_patch` call. Commitment to a change in prose is itself a commitment that must be preceded by a worklist proposal. Read-only investigation (curl, cat, grep) does not exempt you — if your stated plan is "verify X then edit Y", you have already committed.
+
+On the first response to any change request, ask:
 
 - Does this task touch more than one file?
 - Does it have more than 2 discrete sub-edits in a single file?
 - Is it more than a typo or one-line correction the user explicitly told you to commit directly?
 
-If YES to any of those: STOP. Do NOT run `apply_patch` or any other file edit yet. Go to the two-stage flow below.
+If YES to any of those, your first response must be one of exactly three shapes:
+
+- (a) A clarifying question to the user.
+- (b) A write to `resources/worklist.json` proposing items.
+- (c) Read-only investigation explicitly prefaced with: *"I don't yet have enough context to propose; I need to check X first."* After that check, your very next action must be a worklist write — NOT narration of a plan, NOT "I have enough context to…", NOT "before editing I'm verifying…".
+
+Specifically, these phrasings as the first response on a multi-file task ARE the failure mode:
+
+- "I'll start by verifying X" → skip.
+- "Before editing I'm checking Y" → skip.
+- "I have enough context to change structure safely" → skip.
+- "Let me first look at Z" (without the (c) preface above) → skip.
 
 ## Two-stage flow
 
@@ -45,4 +58,9 @@ If YES to any of those: STOP. Do NOT run `apply_patch` or any other file edit ye
 
 ## Self-check
 
-If your first action on a multi-file task is `apply_patch` instead of a write to `resources/worklist.json`, you skipped the workflow. Back up, revert the edit if needed, and propose first.
+You skipped the workflow if either of these is true:
+
+- Your first *action* on a multi-file task was `apply_patch` instead of a write to `resources/worklist.json`.
+- Your first *response* on a multi-file task was "I'll verify X" / "Before editing I'm checking Y" / "I have enough context to…" and your next action was not a worklist write.
+
+In either case: back up, revert any edits made, and propose first.

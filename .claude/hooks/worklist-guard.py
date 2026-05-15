@@ -86,6 +86,14 @@ def main():
     if not removed:
         sys.exit(0)
 
+    # Renames: a new item may declare `rename_from: "<old-id>"` to inherit
+    # the old item's identity, which authorizes the old id's removal
+    # without a `drop:` from the user.
+    renamed_from = {
+        rf for nit in new_items.values()
+        if isinstance((rf := nit.get("rename_from")), str) and rf
+    }
+
     kind, ids = parse_auth(last_user_text(payload.get("transcript_path", "")))
 
     violations = []
@@ -94,6 +102,8 @@ def main():
         if st == "applied":
             continue
         if kind == "drop" and rid in ids:
+            continue
+        if rid in renamed_from:
             continue
         violations.append((rid, st))
 

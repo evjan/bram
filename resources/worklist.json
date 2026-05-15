@@ -1,12 +1,4 @@
 {
   "description": "",
-  "items": [
-    {
-      "id": "worklist-show-diff-for-applied-items",
-      "status": "proposed",
-      "file": "app/tools/components/Workspace.xmlui",
-      "before": "Worklist rows show only the before/after summary text. When an item is TO COMMIT (status: applied), the user has no in-app way to review the actual file diff before approving the commit — they have to run `git diff <file>` in the terminal or switch to another tool.",
-      "after": "Add an in-row diff viewer for TO COMMIT items: an expandable section (e.g., a 'Show diff' toggle, or always-expanded code block) that renders `git diff -- <file>` for the listed file. Backed by a new Rust IPC command `git_diff_file(path) -> String` shelling out to `git diff -- <path>`, surfaced through helpers.js similar to gitPush, and rendered with a monospace code block or a syntax-highlighted diff component. Scope to TO COMMIT rows initially; TO APPLY rows have no on-disk diff yet."
-    }
-  ]
+  "items": []
 }

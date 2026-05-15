@@ -3292,6 +3292,347 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
     serde_json::to_vec(&body).map_err(|e| e.to_string())
 }
 
+// ============================================================================
+// Worklist history (issue #18: save and browse completed worklist items)
+//
+// The filesystem watcher detects writes to resources/worklist.json and
+// appends a timestamped JSON snapshot of the *prior* contents to
+// resources/worklist-history/, plus a sibling .md changelog summarizing
+// what changed. The cache lives in process memory so we can diff old
+// vs new without re-reading from disk.
+// ============================================================================
+
+static LAST_WORKLIST: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn last_worklist_cell() -> &'static Mutex<Option<String>> {
+    LAST_WORKLIST.get_or_init(|| Mutex::new(None))
+}
+
+fn worklist_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| p.join("resources").join("worklist.json"))
+}
+
+fn worklist_history_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| p.join("resources").join("worklist-history"))
+}
+
+fn unix_now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+// Howard Hinnant's days-from-civil, inverted. Used by format_iso_utc to
+// avoid pulling in chrono just for one timestamp formatter.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z / 146097 } else { (z - 146096) / 146097 };
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let y = y + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
+}
+
+fn format_iso_utc(ms: i64) -> String {
+    let secs = ms / 1000;
+    let days = secs.div_euclid(86400);
+    let secs_of_day = secs.rem_euclid(86400);
+    let h = secs_of_day / 3600;
+    let m = secs_of_day % 3600 / 60;
+    let s = secs_of_day % 60;
+    let (y, mo, d) = civil_from_days(days);
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, mo, d, h, m, s)
+}
+
+fn worklist_item_id(item: &serde_json::Value) -> Option<String> {
+    item.get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+fn worklist_item_status(item: &serde_json::Value) -> &str {
+    item.get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("proposed")
+}
+
+fn worklist_item_str_field<'a>(item: &'a serde_json::Value, key: &str) -> &'a str {
+    item.get(key).and_then(|v| v.as_str()).unwrap_or("")
+}
+
+fn worklist_items(doc: &serde_json::Value) -> Vec<serde_json::Value> {
+    doc.get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn worklist_description(doc: &serde_json::Value) -> String {
+    doc.get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+// Computes the diff between two worklist snapshots and renders it as a
+// markdown changelog. Returns None when no meaningful change is detected
+// (no items proposed/advanced/renamed/pruned and description unchanged),
+// so the caller can suppress trivial snapshots.
+fn generate_worklist_changelog(
+    prior: &serde_json::Value,
+    current: &serde_json::Value,
+    ts_ms: i64,
+) -> Option<String> {
+    use std::collections::HashSet;
+    let prior_items = worklist_items(prior);
+    let current_items = worklist_items(current);
+    let prior_by_id: HashMap<String, &serde_json::Value> = prior_items
+        .iter()
+        .filter_map(|i| worklist_item_id(i).map(|id| (id, i)))
+        .collect();
+    let current_by_id: HashMap<String, &serde_json::Value> = current_items
+        .iter()
+        .filter_map(|i| worklist_item_id(i).map(|id| (id, i)))
+        .collect();
+
+    let mut proposed: Vec<&serde_json::Value> = Vec::new();
+    let mut advanced: Vec<(&serde_json::Value, String, String)> = Vec::new();
+    let mut renamed: Vec<(String, &serde_json::Value)> = Vec::new();
+    let mut renamed_olds: HashSet<String> = HashSet::new();
+
+    for item in &current_items {
+        let id = match worklist_item_id(item) {
+            Some(id) => id,
+            None => continue,
+        };
+        match prior_by_id.get(&id) {
+            Some(prev) => {
+                let prev_status = worklist_item_status(prev).to_string();
+                let new_status = worklist_item_status(item).to_string();
+                if prev_status != new_status {
+                    advanced.push((item, prev_status, new_status));
+                }
+            }
+            None => {
+                // A new addition: classify as a rename if rename_from
+                // points at a removed id, otherwise it's a fresh proposal.
+                let rename_from = item
+                    .get("rename_from")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                if let Some(old_id) = rename_from {
+                    if prior_by_id.contains_key(&old_id) {
+                        renamed.push((old_id.clone(), item));
+                        renamed_olds.insert(old_id);
+                        continue;
+                    }
+                }
+                proposed.push(item);
+            }
+        }
+    }
+    let mut pruned: Vec<&serde_json::Value> = Vec::new();
+    for item in &prior_items {
+        let id = match worklist_item_id(item) {
+            Some(id) => id,
+            None => continue,
+        };
+        if !current_by_id.contains_key(&id) && !renamed_olds.contains(&id) {
+            pruned.push(item);
+        }
+    }
+
+    let prior_desc = worklist_description(prior);
+    let current_desc = worklist_description(current);
+    let description_changed = prior_desc != current_desc;
+
+    // Suppress when the only changes are prunes (or nothing at all). The
+    // audit trail of which commit landed each pruned item already lives
+    // in git log, so the prune-only snapshot is redundant.
+    if !description_changed
+        && proposed.is_empty()
+        && advanced.is_empty()
+        && renamed.is_empty()
+    {
+        return None;
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "# Worklist change @ {} ({})\n\n",
+        format_iso_utc(ts_ms),
+        ts_ms
+    ));
+    out.push_str(&format!(
+        "**Summary:** {} proposed, {} advanced, {} renamed, {} pruned\n\n",
+        proposed.len(),
+        advanced.len(),
+        renamed.len(),
+        pruned.len(),
+    ));
+
+    if description_changed {
+        out.push_str("## Description changed\n\n");
+        out.push_str(&format!("Was: `{}`\nNow: `{}`\n\n", prior_desc, current_desc));
+    }
+
+    if !proposed.is_empty() {
+        out.push_str("## Items proposed\n\n");
+        for item in &proposed {
+            let id = worklist_item_id(item).unwrap_or_default();
+            out.push_str(&format!(
+                "- `{}` ({}, `{}`)\n",
+                id,
+                worklist_item_status(item),
+                worklist_item_str_field(item, "file")
+            ));
+            let before = worklist_item_str_field(item, "before");
+            if !before.is_empty() {
+                out.push_str(&format!(
+                    "  - **Before:** {}\n",
+                    before.replace('\n', " ")
+                ));
+            }
+            let after = worklist_item_str_field(item, "after");
+            if !after.is_empty() {
+                out.push_str(&format!(
+                    "  - **After:** {}\n",
+                    after.replace('\n', " ")
+                ));
+            }
+        }
+        out.push('\n');
+    }
+
+    if !advanced.is_empty() {
+        out.push_str("## Items advanced\n\n");
+        for (item, from, to) in &advanced {
+            let id = worklist_item_id(item).unwrap_or_default();
+            out.push_str(&format!("- `{}`: {} → {}\n", id, from, to));
+        }
+        out.push('\n');
+    }
+
+    if !renamed.is_empty() {
+        out.push_str("## Items renamed\n\n");
+        for (old_id, item) in &renamed {
+            let new_id = worklist_item_id(item).unwrap_or_default();
+            out.push_str(&format!("- `{}` → `{}`\n", old_id, new_id));
+        }
+        out.push('\n');
+    }
+
+    if !pruned.is_empty() {
+        out.push_str("## Items pruned (committed or dropped)\n\n");
+        for item in &pruned {
+            let id = worklist_item_id(item).unwrap_or_default();
+            out.push_str(&format!(
+                "- `{}` (was {}, `{}`)\n",
+                id,
+                worklist_item_status(item),
+                worklist_item_str_field(item, "file")
+            ));
+            let before = worklist_item_str_field(item, "before");
+            if !before.is_empty() {
+                out.push_str(&format!(
+                    "  - **Before:** {}\n",
+                    before.replace('\n', " ")
+                ));
+            }
+            let after = worklist_item_str_field(item, "after");
+            if !after.is_empty() {
+                out.push_str(&format!(
+                    "  - **After:** {}\n",
+                    after.replace('\n', " ")
+                ));
+            }
+        }
+        out.push('\n');
+    }
+
+    Some(out)
+}
+
+// Called from the watcher when resources/worklist.json changes. Reads the
+// current file, compares to the cached prior contents, and if different
+// writes the *prior* contents to worklist-history/<unix_ms>.json plus a
+// changelog .md. Best-effort: errors here must not break the underlying
+// worklist write, which has already completed.
+fn maybe_snapshot_worklist<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(file) = worklist_file(app) else { return };
+    let Some(history_dir) = worklist_history_dir(app) else { return };
+    let current_str = match std::fs::read_to_string(&file) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let cell = last_worklist_cell();
+    let mut guard = match cell.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let prior_str = match guard.clone() {
+        Some(s) => s,
+        None => {
+            // First observation — seed cache, no snapshot.
+            *guard = Some(current_str);
+            return;
+        }
+    };
+    if prior_str == current_str {
+        return;
+    }
+    // Always update the cache so the next change diffs against the most
+    // recent contents, even when this change is suppressed below.
+    *guard = Some(current_str.clone());
+
+    let ts = unix_now_ms();
+    let prior_doc: serde_json::Value = serde_json::from_str(&prior_str).unwrap_or_default();
+    let current_doc: serde_json::Value = serde_json::from_str(&current_str).unwrap_or_default();
+    let changelog = match generate_worklist_changelog(&prior_doc, &current_doc, ts) {
+        Some(s) => s,
+        None => {
+            eprintln!("[worklist-history] suppressed trivial change @ {}", ts);
+            return;
+        }
+    };
+    if let Err(e) = std::fs::create_dir_all(&history_dir) {
+        eprintln!("[worklist-history] create_dir_all failed: {}", e);
+        return;
+    }
+    // Snapshot the POST-change state — each snapshot is a checkpoint of
+    // the worklist as it stands at that moment. The .md changelog
+    // describes the transition from the prior checkpoint.
+    let snapshot_path = history_dir.join(format!("{}.json", ts));
+    if let Err(e) = std::fs::write(&snapshot_path, &current_str) {
+        eprintln!("[worklist-history] write snapshot failed: {}", e);
+    }
+    let changelog_path = history_dir.join(format!("{}.md", ts));
+    if let Err(e) = std::fs::write(&changelog_path, changelog) {
+        eprintln!("[worklist-history] write changelog failed: {}", e);
+    }
+    eprintln!(
+        "[worklist-history] snapshot @ {} ({} bytes)",
+        ts,
+        current_str.len()
+    );
+}
+
+fn init_worklist_cache<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(file) = worklist_file(app) else { return };
+    if let Ok(s) = std::fs::read_to_string(&file) {
+        if let Ok(mut guard) = last_worklist_cell().lock() {
+            *guard = Some(s);
+        }
+    }
+}
+
 // Routing for the right-pane HTTP server. Returns (status, content-type, body).
 fn route_request<R: tauri::Runtime>(
     app: &AppHandle<R>,
@@ -3657,6 +3998,148 @@ fn route_request<R: tauri::Runtime>(
         return (200, "application/json; charset=utf-8", body);
     }
 
+    // /__worklist — same shape as /resources/worklist.json but with a
+    // `diff` field injected on each `applied` item (the `git diff <file>`
+    // output). The Workspace pane polls this so the TO COMMIT rows can
+    // surface their pending diff inline.
+    if path == "__worklist" {
+        let proj = project_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
+        let raw = std::fs::read_to_string(proj.join("resources/worklist.json"))
+            .unwrap_or_else(|_| r#"{"description":"","items":[]}"#.to_string());
+        let mut doc: serde_json::Value = serde_json::from_str(&raw)
+            .unwrap_or_else(|_| serde_json::json!({"description":"","items":[]}));
+        if let Some(items) = doc.get_mut("items").and_then(|v| v.as_array_mut()) {
+            for item in items {
+                let status = item
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("proposed")
+                    .to_string();
+                let file_path = item
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if status == "applied" && !file_path.is_empty() {
+                    let mut diff = git_run(app, &["diff", "--", &file_path]).unwrap_or_default();
+                    if diff.is_empty() {
+                        // git diff returns nothing for untracked files. Fall back
+                        // to --no-index against /dev/null, which always produces
+                        // an "add the whole file" diff. That command exits 1 when
+                        // it finds differences, so git_run would treat it as an
+                        // error and discard stdout — shell out directly here.
+                        if let Some(root) = project_root(Some(app)) {
+                            if let Ok(out) = std::process::Command::new("git")
+                                .current_dir(&root)
+                                .args(&["diff", "--no-index", "--", "/dev/null", &file_path])
+                                .output()
+                            {
+                                diff = String::from_utf8_lossy(&out.stdout).into_owned();
+                            }
+                        }
+                    }
+                    if let Some(obj) = item.as_object_mut() {
+                        obj.insert("diff".to_string(), serde_json::Value::String(diff));
+                    }
+                }
+            }
+        }
+        let body = serde_json::to_vec(&doc).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    // /__git-diff?path=<file> — plain text `git diff -- <path>` output.
+    if path == "__git-diff" {
+        let mut file_path = String::new();
+        for pair in query.split('&') {
+            if let Some(enc) = pair.strip_prefix("path=") {
+                file_path = percent_decode(enc);
+                break;
+            }
+        }
+        let diff = git_run(app, &["diff", "--", &file_path]).unwrap_or_default();
+        return (200, "text/plain; charset=utf-8", diff.into_bytes());
+    }
+
+    // /__worklist-history/list — reverse-chronological list of snapshots
+    // from resources/worklist-history/, each with a one-line summary
+    // parsed from the .md changelog.
+    if path == "__worklist-history/list" {
+        let Some(dir) = worklist_history_dir(app) else {
+            return (200, "application/json; charset=utf-8", b"[]".to_vec());
+        };
+        let mut json_files: Vec<(i64, PathBuf)> = Vec::new();
+        if let Ok(read_dir) = std::fs::read_dir(&dir) {
+            for entry in read_dir.flatten() {
+                let p = entry.path();
+                if p.extension().map_or(false, |e| e == "json") {
+                    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                        if let Ok(ts) = stem.parse::<i64>() {
+                            json_files.push((ts, p));
+                        }
+                    }
+                }
+            }
+        }
+        json_files.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut entries: Vec<serde_json::Value> = Vec::new();
+        for (ts, json_path) in json_files {
+            let md_path = json_path.with_extension("md");
+            let changelog = std::fs::read_to_string(&md_path).unwrap_or_default();
+            let summary = changelog
+                .lines()
+                .find(|l| l.starts_with("**Summary:**"))
+                .map(|l| l.trim_start_matches("**Summary:**").trim().to_string())
+                .unwrap_or_else(|| String::from("change"));
+            entries.push(serde_json::json!({
+                "ts": ts,
+                "iso": format_iso_utc(ts),
+                "summary": summary,
+                "changelog": changelog,
+            }));
+        }
+        let body = serde_json::to_vec(&entries).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    // /__worklist-history/changelog?ts=<unix_ms> — raw .md body
+    if path == "__worklist-history/changelog" {
+        let mut ts = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("ts=") {
+                ts = percent_decode(v);
+                break;
+            }
+        }
+        let Some(dir) = worklist_history_dir(app) else {
+            return (404, "text/plain; charset=utf-8", Vec::new());
+        };
+        let p = dir.join(format!("{}.md", ts));
+        return match std::fs::read(&p) {
+            Ok(bytes) => (200, "text/markdown; charset=utf-8", bytes),
+            Err(_) => (404, "text/plain; charset=utf-8", Vec::new()),
+        };
+    }
+
+    // /__worklist-history/snapshot?ts=<unix_ms> — raw .json snapshot
+    if path == "__worklist-history/snapshot" {
+        let mut ts = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("ts=") {
+                ts = percent_decode(v);
+                break;
+            }
+        }
+        let Some(dir) = worklist_history_dir(app) else {
+            return (404, "text/plain; charset=utf-8", Vec::new());
+        };
+        let p = dir.join(format!("{}.json", ts));
+        return match std::fs::read(&p) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(_) => (404, "text/plain; charset=utf-8", Vec::new()),
+        };
+    }
+
     // worklist.json is the worklist convention. Treat it as always-present
     // (empty when the project hasn't opted in) so the Workspace tool can
     // poll without flooding devtools with 404s in guest projects.
@@ -3860,6 +4343,10 @@ pub fn run() {
                 eprintln!("[watcher] could not resolve project root");
                 return Ok(());
             };
+            // Seed the worklist cache so the first detected change can
+            // diff against the on-disk baseline rather than treating the
+            // entire current file as "new".
+            init_worklist_cache(app.handle());
             // Watch contract: events are emitted on two channels, NOT one.
             //   - "right-pane-reload" fires for changes inside proj_root only;
             //     main.js reloads the right-pane iframe alone. The agent
@@ -3988,6 +4475,18 @@ pub fn run() {
                         EventKind::Modify(_) | EventKind::Create(_)
                     ) {
                         continue;
+                    }
+                    // Worklist history capture. Worklist writes are otherwise
+                    // skipped by the ignored-resources rule below (they
+                    // shouldn't reload the iframe — the DataSource polls).
+                    // Detect them here, snapshot the prior contents, then
+                    // fall through to the normal skip.
+                    let is_worklist_event = event.paths.iter().any(|p| {
+                        p.ends_with("worklist.json")
+                            && p.components().any(|c| c.as_os_str() == "resources")
+                    });
+                    if is_worklist_event {
+                        maybe_snapshot_worklist(&app_handle);
                     }
                     // Skip events whose paths are entirely inside noisy or
                     // data-only directories. resources/ is data the DataSource

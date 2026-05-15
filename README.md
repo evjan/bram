@@ -34,11 +34,11 @@ It is a desktop app that connects an agent like Claude or Codex to the app you a
 Project conventions are authored in
 [`app/__shell/conventions.md`](./app/__shell/conventions.md). Claude is
 bound to that file directly through `CLAUDE.md` and the installed
-`.claude` hook/config path. Wrapped Codex launches do not have an
-equivalent repo-local prompt import path, but xmlui-desktop now seeds
-them with a concise startup instruction block covering the worklist
-flow, then relies on the same shared provider-neutral setup machinery
-plus local Codex config, memories, and rules.
+`.claude` hook/config path. Codex is bound through a repo-local
+`AGENTS.md` block installed by setup, with the shell startup seed as a
+backup for wrapped launches, then reinforced by the shared
+provider-neutral setup machinery plus local Codex config, memories, and
+rules.
 
 <img width="1379" height="857" alt="image" src="https://github.com/user-attachments/assets/51728554-ae75-4508-b70c-0716ed555479" />
 
@@ -97,7 +97,7 @@ On some Windows 11 setups, Smart App Control may block the unsigned binary — m
 
 - **Sessions** — HSplitter list of local claude/codex JSONL sessions on the left, selected session's turns on the right. Search runs server-side across user and assistant text; hits filter the right pane to matching paragraphs. Each row has a ✕ delete (with confirm) and a ✎ rename (Claude only, via `custom-title` append); after the action, the row dims and the buttons disable until the next agent restart picks up the change.
 
-- **Context** — provider-aware HSplitter view of the active agent's durable local context sources. For Claude, that means `CLAUDE.md`, its `@`-imports, the per-project memory tree, hooks, and settings. For Codex, that means Codex-side sources such as `~/.codex/config.toml`, project-local `.codex/` files when present, memories, and rules. Substring search shows grep-style hit snippets in the list and `snippetAroundLine` context on the right.
+- **Context** — provider-aware HSplitter view of the active agent's durable local context sources. For Claude, that means `CLAUDE.md`, its `@`-imports, the per-project memory tree, hooks, and settings. For Codex, that means repo-local `AGENTS.md` when present plus Codex-side sources such as `~/.codex/config.toml`, project-local `.codex/` files, memories, and rules. Substring search shows grep-style hit snippets in the list and `snippetAroundLine` context on the right.
 
 - **README** — the rendered project README, so the agent and the user share the same source-of-truth doc.
 
@@ -133,7 +133,7 @@ When the prompt runs, xmlui-desktop installs two layers:
 - A provider-neutral core: xmlui-desktop records the latest structured `approved:` / `drop:` payload in `resources/.worklist-authorization.json` and uses that local record when validating worklist removals. The desktop watcher can therefore revert an invalid prune even when the active provider has no native pre-tool hook support.
 - A Claude adapter: `.claude/hooks/worklist-guard.py`, registered in `.claude/settings.json` to fire on `Write|Edit`. PreToolUse hooks are Claude Code's harness-level extension point — they run *before* Claude actually invokes a tool, receive a JSON payload describing the pending call on stdin, and can exit 0 to allow it, exit 2 to block it (stderr goes back to Claude as a tool error), or fail to launch (non-blocking — the tool call still proceeds, with a warning shown).
 
-That means first-run setup is provider-aware in when it prompts, but not yet provider-specific in what it installs: today, launching either `claude` or `codex` and accepting the prompt will set up both the shared core and the current Claude adapter.
+That means first-run setup is provider-aware in when it prompts and partially provider-specific in what it installs: today, launching either `claude` or `codex` and accepting the prompt will set up the shared core, the Codex-side `AGENTS.md` guidance block, and the current Claude adapter.
 
 ### How `conventions.md` governs both agents
 
@@ -141,11 +141,12 @@ That means first-run setup is provider-aware in when it prompts, but not yet pro
 It governs Claude and Codex in different ways:
 
 - **Claude: direct prompt binding plus enforcement.** Setup copies that file to `.claude/xmlui-desktop-conventions.md`, adds an `@`-import block to `CLAUDE.md`, and installs the `worklist-guard.py` PreToolUse hook. A new Claude session therefore reads the conventions file directly and is also mechanically blocked from unsafe worklist edits.
-- **Codex: startup seed plus shared local enforcement.** Codex does not have a repo-local equivalent of Claude's `CLAUDE.md` import chain, so xmlui-desktop does not inject the full conventions file into every Codex session. Instead, wrapped `codex` launches receive a concise startup seed covering the worklist lifecycle, and the app reinforces that with shared local behavior, especially the authorization rules enforced through `resources/.worklist-authorization.json` and the watcher-revert fallback.
+- **Codex: repo-local AGENTS.md plus shared local enforcement.** Setup writes a marked xmlui-desktop block into repo-root `AGENTS.md`, which Codex loads as project instructions. Wrapped `codex` launches also receive the same concise worklist guidance as a startup seed. The app reinforces that with shared local behavior, especially the authorization rules enforced through `resources/.worklist-authorization.json` and the watcher-revert fallback.
 
 So the practical rule is: both agents are governed by the worklist
-conventions, but only Claude currently auto-loads the full
-`conventions.md` text as repo-bound session instructions.
+conventions, but Claude gets the full conventions import while Codex
+gets the concise repo-local AGENTS guidance focused on the worklist
+flow.
 
 `worklist-guard.py` watches Write/Edit operations targeting `resources/worklist.json`. It simulates the change, diffs items by `id`, and for any item that would disappear it checks the `status`:
 

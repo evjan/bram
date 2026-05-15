@@ -1903,6 +1903,11 @@ fn hinted_session_provider<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<Sess
     SessionProvider::from_str(record.get("provider")?.as_str()?)
 }
 
+fn active_agent_hint_mtime<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<std::time::SystemTime> {
+    let path = active_agent_hint_path(app).ok()?;
+    std::fs::metadata(path).ok()?.modified().ok()
+}
+
 fn claude_sessions_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let root = project_root(Some(app)).ok_or("could not resolve project root")?;
     let abs = strip_unc_prefix(root.canonicalize().map_err(|e| e.to_string())?);
@@ -2589,30 +2594,27 @@ fn latest_session_path<R: tauri::Runtime>(
     preferred: Option<SessionProvider>,
 ) -> Result<Option<std::path::PathBuf>, String> {
     let hinted = preferred.or_else(|| hinted_session_provider(app));
-    match hinted {
-        Some(SessionProvider::Claude) => latest_claude_session_path(app),
-        Some(SessionProvider::Codex) => latest_codex_session_path(app),
-        None => {
-            let claude = latest_claude_session_path(app)?;
-            let codex = latest_codex_session_path(app)?;
-            match (claude, codex) {
-                (Some(c), None) => Ok(Some(c)),
-                (None, Some(c)) => Ok(Some(c)),
-                (None, None) => Ok(None),
-                (Some(claude_path), Some(codex_path)) => {
-                    let claude_mtime = claude_path
-                        .metadata()
-                        .ok()
-                        .and_then(|md| md.modified().ok());
-                    let codex_mtime = codex_path.metadata().ok().and_then(|md| md.modified().ok());
-                    Ok(match (claude_mtime, codex_mtime) {
-                        (Some(c), Some(x)) if x >= c => Some(codex_path),
-                        _ => Some(claude_path),
-                    })
-                }
-            }
-        }
+    let Some(provider) = hinted else {
+        return Ok(None);
+    };
+    let path = match provider {
+        SessionProvider::Claude => latest_claude_session_path(app)?,
+        SessionProvider::Codex => latest_codex_session_path(app)?,
+    };
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let Some(hint_mtime) = active_agent_hint_mtime(app) else {
+        return Ok(None);
+    };
+    let session_mtime = match std::fs::metadata(&path).and_then(|md| md.modified()) {
+        Ok(mtime) => mtime,
+        Err(_) => return Ok(None),
+    };
+    if session_mtime < hint_mtime {
+        return Ok(None);
     }
+    Ok(Some(path))
 }
 
 // Tail variant: return only the last N records of the JSONL. Lets Transcript
@@ -2891,6 +2893,8 @@ fn mime_for(path: &std::path::Path) -> &'static str {
 const ENHANCE_MARKER_START: &str = "<!-- xmlui-desktop:start -->";
 const ENHANCE_MARKER_END: &str = "<!-- xmlui-desktop:end -->";
 const ENHANCE_SIDECAR_REL: &str = ".claude/xmlui-desktop-conventions.md";
+const ENHANCE_CODEX_AGENTS_REL: &str = "AGENTS.md";
+const ENHANCE_CODEX_BUNDLE_REL: &str = "shell/codex-startup-instructions.md";
 const ENHANCE_HOOK_SCRIPT_REL: &str = ".claude/hooks/worklist-guard.py";
 const ENHANCE_SETTINGS_REL: &str = ".claude/settings.json";
 const ENHANCE_HOOK_BUNDLE_REL: &str = "__shell/worklist-guard.py";
@@ -3233,6 +3237,15 @@ fn collect_codex_context_files<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<Con
 
     let codex_dir = home.join(".codex");
     let config_toml = codex_dir.join("config.toml");
+    let agents_md = proj_root.join("AGENTS.md");
+    if agents_md.exists() {
+        out.push(ContextFile {
+            category: "project",
+            path: agents_md,
+            display: "AGENTS.md".to_string(),
+            kind: Some("codex-agents"),
+        });
+    }
     if config_toml.exists() {
         out.push(ContextFile {
             category: "project",
@@ -3374,7 +3387,7 @@ fn context_list<R: tauri::Runtime>(
         ),
         SessionProvider::Codex => (
             "codex",
-            "Codex Context shows durable Codex-side sources on this machine, such as `~/.codex/config.toml`, project-local `.codex/` files when present, memories, and rules. Codex does not use Claude's `CLAUDE.md` import chain.",
+            "Codex Context shows the repo-local `AGENTS.md` instructions when present plus durable Codex-side sources on this machine, such as `~/.codex/config.toml`, project-local `.codex/` files, memories, and rules.",
             vec![
                 json!({ "key": "project", "label": "Project", "items": project }),
                 json!({ "key": "memory", "label": "Memories", "items": memory }),
@@ -3453,6 +3466,7 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     use serde_json::json;
     let proj = project_root(Some(app)).ok_or("no project root")?;
     let claude_md = proj.join("CLAUDE.md");
+    let codex_agents = proj.join(ENHANCE_CODEX_AGENTS_REL);
     let sidecar = proj.join(ENHANCE_SIDECAR_REL);
     let hook_script = proj.join(ENHANCE_HOOK_SCRIPT_REL);
     let settings = proj.join(ENHANCE_SETTINGS_REL);
@@ -3465,11 +3479,15 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let sidecar_exists = sidecar.exists() || proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
     let hook_script_exists = hook_script.exists();
     let hook_registered = settings_has_worklist_guard_hook(&settings);
+    let codex_agents_has_marker = std::fs::read_to_string(&codex_agents)
+        .map(|s| s.contains(ENHANCE_MARKER_START))
+        .unwrap_or(false);
     let core_installed = worklist_auth.exists();
     let claude_installed =
         claude_md_has_marker && sidecar_exists && hook_script_exists && hook_registered;
+    let codex_installed = core_installed && codex_agents_has_marker;
     let claude_needs_setup = !core_installed || !claude_installed;
-    let codex_needs_setup = !core_installed;
+    let codex_needs_setup = !core_installed || !codex_installed;
     let provider_needs_setup = match active_provider {
         Some(SessionProvider::Claude) => claude_needs_setup,
         Some(SessionProvider::Codex) => codex_needs_setup,
@@ -3481,20 +3499,22 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         None => serde_json::Value::Null,
     };
     let body = serde_json::json!({
-        "enhanced": core_installed && claude_installed,
+        "enhanced": core_installed && claude_installed && codex_installed,
         "activeProvider": active_provider_json,
         "coreInstalled": core_installed,
         "claudeInstalled": claude_installed,
-        "codexInstalled": core_installed,
+        "codexInstalled": codex_installed,
         "claudeNeedsSetup": claude_needs_setup,
         "codexNeedsSetup": codex_needs_setup,
         "providerNeedsSetup": provider_needs_setup,
         "claudeMd": claude_md_has_marker,
+        "codexAgents": codex_agents_has_marker,
         "sidecar": sidecar_exists,
         "hookScript": hook_script_exists,
         "hookRegistered": hook_registered,
         "fallbackMode": "watcher-revert",
         "claudeMdPath": claude_md.display().to_string(),
+        "codexAgentsPath": codex_agents.display().to_string(),
         "sidecarPath": sidecar.display().to_string(),
         "hookScriptPath": hook_script.display().to_string(),
         "settingsPath": settings.display().to_string(),
@@ -3552,6 +3572,36 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
             .map_err(|e| format!("write sidecar: {}", e))?;
         wrote.push(sidecar_path.display().to_string());
     }
+
+    let codex_agents_path = proj.join(ENHANCE_CODEX_AGENTS_REL);
+    let (codex_seed_bytes, _mime) = serve_app_file(Some(app), ENHANCE_CODEX_BUNDLE_REL)
+        .ok_or_else(|| "codex startup instructions bundle not found".to_string())?;
+    let codex_seed = String::from_utf8(codex_seed_bytes)
+        .map_err(|e| format!("codex startup instructions not utf-8: {}", e))?;
+    let codex_block = format!(
+        "{}\n{}\n{}",
+        ENHANCE_MARKER_START,
+        codex_seed.trim_end(),
+        ENHANCE_MARKER_END
+    );
+    let existing_agents = std::fs::read_to_string(&codex_agents_path).unwrap_or_default();
+    let new_agents = if let Some(start_idx) = existing_agents.find(ENHANCE_MARKER_START) {
+        let tail = &existing_agents[start_idx..];
+        let end_offset = tail
+            .find(ENHANCE_MARKER_END)
+            .map(|i| start_idx + i + ENHANCE_MARKER_END.len())
+            .unwrap_or(existing_agents.len());
+        let mut s = existing_agents.clone();
+        s.replace_range(start_idx..end_offset, &codex_block);
+        s
+    } else if existing_agents.is_empty() {
+        format!("{}\n", codex_block)
+    } else {
+        format!("{}\n\n{}\n", existing_agents.trim_end(), codex_block)
+    };
+    std::fs::write(&codex_agents_path, &new_agents)
+        .map_err(|e| format!("write AGENTS.md: {}", e))?;
+    wrote.push(codex_agents_path.display().to_string());
 
     // Proposal-guard hook script (idempotent — same content on re-run).
     let (hook_bytes, _mime) = serve_app_file(Some(app), ENHANCE_HOOK_BUNDLE_REL)

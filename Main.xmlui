@@ -37,7 +37,8 @@ drawer with seven views:
 - **Sessions** — read/search past Claude and Codex transcripts.
 - **Context** — the active provider's durable local context sources:
   Claude shows `CLAUDE.md`, imports, memory, hooks, and settings;
-  Codex shows local Codex config, memories, and rules.
+  Codex shows repo-local `AGENTS.md` plus local Codex config,
+  memories, and rules.
 - **README** — this project's README for quick reference." />
   </VStack>
 </App>

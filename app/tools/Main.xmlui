@@ -172,7 +172,7 @@
 <Text fontSize="$fontSize-sm">
   {enhanceStatus.value.activeProvider === 'claude'
     ? 'Claude is active in this repo. Run setup once to install the shared worklist-enforcement core plus the Claude-specific conventions import and hook.'
-    : 'Codex is active in this repo. Run setup once to install the shared worklist-enforcement core. Today that same setup run also installs the Claude-side conventions import and hook, so a later Claude launch in this repo will usually not prompt again.'}
+    : 'Codex is active in this repo. Run setup once to install the shared worklist-enforcement core plus a repo-local AGENTS.md block that teaches Codex the worklist flow. The same setup run also installs the Claude-side conventions import and hook, so a later Claude launch in this repo will usually not prompt again.'}
 </Text>
 <Text
   when="{enhanceStatus.value.activeProvider === 'claude'}"
@@ -184,7 +184,7 @@
   when="{enhanceStatus.value.activeProvider === 'codex'}"
   fontSize="$fontSize-sm"
   color="$textColor-secondary">
-  After setup runs, later Codex launches in this repo should not prompt again unless the shared core is removed. Because setup also seeds the current Claude adapter, later Claude launches should usually skip the prompt too.
+  After setup runs, later Codex launches in this repo should read the repo-local AGENTS.md guidance and should not prompt again unless those artifacts are removed. Because setup also seeds the current Claude adapter, later Claude launches should usually skip the prompt too.
 </Text>
 <HStack>
   <Button

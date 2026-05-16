@@ -40,7 +40,7 @@ backup for wrapped launches, then reinforced by the shared
 provider-neutral setup machinery plus local Codex config, memories, and
 rules.
 
-<img width="1379" height="857" alt="image" src="https://github.com/user-attachments/assets/51728554-ae75-4508-b70c-0716ed555479" />
+<img width="1508" height="852" alt="image" src="https://github.com/user-attachments/assets/c5954062-0eca-4c8e-a875-22ec84a09b27" />
 
 
 ## Prerequisites

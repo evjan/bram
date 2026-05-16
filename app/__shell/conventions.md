@@ -218,13 +218,49 @@ the authorization channel.
 
 ### When to route through the worklist
 
-Default to proposing items in `resources/worklist.json` whenever a
-change spans more than one file, or has more than ~2 discrete
-sub-edits in a single file, even after the user has verbally said
-"do it". The two-stage proposed→applied flow lets the user uncheck
-individual sub-edits before any code is touched. Single-file tweaks,
-typo fixes, and direct corrections to in-progress code can still be
-edited directly.
+**Default: every change request goes through `resources/worklist.json`.**
+Single-file, single-line, single-attribute — size doesn't matter.
+Propose first, wait for the user's `approved:` payload, then apply.
+The two-stage proposed → applied flow lets the user redirect or veto
+before any code is touched, and the worklist history serves as the
+audit trail for what landed and why.
+
+Skip the worklist only in these specific contexts, never because the
+change is "small":
+
+- **Explicit user opt-out in this turn.** The user types something
+  like "just do it", "commit directly, no worklist", "inline the
+  fix", "no worklist for this", "skip the worklist". The opt-out
+  must be in the same turn as the change request — don't carry it
+  forward across turns or infer it from past patterns. "Looks good"
+  is not opt-out (see *Don't infer commit / drop / advance from
+  feedback*).
+- **Correcting code you just wrote in the current iteration.**
+  If you wrote a typo or off-by-one in the last assistant turn and
+  you're fixing it on the next turn, that's iteration on
+  in-progress work, not a fresh change request. Direct fix is
+  fine.
+- **Iterating on an uncommitted draft.** If the user and you are
+  bouncing edits on a file that hasn't been committed yet — e.g.,
+  shaping a new component during the same conversation — direct
+  edits keep the loop tight. Once the draft is committed, fresh
+  edits become change requests and route through the worklist.
+
+Worked examples:
+
+- "let's fix the top row layout" → propose (fresh change request;
+  size is irrelevant).
+- "center it to match" as a follow-up to a clarifying question
+  about the top-row layout → propose (clarifying didn't authorize
+  direct edit; it just resolved ambiguity).
+- "oh wait, you wrote `intialValue` — typo on line 12" → direct fix
+  (correcting in-progress code from the previous turn).
+- "fix the off-by-one in the loop you just added" → direct fix
+  (same).
+- "fix the top row layout, just do it, no worklist" → direct edit
+  (explicit opt-out in the same turn).
+- "add a chart" + "let's fix the layout too" → propose (multi-step,
+  but this was always the case).
 
 ### Write item prose for the future-agent reader
 

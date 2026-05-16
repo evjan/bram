@@ -268,8 +268,9 @@ Write item `before`/`after` prose with the future-agent reader in
 mind, not just the human triaging it today. Name alternatives
 considered and why they were rejected, not just the chosen path.
 The agent who reads this snapshot months from now does not have
-the conversation that produced it — the committed worklist history
-(see `docs/worklist-history.md`) is their only retrieval. A terse
+the conversation that produced it — if the repo has opted in to
+committing worklist history, that archive (see
+`docs/worklist-history.md`) is their retrieval. A terse
 "add the diff viewer" leaves nothing for them to grep; an item
 that says "considered (a) embedded diff via DataSource, (b) server
 augmentation via /__worklist, (c) full-tree diff — chose (b)
@@ -286,23 +287,25 @@ which is the actual test.
 
 **Enforcement layers.** xmlui-desktop records structured `approved:` /
 `drop:` payloads in `resources/.worklist-authorization.json`. That is
-the provider-neutral authorization record for worklist state changes. On
-Claude, xmlui-desktop also installs a PreToolUse hook at
-`.claude/hooks/worklist-guard.py` that validates `Write` / `Edit`
-operations on `resources/worklist.json` before the tool runs. On
-providers without a native pre-tool hook, the desktop watcher compares
-the old/new worklist snapshots and rewrites the old file back if the
-prune was not authorized. If you hit either path, read the error or
-revert message; it is the convention's enforcement mechanism, not a bug
-to work around.
+the provider-neutral authorization record for worklist state changes.
+Claude installs a PreToolUse hook at `.claude/hooks/worklist-guard.py`
+for `Write` / `Edit`, and Codex installs its own native PreToolUse hook
+through `~/.codex/config.toml` to cover `apply_patch`, mutation-shaped
+Bash, and filesystem/MCP writes. Both hooks validate worklist coverage
+before the tool runs. The desktop watcher remains as fallback coverage:
+it compares the old/new worklist snapshots and rewrites the old file
+back if the prune was not authorized or if a hook failed to launch. If
+you hit either path, read the error or revert message; it is the
+convention's enforcement mechanism, not a bug to work around.
 
-**Don't ask before editing the worklist.** On Claude, `Write(./resources/worklist.json)`
-and `Edit(./resources/worklist.json)` are allow-listed in
-`.claude/settings.json`, and the hook validates the content. On other
-providers, the local authorization record plus watcher fallback is the
-safety net. Either way, there is no need to verbally confirm with the
-user before adding, advancing, or pruning worklist items — the channel
-is already approved and unsafe removals will be rejected or reverted.
+**Don't ask before editing the worklist.** The write channel is already
+approved and guarded. Claude's allow-listed `Write(./resources/worklist.json)`
+and `Edit(./resources/worklist.json)` calls are validated by its hook,
+and Codex mutations are validated by its matching PreToolUse hook. The
+shared authorization record plus watcher fallback remain behind both.
+Either way, there is no need to verbally confirm with the user before
+adding, advancing, or pruning worklist items — unsafe removals will be
+rejected or reverted.
 Save the verbal back-and-forth for design decisions (which items to
 propose, what choices to bake in), not for the mechanical write.
 

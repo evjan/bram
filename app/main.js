@@ -717,9 +717,9 @@ const { listen } = window.__TAURI__.event;
     });
   listen("right-pane-reload", reloadRightPaneOnly);
   listen("tools-pane-reload", reloadAll);
-  // Push Claude Code session JSONL changes to the tools iframe so Talk
-  // can refetch its DataSource immediately — the menu state lives in a
-  // window that's usually shorter than the poll interval.
+  // Push session JSONL changes to the tools iframe so Transcript /
+  // Workspace can refetch immediately — some menu / turn-boundary state
+  // lives in a window that's usually shorter than the fallback poll interval.
   listen("talk-session-changed", () => {
     const tools = document.getElementById("tools-pane");
     if (tools && tools.contentWindow) {

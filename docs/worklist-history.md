@@ -28,9 +28,9 @@ Two audiences, weighted differently over time:
 The implication for prose authors (agent or human): write
 `before`/`after` more for the long-tail reader than for the human
 reviewing today. Name alternatives considered, not just the chosen
-path. Be specific about constraints and reasoning. The agent
-grepping the snapshots next year has no other retrieval — the
-committed worklist history is their context.
+path. Be specific about constraints and reasoning. If a repo opts in
+to committing worklist-history snapshots, the agent grepping them next
+year has no other retrieval — that committed history is their context.
 
 ## Flow
 
@@ -124,11 +124,13 @@ the prose of each item that moved through the transition.
 
 xmlui-desktop is launched against an arbitrary project, so the
 history directory is created inside that project's `resources/`.
-Each project decides independently whether to commit
-`resources/worklist-history/` or keep it gitignored.
+Local snapshots are always written. Whether those files become part of
+the repo's committed history is a separate, opt-in decision made by
+each project.
 
-The choice is expressed via the project's `.gitignore` — no XMLUI
-config or runtime flag is involved. A project that wants to opt out
-adds `resources/worklist-history/` to `.gitignore`; a project that
-wants to track history simply omits the path and stages the snapshot
-files alongside whatever feature work produced them.
+That choice is expressed via the project's `.gitignore` — no XMLUI
+config or runtime flag is involved. A project that wants committed
+history removes `resources/worklist-history/` from `.gitignore` and
+stages the snapshot files alongside the feature work they explain. A
+project that has not opted in keeps the path gitignored, so the
+snapshots remain local-only audit trail.

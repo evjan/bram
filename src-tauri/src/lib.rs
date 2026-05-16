@@ -5374,16 +5374,20 @@ pub fn run() {
             } else {
                 eprintln!("[watcher] no on-disk app/; using embedded tree (no app/ reload)");
             }
-            // Claude Code's per-project session JSONL lives under
-            // ~/.claude/projects/<encoded>/<session-id>.jsonl. Watch the
-            // directory (not the file — the file rotates per session and may
-            // not exist at startup). Used to push talk-session-changed events
-            // so the Transcript pane refreshes immediately instead of waiting
-            // on the next DataSource poll.
-            let sessions_dir = claude_sessions_dir(&app.handle()).ok();
+            // Provider session JSONLs get their own dispatch. Watch the
+            // containing roots (not the file — the file rotates per session
+            // and may not exist at startup) so the tools pane can refetch
+            // immediately instead of waiting on fallback polling.
+            let claude_sessions_dir = claude_sessions_dir(&app.handle()).ok();
+            let codex_sessions_dir = home_dir().map(|h| h.join(".codex").join("sessions"));
             let mut watch_paths: Vec<std::path::PathBuf> = vec![proj_root_path.clone()];
             watch_paths.extend(tools_pane_paths.iter().cloned());
-            if let Some(ref sd) = sessions_dir {
+            if let Some(ref sd) = claude_sessions_dir {
+                if sd.exists() {
+                    watch_paths.push(sd.clone());
+                }
+            }
+            if let Some(ref sd) = codex_sessions_dir {
                 if sd.exists() {
                     watch_paths.push(sd.clone());
                 }
@@ -5439,15 +5443,14 @@ pub fn run() {
                         Err(RecvTimeoutError::Disconnected) => break,
                     };
 
-                    // Claude Code session JSONL changes get their own
-                    // dispatch. The Transcript pane subscribes to
-                    // talk-session-changed and refetches its DataSource
-                    // without waiting on the regular poll interval.
-                    let is_session_event = sessions_dir.as_ref().map_or(false, |sd| {
-                        event.paths.iter().any(|p| {
-                            p.starts_with(sd)
-                                && p.extension().map_or(false, |e| e == "jsonl")
-                        })
+                    // Session JSONL changes get their own dispatch. The
+                    // Transcript / Workspace panes subscribe to
+                    // talk-session-changed and refetch without waiting on
+                    // the regular fallback poll interval.
+                    let is_session_event = event.paths.iter().any(|p| {
+                        p.extension().map_or(false, |e| e == "jsonl")
+                            && (claude_sessions_dir.as_ref().map_or(false, |sd| p.starts_with(sd))
+                                || codex_sessions_dir.as_ref().map_or(false, |sd| p.starts_with(sd)))
                     });
                     if is_session_event {
                         if last_session_emit.elapsed() < Duration::from_millis(100) {

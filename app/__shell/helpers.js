@@ -238,10 +238,10 @@ window.getRightPaneSize = function (callback) {
   );
 };
 
-// Subscribe to "Claude Code session JSONL changed" events pushed by the
-// parent shell. Used by Talk to refetch its DataSource immediately on
-// any session-file write — eliminates the poll-window lag where the
-// approval menu could come and go between ticks.
+// Subscribe to session-JSONL change events pushed by the parent shell.
+// Used by Transcript / Workspace to refetch immediately on provider
+// session-file writes — eliminates the poll-window lag where short-lived
+// menu or turn-boundary state could come and go between ticks.
 var __talkSessionSubscriber = null;
 window.onTalkSessionChange = function (fn) {
   __talkSessionSubscriber = typeof fn === "function" ? fn : null;

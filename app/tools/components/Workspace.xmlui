@@ -4,12 +4,20 @@
   var.submitting="{!!getInflight()}"
   var.expandedItemId="{null}"
   var.expandedSnapshotTs="{null}"
-  var.lastJsonl="{null}">
+  var.lastJsonl="{null}"
+  var.sessionTick="{0}"
+  var.sessionRefreshArmed="{false}">
+  <DataSource
+    id="sessionMeta"
+    url="/__sessions/latest-meta"
+    pollIntervalInSeconds="5" />
+  <ChangeListener
+    listenTo="{sessionMeta.value && (sessionMeta.value.size + ':' + sessionMeta.value.mtime)}"
+    onDidChange="sessionTick = sessionTick + 1" />
   <DataSource
     id="sessionTail"
-    url="/__sessions/latest-tail?lines=200"
-    dataType="text"
-    pollIntervalInSeconds="1" />
+    url="/__sessions/latest-tail?lines=200&amp;t={sessionTick}"
+    dataType="text" />
   <ChangeListener
     listenTo="{sessionTail.value}"
     onDidChange="(c) => {
@@ -19,18 +27,23 @@
       // is isAgentIdle (looks for end_turn on Claude or task_complete on
       // codex) rather than isWaitingForAssistant (which flips false the
       // moment the assistant emits any text and would undim mid-turn
-      // during narration). The 3s grace gives the user message time to
-      // land in the JSONL. The stale-timeout check in worklist onLoaded
-      // below is the long-tail safety net for sessions that never idle.
+      // during narration). Keep only a short grace so the freshly-sent
+      // user turn has time to land in the JSONL, then refetch the
+      // worklist/history immediately when the agent goes idle instead
+      // of waiting on the slower follow-on polls. The stale-timeout
+      // check in worklist onLoaded below is the long-tail safety net
+      // for sessions that never idle.
       const stored = getInflight();
       if (!stored) return;
       const elapsed = Date.now() - (stored.ts || 0);
-      if (elapsed < 3000) return;
+      if (elapsed < 750) return;
       if (!isAgentIdle(c.newValue)) return;
       clearInflight();
       submitting = false;
       saveChecked([]);
       checked = [];
+      worklist.refetch();
+      history.refetch();
     }" />
   <DataSource
     id="worklist"
@@ -40,6 +53,19 @@
       const items = (data && data.items) || [];
       const stored = getInflight();
       if (stored) {
+        const sig = items
+          .filter(i => i && i.id)
+          .map(i => i.id + ':' + (i.status || 'proposed'))
+          .sort()
+          .join(',');
+        if (sig !== (stored.ids || '')) {
+          clearInflight();
+          submitting = false;
+          saveChecked([]);
+          checked = [];
+          checked = pruneChecked(items.map(i => i.id));
+          return;
+        }
         // 180s stale-timeout safety net for cases where the agent never
         // emits a textful response (e.g., it crashes or the user kills
         // the session). The session-activity clear lives in the
@@ -60,7 +86,17 @@
     url="/__worklist-history/list"
     pollIntervalInSeconds="10" />
 
-  <VStack padding="$space-6" gap="$space-6">
+  <VStack
+    padding="$space-6"
+    gap="$space-6"
+    onInit="onTalkSessionChange(() => {
+      if (!submitting || sessionRefreshArmed) return;
+      sessionRefreshArmed = true;
+      setTimeout(() => {
+        sessionRefreshArmed = false;
+        if (submitting) sessionTick = sessionTick + 1;
+      }, 400);
+    })">
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3" opacity="{submitting ? 0.3 : 1}">
         <Heading level="h2">Worklist</Heading>

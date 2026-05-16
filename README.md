@@ -89,13 +89,13 @@ On some Windows 11 setups, Smart App Control may block the unsigned binary — m
 
 - **Transcript** — the current active-session transcript for Claude or Codex. It follows the current session and renders turns plus inline tool activity for both providers, but it is intentionally a reader, not a full realtime control surface. Use Sessions to browse/search older transcripts.
 
-- **Worklist** — the two-stage `proposed → applied → committed` approval surface that coordinates multi-step agent work. Each item is a small, independently approvable diff with a `before → after` summary; the agent applies on TO APPLY approval and commits only on TO COMMIT approval, never unilaterally.
+- **Worklist** — the two-stage `proposed → applied → committed` approval surface that coordinates multi-step agent work. Each item is a small, independently approvable diff with a `before → after` summary; the agent applies on TO APPLY approval and commits only on TO COMMIT approval, never unilaterally. xmlui-desktop always writes local `resources/worklist-history/` snapshots for auditability, while committing that directory is an opt-in repo policy.
 
 - **Commits** — HSplitter list of recent commits on the left, selected commit on the right. Full-history search via `git log --grep` across subject, body, and author; matched commits expand to clickable hit-row snippets, and the right pane stacks `snippetAroundLine` previews for every hit. The right-pane header is an `ExpandableItem` revealing the full commit message body. Unpushed commits surface a "Push" button that runs `git push origin`.
 
 - **Issues** — HSplitter list of GitHub issues on the left (via `gh issue list`), selected issue on the right. Search runs `gh issue list --search` and tags hits per title/body line; clicking a hit filters the right-pane body to paragraphs containing the query. The expanded issue refetches every 30s so edits made via `gh` or github.com surface without collapse-and-reopen.
 
-- **Sessions** — HSplitter list of local claude/codex JSONL sessions on the left, selected session's turns on the right. Search runs server-side across user and assistant text; hits filter the right pane to matching paragraphs. Each row has a ✕ delete (with confirm) and a ✎ rename (Claude only, via `custom-title` append); after the action, the row dims and the buttons disable until the next agent restart picks up the change.
+- **Sessions** — HSplitter list of local claude/codex JSONL sessions on the left, selected session's turns on the right. Search runs server-side across user and assistant text; hits filter the right pane to matching paragraphs. Each row has a ✕ delete (with confirm) and a ✎ rename: on Claude the rename appends a `custom-title` record to the session JSONL, on codex it appends a `{id,thread_name,updated_at}` entry to `~/.codex/session_index.jsonl`. After the action, the row dims and the buttons disable until the next agent restart picks up the change. Codex's `/resume` creates a forked session with a new id, so the `[current]` marker won't follow a renamed codex session — the rename modal documents that caveat inline.
 
 - **Context** — provider-aware HSplitter view of the active agent's durable local context sources. For Claude, that means `CLAUDE.md`, its `@`-imports, the per-project memory tree, hooks, and settings. For Codex, that means repo-local `AGENTS.md` when present plus Codex-side sources such as `~/.codex/config.toml`, project-local `.codex/` files, memories, and rules. Substring search shows grep-style hit snippets in the list and `snippetAroundLine` context on the right.
 
@@ -125,15 +125,18 @@ Current behavior:
 
 - **Claude in a fresh repo** — prompt once. Setup installs the provider-neutral core plus the Claude-specific adapter.
 - **Claude in a repo that is already set up** — no prompt.
-- **Codex in a fresh repo** — prompt once. The prompt is provider-aware, but the current installer is shared, so running setup from Codex also seeds the current Claude-side adapter artifacts.
-- **Codex in a repo where setup has already run** — no prompt. There is currently no separate Codex adapter to install.
+- **Codex in a fresh repo** — prompt once. Setup installs the provider-neutral core, the codex hook adapter, and the codex `developer_instructions`, and it also refreshes the shared Claude-side artifacts that live in the repo.
+- **Codex in a repo where setup has already run** — no prompt. The repo and user-global Codex setup artifacts are already in place.
 
 When the prompt runs, xmlui-desktop installs two layers:
 
-- A provider-neutral core: xmlui-desktop records the latest structured `approved:` / `drop:` payload in `resources/.worklist-authorization.json` and uses that local record when validating worklist removals. The desktop watcher can therefore revert an invalid prune even when the active provider has no native pre-tool hook support.
-- A Claude adapter: `.claude/hooks/worklist-guard.py`, registered in `.claude/settings.json` to fire on `Write|Edit`. PreToolUse hooks are Claude Code's harness-level extension point — they run *before* Claude actually invokes a tool, receive a JSON payload describing the pending call on stdin, and can exit 0 to allow it, exit 2 to block it (stderr goes back to Claude as a tool error), or fail to launch (non-blocking — the tool call still proceeds, with a warning shown).
+- A provider-neutral core: xmlui-desktop records the latest structured `approved:` / `drop:` payload in `resources/.worklist-authorization.json` and uses that local record when validating worklist removals. The desktop watcher can revert an invalid prune as a defense-in-depth fallback if a hook ever fails to fire.
+- A Claude adapter: `.claude/hooks/worklist-guard.py`, registered in `.claude/settings.json` to fire on `Write|Edit`. The hook denies edits to project files not covered by a proposed/applied worklist item (with explicit opt-out phrases in the last user message as the escape hatch), and validates worklist-prune authorization for changes to `resources/worklist.json` itself.
+- A codex adapter: `~/.xmlui-desktop/codex-worklist-guard.py`, registered in `~/.codex/config.toml` as a `PreToolUse` hook with matcher `^(apply_patch|Bash|Write|Edit|mcp__.*)$`. Same coverage logic as the Claude hook, broadened to catch codex's `apply_patch` tool, mutation-shaped Bash commands, and MCP filesystem write/edit/create/move calls. Setup also writes `developer_instructions` into the codex config so the gate prose lands in the developer-role context part of every session, not just the user-role `AGENTS.md`.
 
-That means first-run setup is provider-aware in when it prompts and partially provider-specific in what it installs: today, launching either `claude` or `codex` and accepting the prompt will set up the shared core, the Codex-side `AGENTS.md` guidance block, and the current Claude adapter.
+PreToolUse hooks are the generic extension point — both Claude Code and codex expose them — so the two adapters share the same shape: each runs *before* the agent invokes a tool, receives a JSON payload describing the pending call on stdin, and can exit 0 to allow, return a deny decision to block (stderr/permissionDecisionReason goes back to the agent as a tool error), or fail to launch.
+
+That means first-run setup is provider-aware in when it prompts but provider-symmetric in what it installs: launching either `claude` or `codex` and accepting the prompt sets up the shared core, the codex-side `AGENTS.md` guidance block, the codex `developer_instructions`, and the Claude and codex hook adapters.
 
 ### How `conventions.md` governs both agents
 
@@ -141,19 +144,19 @@ That means first-run setup is provider-aware in when it prompts and partially pr
 It governs Claude and Codex in different ways:
 
 - **Claude: direct prompt binding plus enforcement.** Setup copies that file to `.claude/xmlui-desktop-conventions.md`, adds an `@`-import block to `CLAUDE.md`, and installs the `worklist-guard.py` PreToolUse hook. A new Claude session therefore reads the conventions file directly and is also mechanically blocked from unsafe worklist edits.
-- **Codex: repo-local AGENTS.md plus shared local enforcement.** Setup writes a marked xmlui-desktop block into repo-root `AGENTS.md`, which Codex loads as project instructions. Wrapped `codex` launches also receive the same concise worklist guidance as a startup seed. The app reinforces that with shared local behavior, especially the authorization rules enforced through `resources/.worklist-authorization.json` and the watcher-revert fallback.
+- **Codex: repo-local AGENTS.md plus native hook enforcement.** Setup writes a marked xmlui-desktop block into repo-root `AGENTS.md`, installs top-level `developer_instructions` in `~/.codex/config.toml`, and registers the codex worklist guard as a native `PreToolUse` hook. Wrapped `codex` launches also receive the same concise worklist guidance as a startup seed. The app reinforces that with the shared local authorization record in `resources/.worklist-authorization.json` and the watcher-revert fallback as defense in depth.
 
-So the practical rule is: both agents are governed by the worklist
-conventions, but Claude gets the full conventions import while Codex
-gets the concise repo-local AGENTS guidance focused on the worklist
-flow.
+So the practical rule is: both agents are governed by the same worklist
+conventions, with Claude reading the imported conventions file directly
+and Codex receiving the equivalent guidance through AGENTS, top-level
+`developer_instructions`, and its native hook adapter.
 
 `worklist-guard.py` watches Write/Edit operations targeting `resources/worklist.json`. It simulates the change, diffs items by `id`, and for any item that would disappear it checks the `status`:
 
 - `applied` (TO COMMIT) — removal allowed. Commit-then-prune is legitimate.
 - `proposed` (TO APPLY) — removal allowed **only** if the user's most recent message starts with `drop: {"ids":[...]}` listing that id.
 
-Violating writes are rejected with a "Blocked: removing X (status=proposed)..." stderr message that Claude sees and reacts to. On providers without a comparable pre-tool hook, xmlui-desktop falls back to watcher-based enforcement: it compares the old/new worklist snapshots, consults `resources/.worklist-authorization.json`, and rewrites the prior file contents back if the prune was not authorized. That fallback is later than a native hook, but it gives non-Claude providers an explicit enforcement path instead of leaving the worklist flow purely advisory.
+Violating writes are rejected with a "Blocked: removing X (status=proposed)..." stderr message that the agent sees and reacts to. Both providers run native PreToolUse hooks via this path, so the worklist-prune validation is enforced symmetrically. The watcher-based fallback (compare old/new worklist snapshots, consult `resources/.worklist-authorization.json`, restore prior contents if the prune wasn't authorized) is retained as defense-in-depth — it fires later than a native hook, but it covers the case where a hook fails to launch (e.g., Python missing) or where a future provider integration lacks a comparable extension point.
 
 The hook is a Python script and needs Python 3 to run. On macOS and Linux it's invoked directly via its shebang (`#!/usr/bin/env python3`), so `python3` must be on PATH — almost always the case. On Windows it's invoked via `py -3 <path>`; the `py` launcher ships with the python.org installer and resolves Python via the Windows registry, independent of PATH. If Python isn't installed at all, Claude Code shows "Failed with non-blocking status code" for every Write/Edit and the validator is silently inert — writes still proceed, but the worklist guard isn't actually checking them. Install Python 3 to enable enforcement.
 

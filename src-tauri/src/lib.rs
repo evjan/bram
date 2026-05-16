@@ -3619,6 +3619,27 @@ fn context_search<R: tauri::Runtime>(
     })
 }
 
+// Compare the on-disk copy of a hook script against the bundled copy
+// embedded in this binary. Returns false if the on-disk file is missing,
+// unreadable, or differs by even one byte from the bundle. Used by
+// enhance_status to flip claude_installed / codex_installed false when a
+// previously-set-up project still has a stale hook from an older release —
+// without this, the Setup button stays hidden after an upgrade and
+// enhance_run never re-fires to overwrite the stale file.
+fn hook_matches_bundle<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    on_disk: &Path,
+    bundle_rel: &str,
+) -> bool {
+    let Ok(disk_bytes) = std::fs::read(on_disk) else {
+        return false;
+    };
+    let Some((bundle_bytes, _)) = serve_app_file(Some(app), bundle_rel) else {
+        return false;
+    };
+    disk_bytes == bundle_bytes
+}
+
 fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     use serde_json::json;
     let proj = project_root(Some(app)).ok_or("no project root")?;
@@ -3628,6 +3649,7 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let hook_script = proj.join(ENHANCE_HOOK_SCRIPT_REL);
     let settings = proj.join(ENHANCE_SETTINGS_REL);
     let worklist_auth = proj.join(WORKLIST_AUTH_REL);
+    let codex_hook_script = home_dir().map(|h| h.join(ENHANCE_CODEX_HOOK_INSTALL_REL));
     let active_provider = hinted_session_provider(app);
     let claude_md_has_marker = std::fs::read_to_string(&claude_md)
         .map(|s| s.contains(ENHANCE_MARKER_START))
@@ -3635,14 +3657,20 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     // Source repo treats the bundle itself as the canonical sidecar.
     let sidecar_exists = sidecar.exists() || proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
     let hook_script_exists = hook_script.exists();
+    let hook_script_current =
+        hook_script_exists && hook_matches_bundle(app, &hook_script, ENHANCE_HOOK_BUNDLE_REL);
     let hook_registered = settings_has_worklist_guard_hook(&settings);
     let codex_agents_has_marker = std::fs::read_to_string(&codex_agents)
         .map(|s| s.contains(ENHANCE_MARKER_START))
         .unwrap_or(false);
+    let codex_hook_current = codex_hook_script
+        .as_ref()
+        .map(|p| hook_matches_bundle(app, p, ENHANCE_CODEX_HOOK_BUNDLE_REL))
+        .unwrap_or(false);
     let core_installed = worklist_auth.exists();
     let claude_installed =
-        claude_md_has_marker && sidecar_exists && hook_script_exists && hook_registered;
-    let codex_installed = core_installed && codex_agents_has_marker;
+        claude_md_has_marker && sidecar_exists && hook_script_current && hook_registered;
+    let codex_installed = core_installed && codex_agents_has_marker && codex_hook_current;
     let claude_needs_setup = !core_installed || !claude_installed;
     let codex_needs_setup = !core_installed || !codex_installed;
     let provider_needs_setup = match active_provider {
@@ -3668,6 +3696,8 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         "codexAgents": codex_agents_has_marker,
         "sidecar": sidecar_exists,
         "hookScript": hook_script_exists,
+        "hookScriptCurrent": hook_script_current,
+        "codexHookCurrent": codex_hook_current,
         "hookRegistered": hook_registered,
         "fallbackMode": "watcher-revert",
         "claudeMdPath": claude_md.display().to_string(),

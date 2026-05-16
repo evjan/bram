@@ -4325,12 +4325,21 @@ fn maybe_enforce_worklist_policy<R: tauri::Runtime>(
 // markdown changelog. Returns None when no meaningful change is detected
 // (no items proposed/advanced/renamed/pruned and description unchanged),
 // so the caller can suppress trivial snapshots.
-fn generate_worklist_changelog(
+// Classify each diffed worklist change by the lifecycle phase it represents:
+//   proposed:  new id introduced (status="proposed" or unset)
+//   applied:   existing id transitioned status (was proposed, now applied)
+//   committed: id removed AND auth record says kind="approved" for that id
+//   dropped:   id removed AND auth record says kind="drop" for that id
+// The 'renamed' and 'pruned' buckets from earlier versions were removed:
+// rename_from was retired in 67eff19, and unauthorized prunes are already
+// blocked by maybe_enforce_worklist_policy before they can reach the watcher,
+// so every removal flows through either the approved or drop channel.
+fn generate_worklist_changelog<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     prior: &serde_json::Value,
     current: &serde_json::Value,
     ts_ms: i64,
 ) -> Option<String> {
-    use std::collections::HashSet;
     let prior_items = worklist_items(prior);
     let current_items = worklist_items(current);
     let prior_by_id: HashMap<String, &serde_json::Value> = prior_items
@@ -4342,10 +4351,15 @@ fn generate_worklist_changelog(
         .filter_map(|i| worklist_item_id(i).map(|id| (id, i)))
         .collect();
 
+    // Read the auth record once so we can classify removals as committed,
+    // dropped, or pruned. Failure to load returns None → all removals fall
+    // back to the 'pruned' bucket.
+    let auth: Option<WorklistAuthorizationRecord> = worklist_auth_file(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+
     let mut proposed: Vec<&serde_json::Value> = Vec::new();
-    let mut advanced: Vec<(&serde_json::Value, String, String)> = Vec::new();
-    let mut renamed: Vec<(String, &serde_json::Value)> = Vec::new();
-    let mut renamed_olds: HashSet<String> = HashSet::new();
+    let mut applied: Vec<(&serde_json::Value, String, String)> = Vec::new();
 
     for item in &current_items {
         let id = match worklist_item_id(item) {
@@ -4357,35 +4371,37 @@ fn generate_worklist_changelog(
                 let prev_status = worklist_item_status(prev).to_string();
                 let new_status = worklist_item_status(item).to_string();
                 if prev_status != new_status {
-                    advanced.push((item, prev_status, new_status));
+                    applied.push((item, prev_status, new_status));
                 }
             }
             None => {
-                // A new addition: classify as a rename if rename_from
-                // points at a removed id, otherwise it's a fresh proposal.
-                let rename_from = item
-                    .get("rename_from")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                if let Some(old_id) = rename_from {
-                    if prior_by_id.contains_key(&old_id) {
-                        renamed.push((old_id.clone(), item));
-                        renamed_olds.insert(old_id);
-                        continue;
-                    }
-                }
                 proposed.push(item);
             }
         }
     }
-    let mut pruned: Vec<&serde_json::Value> = Vec::new();
+
+    let mut committed: Vec<&serde_json::Value> = Vec::new();
+    let mut dropped: Vec<&serde_json::Value> = Vec::new();
     for item in &prior_items {
         let id = match worklist_item_id(item) {
             Some(id) => id,
             None => continue,
         };
-        if !current_by_id.contains_key(&id) && !renamed_olds.contains(&id) {
-            pruned.push(item);
+        if current_by_id.contains_key(&id) {
+            continue;
+        }
+        // Removal classification: only emit history for authorized removals.
+        // Any unauthorized prune would have been reverted by
+        // maybe_enforce_worklist_policy before reaching the watcher, so the
+        // only way an id can disappear here is via an approved or drop auth.
+        if let Some(rec) = auth.as_ref() {
+            if rec.ids.iter().any(|i| i == &id) {
+                match rec.kind.as_str() {
+                    "approved" => committed.push(item),
+                    "drop" => dropped.push(item),
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -4393,13 +4409,14 @@ fn generate_worklist_changelog(
     let current_desc = worklist_description(current);
     let description_changed = prior_desc != current_desc;
 
-    // Suppress when the only changes are prunes (or nothing at all). The
-    // audit trail of which commit landed each pruned item already lives
-    // in git log, so the prune-only snapshot is redundant.
+    // Suppress only when nothing meaningful happened. committed/dropped ARE
+    // meaningful (they mark lifecycle endpoints), so a clean prune-on-commit
+    // sequence now leaves a history entry instead of being silently skipped.
     if !description_changed
         && proposed.is_empty()
-        && advanced.is_empty()
-        && renamed.is_empty()
+        && applied.is_empty()
+        && committed.is_empty()
+        && dropped.is_empty()
     {
         return None;
     }
@@ -4410,13 +4427,22 @@ fn generate_worklist_changelog(
         format_iso_utc(ts_ms),
         ts_ms
     ));
-    out.push_str(&format!(
-        "**Summary:** {} proposed, {} advanced, {} renamed, {} pruned\n\n",
-        proposed.len(),
-        advanced.len(),
-        renamed.len(),
-        pruned.len(),
-    ));
+    let mut tallies: Vec<String> = Vec::new();
+    if !proposed.is_empty() {
+        tallies.push(format!("{} proposed", proposed.len()));
+    }
+    if !applied.is_empty() {
+        tallies.push(format!("{} applied", applied.len()));
+    }
+    if !committed.is_empty() {
+        tallies.push(format!("{} committed", committed.len()));
+    }
+    if !dropped.is_empty() {
+        tallies.push(format!("{} dropped", dropped.len()));
+    }
+    if !tallies.is_empty() {
+        out.push_str(&format!("**Summary:** {}\n\n", tallies.join(", ")));
+    }
 
     if description_changed {
         out.push_str("## Description changed\n\n");
@@ -4451,27 +4477,21 @@ fn generate_worklist_changelog(
         out.push('\n');
     }
 
-    if !advanced.is_empty() {
-        out.push_str("## Items advanced\n\n");
-        for (item, from, to) in &advanced {
+    if !applied.is_empty() {
+        out.push_str("## Items applied\n\n");
+        for (item, from, to) in &applied {
             let id = worklist_item_id(item).unwrap_or_default();
             out.push_str(&format!("- `{}`: {} → {}\n", id, from, to));
         }
         out.push('\n');
     }
 
-    if !renamed.is_empty() {
-        out.push_str("## Items renamed\n\n");
-        for (old_id, item) in &renamed {
-            let new_id = worklist_item_id(item).unwrap_or_default();
-            out.push_str(&format!("- `{}` → `{}`\n", old_id, new_id));
+    let emit_removed_section = |out: &mut String, header: &str, items: &[&serde_json::Value]| {
+        if items.is_empty() {
+            return;
         }
-        out.push('\n');
-    }
-
-    if !pruned.is_empty() {
-        out.push_str("## Items pruned (committed or dropped)\n\n");
-        for item in &pruned {
+        out.push_str(&format!("## {}\n\n", header));
+        for item in items {
             let id = worklist_item_id(item).unwrap_or_default();
             out.push_str(&format!(
                 "- `{}` (was {}, `{}`)\n",
@@ -4494,6 +4514,13 @@ fn generate_worklist_changelog(
                 ));
             }
         }
+        out.push('\n');
+    };
+    emit_removed_section(&mut out, "Items committed", &committed);
+    emit_removed_section(&mut out, "Items dropped", &dropped);
+
+    // Trailing-newline padding kept from the legacy bottom of the function.
+    {
         out.push('\n');
     }
 
@@ -4538,7 +4565,7 @@ fn maybe_snapshot_worklist<R: tauri::Runtime>(app: &AppHandle<R>) {
     let ts = unix_now_ms();
     let prior_doc: serde_json::Value = serde_json::from_str(&prior_str).unwrap_or_default();
     let current_doc: serde_json::Value = serde_json::from_str(&current_str).unwrap_or_default();
-    let changelog = match generate_worklist_changelog(&prior_doc, &current_doc, ts) {
+    let changelog = match generate_worklist_changelog(app, &prior_doc, &current_doc, ts) {
         Some(s) => s,
         None => {
             eprintln!("[worklist-history] suppressed trivial change @ {}", ts);

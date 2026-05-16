@@ -272,9 +272,34 @@ the conversation that produced it — if the repo has opted in to
 committing worklist history, that archive (see
 `docs/worklist-history.md`) is their retrieval. A terse
 "add the diff viewer" leaves nothing for them to grep; an item
-that says "considered (a) embedded diff via DataSource, (b) server
-augmentation via /__worklist, (c) full-tree diff — chose (b)
-because…" is the kind of audit trail that earns its keep.
+whose `after` reads like
+
+> Alternatives considered:
+>
+> - Embedded diff via DataSource — rejected: each row would fire its own request.
+> - Full-tree diff at the top of the worklist — rejected: hides per-item attribution.
+> - **[chosen]** Server augmentation via `/__worklist` — single payload, per-item diffs travel with each row.
+
+is the kind of audit trail that earns its keep.
+
+### Use Markdown in item prose
+
+Worklist `before` / `after` fields and worklist-history `changelog`
+entries render as Markdown in the agent-tools drawer, so use real
+Markdown syntax instead of inline ad-hoc formatting:
+
+- Bullet lists need `- ` (or `* `) at the start of each line; inline
+  enumerations like `(a) ... (b) ... (c) ...` collapse into a
+  single run-on paragraph and lose the scanning affordance.
+- Numbered steps use `1.` / `2.` per line.
+- Inline code references (file paths, identifiers, attribute names)
+  belong in single backticks so they render monospace and stay
+  greppable.
+- Multi-line code or markup snippets belong in fenced code blocks.
+- Blank lines separate paragraphs; a lone newline inside a paragraph
+  is just a soft wrap.
+- `*emphasis*` and `**strong**` work for the rare term that needs
+  to stand out (e.g., **[chosen]** to mark the picked alternative).
 
 ### Test Worklist UX through the worklist itself
 

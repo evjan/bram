@@ -1,13 +1,5 @@
 {
-  "description": "Worklist dimming: undim when the agent's turn completes (not on each worklist content change, and not only on stale timeout). Also session-rename-hardening still pending from earlier.",
+  "description": "",
   "items": [
-{
-      "id": "session-rename-hardening",
-      "files": [
-        "src-tauri/src/lib.rs"
-      ],
-      "before": "Issue #17 (judell/xmlui-desktop) reports that XD's session titles don't match what Claude Code's /resume shows for un-renamed sessions, and that after compaction the top session's displayed title in CC changes — implying CC re-derives the title from session content rather than caching it. Renamed sessions (with a custom-title record) are presumably stable, but the issue comment didn't separate that case cleanly. Need to (a) verify claude_session_title()'s precedence — custom-title records should beat any first-message derivation, even after compaction rewrites the first user_message; (b) optionally align the un-renamed derivation with CC's /resume heuristic so XD and CC agree on titles for sessions that have never been renamed. Considered (a) only fixing custom-title precedence and accepting that un-renamed sessions may show different titles in XD vs CC — rejected, the user-facing complaint covers both cases; (b) caching titles in a sidecar file XD maintains — rejected, adds a sync surface that drifts; (c) matching CC's algorithm — chosen, single source of truth.",
-      "after": "Two-part fix. Part 1 (always do): audit claude_session_title() at lib.rs:1893 to confirm custom-title records are picked up regardless of where they appear in the JSONL (a custom-title appended AFTER compaction should still win). If precedence is off, fix it. Part 2 (align with CC): pull CC's /resume title-derivation logic from the claude-code source (or by experiment — load a known session, see what /resume shows, see what XD shows, reconcile). Implement the matching heuristic in claude_session_title() for sessions without a custom-title record. Document the heuristic inline so future-agent readers don't drift. Smoke-test on at least 3 real sessions: one renamed (custom-title beats everything), one compacted-no-rename (matches CC after compaction), one fresh (matches CC on first message)."
-    }
   ]
 }

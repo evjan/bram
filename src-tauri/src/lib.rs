@@ -1916,11 +1916,23 @@ fn claude_sessions_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf,
     Ok(home.join(".claude").join("projects").join(encoded))
 }
 
-// Best-effort label for a session: prefers the most recent custom-title record
-// (set via /rename), falls back to a snippet of the first user message.
+// Best-effort label for a Claude session. Precedence (matches what
+// `claude /resume` displays):
+//   1. Most recent `custom-title` record — set via the rename surface
+//      (rename_session() at lib.rs:2397). User-supplied, overrides everything.
+//   2. Most recent `ai-title` record (field: `aiTitle`) — Claude Code itself
+//      writes these auto-generated titles as the conversation evolves and
+//      uses them in /resume listings. Walking to the latest one keeps XD in
+//      sync with CC after compaction or topic shifts.
+//   3. First `user` message snippet — last-resort fallback only used when
+//      no title records exist yet (very fresh sessions before CC has
+//      generated an ai-title).
+// All title-record scans walk the whole file so a custom-title or ai-title
+// appended after compaction still wins.
 fn claude_session_title(path: &Path) -> std::io::Result<Option<String>> {
     let reader = BufReader::new(std::fs::File::open(path)?);
     let mut custom_title: Option<String> = None;
+    let mut ai_title: Option<String> = None;
     let mut first_user: Option<String> = None;
     for line in reader.lines() {
         let line = line?;
@@ -1936,6 +1948,11 @@ fn claude_session_title(path: &Path) -> std::io::Result<Option<String>> {
                     custom_title = Some(t.to_string());
                 }
             }
+            Some("ai-title") => {
+                if let Some(t) = record.get("aiTitle").and_then(|v| v.as_str()) {
+                    ai_title = Some(t.to_string());
+                }
+            }
             Some("user") if first_user.is_none() => {
                 if let Some(content) = record.pointer("/message/content") {
                     let text = match content {
@@ -1948,7 +1965,7 @@ fn claude_session_title(path: &Path) -> std::io::Result<Option<String>> {
             _ => {}
         }
     }
-    Ok(custom_title.or(first_user))
+    Ok(custom_title.or(ai_title).or(first_user))
 }
 
 fn claude_message_text(record: &serde_json::Value) -> String {

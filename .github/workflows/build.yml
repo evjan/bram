@@ -13,7 +13,15 @@ permissions:
 
 jobs:
 
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Worklist-guard bundle in sync with canonical
+        run: diff -q .claude/hooks/worklist-guard.py app/__shell/worklist-guard.py
+
   create-release:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

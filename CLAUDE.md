@@ -22,9 +22,29 @@ Examples:
 - *"Walk me through this in steps"* → render a `<Stepper>` or tabbed
   `<Pages>` and let the user navigate.
 
-The user's existing `~/CLAUDE.md` already mandates that you use the
-**`xmlui-mcp`** MCP server for component lookups and cite a doc URL for
-any non-obvious markup. Follow that here too.
+## Working in XMLUI surfaces
+
+Both panes here are XMLUI, so most edits land in `.xmlui` files. Some
+rules the xmlui-standalone evaluator enforces hard:
+
+- **No raw browser JS in event handlers** — `setTimeout`, `setInterval`,
+  `fetch` outside DataSource, `async` / `await`, etc. are rejected at
+  evaluation time with an unhandled rejection. Stay within App
+  abstractions: `delay(ms)`, `debounce(ms, fn, ...args)`, the `Timer`
+  component, `DataSource` for HTTP, `ChangeListener` for derived
+  reactivity.
+- **Lead with the xmlui-mcp tools** before reaching for a JS solution.
+  The `xmlui_search_howto` tool is the fastest way to find the
+  XMLUI-native pattern for a feature (e.g. "delay function", "debounce
+  input", "wrap text in table cell"); `xmlui_component_docs` is for
+  component-prop lookups; `xmlui_get_prompt` re-injects the server's
+  framing guidance mid-session when you suspect you've drifted.
+- **Cite a doc URL** for any non-obvious markup decision —
+  `https://www.xmlui.org/docs/reference/components/<Name>` or
+  `https://www.xmlui.org/docs/howto/<slug>`. If you can't cite one,
+  search again.
+
+The `xmlui-mcp` server is loaded for this conversation. Use it.
 
 ## How the right pane talks back to you
 

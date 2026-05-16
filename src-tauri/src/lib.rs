@@ -4390,15 +4390,31 @@ fn generate_worklist_changelog<R: tauri::Runtime>(
         if current_by_id.contains_key(&id) {
             continue;
         }
-        // Removal classification: only emit history for authorized removals.
-        // Any unauthorized prune would have been reverted by
-        // maybe_enforce_worklist_policy before reaching the watcher, so the
-        // only way an id can disappear here is via an approved or drop auth.
+        // Removal classification, in order:
+        //   1. Prior status == "applied" → committed unconditionally. Matches
+        //      the maybe_enforce_worklist_policy hook, which lets applied-status
+        //      items prune freely (commit-then-prune is legitimate, no fresh
+        //      auth required). Without this branch, a commit-prune whose auth
+        //      record was overwritten between approve and prune (any subsequent
+        //      drop:/approved: payload replaces the single-slot record) falls
+        //      out of both buckets and the history UI shows "change".
+        //   2. auth.kind == "drop" and id in auth.ids → dropped (user pruned
+        //      a still-proposed item via the drop authorization channel).
+        //   3. auth.kind == "approved" and id in auth.ids → committed (unusual:
+        //      a proposed item was removed via approved auth without first
+        //      transitioning to applied — included for completeness).
+        //   4. else → skip silently; the policy hook would have reverted any
+        //      other case before the watcher saw it.
+        let prior_status = worklist_item_status(item).to_string();
+        if prior_status == "applied" {
+            committed.push(item);
+            continue;
+        }
         if let Some(rec) = auth.as_ref() {
             if rec.ids.iter().any(|i| i == &id) {
                 match rec.kind.as_str() {
-                    "approved" => committed.push(item),
                     "drop" => dropped.push(item),
+                    "approved" => committed.push(item),
                     _ => {}
                 }
             }

@@ -3,24 +3,57 @@
   var.checked="{loadChecked()}"
   var.submitting="{!!getInflight()}"
   var.expandedItemId="{null}"
-  var.expandedSnapshotTs="{null}">
+  var.expandedSnapshotTs="{null}"
+  var.lastJsonl="{null}">
+  <DataSource
+    id="sessionTail"
+    url="/__sessions/latest-tail?lines=200"
+    dataType="text"
+    pollIntervalInSeconds="1" />
+  <ChangeListener
+    listenTo="{sessionTail.value}"
+    onDidChange="(c) => {
+      if (c.newValue) lastJsonl = c.newValue;
+      // Reactive turn-done check: every time the session JSONL changes,
+      // clear the dim once the agent's turn has actually ended. The signal
+      // is isAgentIdle (looks for end_turn on Claude or task_complete on
+      // codex) rather than isWaitingForAssistant (which flips false the
+      // moment the assistant emits any text and would undim mid-turn
+      // during narration). The 3s grace gives the user message time to
+      // land in the JSONL. The stale-timeout check in worklist onLoaded
+      // below is the long-tail safety net for sessions that never idle.
+      const stored = getInflight();
+      if (!stored) return;
+      const elapsed = Date.now() - (stored.ts || 0);
+      if (elapsed < 3000) return;
+      if (!isAgentIdle(c.newValue)) return;
+      clearInflight();
+      submitting = false;
+      saveChecked([]);
+      checked = [];
+    }" />
   <DataSource
     id="worklist"
     url="/__worklist"
     pollIntervalInSeconds="2"
     onLoaded="(data) => {
       const items = (data && data.items) || [];
-      const currentIds = items.map(i => i.id + ':' + (i.status || 'proposed')).sort().join(',');
       const stored = getInflight();
-      const stale = stored && stored.ts && (Date.now() - stored.ts) > 60000;
-      if (stored && (currentIds !== (stored.ids || '') || stale)) {
-        clearInflight();
-        submitting = false;
-        saveChecked([]);
-        checked = [];
-      } else {
-        checked = pruneChecked(items.map(i => i.id));
+      if (stored) {
+        // 180s stale-timeout safety net for cases where the agent never
+        // emits a textful response (e.g., it crashes or the user kills
+        // the session). The session-activity clear lives in the
+        // ChangeListener above; this branch is only here to recover from
+        // a stuck inflight flag.
+        if (Date.now() - (stored.ts || 0) > 180000) {
+          clearInflight();
+          submitting = false;
+          saveChecked([]);
+          checked = [];
+          return;
+        }
       }
+      checked = pruneChecked(items.map(i => i.id));
     }" />
   <DataSource
     id="history"

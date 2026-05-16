@@ -89,7 +89,7 @@ function stripMarkdownImages(text) {
 // i.e. the user has spoken (or a worklist button submitted via toTurn) but
 // the assistant has not yet emitted text. tool_use-only assistant records
 // and tool_result-only user records are skipped so a long tool cycle still
-// reads as "waiting".
+// reads as "waiting". Used by Transcript's "agent is thinking" spinner.
 function isWaitingForAssistant(jsonlText) {
   if (!jsonlText) return false;
   const lines = jsonlText.split('\n');
@@ -116,6 +116,49 @@ function isWaitingForAssistant(jsonlText) {
     }
   }
   return lastRole === 'user';
+}
+
+// True when the most recent meaningful record signals the agent has FINISHED
+// its turn (not just emitted a first text response). isWaitingForAssistant
+// flips false the moment the assistant says anything, which is too early for
+// UX surfaces that want to dim through the whole turn — mid-turn narration
+// would clear the dim while the agent is still working. This helper walks
+// for the real turn-boundary markers each provider emits:
+//   Claude: assistant record with `message.stop_reason: "end_turn"`. Records
+//     with stop_reason: "tool_use" (mid-turn narration that ends in a tool
+//     call) keep the state as `assistant_busy`, not idle.
+//   Codex:  event_msg with `payload.type: "task_complete"`. Codex emits this
+//     as a separate event at the end of every turn (verified against a live
+//     session JSONL alongside task_started / user_message / agent_message).
+// The state machine: 'user' → busy (turn just started or mid-tool), 'assistant_busy'
+// → busy (mid-turn narration), 'idle' → turn-end marker seen. Returns true
+// only when we end on 'idle'.
+function isAgentIdle(jsonlText) {
+  if (!jsonlText) return false;
+  const lines = jsonlText.split('\n');
+  let lastState = null;
+  for (const line of lines) {
+    if (!line) continue;
+    let r;
+    try { r = JSON.parse(line); } catch (e) { continue; }
+    if (r.type === 'user' && r.message && r.message.content) {
+      const content = r.message.content;
+      if (Array.isArray(content) && content.length > 0 &&
+          content.every(c => c && c.type === 'tool_result')) continue;
+      lastState = 'user';
+    } else if (r.type === 'assistant' && r.message && r.message.content) {
+      const content = r.message.content;
+      const hasText = (typeof content === 'string') ||
+        (Array.isArray(content) && content.some(c => c && c.type === 'text'));
+      if (!hasText) continue;
+      lastState = r.message.stop_reason === 'end_turn' ? 'idle' : 'assistant_busy';
+    } else if (r.type === 'event_msg' && r.payload) {
+      if (r.payload.type === 'user_message') lastState = 'user';
+      else if (r.payload.type === 'agent_message') lastState = 'assistant_busy';
+      else if (r.payload.type === 'task_complete') lastState = 'idle';
+    }
+  }
+  return lastState === 'idle';
 }
 
 // Clean a user turn for transcript display: strip protocol prefixes

@@ -2390,10 +2390,45 @@ fn delete_session<R: tauri::Runtime>(
     Ok(b"{\"ok\":true}".to_vec())
 }
 
-// Append a `custom-title` record to a Claude session JSONL so the title
-// reader (claude_session_title at lib.rs:1893) picks it up on next read.
-// Codex sessions have no override hook (codex_session_title derives only
-// from the first user_message), so we return an error in that case.
+// Format `SystemTime::now()` as an RFC3339 string in UTC (seconds precision,
+// no subseconds). Used for the `updated_at` field codex writes into
+// session_index.jsonl entries. xmlui-desktop has no date-formatting crate
+// dependency; this inline implementation uses Howard Hinnant's gregorian
+// algorithm to avoid adding one. Codex does not parse `updated_at` back
+// (only `id` + `thread_name` are read), but writing a real RFC3339 keeps the
+// file compatible with codex's own writers.
+fn rfc3339_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    let days = secs.div_euclid(86400);
+    let secs_in_day = secs.rem_euclid(86400);
+    let hour = (secs_in_day / 3600) as u32;
+    let minute = ((secs_in_day / 60) % 60) as u32;
+    let second = (secs_in_day % 60) as u32;
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as i64;
+    let year = if month <= 2 { y + 1 } else { y };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month as u32, day, hour, minute, second
+    )
+}
+
+// Rename a session. For Claude: append `{type: "custom-title", customTitle: ...}`
+// to the session JSONL so claude_session_title at lib.rs:1893 picks it up on
+// next read. For codex: append `{id, thread_name, updated_at}` to
+// ~/.codex/session_index.jsonl (append-only, last entry wins) so both
+// codex_session_index in xmlui-desktop and codex's own session listing see the
+// new title. Codex contract verified against codex-rs/rollout/src/session_index.rs.
 fn rename_session<R: tauri::Runtime>(
     app: &AppHandle<R>,
     id: &str,
@@ -2408,22 +2443,44 @@ fn rename_session<R: tauri::Runtime>(
         return Err("empty title".to_string());
     }
     let (provider, sessions) = sessions_for_provider(app, preferred)?;
-    if !matches!(provider, SessionProvider::Claude) {
-        return Err("rename is only supported for Claude sessions".to_string());
-    }
     let session = sessions
         .into_iter()
         .find(|session| session.id == id)
         .ok_or("session not found")?;
-    let record = serde_json::json!({ "type": "custom-title", "customTitle": trimmed });
-    let mut line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
-    line.push('\n');
-    let mut f = std::fs::OpenOptions::new()
-        .append(true)
-        .open(&session.path)
-        .map_err(|e| e.to_string())?;
     use std::io::Write;
-    f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+    match provider {
+        SessionProvider::Claude => {
+            let record =
+                serde_json::json!({ "type": "custom-title", "customTitle": trimmed });
+            let mut line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+            line.push('\n');
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&session.path)
+                .map_err(|e| e.to_string())?;
+            f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        }
+        SessionProvider::Codex => {
+            let home = home_dir().ok_or("no HOME or USERPROFILE")?;
+            let index_path = home.join(".codex").join("session_index.jsonl");
+            if let Some(parent) = index_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let record = serde_json::json!({
+                "id": session.id,
+                "thread_name": trimmed,
+                "updated_at": rfc3339_now(),
+            });
+            let mut line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+            line.push('\n');
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&index_path)
+                .map_err(|e| e.to_string())?;
+            f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        }
+    }
     Ok(b"{\"ok\":true}".to_vec())
 }
 

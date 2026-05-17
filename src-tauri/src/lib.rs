@@ -6,7 +6,7 @@ use std::thread;
 
 use include_dir::{include_dir, Dir};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
-use tauri::{ipc::Channel, AppHandle, Manager, State};
+use tauri::{http, ipc::Channel, AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 // The `app/` tree is embedded in the binary at compile time so
@@ -124,28 +124,45 @@ fn expand_tilde(p: &str) -> String {
 // the HTTP server, watcher, git/sessions/PTY commands.
 struct ActiveProjectState(Mutex<PathBuf>);
 
-// URLs for the two iframes. `tools` is always the internal loopback
-// (xmlui-desktop's own server, serving /__tools/index.html, /__shell/*,
-// embedded assets, git/issues endpoints, etc.). `right_pane` is either
-// the same internal loopback (default) or an external URL when the
-// project's .xmlui-desktop.json declares a `server` block — see
-// load_project_config / SpawnedServerState. Splitting them lets the
-// drawer keep loading from the internal origin while the right pane
-// targets a project-managed server.
+// URLs for the two iframes.
 //
-// Service workers (used by MSW and xmlui's apiInterceptor) require an
-// http(s) secure-context origin, which a custom URI scheme cannot
-// provide — hence the move from xmlui:// to http://127.0.0.1:<port>.
+// `tools` is always the internal loopback (xmlui-desktop's own server,
+// serving /__tools/index.html, /__shell/*, embedded assets, git/issues
+// endpoints, etc.).
+//
+// `right_pane` is now always `tauri://localhost/__project/index.html`
+// regardless of project configuration. The tauri:// scheme handler in
+// `handle_tauri_scheme` intercepts paths under `/__project/*` and
+// proxies them to `right_pane_upstream` (loopback default, or external
+// dev server when `.xmlui-desktop.json` declares one). Net effect: the
+// right-pane iframe is same-origin with the shell, while the actual
+// bytes still come from the upstream.
+//
+// `right_pane_upstream` is the proxy target (always ends with `/`).
+//
+// Service workers (used by MSW and xmlui's apiInterceptor) require a
+// secure-context origin. Custom URI schemes are not secure contexts on
+// macOS, so SW capability is lost in the right-pane iframe on macOS.
+// Acceptable for normal apps; playground apps that synthesize APIs
+// will not work in xd on macOS — see worklist item
+// `same-origin-iframe-via-tauri-scheme-proxy` for the full discussion.
 struct PaneUrlsState(Mutex<PaneUrls>);
 
 #[derive(Default, Clone)]
 struct PaneUrls {
     right_pane: String,
     tools: String,
-    // Internal-loopback URL used when no project server is declared, or as
-    // the fallback target after the server block is removed from
-    // .xmlui-desktop.json at runtime. Set once at startup.
+    // Loopback-served URL used when no project server is declared. Used by
+    // the agent-tools drawer's right-pane-info display (so the user sees
+    // the actual upstream URL, not the tauri:// proxy URL) and as the
+    // fallback upstream after the server block is removed from
+    // .xmlui-desktop.json at runtime.
     default_right_pane: String,
+    // Base URL the tauri:// scheme handler proxies right-pane requests to.
+    // Always ends with `/`. Switches between the loopback default and an
+    // external server based on .xmlui-desktop.json at startup and on
+    // config reload.
+    right_pane_upstream: String,
 }
 
 // Project-level config read from .xmlui-desktop.json at the project
@@ -1644,24 +1661,35 @@ fn handle_project_config_reload<R: tauri::Runtime>(app_handle: &AppHandle<R>, pr
         );
     }
 
-    let new_right_pane_url = match new_server.as_ref() {
+    // With the tauri:// scheme proxy, the iframe URL itself is constant
+    // (`tauri://localhost/__project/index.html`). Config changes affect
+    // the upstream the proxy fetches from, not the iframe src. Compute
+    // the new upstream and update state; the iframe reload below
+    // re-fetches via the new upstream automatically.
+    let new_right_pane_upstream = match new_server.as_ref() {
         Some(cfg) => format!("http://localhost:{}{}", cfg.port, cfg.path),
-        None => app_handle
-            .state::<PaneUrlsState>()
-            .0
-            .lock()
-            .unwrap()
-            .default_right_pane
-            .clone(),
+        None => {
+            // default_right_pane ends in `/index.html`; the upstream
+            // wants the origin + trailing slash. Strip the filename.
+            let default = {
+                let state = app_handle.state::<PaneUrlsState>();
+                let urls = state.0.lock().unwrap();
+                urls.default_right_pane.clone()
+            };
+            default
+                .rsplit_once('/')
+                .map(|(base, _)| format!("{}/", base))
+                .unwrap_or(default)
+        }
     };
     {
         let state = app_handle.state::<PaneUrlsState>();
         let mut urls = state.0.lock().unwrap();
-        urls.right_pane = new_right_pane_url.clone();
+        urls.right_pane_upstream = new_right_pane_upstream.clone();
     }
     eprintln!(
-        "[project-config] reloaded; right-pane URL -> {}",
-        new_right_pane_url
+        "[project-config] reloaded; right-pane upstream -> {}",
+        new_right_pane_upstream
     );
     let _ = app_handle.emit("right-pane-reload", ());
 }
@@ -5670,6 +5698,181 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, request: tiny_http::Reques
     let _ = request.respond(response);
 }
 
+// Tauri custom-scheme handler that overrides Tauri's default tauri://
+// behavior. Tauri 2 skips registering its built-in handler when an
+// app-level handler with the same scheme name is present (see
+// tauri-2.11.0/src/manager/webview.rs:267). With our handler in place:
+//
+//   - `tauri://localhost/__project/*` is proxied to the upstream URL in
+//     PaneUrlsState.right_pane_upstream (the loopback HTTP server by
+//     default, or an external project dev server when .xmlui-desktop.json
+//     declares one). The iframe's origin stays `tauri://localhost`, same
+//     as the shell — same-origin policy then permits direct cross-frame
+//     JS access. This is the whole point: shell and target can share
+//     window globals (e.g., _xsLogs) without a postMessage bridge, and
+//     the target reaches window.__TAURI__ directly.
+//
+//   - All other paths fall back to xd's own app/ tree via serve_app_file
+//     (on-disk preferred, embedded fallback). Replicates Tauri's default
+//     resource-loading behavior so the shell's own index.html, main.js,
+//     vendor/*, __shell/*, __tools/* keep loading exactly as before.
+//
+// Hop-by-hop request and response headers are filtered out per RFC 7230.
+// Connection failures to the upstream surface as 502 responses with a
+// short error body so the iframe shows something rather than hanging.
+fn handle_tauri_scheme<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    request: http::Request<Vec<u8>>,
+) -> http::Response<Vec<u8>> {
+    let uri = request.uri().clone();
+    let path = uri.path();
+    let rel = path.trim_start_matches('/');
+
+    // Explicit /__project/* paths: strip prefix and proxy to upstream.
+    // This is the iframe's own URL pattern.
+    if let Some(after) = rel.strip_prefix("__project/") {
+        return proxy_to_upstream_path(app, after, uri.query(), request);
+    }
+
+    // Try shell asset first. The shell loads its own resources via
+    // relative URLs (vendor/xterm.js, styles.css, main.js, etc.) that
+    // resolve to absolute paths under the origin. Anything the project
+    // iframe also references with an absolute path will land here too —
+    // if it matches a shell asset, we serve it. Conflict only arises if
+    // a project independently uses `/vendor/...` etc. as absolute paths;
+    // in practice projects use `/__vendor/` (xmlui-desktop convention)
+    // or `/xmlui/...` (xmlui-weather etc.), neither of which collides.
+    let app_rel = if rel.is_empty() { "index.html" } else { rel };
+    if let Some((bytes, mime)) = serve_app_file(Some(app), app_rel) {
+        return http::Response::builder()
+            .status(200)
+            .header("Content-Type", mime)
+            .body(bytes)
+            .unwrap_or_else(|_| {
+                http::Response::builder()
+                    .status(500)
+                    .body(Vec::new())
+                    .unwrap()
+            });
+    }
+
+    // Fall through: proxy to the upstream as a project resource. The
+    // loopback knows how to route /__vendor/, /__shell/, /__sessions/,
+    // /__worklist, project-root files, etc. External dev servers
+    // (Vite, etc.) handle their own routing. Both Just Work because
+    // we keep the path intact.
+    proxy_to_upstream_path(app, rel, uri.query(), request)
+}
+
+fn proxy_to_upstream_path<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    path_after_origin: &str,
+    query: Option<&str>,
+    request: http::Request<Vec<u8>>,
+) -> http::Response<Vec<u8>> {
+    let upstream = {
+        let state = app.state::<PaneUrlsState>();
+        let urls = state.0.lock().unwrap();
+        urls.right_pane_upstream.clone()
+    };
+    let mut url = format!("{}{}", upstream, path_after_origin);
+    if let Some(q) = query {
+        url.push('?');
+        url.push_str(q);
+    }
+    proxy_to_upstream(url, request)
+}
+
+fn proxy_to_upstream(
+    url: String,
+    request: http::Request<Vec<u8>>,
+) -> http::Response<Vec<u8>> {
+    let method = request.method().clone();
+    let (parts, body) = request.into_parts();
+
+    let mut req = ureq::request(method.as_str(), &url);
+    for (name, value) in parts.headers.iter() {
+        let name_str = name.as_str();
+        // Skip hop-by-hop headers and Host (ureq sets Host automatically
+        // from the request URL — forwarding the shell's `tauri.localhost`
+        // would confuse the upstream).
+        if is_hop_by_hop(name_str) || name_str.eq_ignore_ascii_case("host") {
+            continue;
+        }
+        if let Ok(value_str) = value.to_str() {
+            req = req.set(name_str, value_str);
+        }
+    }
+
+    let result = if body.is_empty() {
+        req.call()
+    } else {
+        req.send_bytes(&body)
+    };
+
+    let response = match result {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[scheme-proxy] {} {} -> {}", method, url, e);
+            return http::Response::builder()
+                .status(502)
+                .header("Content-Type", "text/plain")
+                .body(format!("upstream proxy error for {}: {}", url, e).into_bytes())
+                .unwrap();
+        }
+    };
+
+    let status = response.status();
+    // Snapshot headers before consuming response into a reader.
+    let header_names = response.headers_names();
+    let header_pairs: Vec<(String, String)> = header_names
+        .iter()
+        .filter_map(|name| {
+            response
+                .header(name)
+                .map(|v| (name.clone(), v.to_string()))
+        })
+        .collect();
+
+    let mut body_bytes = Vec::new();
+    if let Err(e) = response.into_reader().read_to_end(&mut body_bytes) {
+        eprintln!("[scheme-proxy] read error from {}: {}", url, e);
+        return http::Response::builder()
+            .status(502)
+            .header("Content-Type", "text/plain")
+            .body(format!("upstream read error: {}", e).into_bytes())
+            .unwrap();
+    }
+
+    let mut builder = http::Response::builder().status(status);
+    for (name, value) in header_pairs {
+        if is_hop_by_hop(&name) {
+            continue;
+        }
+        builder = builder.header(&name, &value);
+    }
+    builder.body(body_bytes).unwrap_or_else(|_| {
+        http::Response::builder()
+            .status(502)
+            .body(Vec::new())
+            .unwrap()
+    })
+}
+
+fn is_hop_by_hop(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailers"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     parse_cli_flags();
@@ -5681,6 +5884,16 @@ pub fn run() {
         );
     }
     tauri::Builder::default()
+        .register_asynchronous_uri_scheme_protocol("tauri", |ctx, request, responder| {
+            // Offload to a thread so the WebView's request thread is not
+            // blocked while the proxy fetches from the upstream. The
+            // responder takes ownership and can be called from any thread.
+            let app = ctx.app_handle().clone();
+            std::thread::spawn(move || {
+                let response = handle_tauri_scheme(&app, request);
+                responder.respond(response);
+            });
+        })
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .manage(WhisperState::default())
@@ -5726,15 +5939,24 @@ pub fn run() {
                 .as_deref()
                 .and_then(load_project_config);
             let default_right_pane = format!("{}/index.html", internal_origin);
-            let right_pane_url = if let Some(cfg) = project_cfg.as_ref().and_then(|c| c.server.as_ref()) {
-                let external = format!("http://localhost:{}{}", cfg.port, cfg.path);
+            let internal_base = format!("{}/", internal_origin);
+            // `right_pane` is the URL the iframe loads. With the
+            // tauri:// scheme proxy, it's always a same-origin URL
+            // under /__project/. `right_pane_upstream` is the actual
+            // HTTP target the scheme handler proxies to.
+            const RIGHT_PANE_PROXY_URL: &str = "tauri://localhost/__project/index.html";
+            let (right_pane_url, right_pane_upstream) = if let Some(cfg) = project_cfg.as_ref().and_then(|c| c.server.as_ref()) {
+                // External base URL ends with `/` after concatenating
+                // the config's `path` (defaults to "/"). The scheme
+                // handler appends the iframe-relative path directly.
+                let external_base = format!("http://localhost:{}{}", cfg.port, cfg.path);
                 match probe_port_http(cfg.port, &cfg.path) {
                     PortStatus::Live => {
                         eprintln!(
                             "[server] port {} is live (HTTP responsive); reusing (skipping spawn of `{}`)",
                             cfg.port, cfg.command
                         );
-                        external
+                        (RIGHT_PANE_PROXY_URL.to_string(), external_base)
                     }
                     PortStatus::Unresponsive(reason) => {
                         eprintln!(
@@ -5745,16 +5967,20 @@ pub fn run() {
                             "[server] HINT: a previous server is likely wedged. Run `lsof -i :{}` to find the pid, then kill it and restart xmlui-desktop.",
                             cfg.port
                         );
-                        // Surface the problem in the iframe instead of letting it
-                        // hang on a blank load. /__error is served by the internal
-                        // loopback so the user sees text immediately.
-                        format!(
-                            "{}/__error?reason={}",
-                            internal_origin,
+                        // Surface the problem in the iframe via /__error
+                        // on the internal loopback (the scheme handler
+                        // proxies there; the iframe's URL stays under
+                        // /__project so origin remains tauri://localhost).
+                        let error_path = format!(
+                            "__project/__error?reason={}",
                             percent_encode(&format!(
                                 "Port {} is in use but unresponsive ({}). The previous xmlui-desktop session likely left an orphan process. Run `lsof -i :{}` and kill the listed pid, then restart xmlui-desktop.",
                                 cfg.port, reason, cfg.port
                             ))
+                        );
+                        (
+                            format!("tauri://localhost/{}", error_path),
+                            internal_base.clone(),
                         )
                     }
                     PortStatus::NotListening => {
@@ -5780,18 +6006,20 @@ pub fn run() {
                                 }
                             }
                         }
-                        external
+                        (RIGHT_PANE_PROXY_URL.to_string(), external_base)
                     }
                 }
             } else {
-                default_right_pane.clone()
+                (RIGHT_PANE_PROXY_URL.to_string(), internal_base.clone())
             };
             eprintln!("[xmlui-desktop] right pane URL: {}", right_pane_url);
+            eprintln!("[xmlui-desktop] right pane upstream: {}", right_pane_upstream);
             eprintln!("[xmlui-desktop] tools pane URL: {}", tools_url);
             *app.state::<PaneUrlsState>().0.lock().unwrap() = PaneUrls {
                 right_pane: right_pane_url,
                 tools: tools_url,
                 default_right_pane,
+                right_pane_upstream,
             };
 
             let server_app = app.handle().clone();

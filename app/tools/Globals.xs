@@ -288,6 +288,131 @@ function editDiffLines(input) {
   return out;
 }
 
+// Aggregate the file-modifying tool calls in the most recent turn. A
+// "turn" boundary is the most recent user message; all assistant
+// tool_use entries after it that touch files (Edit / MultiEdit / Write)
+// belong to the current turn. Group by file_path; multiple edits to the
+// same file accumulate in chronological order.
+//
+// Returns: [{
+//   filePath: string,
+//   kind: 'edited' | 'multi-edited' | 'written' | 'mixed',
+//   edits: [{ kind: 'edit' | 'write', before, after }],
+//   added: int,
+//   removed: int,
+// }]
+//
+// Empty array when no current-turn file mutations exist. Skips Read,
+// Bash, Grep, Glob, and all other read-only tools.
+function currentTurnEdits(jsonlText) {
+  if (!jsonlText) return currentTurnEdits._cache || [];
+  if (currentTurnEdits._cacheKey === jsonlText && currentTurnEdits._cache) {
+    return currentTurnEdits._cache;
+  }
+  // Fast path: skip parsing entirely if the text has no tool_use blocks
+  // at all. The expensive split + per-line JSON.parse below would
+  // otherwise run on every render against the full JSONL tail. This
+  // takes the common case (idle session, no in-flight edits) from
+  // O(lines) to O(text.length) byte scan.
+  if (jsonlText.indexOf('"tool_use"') === -1) {
+    currentTurnEdits._cacheKey = jsonlText;
+    currentTurnEdits._cache = [];
+    return currentTurnEdits._cache;
+  }
+
+  // Walk lines in chronological order to find the index of the most
+  // recent user-message line (i.e., the boundary between previous turn
+  // and current turn). All assistant tool_use entries AFTER that index
+  // belong to the in-flight turn.
+  const lines = jsonlText.split('\n');
+  let lastUserIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i]) continue;
+    let r;
+    try { r = JSON.parse(lines[i]); } catch (e) { continue; }
+    if (r.type !== 'user' || !r.message || !r.message.content) continue;
+    const content = r.message.content;
+    // Skip user-role turns that are tool_result wrappers — those are
+    // tool outputs, not actual user messages.
+    if (Array.isArray(content) && content.length > 0 &&
+        content.every(c => c && c.type === 'tool_result')) {
+      continue;
+    }
+    lastUserIdx = i;
+    break;
+  }
+
+  // Pass over lines AFTER the user boundary, collecting Edit/MultiEdit/
+  // Write tool_use blocks. Group by file_path.
+  const byFile = {};
+  const order = [];
+  const start = lastUserIdx + 1;
+  for (let i = start; i < lines.length; i++) {
+    if (!lines[i]) continue;
+    let r;
+    try { r = JSON.parse(lines[i]); } catch (e) { continue; }
+    if (r.type !== 'assistant' || !r.message || !r.message.content) continue;
+    const content = r.message.content;
+    if (!Array.isArray(content)) continue;
+    for (const c of content) {
+      if (!c || c.type !== 'tool_use') continue;
+      const name = c.name;
+      const input = c.input || {};
+      const filePath = input.file_path;
+      if (!filePath) continue;
+      if (name !== 'Edit' && name !== 'MultiEdit' && name !== 'Write') continue;
+
+      if (!byFile[filePath]) {
+        byFile[filePath] = {
+          filePath: filePath,
+          kind: null,
+          edits: [],
+          added: 0,
+          removed: 0,
+          lastToolId: null,
+        };
+        order.push(filePath);
+      }
+      const bucket = byFile[filePath];
+      // Track the most recent tool_use_id that touched this file so the
+      // footer row can deep-link into the existing tool-detail modal.
+      if (c.id) bucket.lastToolId = c.id;
+
+      if (name === 'Edit') {
+        const before = input.old_string || '';
+        const after = input.new_string || '';
+        bucket.edits.push({ kind: 'edit', before: before, after: after });
+        bucket.removed += (before ? before.split('\n').length : 0);
+        bucket.added += (after ? after.split('\n').length : 0);
+        bucket.kind = bucket.kind ? (bucket.kind === 'edited' ? 'edited' : 'mixed') : 'edited';
+      } else if (name === 'MultiEdit') {
+        const subEdits = Array.isArray(input.edits) ? input.edits : [];
+        for (const e of subEdits) {
+          if (!e) continue;
+          const before = e.old_string || '';
+          const after = e.new_string || '';
+          bucket.edits.push({ kind: 'edit', before: before, after: after });
+          bucket.removed += (before ? before.split('\n').length : 0);
+          bucket.added += (after ? after.split('\n').length : 0);
+        }
+        bucket.kind = bucket.kind ? (bucket.kind === 'multi-edited' ? 'multi-edited' : 'mixed') : 'multi-edited';
+      } else if (name === 'Write') {
+        const after = input.content || '';
+        bucket.edits.push({ kind: 'write', before: null, after: after });
+        bucket.added += (after ? after.split('\n').length : 0);
+        // No removed count — we don't have prior content. If this file
+        // also got Edited earlier in the turn, kind becomes 'mixed'.
+        bucket.kind = bucket.kind ? (bucket.kind === 'written' ? 'written' : 'mixed') : 'written';
+      }
+    }
+  }
+
+  const result = order.map(fp => byFile[fp]);
+  currentTurnEdits._cacheKey = jsonlText;
+  currentTurnEdits._cache = result;
+  return result;
+}
+
 // First N lines of a Write tool's content, plus the leftover count for
 // the truncation footer.
 function writeBodyLines(input, maxLines) {

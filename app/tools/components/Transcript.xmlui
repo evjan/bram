@@ -247,24 +247,79 @@
     </HStack>
 
     <StickyBox to="bottom">
-      <HStack gap="$space-2" padding="$space-2"
+      <VStack gap="{0}"
         backgroundColor="$color-surface-50"
         borderTop="1px solid $borderColor"
-        verticalAlignment="end">
-        <Button icon="up" variant="ghost" size="xs"
-          tooltip="Scroll to top" onClick="window.scrollAllToTop()" />
-        <Form width="*"
-          onSubmit="if (inputBox.value &amp;&amp; inputBox.value.trim()) { toTurn(inputBox.value); inputBox.setValue('') }">
-          <property name="buttonRowTemplate"><Fragment/></property>
-          <HStack gap="$space-2" verticalAlignment="end">
-            <TextArea id="inputBox" enterSubmits="true"
-              enabled="{!isWaitingForAssistant(lastJsonl)}"
-              placeholder="Message agent — Enter sends, Shift+Enter newline"
-              autoSize="true" minRows="1" maxRows="6" width="*" />
-            <Button label="Send" type="submit" size="sm" />
-          </HStack>
-        </Form>
-      </HStack>
+        var.turnEdits="{currentTurnEdits(lastJsonl)}">
+        <VStack
+          when="{turnEdits.length > 0}"
+          gap="{0}"
+          paddingHorizontal="$space-2"
+          paddingVertical="$space-1"
+          borderBottom="1px solid $borderColor">
+          <Items data="{turnEdits}">
+            <Link
+              when="{$item.lastToolId}"
+              onClick="openToolId = $item.lastToolId"
+              noIndicator="true">
+              <HStack gap="$space-2" verticalAlignment="center">
+                <Text
+                  fontFamily="$fontFamily-monospace"
+                  fontSize="$fontSize-xs"
+                  color="$textColor-secondary"
+                  value="{$item.filePath}" />
+                <SpaceFiller />
+                <Text
+                  fontFamily="$fontFamily-monospace"
+                  fontSize="$fontSize-xs"
+                  color="$color-success-700"
+                  value="+{$item.added}" />
+                <Text
+                  fontFamily="$fontFamily-monospace"
+                  fontSize="$fontSize-xs"
+                  color="$color-danger-700"
+                  value="-{$item.removed}" />
+              </HStack>
+            </Link>
+            <HStack
+              when="{!$item.lastToolId}"
+              gap="$space-2"
+              verticalAlignment="center">
+              <Text
+                fontFamily="$fontFamily-monospace"
+                fontSize="$fontSize-xs"
+                color="$textColor-secondary"
+                value="{$item.filePath}" />
+              <SpaceFiller />
+              <Text
+                fontFamily="$fontFamily-monospace"
+                fontSize="$fontSize-xs"
+                color="$color-success-700"
+                value="+{$item.added}" />
+              <Text
+                fontFamily="$fontFamily-monospace"
+                fontSize="$fontSize-xs"
+                color="$color-danger-700"
+                value="-{$item.removed}" />
+            </HStack>
+          </Items>
+        </VStack>
+        <HStack gap="$space-2" padding="$space-2" verticalAlignment="end">
+          <Button icon="up" variant="ghost" size="xs"
+            tooltip="Scroll to top" onClick="window.scrollAllToTop()" />
+          <Form width="*"
+            onSubmit="if (inputBox.value &amp;&amp; inputBox.value.trim()) { toTurn(inputBox.value); inputBox.setValue('') }">
+            <property name="buttonRowTemplate"><Fragment/></property>
+            <HStack gap="$space-2" verticalAlignment="end">
+              <TextArea id="inputBox" enterSubmits="true"
+                enabled="{!isWaitingForAssistant(lastJsonl)}"
+                placeholder="Message agent — Enter sends, Shift+Enter newline"
+                autoSize="true" minRows="1" maxRows="6" width="*" />
+              <Button label="Send" type="submit" size="sm" />
+            </HStack>
+          </Form>
+        </HStack>
+      </VStack>
     </StickyBox>
   </VStack>
 </Component>

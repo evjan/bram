@@ -458,50 +458,6 @@ hot-reloaded. After editing those, run `cargo build` and have the
 user restart. Don't suggest `cargo run` as an alternative — the user
 prefers rebuild + restart, and the incremental build is fast.
 
-## Building and releasing
-
-Debug builds are the shipping format. Don't propose `cargo build
---release`, code signing, notarization, or installer pipelines. The
-Rust side is thin glue (PTY relay, loopback HTTP file server, small
-git/sessions queries); the heavy lifting is XMLUI's TypeScript
-runtime in the WebView, which is identical between debug and release.
-The audience is XMLUI developers, who benefit from devtools being
-accessible.
-
-Cutting a new release:
-
-1. Bump `version` in `src-tauri/Cargo.toml` and
-   `src-tauri/tauri.conf.json`.
-2. Run `cargo build` to refresh `Cargo.lock`.
-3. Commit, then create the `vX.Y.Z` tag locally
-   (`git tag vX.Y.Z <release-commit>`).
-4. Push the commits via the agent-tools drawer's "Push N unpushed
-   commits" button, then push the tag separately with
-   `git push origin vX.Y.Z`. **The push button does not follow
-   tags** — `git ls-remote --tags origin vX.Y.Z` after clicking it
-   will return empty until you push the tag explicitly. The workflow
-   in step 5 needs the tag to exist on origin.
-5. Manually dispatch `.github/workflows/build.yml` from the GitHub
-   Actions UI with the tag string. The workflow is `workflow_dispatch`
-   only — it builds debug binaries for linux-amd64, macos-arm64,
-   macos-intel, and windows-amd64, generates SHA256SUMS, and attaches
-   `install.sh` / `install.ps1`.
-
-It's fine to leave `#[cfg(debug_assertions)]` gates in code (e.g.,
-`open_devtools`) — they work in the only build we ship.
-
-### Testing the update banner
-
-The `/__app-info` route reads the current version from
-`CARGO_PKG_VERSION` and compares it against the latest GitHub release.
-To exercise the banner UI before actually cutting a new release, launch
-with `XMLUI_DESKTOP_FAKE_CURRENT=0.0.1 cargo run` — the env var
-substitutes for the real package version in both the comparison and the
-response's `current` field, so `has_update` flips to `true` against
-whatever the real GitHub latest is, and the banner renders. The result
-is cached per process, so set the env var before launch and restart to
-re-test with a different fake value.
-
 ## Compressing screencasts for the README
 
 GitHub README videos are capped at ~10 MiB. Screencasts of

@@ -1,11 +1,15 @@
 // Shell-side helpers exposed to any XMLUI app served by the xmlui-desktop
 // binary. Include from your project's index.html with:
 //
-//   <script src="xmlui://localhost/__shell/helpers.js"></script>
+//   <script src="tauri://localhost/__shell/helpers.js"></script>
 //
-// The helpers all communicate with the parent shell via window.parent
-// .postMessage and the matching dispatcher in app/main.js. Tauri's IPC
-// (window.__TAURI__.core.invoke) is used directly when reachable.
+// Both iframes (right pane and agent-tools drawer) are same-origin with
+// the parent shell at tauri://localhost, so these helpers call Tauri IPC
+// directly via window.parent.__TAURI__.core.invoke. `getTauriInvoke()`
+// formalizes the lookup with a window.__TAURI__ → window.parent → window.top
+// fallback chain. The legacy postMessage bridge to app/main.js has been
+// retired; voice recording (voiceStart / voiceStop) is the one remaining
+// exception, because the parent shell owns the MediaRecorder pipeline.
 
 window._xsLogs = window._xsLogs || [];
 
@@ -56,15 +60,12 @@ window._xsLogs = window._xsLogs || [];
   } catch (e) {}
 })();
 
-// Three intents the right pane can send to the parent shell:
-//   to-shell      → inject text into the PTY (foreground process reads it as user input)
-//   log           → record in cargo run stderr only, don't bother the shell
-//   open-devtools → internal command (handled by parent.invoke)
 window.toShell = function (text) {
-  window.parent.postMessage(
-    { type: "right-pane", kind: "to-shell", text: String(text) },
-    "*",
-  );
+  var invoke = getTauriInvoke();
+  if (!invoke) return;
+  invoke("pty_write", { data: String(text) + "\n" }).catch(function (e) {
+    console.error("toShell pty_write", e);
+  });
 };
 window.toTurn = function (text) {
   var s = String(text);
@@ -78,31 +79,44 @@ window.toTurn = function (text) {
     });
   } catch (e) {}
   var normalized = s.replace(/\s+/g, " ").trim();
-  window.parent.postMessage(
-    { type: "right-pane", kind: "to-turn", text: normalized },
-    "*",
-  );
+  var invoke = getTauriInvoke();
+  if (!invoke) return;
+  invoke("log_from_right_pane", {
+    payload: {
+      kind: "to-turn",
+      stage: "sink",
+      textLength: normalized.length,
+      textPreview: normalized.slice(0, 80),
+      at: new Date().toISOString(),
+    },
+  }).catch(function () {});
+  invoke("pty_write", {
+    data: "\x15\x1b[200~" + normalized + "\x1b[201~\r",
+  }).catch(function (e) {
+    console.error("toTurn pty_write", e);
+  });
 };
 // sendKeys writes raw bytes to the PTY with NO trailing newline (unlike
 // toShell which always appends \n). Use it for control sequences like ESC,
 // arrow keys, or single-keypress menu shortcuts.
 window.sendKeys = function (text) {
-  window.parent.postMessage(
-    { type: "right-pane", kind: "send-keys", text: String(text) },
-    "*",
-  );
+  var invoke = getTauriInvoke();
+  if (!invoke) return;
+  invoke("pty_write", { data: String(text) }).catch(function (e) {
+    console.error("sendKeys pty_write", e);
+  });
 };
 window.logToHost = function (payload) {
-  window.parent.postMessage(
-    { type: "right-pane", kind: "log", payload },
-    "*",
-  );
+  var invoke = getTauriInvoke();
+  if (!invoke) return;
+  invoke("log_from_right_pane", { payload: payload }).catch(function () {});
 };
 window.openExternal = function (url) {
-  window.parent.postMessage(
-    { type: "right-pane", kind: "open-url", url: String(url) },
-    "*",
-  );
+  var invoke = getTauriInvoke();
+  if (!invoke) return;
+  invoke("open_url", { url: String(url) }).catch(function (e) {
+    console.error("openExternal open_url", e);
+  });
 };
 // Capture an interactive screenshot via the host (macOS: screencapture -i)
 // and inject the resulting file path into the terminal as a fresh user turn
@@ -124,28 +138,12 @@ window.captureScreenshot = function () {
       logToHost({ kind: "screenshot", error: msg });
     }
   }
-
   var invoke = getTauriInvoke();
-  if (invoke) {
-    invoke("capture_screenshot", {}).then(deliver).catch(report);
+  if (!invoke) {
+    report(new Error("Tauri IPC unavailable"));
     return;
   }
-
-  // Cross-origin iframe: round-trip via the parent shell.
-  var requestId =
-    "screenshot-" + Date.now() + "-" + Math.random().toString(36).slice(2);
-  function onResult(ev) {
-    var d = ev && ev.data;
-    if (!d || d.type !== "capture-screenshot-result" || d.requestId !== requestId) return;
-    window.removeEventListener("message", onResult);
-    if (d.ok) deliver(d.path);
-    else report(d.error);
-  }
-  window.addEventListener("message", onResult);
-  window.parent.postMessage(
-    { type: "right-pane", kind: "capture-screenshot", requestId: requestId },
-    "*",
-  );
+  invoke("capture_screenshot", {}).then(deliver).catch(report);
 };
 
 // Click-to-toggle voice. Single in-flight session per iframe.
@@ -216,29 +214,20 @@ window.voiceStop = function (callback) {
     "*",
   );
 };
-// Ask the parent shell for the right-pane iframe's current pixel
-// size. Round-trips through main.js, which measures via
-// getBoundingClientRect. Callback receives { width, height } as
-// integers (rounded).
+// Snapshot of the iframe's current pixel size. Same-origin iframes can
+// read their own viewport dimensions directly — no parent round-trip
+// needed. Callback receives { width, height } as integers (rounded).
 window.getRightPaneSize = function (callback) {
-  var requestId =
-    "rps-" + Date.now() + "-" + Math.random().toString(36).slice(2);
-  function onResult(ev) {
-    var d = ev && ev.data;
-    if (!d || d.type !== "right-pane-size-result" || d.requestId !== requestId) return;
-    window.removeEventListener("message", onResult);
-    if (typeof callback === "function") {
-      callback({ width: d.width, height: d.height });
-    }
-  }
-  window.addEventListener("message", onResult);
-  window.parent.postMessage(
-    { type: "right-pane", kind: "get-right-pane-size", requestId: requestId },
-    "*",
-  );
+  if (typeof callback !== "function") return;
+  callback({
+    width: Math.round(window.innerWidth || 0),
+    height: Math.round(window.innerHeight || 0),
+  });
 };
 
-// Subscribe to session-JSONL change events pushed by the parent shell.
+// Subscribe to session-JSONL change events. The parent shell receives
+// `talk-session-changed` Tauri events from the file watcher; same-origin
+// iframes can listen for that event directly via window.parent.__TAURI__.
 // Used by Transcript / Workspace to refetch immediately on provider
 // session-file writes — eliminates the poll-window lag where short-lived
 // menu or turn-boundary state could come and go between ticks.
@@ -246,66 +235,55 @@ var __talkSessionSubscriber = null;
 window.onTalkSessionChange = function (fn) {
   __talkSessionSubscriber = typeof fn === "function" ? fn : null;
 };
-window.addEventListener("message", function (ev) {
-  var d = ev && ev.data;
-  if (!d || d.type !== "talk-session-changed") return;
-  if (typeof __talkSessionSubscriber === "function") {
-    __talkSessionSubscriber();
+try {
+  if (window.parent && window.parent.__TAURI__ && window.parent.__TAURI__.event) {
+    window.parent.__TAURI__.event.listen("talk-session-changed", function () {
+      if (typeof __talkSessionSubscriber === "function") {
+        __talkSessionSubscriber();
+      }
+    });
   }
-});
+} catch (e) {}
 
-// Continuous variant: register a callback that fires on every resize of
-// the right pane (via the ResizeObserver in main.js) plus once with the
-// current size at registration time. Use this when you want a readout
-// that stays live, not just a snapshot on a button click.
+// Continuous variant: register a callback that fires on every resize
+// (window.resize event inside the iframe) plus once with the current
+// size at registration time. Use this when you want a readout that
+// stays live, not just a snapshot on a button click.
 var __rpsSubscriber = null;
+var __rpsListenerAttached = false;
+function __rpsBroadcast() {
+  if (typeof __rpsSubscriber === "function") {
+    __rpsSubscriber({
+      width: Math.round(window.innerWidth || 0),
+      height: Math.round(window.innerHeight || 0),
+    });
+  }
+}
 window.subscribeRightPaneSize = function (callback) {
   __rpsSubscriber = typeof callback === "function" ? callback : null;
-  if (__rpsSubscriber) {
-    window.getRightPaneSize(__rpsSubscriber);
+  if (!__rpsSubscriber) return;
+  __rpsBroadcast();
+  if (!__rpsListenerAttached) {
+    window.addEventListener("resize", __rpsBroadcast);
+    __rpsListenerAttached = true;
   }
 };
-window.addEventListener("message", function (ev) {
-  var d = ev && ev.data;
-  if (!d || d.type !== "right-pane-size-changed") return;
-  if (typeof __rpsSubscriber === "function") {
-    __rpsSubscriber({ width: d.width, height: d.height });
-  }
-});
 // Push local commits to origin and refetch a DataSource (typically
 // the commits list) when the push completes, so the pushed flags
 // refresh without a manual reload.
-var _gitPushPending = null;
 window.gitPush = function (commitsDs) {
   var invoke = getTauriInvoke();
-  if (invoke) {
-    invoke("git_push", {})
-      .then(function () {
-        if (commitsDs && typeof commitsDs.refetch === "function") {
-          commitsDs.refetch();
-        }
-      })
-      .catch(function (e) {
-        window.logToHost({ kind: "git-push", phase: "err", error: String(e) });
-      });
-    return;
-  }
-  // No direct invoke (cross-origin iframe). Round-trip via the parent
-  // shell; the parent posts back a "git-push-result" we listen for.
-  _gitPushPending = commitsDs;
-  window.parent.postMessage(
-    { type: "right-pane", kind: "git-push" },
-    "*"
-  );
+  if (!invoke) return;
+  invoke("git_push", {})
+    .then(function () {
+      if (commitsDs && typeof commitsDs.refetch === "function") {
+        commitsDs.refetch();
+      }
+    })
+    .catch(function (e) {
+      window.logToHost({ kind: "git-push", phase: "err", error: String(e) });
+    });
 };
-window.addEventListener("message", function (event) {
-  var data = event.data;
-  if (!data || data.type !== "git-push-result") return;
-  if (_gitPushPending && typeof _gitPushPending.refetch === "function") {
-    _gitPushPending.refetch();
-  }
-  _gitPushPending = null;
-});
 // In-flight marker that persists across iframe reloads. At click
 // time we snapshot the current worklist's item IDs; the XMLUI side
 // clears the flag whenever worklist.json's items differ from that
@@ -514,7 +492,6 @@ function getTauriInvoke() {
 window.addEventListener("message", async (event) => {
   var data = event.data;
   if (!data || data.type !== "inspector-export") return;
-  var requestId = "trace-export-" + Date.now() + "-" + Math.random().toString(36).slice(2);
   var source = event.source;
 
   function reply(payload) {
@@ -523,50 +500,26 @@ window.addEventListener("message", async (event) => {
     }
   }
 
-  function onResult(resultEvent) {
-    var result = resultEvent.data;
-    if (!result || result.type !== "save-trace-export-result" || result.requestId !== requestId) {
-      return;
-    }
-    window.removeEventListener("message", onResult);
-    reply(
-      result.ok
-        ? { type: "inspector-export-result", ok: true, path: result.path }
-        : { type: "inspector-export-result", ok: false, error: result.error }
-    );
-  }
-
   var invoke = getTauriInvoke();
-  if (invoke) {
-    try {
-      var path = await invoke("save_trace_export", {
-        filename: String(data.filename || "xs-trace.json"),
-        content: String(data.content || ""),
-        mimeType: String(data.mimeType || "application/octet-stream")
-      });
-      reply({ type: "inspector-export-result", ok: true, path: path });
-      return;
-    } catch (e) {
-      logToHost({
-        kind: "trace-export-direct-failed",
-        error: String((e && e.message) || e),
-        at: new Date().toISOString(),
-      });
-    }
+  if (!invoke) {
+    reply({ type: "inspector-export-result", ok: false, error: "Tauri IPC unavailable" });
+    return;
   }
-
-  window.addEventListener("message", onResult);
-  window.parent.postMessage(
-    {
-      type: "right-pane",
-      kind: "save-trace-export",
-      requestId: requestId,
+  try {
+    var path = await invoke("save_trace_export", {
       filename: String(data.filename || "xs-trace.json"),
       content: String(data.content || ""),
       mimeType: String(data.mimeType || "application/octet-stream")
-    },
-    "*"
-  );
+    });
+    reply({ type: "inspector-export-result", ok: true, path: path });
+  } catch (e) {
+    logToHost({
+      kind: "trace-export-direct-failed",
+      error: String((e && e.message) || e),
+      at: new Date().toISOString(),
+    });
+    reply({ type: "inspector-export-result", ok: false, error: String((e && e.message) || e) });
+  }
 });
 
 // Adjustable root font-size for the xmlui surface (mirrors the terminal-side

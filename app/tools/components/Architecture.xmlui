@@ -2,13 +2,26 @@
   <VStack padding="$space-4" gap="$space-4">
 
     <Card title="xmlui-desktop"
-          subtitle="A Tauri shell with a real PTY on the left and an XMLUI iframe on the right">
+          subtitle="A Tauri shell with a real PTY on the left and two iframes on the right: the project under development plus an agent-tools drawer">
       <Text>
-        The Rust backend owns the PTY, a custom xmlui:// URI scheme that serves
-        files from app/, and a filesystem watcher that triggers right-pane
-        reloads. The web parent (main.js) bridges xterm.js, the iframe, and
-        Tauri's IPC. The right pane is an XMLUI app loaded into an iframe; it
-        talks back to the shell via window.postMessage.
+        The Rust backend owns the PTY, a custom tauri:// URI scheme
+        handler that proxies the right pane to the project's HTTP server
+        and serves shell assets, and a filesystem watcher that triggers
+        iframe reloads. The web parent (main.js) bridges xterm.js and
+        both iframes.
+      </Text>
+      <Text>
+        Two iframes load same-origin with the parent at tauri://localhost:
+        the **right pane** (the project under development — any web app:
+        a React/Vue/Svelte SPA, a static site, an XMLUI app, etc.) and
+        the **agent-tools drawer** (xmlui-desktop's own control surface,
+        an XMLUI app built into the binary at app/tools/, providing the
+        Transcript, Worklist, Commits, Issues, Sessions, Context, and
+        README tabs). Because both share an origin with the parent,
+        iframe code calls Tauri IPC directly via
+        window.parent.__TAURI__.core.invoke — no postMessage bridge for
+        routine calls. Voice is the lone exception, because the parent
+        shell owns the MediaRecorder pipeline.
       </Text>
     </Card>
 
@@ -32,20 +45,21 @@
             data: [
               { name: 'User',                 x: 420, y: 30,  itemStyle: { color: '#666' } },
               { name: 'Terminal (xterm.js)',  x: 150, y: 150, itemStyle: { color: '#0b6' } },
-              { name: 'XMLUI iframe',         x: 690, y: 150, itemStyle: { color: '#06b' } },
+              { name: 'Right pane + agent-tools iframes', x: 690, y: 150, symbolSize: [200, 56], itemStyle: { color: '#06b' } },
               { name: 'Parent shell main.js', x: 420, y: 280, itemStyle: { color: '#444' } },
               { name: 'Rust / Tauri backend', x: 420, y: 410, itemStyle: { color: '#a40' } },
               { name: 'Claude / Codex CLI',   x: 420, y: 540, itemStyle: { color: '#840' } }
             ],
             links: [
               { source: 'User',                 target: 'Terminal (xterm.js)',  value: 'keystrokes' },
-              { source: 'User',                 target: 'XMLUI iframe',         value: 'clicks / sees' },
+              { source: 'User',                 target: 'Right pane + agent-tools iframes',         value: 'clicks / sees' },
               { source: 'Terminal (xterm.js)',  target: 'Parent shell main.js', value: 'term.onData' },
               { source: 'Parent shell main.js', target: 'Terminal (xterm.js)', value: 'term.write', lineStyle: { curveness: -0.2 } },
-              { source: 'XMLUI iframe',         target: 'Parent shell main.js', value: 'postMessage' },
-              { source: 'Parent shell main.js', target: 'XMLUI iframe',         value: 'iframe.src reload', lineStyle: { curveness: -0.2 } },
+              { source: 'Right pane + agent-tools iframes',         target: 'Rust / Tauri backend', value: 'invoke() via window.parent.__TAURI__' },
+              { source: 'Parent shell main.js', target: 'Right pane + agent-tools iframes',         value: 'iframe.src reload', lineStyle: { curveness: -0.2 } },
               { source: 'Parent shell main.js', target: 'Rust / Tauri backend', value: 'invoke()' },
               { source: 'Rust / Tauri backend', target: 'Parent shell main.js', value: 'Channel + emit', lineStyle: { curveness: -0.2 } },
+              { source: 'Rust / Tauri backend', target: 'Right pane + agent-tools iframes',         value: 'event.listen() (file watcher, etc.)', lineStyle: { curveness: 0.15 } },
               { source: 'Rust / Tauri backend', target: 'Claude / Codex CLI',   value: 'PTY stdin' },
               { source: 'Claude / Codex CLI',   target: 'Rust / Tauri backend', value: 'PTY stdout', lineStyle: { curveness: -0.2 } }
             ]
@@ -54,40 +68,67 @@
     </Card>
 
     <Tabs>
-      <TabItem label="Three layers">
+      <TabItem label="Four layers">
         <VStack gap="$space-3" padding="$space-3">
           <Card title="1. Rust / Tauri backend"
                 subtitle="src-tauri/src/lib.rs">
             <Text>
-              Owns the PTY (portable_pty), spawns the child shell with the project
-              root as cwd, streams stdout to JS via a tauri::ipc::Channel, accepts
-              stdin via pty_write. Registers a custom xmlui:// URI scheme that
-              serves project files from the project root, plus binary-bundled
-              namespaces (__shell/, __vendor/, __sessions/, __commits, __file).
-              Spawns a notify watcher on the project root, app/__shell, and
-              app/vendor that emits a "right-pane-reload" event (debounced 100ms).
-              Also handles trace export and url opening.
+              Owns the PTY (portable_pty), spawns the child shell with the
+              project root as cwd, streams stdout to JS via a
+              tauri::ipc::Channel, accepts stdin via pty_write. Registers a
+              custom tauri:// URI scheme handler whose four routing tiers
+              are: /__project/* proxied to the project's HTTP server,
+              shell assets served from app/ under /__shell/, /__vendor/,
+              /__tools/, every other /__* path forwarded to the same
+              loopback tiny_http server, and everything else returning the
+              embedded index.html. Spawns a notify watcher that emits
+              scoped reload events plus targeted state-changed events
+              (talk-session-changed, pty-menu-changed, worklist-changed,
+              etc.). Also handles trace export, url opening, voice
+              transcription via whisper.cpp.
             </Text>
           </Card>
           <Card title="2. Parent shell (web)"
                 subtitle="app/index.html + app/main.js">
             <Text>
-              The window's host page. Mounts xterm.js into the left pane, mounts
-              an iframe pointing at xmlui://localhost/index.html into the
-              right pane. Bridges three flows: terminal keystrokes → PTY,
-              PTY output → terminal, and right-pane postMessages → IPC commands
-              (with watcher events → iframe reload coming back the other way).
+              The window's host page. Mounts xterm.js into the left pane,
+              mounts both iframes at tauri://localhost. Bridges terminal
+              keystrokes → PTY and PTY output → terminal; owns the voice
+              MediaRecorder pipeline. Re-assigns iframe.src in response to
+              file-watcher reload events. Iframe code calls Tauri IPC
+              directly without going through main.js, so the parent's
+              iframe-facing surface is intentionally small.
             </Text>
           </Card>
-          <Card title="3. XMLUI right pane"
-                subtitle="index.html + Main.xmlui (at the project root)">
+          <Card title="3. Right pane — the app under development"
+                subtitle="any web app served from the project root via /__project/*">
             <Text>
-              A separate document loaded over xmlui://, so it is cross-origin
-              from the tauri:// parent. Boots the standalone XMLUI build plus
-              the EChart and xs-trace extensions. Exposes window.toShell,
-              window.toTurn, window.logToHost, window.openExternal — thin
-              postMessage wrappers — so XMLUI components can drive the shell
-              just by calling functions.
+              Whatever's at the project root: a React/Vue/Svelte SPA, a
+              static site, a server-rendered app, an XMLUI app — anything
+              the project's HTTP server (declared in .xmlui-desktop.json
+              or auto-detected) returns. The scheme handler proxies
+              /__project/* to that server, so the iframe's
+              location.origin is tauri://localhost while the bytes come
+              from 127.0.0.1:&lt;random-port&gt;. Project code that wants
+              to talk back to xmlui-desktop opts in by including
+              app/__shell/helpers.js, which exposes window.toShell,
+              window.toTurn, window.sendKeys, window.logToHost,
+              window.openExternal, window.captureScreenshot,
+              window.gitPush, and window.subscribeRightPaneSize — thin
+              getTauriInvoke() wrappers that call IPC commands directly.
+            </Text>
+          </Card>
+          <Card title="4. Agent-tools drawer — xmlui-desktop's own control surface"
+                subtitle="app/tools/Main.xmlui + components, built into the binary">
+            <Text>
+              The second iframe (toggled from the toolbar) and the only
+              piece guaranteed to be XMLUI. Ships with the binary at
+              app/tools/, loads helpers.js unconditionally, and renders
+              the Transcript, Worklist, Commits, Issues, Sessions,
+              Context, and README tabs. Uses Tauri IPC and the loopback
+              /__* HTTP routes for everything; subscribes to file-watcher
+              events directly via window.parent.__TAURI__.event.listen
+              for live updates.
             </Text>
           </Card>
         </VStack>
@@ -108,48 +149,65 @@
         </Table>
       </TabItem>
 
-      <TabItem label="postMessage intents">
+      <TabItem label="Iframe → host IPC">
         <VStack gap="$space-3" padding="$space-3">
           <Text>
-            The right-pane iframe sends typed messages to its parent. main.js
-            switches on data.kind:
+            Iframe code (right pane and agent-tools drawer) calls Tauri
+            IPC directly through window.parent.__TAURI__.core.invoke.
+            app/__shell/helpers.js wraps the common commands as window
+            globals so XMLUI components can call them from event handlers:
           </Text>
           <Table data="{[
-            { kind: 'to-shell',          effect: 'Inject text + newline into the PTY (raw, like typing it)' },
-            { kind: 'to-turn',           effect: 'Inject text wrapped in bracketed-paste markers + CR (one Claude/Codex turn)' },
-            { kind: 'open-devtools',     effect: 'Calls open_devtools' },
-            { kind: 'open-url',          effect: 'Calls open_url with data.url' },
-            { kind: 'save-trace-export', effect: 'Calls save_trace_export, replies to source via postMessage' },
-            { kind: 'log',               effect: 'Forwards payload to cargo run stderr (silent to the agent)' }
+            { helper: 'toShell(text)',          ipc: 'pty_write — text + \n into the PTY (like typing it)' },
+            { helper: 'toTurn(text)',           ipc: 'pty_write — bracketed-paste markers + CR (one Claude/Codex turn)' },
+            { helper: 'sendKeys(text)',         ipc: 'pty_write — raw bytes, no newline (Esc, arrows, single-keypress menus)' },
+            { helper: 'logToHost(payload)',     ipc: 'log_from_right_pane — forwards to cargo run stderr (silent to the agent)' },
+            { helper: 'openExternal(url)',      ipc: 'open_url — opens via the host OS opener' },
+            { helper: 'captureScreenshot()',    ipc: 'capture_screenshot — then injects @path via toTurn' },
+            { helper: 'gitPush(commitsDs)',     ipc: 'git_push — and refetches the commits DataSource on success' },
+            { helper: 'inspector-export listener', ipc: 'save_trace_export — writes the Inspector trace JSON to ~/Downloads' }
           ]}">
-            <Column bindTo="kind"   header="kind"   width="220px" />
-            <Column bindTo="effect" header="effect" />
+            <Column bindTo="helper" header="helper" width="260px" />
+            <Column bindTo="ipc"    header="Tauri command" />
           </Table>
           <Text>
-            On the iframe side, helpers are exposed in app/__shell/helpers.js
-            (loaded by index.html via xmlui://localhost/__shell/helpers.js):
-            toShell(text), toTurn(text), logToHost(payload), openExternal(url).
-            Components call these directly from event handlers.
+            Include from any project's index.html with
+            &lt;script src="tauri://localhost/__shell/helpers.js"&gt;.
+            getRightPaneSize / subscribeRightPaneSize are also exposed,
+            but they don't hit IPC — same-origin iframes read their own
+            viewport via window.innerWidth / innerHeight, with a window
+            "resize" listener for the continuous variant.
+          </Text>
+          <Text>
+            Voice (voiceStart, voiceStop) is the one helper that still
+            posts to main.js — the parent shell owns the MediaRecorder
+            pipeline and the single-in-flight rejection logic.
           </Text>
         </VStack>
       </TabItem>
 
-      <TabItem label="Hot reload + xmlui://">
+      <TabItem label="Hot reload + tauri://">
         <VStack gap="$space-3" padding="$space-3">
           <Card title="Why a custom URI scheme">
             <Text>
-              Tauri's bundled-frontend protocol stamps unknown extensions as
-              text/html, which xmlui-standalone rejects. The xmlui:// handler
-              in lib.rs reads files directly from app/ and sets correct
-              MIME types — including .xmlui and .xs as text/plain so they
-              load. It also sets Access-Control-Allow-Origin: *.
+              Tauri's bundled-frontend protocol stamps unknown extensions
+              as text/html, which xmlui-standalone rejects. The tauri://
+              handler in lib.rs serves shell assets from app/ with the
+              correct MIME types (including .xmlui and .xs as text/plain
+              so they load), and proxies /__project/* to the project's
+              HTTP server so the right pane shares an origin with the
+              parent. It also sets Access-Control-Allow-Origin: *.
             </Text>
           </Card>
-          <Card title="Cross-origin reload trick">
+          <Card title="Same-origin reload">
             <Text>
-              The parent is on tauri://, the iframe on xmlui://. That makes
-              iframe.contentWindow.location.reload() throw. Workaround: the
-              parent reassigns iframe.src with a fresh ?t= cache-buster.
+              Both iframes are same-origin with the parent now, so
+              iframe.contentWindow.location.reload() works in principle —
+              but reassigning iframe.src with a ?t= cache-buster gives
+              the file watcher cleaner control over which iframes reload
+              on which path-prefix changes (app/__shell/ and app/vendor/
+              reload both, app/tools/ reloads the drawer only, the
+              project directory reloads the right pane only).
             </Text>
           </Card>
         </VStack>

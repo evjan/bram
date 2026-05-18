@@ -1,21 +1,42 @@
 # Backend APIs
 
-Inventory of the backend surfaces produced by `src-tauri/src/lib.rs`. Two
-transport channels carry traffic between the Rust host and everything else:
+Inventory of the backend surfaces produced by `src-tauri/src/lib.rs`.
+xmlui-desktop hosts two iframes inside the parent shell — the **right
+pane** (the project under development; any web app served by the
+project's HTTP server) and the **agent-tools drawer** (xmlui-desktop's
+own XMLUI control surface at `app/tools/`, providing Transcript,
+Worklist, Commits, Issues, Sessions, Context, README tabs). Two
+transport channels carry traffic between the Rust host and everything
+else (those two iframes, the parent shell, and the agent running in the
+terminal):
 
 - **HTTP loopback.** A `tiny_http` server bound to `127.0.0.1:<random-port>`
-  serves the right-pane iframe, the agent-tools iframe, and occasionally
-  the agent itself via `curl`. Every route lives under the `__<name>`
-  prefix (and a small set of static fallbacks).
+  serves the agent directly (via `curl`) and serves both iframes
+  *indirectly* through the `tauri://localhost` custom-scheme handler.
+  Every route lives under the `__<name>` prefix (and a small set of
+  static fallbacks). When an iframe fetches
+  `tauri://localhost/__worklist`, the scheme handler's loopback tier
+  proxies the request to `http://127.0.0.1:<port>/__worklist` and
+  returns the body. The two call sites (`curl` from the agent, `fetch`
+  from an iframe) hit the same handlers with different base URLs.
 - **Tauri IPC.** `#[tauri::command]` functions registered in
-  `tauri::generate_handler!` at the bottom of `lib.rs`. Reachable only
-  from windows owned by this app process — today that means the parent
-  shell `app/main.js`. Not callable from iframes or agents.
+  `tauri::generate_handler!` at the bottom of `lib.rs`. Reachable from
+  any window owned by this app process. Because both iframes are
+  same-origin with the parent shell at `tauri://localhost`, they call
+  IPC directly via `window.parent.__TAURI__.core.invoke(...)`;
+  `app/__shell/helpers.js:getTauriInvoke` formalizes a `window.__TAURI__`
+  → `window.parent.__TAURI__` → `window.top.__TAURI__` fallback chain.
+  The `postMessage` bridge to `app/main.js` has been retired except for
+  voice (`voice-start` / `voice-stop`), which still routes through the
+  parent because the parent shell owns the MediaRecorder pipeline. The
+  agent itself cannot call IPC — it has no Tauri runtime.
 
-The HTTP port is exposed to the right pane via the IPC command
-`get_right_pane_url`; nothing else binds to it. There is no auth beyond
-loopback. IPC commands have no auth surface at all — they are
-process-scoped.
+The right-pane iframe URL is provisioned via the IPC command
+`get_right_pane_url`, which returns the `tauri://localhost/__project/...`
+form (the scheme handler routes `/__project/*` to the project's HTTP
+server). The loopback port is not exposed to the iframes — they only
+see the `tauri://` origin. There is no auth on either channel beyond
+loopback / process scope.
 
 When a route or command is added or removed, update this catalog. Code is
 the source of truth; this is the announcement surface.
@@ -52,15 +73,15 @@ uses them for the right-pane info dialog.
 | `/__pty-stripped` | HTTP GET | — | PTY output with ANSI escapes removed, `text/plain` | agent-tools iframe |
 | `/__pty-menu` | HTTP GET | — | current permission menu (if any), JSON | agent-tools iframe |
 | `pty_spawn` | IPC | `{ shell, cwd, env, agentAutostart? }` | `Result<(), String>` | parent shell |
-| `pty_write` | IPC | `{ data: String }` | `Result<(), String>` | parent shell |
+| `pty_write` | IPC | `{ data: String }` | `Result<(), String>` | parent shell, iframe helpers (direct) |
 | `pty_resize` | IPC | `{ cols, rows }` | `Result<(), String>` | parent shell |
 | `open_devtools` | IPC | — | `()` (debug builds only) | parent shell |
-| `open_url` | IPC | `{ url }` | `Result<(), String>` | parent shell |
-| `save_trace_export` | IPC | `{ json }` | `Result<String, String>` (path) | parent shell |
-| `capture_screenshot` | IPC | — | `Result<String, String>` (path) | parent shell |
+| `open_url` | IPC | `{ url }` | `Result<(), String>` | iframe helpers (direct) |
+| `save_trace_export` | IPC | `{ json }` | `Result<String, String>` (path) | iframe helpers (direct) |
+| `capture_screenshot` | IPC | — | `Result<String, String>` (path) | iframe helpers (direct) |
 | `get_right_pane_url` | IPC | — | `String` | parent shell |
 | `get_tools_pane_url` | IPC | — | `String` | parent shell |
-| `log_from_right_pane` | IPC | `{ payload }` | `()` | iframe helpers via parent |
+| `log_from_right_pane` | IPC | `{ payload }` | `()` | parent shell, iframe helpers (direct) |
 
 `pty_write` runs every byte through `record_worklist_authorization_from_input`,
 which detects `approved:` / `drop:` prefixes and writes the verified
@@ -171,7 +192,7 @@ The HTTP routes shell out to `git`; the IPC command shells out to
 | `/__repo/origin` | HTTP GET | — | `{ remote, owner, name }` | agent-tools iframe |
 | `/__git-diff` | HTTP GET | `path=` | `git diff -- <path>`, `text/plain` | agent-tools iframe |
 | `/__file` | HTTP GET | `path=` | file body, `text/plain` | agent-tools iframe |
-| `git_push` | IPC | — | `Result<(), String>` | parent shell |
+| `git_push` | IPC | — | `Result<(), String>` | iframe helpers (direct) |
 
 ## 7. Issues
 

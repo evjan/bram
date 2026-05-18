@@ -175,14 +175,34 @@ From `src-tauri/`:
 
 Tauri docs: <https://tauri.app/develop/>, <https://tauri.app/distribute/>.
 
+### Calling xmlui-desktop from project code
+
+Because the right pane is same-origin with the parent shell
+(`tauri://localhost`), project code can reach the Tauri command bridge
+directly through `window.parent` — no `postMessage` shim needed:
+
+```js
+const { invoke } = window.parent.__TAURI__.core;
+const url = await invoke("get_right_pane_url");
+```
+
+Use this when an XMLUI app embedded in the right pane needs to read
+filesystem state, hit one of xmlui-desktop's `__`-prefixed loopback
+endpoints, or invoke any of the Rust IPC commands. The `helpers.js`
+script loaded by the embedded XMLUI surfaces (`toShell`, `toTurn`,
+`openExternal`, `logToHost`) is built on top of this bridge — opt
+into the helpers for project XMLUI apps that need to talk back to
+the running agent.
+
 ## Layout
 
-- `Main.xmlui`, `components/`, `resources/`, `manual.md`, `Globals.xs`,
+- `Main.xmlui`, `components/`, `resources/`, `Globals.xs`,
   `config.json`, `index.html` — the XMLUI app at the repo root.
 - `app/` — parent shell (Tauri webview entry, terminal wiring, vendor
   scripts, and `__shell/helpers.js` that the right pane includes).
-- `src-tauri/` — Rust backend (PTY for the terminal, custom `xmlui://`
-  URI scheme, filesystem watcher, IPC handlers).
+- `src-tauri/` — Rust backend (PTY for the terminal, custom `tauri://`
+  URI scheme handler that proxies the right-pane iframe to the project's
+  HTTP server, filesystem watcher, IPC handlers).
 - `scripts/` — auxiliary scripts.
 
 ## Screen capture
@@ -310,6 +330,24 @@ bounces it to `localhost:8080`. `.xmlui-desktop.json` is the preferred
 mechanism — it auto-spawns the server, surfaces logs, and doesn't
 pollute the project's HTML.
 
+#### Service workers don't register on macOS/Linux
+
+The right-pane iframe loads at `tauri://localhost`, and the WebKit
+engines on macOS (WKWebView) and Linux (WebKitGTK) don't treat
+custom-scheme origins as secure contexts. Service-worker registration
+silently fails there, so project features that depend on a service
+worker — Mock Service Worker (MSW), XMLUI's in-page
+`apiInterceptor`, custom offline caches — won't activate inside
+xmlui-desktop on those platforms. Windows uses WebView2 (Chromium)
+with the `http://tauri.localhost` form, which *is* a secure context,
+so service workers register normally there.
+
+Apps that hit a real HTTP backend are unaffected; the constraint only
+applies to in-page request interception. If you're developing against
+MSW or `apiInterceptor`, run your project in a regular browser tab at
+`localhost:8080` while keeping xmlui-desktop pointed at the same
+server for the agent loop.
+
 #### Auth callbacks won't reach the right pane
 
 The right-pane webview has its own browser storage, isolated from
@@ -363,9 +401,14 @@ inside the right pane depend on the OS:
 To open them, **right-click inside the right pane → Inspect Element**
 in dev/debug builds (`cargo run` or `cargo tauri dev`). Release
 builds disable DevTools by default. The execution context belongs to
-the right-pane document specifically — that matters because the
-shell window (`tauri.localhost`) and the right pane have separate
-storage, so logging into one tells you nothing about the other.
+the right-pane document specifically. The shell window and the right
+pane both load at `tauri://localhost` (the parent shell directly, the
+right pane via the scheme handler that proxies project content under
+`/__project/*`), so they share an origin and therefore a `localStorage`
+/ `IndexedDB` partition — a console session in either reaches the
+same storage. A regular browser tab pointed at the project's own
+`localhost:8080` server, by contrast, is a different origin with its
+own independent storage.
 
 #### WebKit quirks worth knowing
 
@@ -389,7 +432,8 @@ DevTools in a few ways that bite when you're testing auth flows:
   pointed at `localhost:8080`.
 
 If you'd rather use Chromium DevTools on macOS/Linux, you can run
-your project in a regular browser tab pointed at the same
-`localhost:8080` origin — but remember that the tab's `localStorage`
-is a separate store from the right pane's, so a session created
-there won't carry into xmlui-desktop.
+your project in a regular browser tab pointed at its `localhost:8080`
+origin — but remember that the tab's `localStorage` is a separate
+store from the right pane's (the right pane is at `tauri://localhost`,
+a different origin), so a session created there won't carry into
+xmlui-desktop.

@@ -143,7 +143,6 @@ and https://echarts.apache.org/en/option.html for the full option API.
 
 - `Main.xmlui` — the XMLUI surface (the one)
 - `components/*.xmlui` — Workspace, Sessions, Toolbar, Architecture, etc.
-- `manual.md` — user-facing manual (renders when the help icon is clicked)
 - `config.json` — XMLUI app config (resources, appGlobals)
 - `resources/*.svg` — custom icons; register in
   `config.json` under `resources` with the `icon.<name>` prefix

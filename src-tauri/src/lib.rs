@@ -363,6 +363,12 @@ static PTY_TAIL: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 static PTY_MENU: OnceLock<Mutex<Option<PtyMenu>>> = OnceLock::new();
 static PTY_MENU_SUPPRESSED: OnceLock<Mutex<Option<(String, std::time::Instant)>>> = OnceLock::new();
 
+// The loopback HTTP server's port, captured at setup. Used to inject
+// XMLUI_DESKTOP_PORT into the PTY child's environment so the agent can
+// reach /__worklist/resolve and other /__* routes without rediscovering
+// the random port each turn.
+static LOOPBACK_PORT: OnceLock<u16> = OnceLock::new();
+
 #[derive(serde::Serialize, Clone)]
 struct PtyMenu {
     tool: String,
@@ -1369,6 +1375,9 @@ fn pty_spawn(
             "XMLUI_DESKTOP_AGENT_HINT",
             hint_path.to_string_lossy().into_owned(),
         );
+    }
+    if let Some(p) = LOOPBACK_PORT.get() {
+        command.env("XMLUI_DESKTOP_PORT", p.to_string());
     }
 
     let _child = pair
@@ -5983,6 +5992,7 @@ pub fn run() {
                 .to_ip()
                 .map(|sa| sa.port())
                 .ok_or("right-pane server bound to non-ip address")?;
+            let _ = LOOPBACK_PORT.set(port);
             let internal_origin = format!("http://127.0.0.1:{}", port);
             eprintln!("[xmlui-desktop] internal HTTP server: {}", internal_origin);
             // Tools pane lives at xd's app/tools/index.html, served via

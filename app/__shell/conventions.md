@@ -137,9 +137,17 @@ Lifecycle:
      at the moment the line arrives and writes the verified item
      content into `resources/.worklist-authorization.json`.
      **To act on the approval, GET `/__worklist/resolve` from the
-     loopback HTTP server** (the same origin that serves `/__worklist`
-     for the Worklist tab — see the project's `.xmlui-desktop.json` or
-     run `curl http://localhost:<port>/__worklist/resolve`). The
+     loopback HTTP server.** xmlui-desktop injects `XMLUI_DESKTOP_PORT`
+     into the PTY child's environment at spawn time, so the agent can
+     reach the endpoint without rediscovering the random loopback port:
+
+     ```
+     curl -s "http://localhost:$XMLUI_DESKTOP_PORT/__worklist/resolve"
+     ```
+
+     If the env var is unset (the rare case where the agent was launched
+     outside the wrapped PTY shell), fall back to discovering the port
+     via `lsof -nP -iTCP -sTCP:LISTEN | grep xmlui-desktop`. The
      response is one of:
      - `{"kind":"approved", "items":[<full verified content>], ...}` —
        execute these items. The user has already triaged; do NOT

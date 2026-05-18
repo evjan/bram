@@ -84,24 +84,31 @@ def last_user_text(transcript_path):
     return last
 
 
-def parse_auth(msg):
-    """Return (kind, ids) for `approved:` or `drop:` prefixed messages."""
-    msg = msg.strip()
-    for prefix, kind in (("approved:", "approved"), ("drop:", "drop")):
-        if msg.startswith(prefix):
-            try:
-                data = json.loads(msg[len(prefix):].strip())
-            except Exception:
-                return kind, set()
-            items = data.get("items")
-            if isinstance(items, list):
-                return kind, {
-                    it.get("id") for it in items
-                    if isinstance(it, dict) and it.get("id")
-                }
-            # Legacy fallback: drop: {"ids":[...]}
-            return kind, set(data.get("ids", []))
-    return None, set()
+def read_authorization_record(project_root):
+    """Return (kind, ids) from resources/.worklist-authorization.json.
+    kind is 'approved' / 'drop' / None; ids is the set of authorized item ids.
+    Direct-edit records and missing/malformed files return (None, set())."""
+    try:
+        with open(os.path.join(project_root, AUTH_REL)) as f:
+            rec = json.load(f)
+    except Exception:
+        return None, set()
+    if not isinstance(rec, dict):
+        return None, set()
+    kind = rec.get("kind")
+    if kind not in ("approved", "drop"):
+        return None, set()
+    ids = set()
+    items = rec.get("items")
+    if isinstance(items, list):
+        for it in items:
+            if isinstance(it, dict) and isinstance(it.get("id"), str):
+                ids.add(it["id"])
+    if not ids:
+        raw_ids = rec.get("ids")
+        if isinstance(raw_ids, list):
+            ids = {x for x in raw_ids if isinstance(x, str)}
+    return kind, ids
 
 
 def has_opt_out(msg):
@@ -238,7 +245,7 @@ def main():
         removed = set(old_items) - set(new_items)
         if not removed:
             sys.exit(0)
-        kind, ids = parse_auth(last_user_text(payload.get("transcript_path", "")))
+        kind, ids = read_authorization_record(project_root)
         violations = []
         for rid in removed:
             st = old_items[rid].get("status", "proposed")
@@ -254,9 +261,10 @@ def main():
                 f"going through the two-stage flow.\n"
                 f"  - 'proposed' must transition to 'applied' (re-add the item) "
                 f"before pruning.\n"
-                f"  - Direct removal is allowed only when the user's last "
-                f"message was `drop: {{\"items\":[{{\"id\":\"...\"}}]}}`.\n"
-                f"Last user authorization kind: {kind or 'none'}.",
+                f"  - Direct removal is allowed only when resources/.worklist-authorization.json "
+                f"holds a `drop:` record covering this id (issued by the user via the "
+                f"Worklist tab or a typed `drop: {{\"items\":[{{\"id\":\"...\"}}]}}` turn).\n"
+                f"Last recorded authorization kind: {kind or 'none'}.",
                 file=sys.stderr,
             )
             sys.exit(2)

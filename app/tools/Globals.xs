@@ -309,12 +309,16 @@ function currentTurnEdits(jsonlText) {
   if (currentTurnEdits._cacheKey === jsonlText && currentTurnEdits._cache) {
     return currentTurnEdits._cache;
   }
-  // Fast path: skip parsing entirely if the text has no tool_use blocks
-  // at all. The expensive split + per-line JSON.parse below would
-  // otherwise run on every render against the full JSONL tail. This
-  // takes the common case (idle session, no in-flight edits) from
-  // O(lines) to O(text.length) byte scan.
-  if (jsonlText.indexOf('"tool_use"') === -1) {
+  // Fast path: skip parsing entirely if the text has no tool-call
+  // signal of either provider. The expensive split + per-line
+  // JSON.parse below would otherwise run on every render against the
+  // full JSONL tail. Takes the common case (idle session, no in-flight
+  // edits) from O(lines) to a single O(text.length) byte scan.
+  // - "tool_use" -> Claude assistant content[*].type
+  // - "function_call" / "custom_tool_call" -> Codex response_item payload types
+  if (jsonlText.indexOf('"tool_use"') === -1 &&
+      jsonlText.indexOf('"function_call"') === -1 &&
+      jsonlText.indexOf('"custom_tool_call"') === -1) {
     currentTurnEdits._cacheKey = jsonlText;
     currentTurnEdits._cache = [];
     return currentTurnEdits._cache;
@@ -322,35 +326,104 @@ function currentTurnEdits(jsonlText) {
 
   // Walk lines in chronological order to find the index of the most
   // recent user-message line (i.e., the boundary between previous turn
-  // and current turn). All assistant tool_use entries AFTER that index
-  // belong to the in-flight turn.
+  // and current turn). All assistant tool-use entries AFTER that index
+  // belong to the in-flight turn. Handles both Claude (`type:"user"`
+  // with non-tool_result content) and Codex (`type:"event_msg"`,
+  // `payload.type:"user_message"`).
   const lines = jsonlText.split('\n');
   let lastUserIdx = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (!lines[i]) continue;
     let r;
     try { r = JSON.parse(lines[i]); } catch (e) { continue; }
-    if (r.type !== 'user' || !r.message || !r.message.content) continue;
-    const content = r.message.content;
-    // Skip user-role turns that are tool_result wrappers — those are
-    // tool outputs, not actual user messages.
-    if (Array.isArray(content) && content.length > 0 &&
-        content.every(c => c && c.type === 'tool_result')) {
-      continue;
+
+    // Claude
+    if (r.type === 'user' && r.message && r.message.content) {
+      const content = r.message.content;
+      // Skip user-role turns that are tool_result wrappers — those are
+      // tool outputs, not actual user messages.
+      if (Array.isArray(content) && content.length > 0 &&
+          content.every(c => c && c.type === 'tool_result')) {
+        continue;
+      }
+      lastUserIdx = i;
+      break;
     }
-    lastUserIdx = i;
-    break;
+
+    // Codex
+    if (r.type === 'event_msg' && r.payload && r.payload.type === 'user_message') {
+      lastUserIdx = i;
+      break;
+    }
   }
 
-  // Pass over lines AFTER the user boundary, collecting Edit/MultiEdit/
-  // Write tool_use blocks. Group by file_path.
+  // Pass over lines AFTER the user boundary, collecting both Claude
+  // tool_use blocks and Codex function_call / custom_tool_call records.
+  // Group by file_path.
   const byFile = {};
   const order = [];
   const start = lastUserIdx + 1;
+
+  function ensureBucket(filePath) {
+    if (!byFile[filePath]) {
+      byFile[filePath] = {
+        filePath: filePath,
+        kind: null,
+        edits: [],
+        added: 0,
+        removed: 0,
+        lastToolId: null,
+      };
+      order.push(filePath);
+    }
+    return byFile[filePath];
+  }
+
   for (let i = start; i < lines.length; i++) {
     if (!lines[i]) continue;
     let r;
     try { r = JSON.parse(lines[i]); } catch (e) { continue; }
+
+    // ---------- Codex branch ----------
+    if (r.type === 'response_item' && r.payload) {
+      const p = r.payload;
+      if (p.type !== 'function_call' && p.type !== 'custom_tool_call') continue;
+      // Only apply_patch is a file mutator in standard Codex; MCP
+      // filesystem.* tools (if used) could be added here later.
+      if (p.name !== 'apply_patch') continue;
+      const input = codexToolInput(p);
+      const patchText = typeof input === 'string' ? input : '';
+      if (!patchText) continue;
+
+      // Parse the patch text into per-file sections. Format:
+      //   *** Add|Update|Delete File: <path>
+      //   <hunk lines: ' ' context, '+' add, '-' remove, '@@ hunk header'>
+      //   *** End Patch
+      // Counts: each '+' line is +1 added, each '-' line is +1 removed.
+      // We skip diff context (' '), hunk headers ('@@'), and the
+      // patch-format header lines ('*** ...').
+      let current = null;
+      const patchLines = patchText.split('\n');
+      for (const pl of patchLines) {
+        const m = pl.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/);
+        if (m) {
+          current = ensureBucket(m[2].trim());
+          const action = m[1].toLowerCase();
+          current.kind = current.kind
+            ? (current.kind === action + 'ed' ? current.kind : 'mixed')
+            : (action === 'add' ? 'added' : action === 'delete' ? 'deleted' : 'updated');
+          if (p.call_id) current.lastToolId = p.call_id;
+          continue;
+        }
+        if (pl === '*** End Patch' || pl.startsWith('*** ')) { current = null; continue; }
+        if (!current) continue;
+        if (pl.startsWith('+') && !pl.startsWith('+++')) current.added += 1;
+        else if (pl.startsWith('-') && !pl.startsWith('---')) current.removed += 1;
+      }
+      continue;
+    }
+
+    // ---------- Claude branch ----------
     if (r.type !== 'assistant' || !r.message || !r.message.content) continue;
     const content = r.message.content;
     if (!Array.isArray(content)) continue;
@@ -362,18 +435,7 @@ function currentTurnEdits(jsonlText) {
       if (!filePath) continue;
       if (name !== 'Edit' && name !== 'MultiEdit' && name !== 'Write') continue;
 
-      if (!byFile[filePath]) {
-        byFile[filePath] = {
-          filePath: filePath,
-          kind: null,
-          edits: [],
-          added: 0,
-          removed: 0,
-          lastToolId: null,
-        };
-        order.push(filePath);
-      }
-      const bucket = byFile[filePath];
+      const bucket = ensureBucket(filePath);
       // Track the most recent tool_use_id that touched this file so the
       // footer row can deep-link into the existing tool-detail modal.
       if (c.id) bucket.lastToolId = c.id;

@@ -5717,6 +5717,24 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, request: tiny_http::Reques
     let _ = request.respond(response);
 }
 
+// Shell-document origin string used as the prefix for URLs that load
+// in the shell or in same-origin iframes. Tauri 2 presents the scheme
+// differently per platform:
+//   - macOS / iOS / Linux: `tauri://localhost/...`
+//   - Windows / Android:   `http://tauri.localhost/...` (HTTP localhost
+//     subdomain — browser policy treats this as a secure context, so
+//     service workers work; the macOS form is custom-scheme and not a
+//     secure context, so SW does not work there)
+// The scheme NAME we register against (`tauri`) is the same across
+// platforms; only the URL form the WebView sees changes. The iframe
+// `src` we hand to the JS side must match the platform's actual form
+// so navigations resolve to our scheme handler rather than 404.
+#[cfg(any(target_os = "windows", target_os = "android"))]
+const SHELL_ORIGIN: &str = "http://tauri.localhost";
+
+#[cfg(not(any(target_os = "windows", target_os = "android")))]
+const SHELL_ORIGIN: &str = "tauri://localhost";
+
 // Tauri custom-scheme handler that overrides Tauri's default tauri://
 // behavior. Tauri 2 skips registering its built-in handler when an
 // app-level handler with the same scheme name is present (see
@@ -5969,8 +5987,9 @@ pub fn run() {
             eprintln!("[xmlui-desktop] internal HTTP server: {}", internal_origin);
             // Tools pane lives at xd's app/tools/index.html, served via
             // the scheme handler's Tier 2 (shell asset) directly. Same
-            // origin as the shell.
-            let tools_url = "tauri://localhost/tools/index.html".to_string();
+            // origin as the shell. SHELL_ORIGIN picks the right URL form
+            // per platform — see the const definition above.
+            let tools_url = format!("{}/tools/index.html", SHELL_ORIGIN);
 
             // .xmlui-desktop.json may declare an external server for the
             // right pane. The tools-pane URL always points at the internal
@@ -5984,7 +6003,7 @@ pub fn run() {
             // tauri:// scheme proxy, it's always a same-origin URL
             // under /__project/. `right_pane_upstream` is the actual
             // HTTP target the scheme handler proxies to.
-            const RIGHT_PANE_PROXY_URL: &str = "tauri://localhost/__project/index.html";
+            let right_pane_proxy_url = format!("{}/__project/index.html", SHELL_ORIGIN);
             let (right_pane_url, right_pane_upstream) = if let Some(cfg) = project_cfg.as_ref().and_then(|c| c.server.as_ref()) {
                 // External base URL ends with `/` after concatenating
                 // the config's `path` (defaults to "/"). The scheme
@@ -5996,7 +6015,7 @@ pub fn run() {
                             "[server] port {} is live (HTTP responsive); reusing (skipping spawn of `{}`)",
                             cfg.port, cfg.command
                         );
-                        (RIGHT_PANE_PROXY_URL.to_string(), external_base)
+                        (right_pane_proxy_url.clone(), external_base)
                     }
                     PortStatus::Unresponsive(reason) => {
                         eprintln!(
@@ -6019,7 +6038,7 @@ pub fn run() {
                             ))
                         );
                         (
-                            format!("tauri://localhost/{}", error_path),
+                            format!("{}/{}", SHELL_ORIGIN, error_path),
                             internal_base.clone(),
                         )
                     }
@@ -6046,11 +6065,11 @@ pub fn run() {
                                 }
                             }
                         }
-                        (RIGHT_PANE_PROXY_URL.to_string(), external_base)
+                        (right_pane_proxy_url.clone(), external_base)
                     }
                 }
             } else {
-                (RIGHT_PANE_PROXY_URL.to_string(), internal_base.clone())
+                (right_pane_proxy_url.clone(), internal_base.clone())
             };
             eprintln!("[xmlui-desktop] right pane URL: {}", right_pane_url);
             eprintln!("[xmlui-desktop] right pane upstream: {}", right_pane_upstream);

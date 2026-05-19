@@ -27,7 +27,7 @@ As files in the project change, the right pane reloads automatically
 
 ### Workflow
 
-There are three phases for an item on the worklist: **proposed*** → **applied** → **committed**. The arrows between the phases are approval gates where you converse with the agent as it works on the proposed item: researching and writing code; creating or closing issues; organizing commits as an orderly and well-defined audit trail.
+There are three phases for an item on the worklist: **proposed** → **applied** → **committed**. The arrows between the phases are approval gates where you converse with the agent as it works on the proposed item: researching and writing code; creating or closing issues; organizing commits as an orderly and well-defined audit trail.
 
 ### Agent conventions
 

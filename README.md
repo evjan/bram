@@ -44,15 +44,10 @@ rules.
 
 ## Prerequisites
 
-xmlui-desktop is built around the git commit lifecycle — the Worklist
-transitions through proposed → applied → committed, the Commits tab
-reads `git log`, and the agent runs `git commit` / `git push`
-directly. Run it inside a local git repo.
-
 1. **`git`** — usually preinstalled on macOS and Linux; install via
    your package manager if missing.
 
-3. **GitHub CLI (`gh`) — recommended.** Powers the Issues tab in the
+3. **GitHub CLI (`gh`)**  - Powers the Issues tab in the
    agent-tools drawer and the agent's issue create / close / comment
    operations. Install from <https://cli.github.com/> and run
    `gh auth login` once. Without it, the Issues tab shows an empty

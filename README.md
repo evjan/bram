@@ -8,11 +8,9 @@ A desktop app that helps you make best use of git and GitHub for AI-assisted sof
 
 Anyone who wants to use AI coding agents in a safe and accountable way.
 
-<img width="1719" height="1082" alt="image" src="https://github.com/user-attachments/assets/3da680a2-1f9a-411d-93f0-5c87dbf80413" />
-
-
-
 This app has opinions. It thinks versioning and collaboration are well-handled by git and GitHub, so it guides agents to make best use of them on your behalf, in conversation with you. And it thinks GitHub is great for accountability, so it also guides agents to join you in orderly and well-documented collaboration that leaves an auditable trail. 
+
+<img width="1384" height="878" alt="image" src="https://github.com/user-attachments/assets/81fdac93-783e-489a-82b4-e0062950b83a" />
 
 
 ## How does it work?
@@ -42,7 +40,6 @@ backup for wrapped launches, then reinforced by the shared
 provider-neutral setup machinery plus local Codex config, memories, and
 rules.
 
-<img width="1384" height="878" alt="image" src="https://github.com/user-attachments/assets/81fdac93-783e-489a-82b4-e0062950b83a" />
 
 
 ## Prerequisites

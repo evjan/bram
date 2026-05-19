@@ -436,6 +436,25 @@ materially expands (new file added to `files`, or the change's
 intent shifts). Otherwise leave it; the iteration history doesn't
 need to live in the item.
 
+**Prefer `POST /__worklist/mutate` for mechanical prunes + status
+advances** — it's the symmetric counterpart to `/__worklist/resolve`
+and renders no diff in the chat. Two ops:
+
+```
+curl -X POST -d '{"op":"prune","ids":["item-a"]}' \
+  http://localhost:$XMLUI_DESKTOP_PORT/__worklist/mutate
+curl -X POST -d '{"op":"advance","ids":["item-a"],"status":"applied"}' \
+  http://localhost:$XMLUI_DESKTOP_PORT/__worklist/mutate
+```
+
+Server-side auth check: `prune` requires `kind: "drop"` for those ids
+in `.worklist-authorization.json`; `advance` requires `kind: "approved"`.
+Mismatch returns 400 with `{"error": "..."}` and no file change. Use
+this instead of `jq` + Bash for prunes, and instead of an `Edit` for
+proposed→applied status flips. Item content edits (new proposals,
+prose revisions on iterate) still go through `Write` / `Edit` — the
+endpoint is only for the mechanical mutations enumerated above.
+
 ## Right-pane helpers (opt-in, only needed for project-side hooks)
 
 The Worklist and Sessions tabs in the agent tools drawer already use

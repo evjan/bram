@@ -5730,14 +5730,199 @@ fn route_request<R: tauri::Runtime>(
     }
 }
 
-fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, request: tiny_http::Request) {
+// POST /__worklist/mutate — server-side mechanical mutations (prune,
+// advance status) symmetric to /__worklist/resolve. The agent issues a
+// one-line curl instead of an Edit on resources/worklist.json, so the
+// chat doesn't render a diff. Authorization is checked against
+// resources/.worklist-authorization.json before the write: prune
+// requires `kind: "drop"`, advance requires `kind: "approved"`, and
+// every requested id must appear in the auth record's ids.
+fn handle_worklist_mutate<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    body: &[u8],
+) -> (u16, &'static str, Vec<u8>) {
+    let req_json: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                400,
+                "application/json; charset=utf-8",
+                format!("{{\"error\":\"invalid JSON: {}\"}}", e).into_bytes(),
+            );
+        }
+    };
+    let op = req_json.get("op").and_then(|v| v.as_str()).unwrap_or("");
+    let ids: Vec<String> = req_json
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return (
+            400,
+            "application/json; charset=utf-8",
+            br#"{"error":"ids[] required"}"#.to_vec(),
+        );
+    }
+    let required_kind = match op {
+        "prune" => "drop",
+        "advance" => "approved",
+        _ => {
+            return (
+                400,
+                "application/json; charset=utf-8",
+                format!("{{\"error\":\"unknown op: {}\"}}", op).into_bytes(),
+            );
+        }
+    };
+
+    // Auth check.
+    let auth_path = match worklist_auth_file(app) {
+        Some(p) => p,
+        None => {
+            return (
+                500,
+                "application/json; charset=utf-8",
+                br#"{"error":"no project root"}"#.to_vec(),
+            );
+        }
+    };
+    let auth: serde_json::Value = std::fs::read_to_string(&auth_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let auth_kind = auth.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    if auth_kind != required_kind {
+        return (
+            400,
+            "application/json; charset=utf-8",
+            format!(
+                "{{\"error\":\"auth kind mismatch: expected {}, got {}\"}}",
+                required_kind, auth_kind
+            )
+            .into_bytes(),
+        );
+    }
+    let auth_ids: Vec<String> = auth
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    for id in &ids {
+        if !auth_ids.iter().any(|aid| aid == id) {
+            return (
+                400,
+                "application/json; charset=utf-8",
+                format!("{{\"error\":\"id not in auth: {}\"}}", id).into_bytes(),
+            );
+        }
+    }
+
+    // Apply the op to worklist.json.
+    let wl_path = match worklist_file(app) {
+        Some(p) => p,
+        None => {
+            return (
+                500,
+                "application/json; charset=utf-8",
+                br#"{"error":"no project root"}"#.to_vec(),
+            );
+        }
+    };
+    let mut wl: serde_json::Value = std::fs::read_to_string(&wl_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({"items":[]}));
+    let items = match wl.get_mut("items").and_then(|v| v.as_array_mut()) {
+        Some(arr) => arr,
+        None => {
+            return (
+                500,
+                "application/json; charset=utf-8",
+                br#"{"error":"worklist missing items[]"}"#.to_vec(),
+            );
+        }
+    };
+
+    let mut affected: Vec<String> = Vec::new();
+    if op == "prune" {
+        items.retain(|item| {
+            let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if ids.iter().any(|id| id == item_id) {
+                affected.push(item_id.to_string());
+                false
+            } else {
+                true
+            }
+        });
+    } else {
+        // advance
+        let new_status = req_json
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("applied")
+            .to_string();
+        for item in items.iter_mut() {
+            let item_id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if ids.iter().any(|id| id == &item_id) {
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert(
+                        "status".to_string(),
+                        serde_json::Value::String(new_status.clone()),
+                    );
+                    affected.push(item_id);
+                }
+            }
+        }
+    }
+
+    let new_text = serde_json::to_string_pretty(&wl).unwrap_or_default();
+    if let Err(e) = std::fs::write(&wl_path, format!("{}\n", new_text)) {
+        return (
+            500,
+            "application/json; charset=utf-8",
+            format!("{{\"error\":\"write failed: {}\"}}", e).into_bytes(),
+        );
+    }
+
+    let result_key = if op == "prune" { "pruned" } else { "advanced" };
+    let response = format!(
+        "{{\"ok\":true,\"{}\":{}}}",
+        result_key,
+        serde_json::to_string(&affected).unwrap_or_else(|_| "[]".to_string())
+    );
+    (200, "application/json; charset=utf-8", response.into_bytes())
+}
+
+fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Request) {
     let url = request.url().to_string();
+    let method = request.method().as_str().to_uppercase();
     let (raw_path, query) = match url.split_once('?') {
         Some((p, q)) => (p, q),
         None => (url.as_str(), ""),
     };
     let path = raw_path.trim_start_matches('/');
-    let (status, content_type, body) = route_request(app, path, query);
+
+    // POST-only routes (route_request is GET-only).
+    let (status, content_type, body) = if path == "__worklist/mutate" {
+        if method != "POST" {
+            (
+                405,
+                "text/plain; charset=utf-8",
+                b"POST only".to_vec(),
+            )
+        } else {
+            let mut buf = Vec::new();
+            let _ = request.as_reader().read_to_end(&mut buf);
+            handle_worklist_mutate(app, &buf)
+        }
+    } else {
+        route_request(app, path, query)
+    };
 
     let response = tiny_http::Response::from_data(body)
         .with_status_code(status)

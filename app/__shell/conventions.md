@@ -1,11 +1,13 @@
 # Working with Bram
 
-Bram is a **workspace for XMLUI development with AI agents**.
-The shell puts a real terminal alongside an XMLUI surface, plus an
-"agent tools" drawer that includes a Worklist (pending items + commits),
-a Sessions browser, and a Context viewer (CLAUDE.md + memory + hooks +
-settings, searchable). The user sees the right pane while talking to
-you — use it.
+Bram is a **workspace for AI-assisted web app development** — it
+works with any project that serves a web UI (vanilla HTML/JS, a
+React or other Node app, a Python web app, an XMLUI app, etc.).
+The shell puts a real terminal alongside the app you're building,
+plus an "agent tools" drawer that includes a Worklist (pending
+items + commits), a Sessions browser, and a Context viewer
+(CLAUDE.md + memory + hooks + settings, searchable). The user
+sees the right pane while talking to you — use it.
 
 > Note on memory: this file is loaded into every session in this
 > project via a `@`-import in `CLAUDE.md`. **Don't save project-related

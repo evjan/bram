@@ -305,6 +305,12 @@ change is "small":
   shaping a new component during the same conversation — direct
   edits keep the loop tight. Once the draft is committed, fresh
   edits become change requests and route through the worklist.
+- **Issue-only `gh` work with no repo diff.** If the user asks you to
+  create, edit, comment on, close, or reopen a GitHub issue, and the
+  task will not modify tracked files in the repo and will not produce a
+  commit, skip the worklist and do it directly. If the issue request is
+  paired with repo changes, the repo changes still go through the
+  worklist.
 
 Worked examples:
 
@@ -319,6 +325,8 @@ Worked examples:
   (same).
 - "fix the top row layout, just do it, no worklist" → direct edit
   (explicit opt-out in the same turn).
+- "comment on issue 51 that the external MCP config is fixed" → direct
+  `gh issue comment` (issue-only work, no repo diff, no commit).
 - "add a chart" + "let's fix the layout too" → propose (multi-step,
   but this was always the case).
 

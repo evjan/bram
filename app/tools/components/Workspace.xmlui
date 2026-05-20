@@ -11,7 +11,10 @@
   var.feedbackHelpFor="{null}"
   var.feedbackExpanded="{false}"
   var.selectedFeedback="{''}"
-  var.lastWorklistSig="{''}">
+  var.lastWorklistSig="{''}"
+  var.closeIssuesDialog="{null}"
+  var.closeIssuesItemRef="{null}"
+  var.closeIssuesState="{null}">
   <DataSource
     id="sessionTail"
     url="/__sessions/latest-tail?lines=200&amp;t={sessionTick}"
@@ -237,7 +240,7 @@
               label="Approve"
               variant="ghost"
               enabled="{!submitting && !!selected}"
-              onClick="submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
+              onClick="(() => { const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: (worklist.value.items || []).filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) })); })()" />
             <Button
               label="Iterate"
               variant="ghost"
@@ -312,6 +315,44 @@
 - **Drop** — reason for the drop. Files stay on disk; ask the agent to discard if you want them gone." />
         <HStack>
           <Button label="Got it" onClick="feedbackHelpFor = null" />
+        </HStack>
+      </VStack>
+    </ModalDialog>
+
+    <ModalDialog
+      when="{closeIssuesDialog !== null}"
+      title="Close referenced issue(s)?"
+      onClose="closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null">
+      <VStack gap="$space-3" padding="$space-2">
+        <Text>
+          This commit is flagged as resolving the GitHub issue(s) below.
+          Uncheck any you don't want to close, and optionally add a closing
+          comment per issue.
+        </Text>
+        <Items data="{closeIssuesItemRef ? closeIssuesItemRef.closesIssues : []}">
+          <VStack gap="$space-1" paddingTop="$space-2" borderTop="1px solid $borderColor">
+            <Checkbox
+              label="Close #{$item}"
+              initialValue="{true}"
+              onDidChange="(v) => closeIssuesState = setCloseIssueClose(closeIssuesState, $item, v)" />
+            <TextBox
+              placeholder="Optional close comment for #{$item}"
+              width="100%"
+              onDidChange="(v) => closeIssuesState = setCloseIssueComment(closeIssuesState, $item, v)" />
+          </VStack>
+        </Items>
+        <HStack gap="$space-2" paddingTop="$space-2">
+          <Button
+            label="Confirm"
+            onClick="submittedItemId = closeIssuesItemRef.id; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: [{id: closeIssuesItemRef.id, hash: closeIssuesItemRef.hash, feedback: combineFeedbackWithCloseLines(selectedFeedback, buildCloseIssueLines(closeIssuesState))}] })); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+          <Button
+            label="Approve without closing"
+            variant="outlined"
+            onClick="submittedItemId = closeIssuesItemRef.id; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: [{id: closeIssuesItemRef.id, hash: closeIssuesItemRef.hash, feedback: selectedFeedback}] })); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+          <Button
+            label="Cancel"
+            variant="ghost"
+            onClick="closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
         </HStack>
       </VStack>
     </ModalDialog>

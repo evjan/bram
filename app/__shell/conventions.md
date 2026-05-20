@@ -67,6 +67,14 @@ instead of `file`. The TO COMMIT inline diff renders all listed
 files concatenated, so the reviewer sees the full scope of the
 change. `file` (singular) stays valid for single-file items.
 
+Optional `closesIssues: [<int>, ...]` on an item declares that the
+commit will resolve those GitHub issues. The Worklist tab uses this
+field to gate the close-on-commit confirm dialog (see *Close-on-commit
+confirm dialog* below). Set it conservatively — only when the commit
+truly closes the issue, not when it merely cross-references it (`see
+#N`, `related to #N`, partial work on a multi-step issue). Omit or
+use an empty array to skip the dialog.
+
 The `status` field controls the badge in the Worklist tab and what
 the user is being asked to approve:
 
@@ -263,6 +271,48 @@ soft-reset approach is only safe on unpushed history.
 
 When *not* to use this: one-or-two-item decisions, free-text input, or
 anything where typing in chat is faster than rendering UI.
+
+### Close-on-commit confirm dialog
+
+When you propose or iterate a worklist item whose `applied` commit
+would resolve a GitHub issue, set `closesIssues: [N, ...]` on the
+item. When the user clicks **Approve** on a TO COMMIT item that
+carries a non-empty `closesIssues`, the Worklist tab opens a confirm
+dialog — one row per issue with a checkbox (default checked) and an
+optional close-comment textbox.
+
+The user's choices arrive back in the per-item `feedback` of the
+`approved:` payload as one or more `close-issue:` lines, appended
+after any free-text feedback the user typed. Two shapes:
+
+```
+close-issue: 52
+close-issue: 50 comment: "shipped, see commit message"
+```
+
+Per item, after resolving `/__worklist/resolve` and committing as
+usual:
+
+1. Split the verified `feedback` on `\n` and pick out lines that
+   start with `close-issue: `.
+2. For each, run `gh issue close <N>` — with `-c "<comment>"` when
+   a `comment: "..."` clause follows the number. The comment string
+   is JSON-encoded by the dialog, so `JSON.parse` on the substring
+   between the matching quotes gives the literal text.
+3. The user's choice is authoritative — if they unchecked an issue
+   the agent listed in `closesIssues`, that issue will not appear
+   as a `close-issue:` line. Do **not** close issues the user
+   didn't confirm, even if `closesIssues` originally listed them.
+4. If the user clicks **Approve without closing** instead of
+   **Confirm**, the payload arrives with the user's free-text
+   feedback only (no `close-issue:` lines). Commit; do not close
+   anything.
+
+Detection by regex on `#N` in item prose is **not** part of this
+flow — the agent has the conversational context to judge whether a
+commit truly resolves an issue, and a regex over `before` / `after`
+has false positives on cross-references. Set `closesIssues`
+explicitly when warranted; leave it off otherwise.
 
 ### Refer to items by id, not by ordinal
 

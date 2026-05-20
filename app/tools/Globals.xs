@@ -837,3 +837,47 @@ function sessionTurns(jsonlText) {
   }
   return turns;
 }
+
+// Worklist close-issue dialog state helpers. The dialog opens when a TO COMMIT
+// item carries closesIssues: [N, ...]. State shape is { <issueNumber>: { close,
+// comment } } so per-issue checkbox + comment edits update one branch without
+// disturbing the rest. Immutable updates so XMLUI's reactivity refreshes.
+function initCloseIssueState(closesIssues) {
+  const state = {};
+  for (const n of (closesIssues || [])) {
+    state[n] = { close: true, comment: '' };
+  }
+  return state;
+}
+function setCloseIssueClose(state, n, close) {
+  const prev = (state && state[n]) || { close: true, comment: '' };
+  return Object.assign({}, state || {}, { [n]: Object.assign({}, prev, { close: !!close }) });
+}
+function setCloseIssueComment(state, n, comment) {
+  const prev = (state && state[n]) || { close: true, comment: '' };
+  return Object.assign({}, state || {}, { [n]: Object.assign({}, prev, { comment: comment || '' }) });
+}
+// Produce the `close-issue:` lines the agent reads out of the approved
+// payload's feedback. Lines look like `close-issue: 52` or
+// `close-issue: 52 comment: "shipped"`. JSON.stringify on the comment keeps
+// embedded quotes / newlines unambiguous for the agent's parse.
+function buildCloseIssueLines(state) {
+  const lines = [];
+  for (const key of Object.keys(state || {})) {
+    const v = state[key];
+    if (!v || !v.close) continue;
+    const c = (v.comment || '').trim();
+    if (c) lines.push('close-issue: ' + key + ' comment: ' + JSON.stringify(c));
+    else lines.push('close-issue: ' + key);
+  }
+  return lines;
+}
+// Merge user-typed feedback with the dialog-generated close-issue lines.
+// Empty base + no lines → empty string; otherwise lines come after the user's
+// text separated by a blank line so the agent can split on `\n\n`.
+function combineFeedbackWithCloseLines(base, lines) {
+  const baseTrim = (base || '').trim();
+  if (!lines || lines.length === 0) return baseTrim;
+  if (!baseTrim) return lines.join('\n');
+  return baseTrim + '\n\n' + lines.join('\n');
+}

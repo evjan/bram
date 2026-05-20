@@ -328,6 +328,36 @@
         </Items>
       </VStack>
       <VStack
+        gap="$space-3"
+        when="{issueDetail.value &amp;&amp; issueDetail.value.comments &amp;&amp; issueDetail.value.comments.length > 0}">
+        <Items data="{issueDetail.value.comments}">
+          <VStack
+            gap="$space-1"
+            paddingTop="$space-2"
+            borderTop="1px solid $borderColor">
+            <Text
+              fontSize="$fontSize-sm"
+              color="$textColor-secondary"
+              value="{(($item.author &amp;&amp; ($item.author.login || $item.author.name)) || 'unknown') + ' commented ' + getDateUntilNow($item.createdAt) + ' ago'}" />
+            <Markdown
+              when="{$item.body}"
+              content="{stripMarkdownImages($item.body)}" />
+            <VStack
+              gap="$space-2"
+              when="{$item.body &amp;&amp; extractMarkdownImages($item.body).length > 0}">
+              <Items data="{extractMarkdownImages($item.body)}">
+                <Link onClick="fullscreenImage = $item" noIndicator>
+                  <Image
+                    src="{$item}"
+                    maxHeight="200px"
+                    fit="contain" />
+                </Link>
+              </Items>
+            </VStack>
+          </VStack>
+        </Items>
+      </VStack>
+      <VStack
         when="{selectedIssue &amp;&amp; selectedIssue.state === 'OPEN'}"
         gap="$space-2"
         paddingTop="$space-3"

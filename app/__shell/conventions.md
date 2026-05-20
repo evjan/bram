@@ -502,6 +502,21 @@ whose existence is structural (expected entry points, conventional
 configs: empty them out and leave the file in place). When in doubt,
 ask.
 
+## Push button auto-rebases on non-fast-forward
+
+The Commits-tab Push button (Rust `git_push`) does `git push`, and if
+that's rejected as non-fast-forward, fetches `origin` and rebases the
+current branch on `origin/<branch>` before retrying the push. Merge
+commits intentionally not used — linear history preferred.
+
+If the rebase has conflicts, the button reports `non-fast-forward;
+rebase conflicts (aborted, working tree clean — re-run the rebase
+manually or ask the agent, then push)` and leaves the working tree
+clean (the rebase is aborted). **Don't manually `git pull --rebase`
+on the user's behalf for the common case** — that's what the button
+does now. Only intervene on conflicts, where the next step is to
+start a manual rebase, resolve it, then push.
+
 ## Updating GitHub issues via gh
 
 For changes to an existing issue, use the `gh` CLI directly — no

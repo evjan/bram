@@ -1866,7 +1866,70 @@ fn open_devtools(window: tauri::WebviewWindow) {
 
 #[tauri::command]
 fn git_push(app: AppHandle) -> Result<(), String> {
-    git_run(&app, &["push"]).map(|_| ())
+    let stderr = match git_run(&app, &["push"]) {
+        Ok(_) => return Ok(()),
+        Err(e) => e,
+    };
+    let is_nonff = stderr.contains("non-fast-forward")
+        || stderr.contains("fetch first");
+    if !is_nonff {
+        return Err(stderr);
+    }
+    auto_rebase_and_push(&app).map_err(|e| format!("non-fast-forward; {}", e))
+}
+
+// Rebase local commits on top of origin and retry push. Stashes any
+// uncommitted working-tree changes first (rebase requires a clean
+// tree) and pops the stash after, regardless of whether the rebase /
+// push succeeded. If the stash pop has conflicts, the stash is left
+// in place so the user can recover via `git stash list` / `git stash apply`.
+fn auto_rebase_and_push<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let dirty = git_run(app, &["status", "--porcelain"])
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let mut stashed = false;
+    if dirty {
+        git_run(
+            app,
+            &["stash", "push", "--include-untracked", "-m", "xmlui-desktop-auto-rebase"],
+        )
+        .map_err(|e| format!("auto-stash failed: {}", e))?;
+        stashed = true;
+    }
+
+    let result: Result<(), String> = (|| {
+        let branch = git_run(app, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .map(|s| s.trim().to_string())?;
+        git_run(app, &["fetch", "origin"])?;
+        let upstream = format!("origin/{}", branch);
+        match git_run(app, &["rebase", &upstream]) {
+            Ok(_) => git_run(app, &["push"]).map(|_| ()),
+            Err(rebase_err) => {
+                let _ = git_run(app, &["rebase", "--abort"]);
+                Err(format!(
+                    "rebase conflicts (aborted, working tree clean — re-run the rebase manually or ask the agent, then push): {}",
+                    rebase_err.trim()
+                ))
+            }
+        }
+    })();
+
+    if stashed {
+        if let Err(pop_err) = git_run(app, &["stash", "pop"]) {
+            let prefix = result
+                .as_ref()
+                .err()
+                .cloned()
+                .unwrap_or_else(|| "push succeeded".to_string());
+            return Err(format!(
+                "{}; stash pop failed: {} (stash retained — recover with `git stash list` / `git stash apply`)",
+                prefix,
+                pop_err.trim()
+            ));
+        }
+    }
+
+    result
 }
 
 #[tauri::command]

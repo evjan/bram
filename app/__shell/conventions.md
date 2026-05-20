@@ -67,13 +67,14 @@ instead of `file`. The TO COMMIT inline diff renders all listed
 files concatenated, so the reviewer sees the full scope of the
 change. `file` (singular) stays valid for single-file items.
 
-Optional `closesIssues: [<int>, ...]` on an item declares that the
-commit will resolve those GitHub issues. The Worklist tab uses this
-field to gate the close-on-commit confirm dialog (see *Close-on-commit
-confirm dialog* below). Set it conservatively — only when the commit
-truly closes the issue, not when it merely cross-references it (`see
-#N`, `related to #N`, partial work on a multi-step issue). Omit or
-use an empty array to skip the dialog.
+Optional `closesIssues: [{number: <int>, title: <string>}, ...]` on
+an item declares that the commit will resolve those GitHub issues.
+Each entry carries the issue number and its current title, which the
+Worklist tab shows in the close-on-commit confirm dialog (see
+*Close-on-commit confirm dialog* below). Set it conservatively — only
+when the commit truly closes the issue, not when it merely
+cross-references it (`see #N`, `related to #N`, partial work on a
+multi-step issue). Omit or use an empty array to skip the dialog.
 
 The `status` field controls the badge in the Worklist tab and what
 the user is being asked to approve:
@@ -275,8 +276,10 @@ anything where typing in chat is faster than rendering UI.
 ### Close-on-commit confirm dialog
 
 When you propose or iterate a worklist item whose `applied` commit
-would resolve a GitHub issue, set `closesIssues: [N, ...]` on the
-item. When the user clicks **Approve** on a TO COMMIT item that
+would resolve a GitHub issue, set
+`closesIssues: [{number: N, title: "..."}, ...]` on the item — the
+title comes from `gh issue view N --json title` (or from the issue's
+data in the Issues tab); keep it current if you iterate. When the user clicks **Approve** on a TO COMMIT item that
 carries a non-empty `closesIssues`, the Worklist tab opens a confirm
 dialog — one row per issue with a checkbox (default checked) and an
 optional close-comment textbox.

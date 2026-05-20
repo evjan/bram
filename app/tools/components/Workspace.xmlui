@@ -332,13 +332,14 @@
         <Items data="{closeIssuesItemRef ? closeIssuesItemRef.closesIssues : []}">
           <VStack gap="$space-1" paddingTop="$space-2" borderTop="1px solid $borderColor">
             <Checkbox
-              label="Close #{$item}"
+              label="Close #{$item.number} — {$item.title}"
+              labelPosition="end"
               initialValue="{true}"
-              onDidChange="(v) => closeIssuesState = setCloseIssueClose(closeIssuesState, $item, v)" />
+              onDidChange="(v) => closeIssuesState = setCloseIssueClose(closeIssuesState, $item.number, v)" />
             <TextBox
-              placeholder="Optional close comment for #{$item}"
+              placeholder="Optional close comment for #{$item.number}"
               width="100%"
-              onDidChange="(v) => closeIssuesState = setCloseIssueComment(closeIssuesState, $item, v)" />
+              onDidChange="(v) => closeIssuesState = setCloseIssueComment(closeIssuesState, $item.number, v)" />
           </VStack>
         </Items>
         <HStack gap="$space-2" paddingTop="$space-2">

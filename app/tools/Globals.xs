@@ -844,7 +844,8 @@ function sessionTurns(jsonlText) {
 // disturbing the rest. Immutable updates so XMLUI's reactivity refreshes.
 function initCloseIssueState(closesIssues) {
   const state = {};
-  for (const n of (closesIssues || [])) {
+  for (const entry of (closesIssues || [])) {
+    const n = (entry && typeof entry === 'object') ? entry.number : entry;
     state[n] = { close: true, comment: '' };
   }
   return state;

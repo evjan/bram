@@ -5,6 +5,7 @@
   var.showNewIssueHint="{false}"
   var.queryDraft=""
   var.query=""
+  var.closeComment="{''}"
   var.selectedHitLine="{null}"
   var.sortField="updatedAt"
   var.sortDir="desc"
@@ -37,6 +38,14 @@
     url="/__issues/search"
     queryParams="{{ q: query }}"
     when="{!!query &amp;&amp; query.trim().length >= 2}" />
+
+  <APICall
+    id="closeIssueCall"
+    url="/__issue/close"
+    method="get"
+    queryParams="{{ number: $param.number, comment: $param.comment }}"
+    completedNotificationMessage="Issue closed."
+    onSuccess="closeComment = ''; issueDetail.refetch(); issues.refetch()" />
 
   <ChangeListener
     listenTo="{queryDraft}"
@@ -317,6 +326,26 @@
               fit="contain" />
           </Link>
         </Items>
+      </VStack>
+      <VStack
+        when="{selectedIssue &amp;&amp; selectedIssue.state === 'OPEN'}"
+        gap="$space-2"
+        paddingTop="$space-3"
+        borderTop="1px solid $borderColor">
+        <TextArea
+          id="closeCommentBox"
+          placeholder="Optional comment to add when closing this issue"
+          rows="2"
+          width="*"
+          initialValue="{closeComment}"
+          onDidChange="(v) => closeComment = v" />
+        <HStack gap="$space-2">
+          <Button
+            label="Close issue"
+            variant="outlined"
+            size="sm"
+            onClick="closeIssueCall.execute({ number: selectedIssue.number, comment: closeComment })" />
+        </HStack>
       </VStack>
     </VStack>
 

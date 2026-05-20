@@ -1202,6 +1202,36 @@ fn gh_issue_view<R: tauri::Runtime>(app: &AppHandle<R>, number: u64) -> Result<V
     }
 }
 
+// Close a GitHub issue via `gh issue close <n>`, optionally with a comment.
+// Returns `{"ok":true}` on success; on failure returns the gh stderr as the
+// error body so the frontend can surface it.
+fn gh_issue_close<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    number: u64,
+    comment: &str,
+) -> Result<Vec<u8>, String> {
+    let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
+    let n = number.to_string();
+    let mut args: Vec<&str> = vec!["issue", "close", &n];
+    let trimmed = comment.trim();
+    if !trimmed.is_empty() {
+        args.push("-c");
+        args.push(trimmed);
+    }
+    let out = std::process::Command::new("gh")
+        .current_dir(&root)
+        .args(&args)
+        .output()
+        .map_err(|e| format!("failed to spawn gh: {}", e))?;
+    if out.status.success() {
+        Ok(b"{\"ok\":true}".to_vec())
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        eprintln!("[gh issue close {}] non-zero exit: {}", n, stderr);
+        Err(stderr)
+    }
+}
+
 fn issue_actor_label(value: &serde_json::Value) -> Option<String> {
     if let Some(s) = value.as_str() {
         let trimmed = s.trim();
@@ -5344,6 +5374,28 @@ fn route_request<R: tauri::Runtime>(
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
             Err(e) => {
                 eprintln!("[http /__issue number={}] {}", number, e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    if path == "__issue/close" {
+        let mut number: u64 = 0;
+        let mut comment = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("number=") {
+                number = percent_decode(v).parse().unwrap_or(0);
+            } else if let Some(v) = pair.strip_prefix("comment=") {
+                comment = percent_decode(v);
+            }
+        }
+        if number == 0 {
+            return (400, "text/plain; charset=utf-8", b"missing number".to_vec());
+        }
+        return match gh_issue_close(app, number, &comment) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__issue/close number={}] {}", number, e);
                 (500, "text/plain; charset=utf-8", e.into_bytes())
             }
         };

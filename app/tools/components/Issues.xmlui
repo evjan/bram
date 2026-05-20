@@ -102,12 +102,6 @@
           label="+ New issue"
           size="xs"
           onClick="showNewIssueHint = true" />
-        <Button
-          when="{repoOrigin.value &amp;&amp; repoOrigin.value.issuesUrl}"
-          label="All on GitHub"
-          variant="outlined"
-          size="xs"
-          onClick="openExternal(repoOrigin.value.issuesUrl)" />
       </HStack>
 
       <HStack gap="$space-2" verticalAlignment="center">

@@ -5335,6 +5335,7 @@ name = "xmlui-desktop"
 version = "0.1.19"
 dependencies = [
  "include_dir",
+ "libc",
  "notify",
  "portable-pty",
  "serde",

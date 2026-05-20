@@ -6251,7 +6251,49 @@ fn is_hop_by_hop(name: &str) -> bool {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+// Bump RLIMIT_NOFILE on Unix so tiny_http's accept loop doesn't panic
+// on EMFILE during long sessions. macOS default soft limit is often 256,
+// which is too low once the filesystem watcher, iframe scheme-proxy,
+// session-JSONL pollers, etc. accumulate. Target 8192 (or hard limit
+// if lower). No-op on Windows — different FD semantics. See issue #44.
+#[cfg(unix)]
+fn raise_open_files_limit() {
+    use libc::{getrlimit, rlimit, setrlimit, RLIMIT_NOFILE};
+    unsafe {
+        let mut current = rlimit { rlim_cur: 0, rlim_max: 0 };
+        if getrlimit(RLIMIT_NOFILE, &mut current) != 0 {
+            eprintln!("[rlimit] getrlimit failed; not bumping");
+            return;
+        }
+        let target: libc::rlim_t = 8192;
+        let new_cur = std::cmp::min(target, current.rlim_max);
+        if new_cur <= current.rlim_cur {
+            eprintln!(
+                "[rlimit] soft={} already meets target={}; not bumping",
+                current.rlim_cur, target
+            );
+            return;
+        }
+        let new_limits = rlimit {
+            rlim_cur: new_cur,
+            rlim_max: current.rlim_max,
+        };
+        if setrlimit(RLIMIT_NOFILE, &new_limits) == 0 {
+            eprintln!(
+                "[rlimit] bumped soft FD limit {} -> {} (hard={})",
+                current.rlim_cur, new_cur, current.rlim_max
+            );
+        } else {
+            eprintln!("[rlimit] setrlimit failed; staying at soft={}", current.rlim_cur);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn raise_open_files_limit() {}
+
 pub fn run() {
+    raise_open_files_limit();
     parse_cli_flags();
     let initial_proj = determine_project_root();
     eprintln!("[xmlui-desktop] project root: {}", initial_proj.display());

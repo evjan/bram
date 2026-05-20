@@ -27,4 +27,5 @@ notify = "8.2.0"
 tiny_http = "0.12"
 include_dir = "0.7"
 ureq = "2"
+libc = "0.2"
 

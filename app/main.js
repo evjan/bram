@@ -120,10 +120,12 @@ const runTerminalFit = ({ preserveViewport = true } = {}) => {
   fitAddon.fit();
   if (!snapshot) return;
   armViewportRestore(snapshot);
-  requestAnimationFrame(() => {
-    restoreViewport(snapshot);
-    requestAnimationFrame(() => restoreViewport(snapshot));
-  });
+  if (!resizing) {
+    requestAnimationFrame(() => {
+      restorePendingViewport();
+      requestAnimationFrame(() => restorePendingViewport());
+    });
+  }
 };
 
 let fitScheduled = false;
@@ -141,7 +143,21 @@ const scheduleTerminalFit = ({ preserveViewport = true } = {}) => {
 };
 
 scheduleTerminalFit({ preserveViewport: false });
-window.addEventListener("resize", () => scheduleTerminalFit());
+
+let resizing = false;
+let resizingRestoreTimer = null;
+window.addEventListener("resize", () => {
+  resizing = true;
+  clearTimeout(resizingRestoreTimer);
+  resizingRestoreTimer = setTimeout(() => {
+    resizing = false;
+    requestAnimationFrame(() => {
+      restorePendingViewport();
+      requestAnimationFrame(() => restorePendingViewport());
+    });
+  }, 50);
+  scheduleTerminalFit();
+});
 
 const setTerminalFontSize = (n) => {
   const size = clampFontSize(n);

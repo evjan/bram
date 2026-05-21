@@ -882,3 +882,4 @@ function combineFeedbackWithCloseLines(base, lines) {
   if (!baseTrim) return lines.join('\n');
   return baseTrim + '\n\n' + lines.join('\n');
 }
+

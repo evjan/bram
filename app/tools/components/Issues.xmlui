@@ -140,7 +140,7 @@
       </Text>
 
       <Text
-        when="{(!query || query.trim().length &lt; 2) &amp;&amp; repoOrigin.value &amp;&amp; repoOrigin.value.htmlBase &amp;&amp; (!issues.value || issues.value.length === 0)}"
+        when="{(!query || query.trim().length &lt; 2) &amp;&amp; repoOrigin.value &amp;&amp; repoOrigin.value.htmlBase &amp;&amp; issues.loaded &amp;&amp; !issues.inProgress &amp;&amp; (!issues.value || issues.value.length === 0)}"
         color="$textColor-secondary">
         No issues found. (Either the repo has none, or `gh` is not installed / authenticated.)
       </Text>
@@ -206,6 +206,12 @@
                       value="#{$item.number} {$item.title}"
                       fontWeight="{expandedNumber === $item.number ? '$fontWeight-bold' : '$fontWeight-normal'}"
                       maxLines="1" />
+                    <Text
+                      when="{$item.commentSummary}"
+                      fontSize="$fontSize-xs"
+                      color="$textColor-secondary"
+                      maxLines="1"
+                      value="{'comments: ' + $item.commentSummary}" />
                     <Text
                       fontSize="$fontSize-xs"
                       color="$textColor-secondary"
@@ -304,6 +310,11 @@
           fontSize="$fontSize-sm"
           color="$textColor-secondary"
           value="{selectedIssue.latestCommentAuthor + ' commented ' + getDateUntilNow(selectedIssue.latestCommentAt) + ' ago'}" />
+        <Text
+          when="{selectedIssue.state === 'CLOSED' &amp;&amp; selectedIssue.closedBy &amp;&amp; selectedIssue.closedByAt}"
+          fontSize="$fontSize-sm"
+          color="$textColor-secondary"
+          value="{'closed by ' + selectedIssue.closedBy + ' ' + getDateUntilNow(selectedIssue.closedByAt) + ' ago'}" />
       </VStack>
       <Link
         when="{selectedHitLine &amp;&amp; query &amp;&amp; query.trim().length >= 2}"
@@ -314,7 +325,7 @@
       <Text when="{issueDetail.inProgress &amp;&amp; !issueDetail.loaded}">Loading…</Text>
       <Markdown
         when="{issueDetail.value &amp;&amp; issueDetail.value.body}"
-        content="{(selectedHitLine &amp;&amp; query &amp;&amp; query.trim().length >= 2) ? paragraphsContaining(stripMarkdownImages(issueDetail.value.body), query) : stripMarkdownImages(issueDetail.value.body)}" />
+        content="{issueDetail.value.body}" />
       <VStack
         gap="$space-2"
         when="{issueDetail.value &amp;&amp; issueDetail.value.body &amp;&amp; extractMarkdownImages(issueDetail.value.body).length > 0}">
@@ -341,7 +352,7 @@
               value="{(($item.author &amp;&amp; ($item.author.login || $item.author.name)) || 'unknown') + ' commented ' + getDateUntilNow($item.createdAt) + ' ago'}" />
             <Markdown
               when="{$item.body}"
-              content="{stripMarkdownImages($item.body)}" />
+              content="{$item.body}" />
             <VStack
               gap="$space-2"
               when="{$item.body &amp;&amp; extractMarkdownImages($item.body).length > 0}">
@@ -355,6 +366,31 @@
               </Items>
             </VStack>
           </VStack>
+        </Items>
+      </VStack>
+      <VStack
+        gap="$space-1"
+        when="{issueDetail.value &amp;&amp; issueDetail.value.crossReferences &amp;&amp; issueDetail.value.crossReferences.length > 0}"
+        paddingTop="$space-3"
+        borderTop="1px solid $borderColor">
+        <Text
+          fontSize="$fontSize-sm"
+          color="$textColor-secondary"
+          value="Mentioned in {issueDetail.value.crossReferences.length} {issueDetail.value.crossReferences.length === 1 ? 'issue' : 'issues'}" />
+        <Items data="{issueDetail.value.crossReferences}">
+          <Link
+            onClick="expandedNumber = $item.number; selectedHitLine = null; queryDraft = ''; query = ''"
+            noIndicator>
+            <HStack gap="$space-2" verticalAlignment="center">
+              <Text value="#{$item.number}" fontSize="$fontSize-sm" color="$textColor-secondary" />
+              <Text
+                fontSize="$fontSize-sm"
+                fontWeight="$fontWeight-bold"
+                color="{$item.state === 'OPEN' ? '$color-success-700' : '$textColor-secondary'}"
+                value="{$item.state === 'OPEN' ? 'open' : 'closed'}" />
+              <Text value="{$item.title}" />
+            </HStack>
+          </Link>
         </Items>
       </VStack>
       <VStack

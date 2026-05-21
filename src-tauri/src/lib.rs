@@ -1013,6 +1013,7 @@ fn git_log_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Result<
 // a friendly empty state rather than a 500.
 fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
+    let repo_slug = repo_owner_name(app);
     let out = std::process::Command::new("gh")
         .current_dir(&root)
         .args(&[
@@ -1036,7 +1037,7 @@ fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
                 }
             };
             for issue in &mut issues {
-                enrich_issue_activity(issue);
+                enrich_issue_activity(app, issue, repo_slug.as_deref());
             }
             serde_json::to_vec(&issues).map_err(|e| e.to_string())
         }
@@ -1070,6 +1071,7 @@ fn gh_issues_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Resul
     const MAX_HITS: usize = 200;
 
     let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
+    let repo_slug = repo_owner_name(app);
     let out = std::process::Command::new("gh")
         .current_dir(&root)
         .args(&[
@@ -1112,7 +1114,7 @@ fn gh_issues_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Resul
     let mut truncated = false;
 
     for mut issue in issues {
-        enrich_issue_activity(&mut issue);
+        enrich_issue_activity(app, &mut issue, repo_slug.as_deref());
         if total_hits >= MAX_HITS {
             truncated = true;
             break;
@@ -1184,7 +1186,24 @@ fn gh_issue_view<R: tauri::Runtime>(app: &AppHandle<R>, number: u64) -> Result<V
                     return Ok(b"{}".to_vec());
                 }
             };
-            enrich_issue_activity(&mut issue);
+            enrich_issue_activity(app, &mut issue, None);
+            let cross_refs = gh_issue_cross_references(app, number);
+            let is_closed = issue.get("state").and_then(|v| v.as_str()) == Some("CLOSED");
+            let closed_event = if is_closed {
+                repo_owner_name(app).and_then(|slug| gh_issue_closed_event_actor(app, &slug, number))
+            } else {
+                None
+            };
+            if let Some(obj) = issue.as_object_mut() {
+                obj.insert(
+                    "crossReferences".to_string(),
+                    serde_json::Value::Array(cross_refs),
+                );
+                if let Some((by, by_at)) = closed_event {
+                    obj.insert("closedBy".to_string(), serde_json::Value::String(by));
+                    obj.insert("closedByAt".to_string(), serde_json::Value::String(by_at));
+                }
+            }
             serde_json::to_vec(&issue).map_err(|e| e.to_string())
         }
         Ok(out) => {
@@ -1198,6 +1217,48 @@ fn gh_issue_view<R: tauri::Runtime>(app: &AppHandle<R>, number: u64) -> Result<V
         Err(e) => {
             eprintln!("[gh issue view {}] failed to spawn: {}", n, e);
             Ok(b"{}".to_vec())
+        }
+    }
+}
+
+// Fetch issues that cross-reference the given issue, via the GitHub timeline
+// API. Returns [{number, title, state}, ...] sorted by issue number. State is
+// normalized to uppercase to match the rest of the issue payload. Empty on any
+// failure — the cross-reference list is an enhancement, not a hard
+// requirement, so quiet degradation is the right behavior.
+fn gh_issue_cross_references<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    number: u64,
+) -> Vec<serde_json::Value> {
+    let Some(root) = project_root(Some(app)) else {
+        return vec![];
+    };
+    let n = number.to_string();
+    let endpoint = format!("repos/:owner/:repo/issues/{}/timeline", n);
+    let out = std::process::Command::new("gh")
+        .current_dir(&root)
+        .args(&[
+            "api",
+            &endpoint,
+            "--jq",
+            r#"[.[] | select(.event == "cross-referenced" and .source.issue) | {number: .source.issue.number, title: .source.issue.title, state: (.source.issue.state | ascii_upcase)}]"#,
+        ])
+        .output();
+    match out {
+        Ok(out) if out.status.success() => {
+            serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout).unwrap_or_default()
+        }
+        Ok(out) => {
+            eprintln!(
+                "[gh api .../issues/{}/timeline] non-zero exit: {}",
+                n,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            vec![]
+        }
+        Err(e) => {
+            eprintln!("[gh api .../issues/{}/timeline] failed to spawn: {}", n, e);
+            vec![]
         }
     }
 }
@@ -1252,18 +1313,76 @@ fn issue_actor_label(value: &serde_json::Value) -> Option<String> {
     None
 }
 
-fn enrich_issue_activity(issue: &mut serde_json::Value) {
+fn repo_owner_name<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<String> {
+    let remote_url = git_run(app, &["remote", "get-url", "origin"]).ok()?;
+    let html_base = remote_to_html(remote_url.trim());
+    let slug = html_base.strip_prefix("https://github.com/")?;
+    if slug.is_empty() {
+        None
+    } else {
+        Some(slug.to_string())
+    }
+}
+
+fn gh_issue_closed_event_actor<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    repo_slug: &str,
+    number: u64,
+) -> Option<(String, String)> {
+    let root = project_root(Some(app))?;
+    let path = format!("repos/{}/issues/{}/events", repo_slug, number);
+    let out = std::process::Command::new("gh")
+        .current_dir(&root)
+        .args(["api", &path])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        eprintln!(
+            "[gh issue events {}] non-zero exit: {}",
+            number,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        return None;
+    }
+    let events: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).ok()?;
+    let mut latest: Option<(String, String)> = None;
+    for event in events {
+        if event.get("event").and_then(|v| v.as_str()) != Some("closed") {
+            continue;
+        }
+        let actor = event.get("actor").and_then(issue_actor_label)?;
+        let created_at = event.get("created_at").and_then(|v| v.as_str())?;
+        let should_replace = latest
+            .as_ref()
+            .map(|(_, current_at)| created_at > current_at.as_str())
+            .unwrap_or(true);
+        if should_replace {
+            latest = Some((actor, created_at.to_string()));
+        }
+    }
+    latest
+}
+
+fn enrich_issue_activity<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    issue: &mut serde_json::Value,
+    repo_slug: Option<&str>,
+) {
     let Some(obj) = issue.as_object_mut() else {
         return;
     };
 
     let mut latest_comment_at: Option<String> = None;
     let mut latest_comment_author: Option<String> = None;
+    let mut comment_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     if let Some(comments) = obj.get("comments").and_then(|v| v.as_array()) {
         for comment in comments {
             let Some(created_at) = comment.get("createdAt").and_then(|v| v.as_str()) else {
                 continue;
             };
+            if let Some(author) = comment.get("author").and_then(issue_actor_label) {
+                *comment_counts.entry(author).or_insert(0) += 1;
+            }
             let should_replace = latest_comment_at
                 .as_deref()
                 .map(|current| created_at > current)
@@ -1276,6 +1395,19 @@ fn enrich_issue_activity(issue: &mut serde_json::Value) {
                     .or_else(|| Some(String::new()));
             }
         }
+    }
+    if !comment_counts.is_empty() {
+        let mut entries: Vec<(String, usize)> = comment_counts.into_iter().collect();
+        entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let summary = entries
+            .into_iter()
+            .map(|(author, count)| format!("{}: {}", author, count))
+            .collect::<Vec<_>>()
+            .join(", ");
+        obj.insert(
+            "commentSummary".to_string(),
+            serde_json::Value::String(summary),
+        );
     }
 
     let activity_at = latest_comment_at
@@ -1300,6 +1432,7 @@ fn enrich_issue_activity(issue: &mut serde_json::Value) {
             );
         }
     }
+    let _ = repo_slug;
 }
 
 // Resolve the GitHub web URL of the configured origin remote. Used by the

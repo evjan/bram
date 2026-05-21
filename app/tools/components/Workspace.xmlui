@@ -14,7 +14,8 @@
   var.lastWorklistSig="{''}"
   var.closeIssuesDialog="{null}"
   var.closeIssuesItemRef="{null}"
-  var.closeIssuesState="{null}">
+  var.closeIssuesState="{null}"
+  var.actionHelpFor="{null}">
   <DataSource
     id="sessionTail"
     url="/__sessions/latest-tail?lines=200&amp;t={sessionTick}"
@@ -132,18 +133,23 @@
                 onClick="selected = (selected === $item.id ? null : $item.id); selectedFeedback = ''; feedbackExpanded = false" />
               <VStack gap="$space-1" width="*">
                 <HStack gap="$space-2" verticalAlignment="center">
-                  <Text
-                    value="{($item.status || 'proposed') === 'applied' ? 'TO COMMIT' : 'TO APPLY'}"
-                    fontSize="$fontSize-xs"
-                    fontWeight="$fontWeight-bold"
-                    color="{($item.status || 'proposed') === 'applied' ? '$color-success-600' : '$color-info-600'}" />
-                  <Button
-                    when="{$itemIndex === worklist.value.items.findIndex(i => (i.status || 'proposed') === ($item.status || 'proposed'))}"
-                    label="ⓘ"
-                    variant="ghost"
-                    size="xs"
-                    tooltip="What does this badge mean?"
-                    onClick="statusHelpFor = ($item.status || 'proposed')" />
+                  <Theme paddingHorizontal-Button-xs="$space-0_5">
+                    <HStack gap="$space-0_5" verticalAlignment="center">
+                      <!-- status badge + ⓘ — hug per howto/control-item-spacing-with-gap -->
+                      <Text
+                        value="{($item.status || 'proposed') === 'applied' ? 'TO COMMIT' : 'TO APPLY'}"
+                        fontSize="$fontSize-xs"
+                        fontWeight="$fontWeight-bold"
+                        color="{($item.status || 'proposed') === 'applied' ? '$color-success-600' : '$color-info-600'}" />
+                      <Button
+                        when="{$itemIndex === worklist.value.items.findIndex(i => (i.status || 'proposed') === ($item.status || 'proposed'))}"
+                        label="ⓘ"
+                        variant="ghost"
+                        size="xs"
+                        tooltip="What does this badge mean?"
+                        onClick="statusHelpFor = ($item.status || 'proposed')" />
+                    </HStack>
+                  </Theme>
                   <Text value="{$item.id}" fontWeight="$fontWeight-bold" />
                   <Link
                     onClick="expandedItemId = (expandedItemId === $item.id ? null : $item.id)"
@@ -235,28 +241,57 @@
         <VStack
           gap="$space-3"
           when="{worklist.value.items && worklist.value.items.length > 0}">
-          <HStack gap="$space-3" verticalAlignment="center">
-            <Button
-              label="Approve"
-              variant="ghost"
-              enabled="{!submitting && !!selected}"
-              onClick="(() => { const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: (worklist.value.items || []).filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) })); })()" />
-            <Button
-              label="Iterate"
-              variant="ghost"
-              enabled="{!submitting && !!selected && selectedFeedback.trim().length > 0}"
-              onClick="submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('iterate: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
-            <Button
-              label="Drop"
-              variant="ghost"
-              enabled="{!submitting && !!selected}"
-              onClick="submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('drop: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
-            <Button
-              when="{submitting}"
-              label="Cancel"
-              variant="ghost"
-              onClick="clearInflight(); submitting = false; submittedItemId = null; selectedFeedback = ''; feedbackExpanded = false; expandedItemId = null; selected = null" />
-          </HStack>
+          <Theme paddingHorizontal-Button-xs="$space-0_5">
+            <HStack gap="$space-3" verticalAlignment="center">
+              <HStack gap="$space-0_5" verticalAlignment="center">
+                <Button
+                  label="Approve"
+                  variant="ghost"
+                  size="xs"
+                  enabled="{!submitting && !!selected}"
+                  onClick="(() => { const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: (worklist.value.items || []).filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) })); })()" />
+                <Button
+                  label="ⓘ"
+                  variant="ghost"
+                  size="xs"
+                  tooltip="What does Approve do?"
+                  onClick="actionHelpFor = 'approve'" />
+              </HStack>
+              <HStack gap="$space-0_5" verticalAlignment="center">
+                <Button
+                  label="Iterate"
+                  variant="ghost"
+                  size="xs"
+                  enabled="{!submitting && !!selected && selectedFeedback.trim().length > 0}"
+                  onClick="submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('iterate: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
+                <Button
+                  label="ⓘ"
+                  variant="ghost"
+                  size="xs"
+                  tooltip="What does Iterate do?"
+                  onClick="actionHelpFor = 'iterate'" />
+              </HStack>
+              <HStack gap="$space-0_5" verticalAlignment="center">
+                <Button
+                  label="Drop"
+                  variant="ghost"
+                  size="xs"
+                  enabled="{!submitting && !!selected}"
+                  onClick="submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('drop: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
+                <Button
+                  label="ⓘ"
+                  variant="ghost"
+                  size="xs"
+                  tooltip="What does Drop do?"
+                  onClick="actionHelpFor = 'drop'" />
+              </HStack>
+              <Button
+                when="{submitting}"
+                label="Cancel"
+                variant="ghost"
+                onClick="clearInflight(); submitting = false; submittedItemId = null; selectedFeedback = ''; feedbackExpanded = false; expandedItemId = null; selected = null" />
+            </HStack>
+          </Theme>
         </VStack>
       </VStack>
 
@@ -374,6 +409,64 @@
 - Click **Drop** if it turned out wrong — the worklist entry is removed, but **the disk edits stay** (the agent doesn't revert files unilaterally). Ask the agent to *discard those changes if you want them gone* — it knows how to use git commands like `git checkout -- &lt;file&gt;` or `git restore &lt;file&gt;`." />
         <HStack>
           <Button label="Got it" onClick="statusHelpFor = null" />
+        </HStack>
+      </VStack>
+    </ModalDialog>
+
+    <ModalDialog
+      when="{actionHelpFor === 'approve'}"
+      title="Approve"
+      onClose="actionHelpFor = null">
+      <VStack gap="$space-3" padding="$space-2">
+        <Text>
+          Approves the selected item for the agent to act on. What that means
+          depends on the item's current status:
+        </Text>
+        <Markdown content="- **TO APPLY** → authorizes the agent to make the proposed file edits. After applying, the item transitions to TO COMMIT (the change is on disk but not yet committed).
+- **TO COMMIT** → authorizes the agent to create the git commit. After committing, the item is pruned from the worklist.
+
+If the item carries `closesIssues`, Approve on TO COMMIT first opens the close-issue confirm dialog. Any text in the per-item feedback box travels with the approval and gives the agent extra guidance." />
+        <HStack>
+          <Button label="Got it" onClick="actionHelpFor = null" />
+        </HStack>
+      </VStack>
+    </ModalDialog>
+
+    <ModalDialog
+      when="{actionHelpFor === 'iterate'}"
+      title="Iterate"
+      onClose="actionHelpFor = null">
+      <VStack gap="$space-3" padding="$space-2">
+        <Text>
+          Refines the item in place — the channel for "keep working on this
+          without yet approving or dropping." Requires non-empty per-item
+          feedback (the button is disabled until you type something into the
+          feedback box).
+        </Text>
+        <Markdown content="- **TO APPLY** → the agent revises the item's proposal text (`before` / `after` / `files`) per your feedback. The item stays TO APPLY. No file edits on disk.
+- **TO COMMIT** → the agent edits the on-disk files per your feedback and may expand the item's `after` to reflect the new scope. The item stays TO COMMIT.
+
+Iterate is the right move when the agent's first cut is *almost* what you want." />
+        <HStack>
+          <Button label="Got it" onClick="actionHelpFor = null" />
+        </HStack>
+      </VStack>
+    </ModalDialog>
+
+    <ModalDialog
+      when="{actionHelpFor === 'drop'}"
+      title="Drop"
+      onClose="actionHelpFor = null">
+      <VStack gap="$space-3" padding="$space-2">
+        <Text>
+          Removes the item from the worklist. The agent will not act on it.
+        </Text>
+        <Markdown content="- **TO APPLY** → the item is removed; nothing on disk changes.
+- **TO COMMIT** → the item is removed, but the file edits the agent already made on your behalf **stay on disk**. If you want them gone, ask the agent to discard them — it knows how to use `git checkout -- &lt;file&gt;` or `git restore &lt;file&gt;`.
+
+Drop is the clean rejection path; Iterate is what you want if the item just needs to change shape." />
+        <HStack>
+          <Button label="Got it" onClick="actionHelpFor = null" />
         </HStack>
       </VStack>
     </ModalDialog>

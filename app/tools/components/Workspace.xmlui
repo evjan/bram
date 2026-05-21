@@ -422,10 +422,10 @@
           Approves the selected item for the agent to act on. What that means
           depends on the item's current status:
         </Text>
-        <Markdown content="- **TO APPLY** → authorizes the agent to make the proposed file edits. After applying, the item transitions to TO COMMIT (the change is on disk but not yet committed).
-- **TO COMMIT** → authorizes the agent to create the git commit. After committing, the item is pruned from the worklist.
+        <Markdown content="- **TO APPLY** → authorizes the agent to make the proposed file edits. Before applying you can `Iterate`. After applying, the item transitions to TO COMMIT (the change is on disk but not yet committed).
+- **TO COMMIT** → authorizes the agent to create the git commit. Before committing you can `Iterate`. After committing, the item is pruned from the worklist.
 
-If the item carries `closesIssues`, Approve on TO COMMIT first opens the close-issue confirm dialog. Any text in the per-item feedback box travels with the approval and gives the agent extra guidance." />
+If the item carries `closesIssues` (because the agent detected the commit is likely an issue-closer), Approve on TO COMMIT first opens the close-issue confirm dialog. Any text in the per-item feedback box travels with the approval and gives the agent extra guidance." />
         <HStack>
           <Button label="Got it" onClick="actionHelpFor = null" />
         </HStack>

@@ -42,9 +42,7 @@
           label="Push {(commits.value || []).filter(c => !c.pushed).length}"
           size="xs"
           onClick="gitPush(commits)" />
-      </HStack>
-
-      <HStack gap="$space-2" verticalAlignment="center">
+        <SpaceFiller />
         <Button
           label="✕"
           variant="ghost"
@@ -55,6 +53,7 @@
           id="searchBox"
           placeholder="Search…"
           width="*"
+          maxWidth="20rem"
           initialValue="{queryDraft}"
           onDidChange="(v) => queryDraft = v" />
       </HStack>
@@ -218,17 +217,21 @@
           <property name="summary">
             <HStack gap="$space-2" verticalAlignment="center">
               <Text value="{selectedSha &amp;&amp; selectedSha.slice(0, 7)}" variant="code" fontSize="$fontSize-sm" />
-              <Text
+              <Link
                 when="{selectedCommit}"
-                value="{selectedCommit.commit.message.split('\n')[0]}"
-                fontWeight="$fontWeight-bold" />
+                width="*"
+                noIndicator
+                onClick="(selectedCommit.html_url &amp;&amp; selectedCommit.pushed) ? openExternal(selectedCommit.html_url) : null">
+                <Text
+                  value="{selectedCommit.commit.message.split('\n')[0]}"
+                  fontWeight="$fontWeight-bold" />
+              </Link>
               <Button
-                when="{selectedCommit &amp;&amp; selectedCommit.html_url &amp;&amp; selectedCommit.pushed}"
-                icon="link"
+                label="✕"
                 variant="ghost"
                 size="xs"
-                tooltip="Open on github.com"
-                onClick="openExternal(selectedCommit.html_url)" />
+                tooltip="Close detail pane"
+                onClick="selectedSha = null; selectedLine = null" />
             </HStack>
           </property>
           <VStack
@@ -281,17 +284,21 @@
           gap="$space-2"
           verticalAlignment="center">
           <Text value="{selectedSha &amp;&amp; selectedSha.slice(0, 7)}" variant="code" fontSize="$fontSize-sm" />
-          <Text
+          <Link
             when="{selectedCommit}"
-            value="{selectedCommit.commit.message.split('\n')[0]}"
-            fontWeight="$fontWeight-bold" />
+            width="*"
+            noIndicator
+            onClick="(selectedCommit.html_url &amp;&amp; selectedCommit.pushed) ? openExternal(selectedCommit.html_url) : null">
+            <Text
+              value="{selectedCommit.commit.message.split('\n')[0]}"
+              fontWeight="$fontWeight-bold" />
+          </Link>
           <Button
-            when="{selectedCommit &amp;&amp; selectedCommit.html_url &amp;&amp; selectedCommit.pushed}"
-            icon="link"
+            label="✕"
             variant="ghost"
             size="xs"
-            tooltip="Open on github.com"
-            onClick="openExternal(selectedCommit.html_url)" />
+            tooltip="Close detail pane"
+            onClick="selectedSha = null; selectedLine = null" />
         </HStack>
         <Text
           when="{selectedCommit}"

@@ -126,8 +126,37 @@
             size="xs"
             onClick="newItemHelp = true" />
         </HStack>
+        <VStack
+          when="{worklist.value.exists && worklist.value.schemaError}"
+          gap="$space-2"
+          padding="$space-3"
+          backgroundColor="$color-warning-50"
+          borderRadius="$borderRadius">
+          <Text
+            fontWeight="$fontWeight-bold"
+            color="$color-warning-700"
+            value="Worklist file has an invalid root shape" />
+          <Text
+            color="$textColor-primary"
+            value="{worklist.value.schemaErrorMessage || 'resources/worklist.json must be a JSON object with description and items at the root.'}" />
+          <Text
+            fontFamily="$fontFamily-monospace"
+            fontSize="$fontSize-sm"
+            value="{worklist.value.path}" />
+          <Text value="Expected shape:" />
+          <VStack
+            gap="0"
+            padding="$space-2"
+            backgroundColor="$color-surface-50"
+            borderRadius="$borderRadius">
+            <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-sm" value='{' />
+            <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-sm" value='  "description": "",' />
+            <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-sm" value='  "items": []' />
+            <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-sm" value='}' />
+          </VStack>
+        </VStack>
         <Text
-          when="{worklist.value.exists && (!worklist.value.items || worklist.value.items.length === 0)}"
+          when="{worklist.value.exists && !worklist.value.schemaError && (!worklist.value.items || worklist.value.items.length === 0)}"
           color="$textColor-secondary">
           (none)
         </Text>

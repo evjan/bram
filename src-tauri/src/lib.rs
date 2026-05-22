@@ -4601,9 +4601,28 @@ fn canonical_item_hash(item: &serde_json::Value) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn worklist_doc<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
+fn base_worklist_doc_from_parsed(parsed_doc: Option<serde_json::Value>) -> serde_json::Value {
     use serde_json::json;
 
+    match parsed_doc {
+        Some(serde_json::Value::Object(obj)) => serde_json::Value::Object(obj),
+        Some(serde_json::Value::Array(_)) => json!({
+            "description": "",
+            "items": [],
+            "schemaError": "root-array",
+            "schemaErrorMessage": "resources/worklist.json must be an object with { \"description\": string, \"items\": [] }, not a bare JSON array",
+        }),
+        Some(_) => json!({
+            "description": "",
+            "items": [],
+            "schemaError": "root-non-object",
+            "schemaErrorMessage": "resources/worklist.json must be a JSON object with { \"description\": string, \"items\": [] } at the root",
+        }),
+        None => json!({ "description": "", "items": [] }),
+    }
+}
+
+fn worklist_doc<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
     let path = worklist_file(app);
     let exists = path.as_ref().map_or(false, |p| p.is_file());
     let resources_exists = path
@@ -4614,11 +4633,11 @@ fn worklist_doc<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
         .as_ref()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
-    let mut doc: serde_json::Value = path
+    let parsed_doc: Option<serde_json::Value> = path
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_else(|| json!({ "description": "", "items": [] }));
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    let mut doc = base_worklist_doc_from_parsed(parsed_doc);
     if let Some(obj) = doc.as_object_mut() {
         obj.insert("exists".to_string(), serde_json::Value::Bool(exists));
         obj.insert(
@@ -4649,13 +4668,52 @@ fn worklist_doc<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
         }
         doc
     } else {
-        json!({
+        serde_json::json!({
             "description": "",
             "items": [],
             "exists": exists,
             "resourcesExists": resources_exists,
             "path": path_str,
         })
+    }
+}
+
+#[cfg(test)]
+mod worklist_doc_tests {
+    use super::base_worklist_doc_from_parsed;
+    use serde_json::json;
+
+    #[test]
+    fn bare_array_root_sets_schema_error() {
+        let doc = base_worklist_doc_from_parsed(Some(json!([
+            { "id": "x", "file": "foo.txt", "before": "", "after": "" }
+        ])));
+
+        assert_eq!(doc.get("schemaError").and_then(|v| v.as_str()), Some("root-array"));
+        assert_eq!(doc.get("description").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(
+            doc.get("items")
+                .and_then(|v| v.as_array())
+                .map(|v| v.len()),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn scalar_root_sets_non_object_schema_error() {
+        let doc = base_worklist_doc_from_parsed(Some(json!("oops")));
+
+        assert_eq!(
+            doc.get("schemaError").and_then(|v| v.as_str()),
+            Some("root-non-object")
+        );
+        assert_eq!(doc.get("description").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(
+            doc.get("items")
+                .and_then(|v| v.as_array())
+                .map(|v| v.len()),
+            Some(0)
+        );
     }
 }
 

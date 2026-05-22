@@ -116,7 +116,7 @@
         if (submitting) sessionTick = sessionTick + 1;
       });
     });
-    (() => { const tauri = (window.parent &amp;&amp; window.parent.__TAURI__) || window.__TAURI__; if (tauri &amp;&amp; tauri.event &amp;&amp; tauri.event.listen) { tauri.event.listen('worklist-changed', () => { worklist.refetch(); history.refetch(); }); } })()">
+    (() => { const tauri = (window.parent &amp;&amp; window.parent.__TAURI__) || window.__TAURI__; if (tauri &amp;&amp; tauri.event &amp;&amp; tauri.event.listen) { tauri.event.listen('worklist-changed', () => { debounce(200, () => { worklist.refetch(); history.refetch(); }); }); } })()">
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">
         <HStack gap="$space-3" verticalAlignment="center">
@@ -233,7 +233,7 @@
                     width="*"
                     fontSize="$fontSize-sm"
                     enabled="{!submitting}"
-                    onDidChange="(v) => selectedFeedback = v" />
+                    onDidChange="(v) => { debounce(200, (text) => { selectedFeedback = text; }, v); }" />
                   <Button
                     label="×"
                     variant="ghost"

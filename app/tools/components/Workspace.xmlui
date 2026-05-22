@@ -133,7 +133,8 @@
         </Text>
         <Text
           when="{worklist.value.items && worklist.value.items.length > 0}"
-          value="{worklist.value.description}" />
+          color="$textColor-secondary"
+          value="Select an item" />
         <Items data="{worklist.value.items}">
           <VStack gap="$space-1">
             <HStack gap="$space-3" verticalAlignment="start">
@@ -253,14 +254,15 @@
         </Items>
         <VStack
           gap="$space-3"
+          paddingBottom="$space-3"
+          borderBottom="1px solid $borderColor"
           when="{worklist.value.items && worklist.value.items.length > 0}">
           <Theme paddingHorizontal-Button-xs="$space-0_5">
             <HStack gap="$space-3" verticalAlignment="center">
-              <HStack gap="$space-0_5" verticalAlignment="center">
+              <HStack gap="$space-1" verticalAlignment="center">
                 <Button
                   label="Approve"
-                  variant="ghost"
-                  size="xs"
+                  size="sm"
                   enabled="{!submitting && !!selected}"
                   onClick="(() => { const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: (worklist.value.items || []).filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) })); })()" />
                 <Button
@@ -270,11 +272,10 @@
                   tooltip="What does Approve do?"
                   onClick="actionHelpFor = 'approve'" />
               </HStack>
-              <HStack gap="$space-0_5" verticalAlignment="center">
+              <HStack gap="$space-1" verticalAlignment="center">
                 <Button
                   label="Iterate"
-                  variant="ghost"
-                  size="xs"
+                  size="sm"
                   enabled="{!submitting && !!selected && selectedFeedback.trim().length > 0}"
                   onClick="submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('iterate: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
                 <Button
@@ -284,11 +285,10 @@
                   tooltip="What does Iterate do?"
                   onClick="actionHelpFor = 'iterate'" />
               </HStack>
-              <HStack gap="$space-0_5" verticalAlignment="center">
+              <HStack gap="$space-1" verticalAlignment="center">
                 <Button
                   label="Drop"
-                  variant="ghost"
-                  size="xs"
+                  size="sm"
                   enabled="{!submitting && !!selected}"
                   onClick="submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('drop: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
                 <Button

@@ -15,7 +15,10 @@
   var.closeIssuesDialog="{null}"
   var.closeIssuesItemRef="{null}"
   var.closeIssuesState="{null}"
-  var.actionHelpFor="{null}">
+  var.actionHelpFor="{null}"
+  var.newItemHelp="{false}"
+  var.newItemIssue="{null}"
+  var.newItemText="{''}">
   <DataSource
     id="sessionTail"
     url="/__sessions/latest-tail?lines=200&amp;t={sessionTick}"
@@ -99,6 +102,10 @@
   <DataSource
     id="history"
     url="/__worklist-history/list" />
+  <DataSource
+    id="openIssues"
+    url="/__issues"
+    when="{newItemHelp}" />
 
   <VStack
     padding="$space-6"
@@ -112,7 +119,13 @@
     (() => { const tauri = (window.parent &amp;&amp; window.parent.__TAURI__) || window.__TAURI__; if (tauri &amp;&amp; tauri.event &amp;&amp; tauri.event.listen) { tauri.event.listen('worklist-changed', () => { worklist.refetch(); history.refetch(); }); } })()">
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">
-        <Heading level="h2">Worklist</Heading>
+        <HStack gap="$space-3" verticalAlignment="center">
+          <Heading level="h2">Worklist</Heading>
+          <Button
+            label="+ New item"
+            size="xs"
+            onClick="newItemHelp = true" />
+        </HStack>
         <Text
           when="{worklist.value.exists && (!worklist.value.items || worklist.value.items.length === 0)}"
           color="$textColor-secondary">
@@ -454,13 +467,69 @@ Iterate is the right move when the agent's first cut is *almost* what you want."
     </ModalDialog>
 
     <ModalDialog
+      when="{newItemHelp}"
+      title="Add a worklist item"
+      onClose="newItemHelp = false; newItemIssue = null; newItemText = ''">
+      <VStack gap="$space-3" padding="$space-2">
+        <Text>
+          The worklist is how you and the agent coordinate multi-step work.
+          You don't add items here directly — you ask the agent in chat to
+          propose one, optionally citing an open GitHub issue to address.
+        </Text>
+        <Markdown content="- **Ask the agent in chat** to propose a worklist item — e.g. *“propose a worklist item to fix the search box width”*.
+- The agent writes an item to `resources/worklist.json`; it appears here as **TO APPLY**.
+- Select an item, then click:
+  - **Approve** — the agent makes the proposed edits; the item transitions to **TO COMMIT**.
+  - **Iterate** — the agent revises the proposal in place (requires per-item feedback).
+  - **Drop** — discard the item without acting.
+
+Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal. Before you `Approve` a `TO-COMMIT` item you can `Iterate` to test and revise the implementation.
+" />
+        <VStack gap="$space-2" paddingTop="$space-2" borderTop="1px solid $borderColor">
+          <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="Ask the agent to propose an item" />
+          <Select
+            placeholder="Optional: cite an open issue"
+            data="{((openIssues.value) || []).filter(i => i.state === 'OPEN').map(i => ({value: i.number, label: '#' + i.number + ' ' + i.title}))}"
+            initialValue="{newItemIssue}"
+            onDidChange="(v) => newItemIssue = v" />
+          <TextArea
+            initialValue="{newItemText}"
+            placeholder="Describe what the item should change"
+            rows="4"
+            width="*"
+            onDidChange="(v) => newItemText = v" />
+          <HStack gap="$space-2">
+            <Button
+              label="Send"
+              enabled="{!!newItemIssue || (newItemText &amp;&amp; newItemText.trim().length > 0)}"
+              onClick="(() => {
+                const issuesArr = (openIssues.value) || [];
+                const issueObj = newItemIssue ? issuesArr.find(i => String(i.number) === String(newItemIssue)) : null;
+                const text = (newItemText || '').trim();
+                let msg;
+                if (issueObj &amp;&amp; text) { msg = 'Propose a worklist item to address #' + issueObj.number + ' (' + issueObj.title + '): ' + text; }
+                else if (issueObj) { msg = 'Propose a worklist item to address #' + issueObj.number + ' (' + issueObj.title + ').'; }
+                else { msg = 'Propose a worklist item: ' + text; }
+                toTurn(msg);
+                newItemHelp = false; newItemIssue = null; newItemText = '';
+              })()" />
+            <Button
+              label="Cancel"
+              variant="ghost"
+              onClick="newItemHelp = false; newItemIssue = null; newItemText = ''" />
+          </HStack>
+        </VStack>
+      </VStack>
+    </ModalDialog>
+
+    <ModalDialog
       when="{actionHelpFor === 'drop'}"
       title="Drop"
       onClose="actionHelpFor = null">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           Removes the item from the worklist. The agent will not act on it.
-        </Text>
+        </Text>x
         <Markdown content="- **TO APPLY** → the item is removed; nothing on disk changes.
 - **TO COMMIT** → the item is removed, but the file edits the agent already made on your behalf **stay on disk**. If you want them gone, ask the agent to discard them — it knows how to use `git checkout -- &lt;file&gt;` or `git restore &lt;file&gt;`.
 

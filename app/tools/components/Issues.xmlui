@@ -3,6 +3,7 @@
   var.expandedNumber="{null}"
   var.fullscreenImage="{null}"
   var.showNewIssueHint="{false}"
+  var.newIssueText="{''}"
   var.queryDraft=""
   var.query=""
   var.closeComment="{''}"
@@ -83,29 +84,31 @@
 
   <ModalDialog
     when="{showNewIssueHint}"
-    title="File an issue through the agent"
-    onClose="showNewIssueHint = false">
+    title="File an issue"
+    onClose="showNewIssueHint = false; newIssueText = ''">
     <VStack gap="$space-3" padding="$space-2">
       <Text>
-        The agent in your terminal has the full conversation you've been having —
-        what you were trying to do, what broke, what you've already tried. If
-        you ask it to file an issue ("file an issue about X"), it can write a
-        title and body that include that context, link related items, and
-        decide whether the work also belongs on the worklist.
+        It's helpful to write down the ideas you'll send to the Worklist. Agents can express ideas as GitHub issues where you, your agents, collaborators, and their agents can all share persistent and durable context.
       </Text>
-      <Text>
-        Filing directly on github.com skips that step; you end up rewriting
-        the context from memory.
-      </Text>
-      <HStack gap="$space-2">
-        <Button
-          label="Got it"
-          onClick="showNewIssueHint = false" />
-        <Button
-          label="Open GitHub anyway"
-          variant="outlined"
-          onClick="showNewIssueHint = false; openExternal(repoOrigin.value.issuesNewUrl)" />
-      </HStack>
+      <VStack gap="$space-2" paddingTop="$space-2" borderTop="1px solid $borderColor">
+        <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="Ask the agent to file an issue" />
+        <TextArea
+          initialValue="{newIssueText}"
+          placeholder="Describe what the issue should cover"
+          rows="4"
+          width="*"
+          onDidChange="(v) => newIssueText = v" />
+        <HStack gap="$space-2">
+          <Button
+            label="Send"
+            enabled="{newIssueText &amp;&amp; newIssueText.trim().length > 0}"
+            onClick="toTurn('File a GitHub issue: ' + (newIssueText || '').trim()); showNewIssueHint = false; newIssueText = ''" />
+          <Button
+            label="Cancel"
+            variant="ghost"
+            onClick="showNewIssueHint = false; newIssueText = ''" />
+        </HStack>
+      </VStack>
     </VStack>
   </ModalDialog>
 

@@ -168,11 +168,23 @@ Lifecycle:
      - `{"kind":"approved", "items":[<full verified content>], ...}` —
        execute these items. The user has already triaged; do NOT
        re-read `resources/worklist.json` to second-guess what was
-       approved.
+       approved. Approved records are **consumed on the first read** —
+       a second GET for the same turn returns `no_active_authorization`
+       (see below), so capture what you need on the first call.
      - `{"kind":"rejected_stale", "mismatched_ids":[...]}` — the
        worklist file changed between the user's click and the watcher
        reading it. Do not edit files; surface the staleness to the
        user and ask them to re-triage.
+     - `{"kind":"no_active_authorization", "consumedAtMs":<ts>}` —
+       the prior authorization record has already been consumed (or
+       this turn isn't an authorization turn at all and the resolver
+       is returning a previously-consumed record). **Do NOT treat
+       this as authorization.** No items to act on, no file edits.
+       This is the architectural backstop for the rule above that
+       `iterate:` and other non-authorization turns must not route
+       through `/__worklist/resolve` — if you forget and call it
+       anyway, you'll land here instead of getting stale approval
+       data back.
      Respond to the optional feedback in either case. Never parse the
      `approved:` turn line yourself for content — the line carries
      only ids and hashes.

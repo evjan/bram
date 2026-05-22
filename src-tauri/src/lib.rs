@@ -6126,9 +6126,19 @@ fn route_request<R: tauri::Runtime>(
     // /__worklist/resolve[?ids=foo,bar] — verified-authorization endpoint
     // the agent reads instead of parsing the `approved:` / `drop:` turn
     // line. Returns the current `.worklist-authorization.json` body, with
-    // optional id-filtering. `kind: "rejected_stale"` signals the on-disk
-    // worklist drifted between the user's click and the watcher reading
-    // it — the agent should surface staleness rather than apply.
+    // optional id-filtering.
+    //
+    // Response kinds:
+    //   - "approved" / "drop": active authorization, body carries items/ids.
+    //     Approved records are consume-on-read here so a confused agent that
+    //     reflexively calls the resolver on a non-authorization turn (iterate,
+    //     talk) can't replay stale approval. Drop consumption stays in
+    //     `maybe_enforce_worklist_policy` so authorized prunes aren't reverted.
+    //   - "rejected_stale": on-disk worklist drifted between the user's click
+    //     and the watcher reading it — agent should surface staleness.
+    //   - "no_active_authorization": prior record has been consumed; the agent
+    //     must NOT treat this as authorization. Returned for any consumed
+    //     record regardless of original kind.
     if path == "__worklist/resolve" {
         let mut id_filter: Option<Vec<String>> = None;
         for pair in query.split('&') {
@@ -6169,6 +6179,18 @@ fn route_request<R: tauri::Runtime>(
                 );
             }
         };
+        let consumed_at = record_value
+            .get("consumedAtMs")
+            .and_then(|v| v.as_i64());
+        if let Some(ts) = consumed_at {
+            let body = serde_json::json!({
+                "kind": "no_active_authorization",
+                "consumedAtMs": ts,
+            })
+            .to_string()
+            .into_bytes();
+            return (200, "application/json; charset=utf-8", body);
+        }
         if let Some(filter) = id_filter {
             if let Some(items) = record_value.get_mut("items").and_then(|v| v.as_array_mut()) {
                 items.retain(|it| {
@@ -6184,7 +6206,15 @@ fn route_request<R: tauri::Runtime>(
                 });
             }
         }
+        let kind = record_value
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let body = record_value.to_string().into_bytes();
+        if kind == "approved" {
+            consume_worklist_authorization(app);
+        }
         return (200, "application/json; charset=utf-8", body);
     }
 

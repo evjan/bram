@@ -290,14 +290,18 @@ window.gitPush = function (commitsDs) {
 // clears the flag whenever worklist.json's items differ from that
 // snapshot — works on the initial fetch too (so refresh recovers
 // from a stale flag), not just on refetches.
-window.markInflight = function (items) {
+window.markInflight = function (items, targetedId) {
   try {
     var sig = (items || [])
       .filter(function (i) { return i && i.id; })
       .map(function (i) { return i.id + ":" + (i.status || "proposed"); })
       .sort()
       .join(",");
-    localStorage.setItem("inflight", JSON.stringify({ ids: sig, ts: Date.now() }));
+    var record = { ids: sig, ts: Date.now() };
+    if (typeof targetedId === "string" && targetedId) {
+      record.targeted = targetedId;
+    }
+    localStorage.setItem("inflight", JSON.stringify(record));
   } catch (e) {}
 };
 window.getInflight = function () {

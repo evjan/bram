@@ -64,11 +64,15 @@
         .map(i => i.id + ':' + (i.status || 'proposed'))
         .sort()
         .join(',');
-      iframeTrace('onLoaded-entered', {sig: sigForTrace, items: items.length, has_inflight: !!stored, stored_ids: (stored && stored.ids) || ''});
+      iframeTrace('onLoaded-entered', {sig: sigForTrace, items: items.length, has_inflight: !!stored, stored_ids: (stored && stored.ids) || '', targeted: (stored && stored.targeted) || ''});
       if (stored) {
-        const sig = sigForTrace;
-        if (sig !== (stored.ids || '')) {
-          iframeTrace('inflight-clear', {reason: 'sig-mismatch', sig: sig, stored_ids: stored.ids || '', item: submittedItemId || ''});
+        // Primary clear path: the targeted item is no longer in the
+        // list (pruned after drop, or pruned after commit). Does NOT
+        // fire on proposed→applied advance — the item is still in the
+        // list with a new status, and the user still owes a TO COMMIT
+        // click. See #68 / fix-premature-inflight-clear-68.
+        if (stored.targeted && !items.some(i => i.id === stored.targeted)) {
+          iframeTrace('inflight-clear', {reason: 'item-gone', item: stored.targeted, sig: sigForTrace, stored_ids: stored.ids || ''});
           clearInflight();
           submitting = false;
           if (selected && !items.some(i => i.id === selected)) selected = null;
@@ -291,7 +295,7 @@
                       label="Approve"
                       size="xs"
                       enabled="{!submitting && !!selected}"
-                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + JSON.stringify({ items: (worklist.value.items || []).filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) })); })()" />
+                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; markInflight(worklist.value && worklist.value.items, selected); submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + JSON.stringify({ items: (worklist.value.items || []).filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) })); })()" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -306,7 +310,7 @@
                       label="Iterate"
                       size="xs"
                       enabled="{!submitting && !!selected && selectedFeedback.trim().length > 0}"
-                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); toTurn('iterate: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
+                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); submittedItemId = selected; markInflight(worklist.value && worklist.value.items, selected); submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); toTurn('iterate: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -321,7 +325,7 @@
                       label="Drop"
                       size="xs"
                       enabled="{!submitting && !!selected}"
-                      onClick="iframeTrace('click', {target: 'drop', item: selected}); submittedItemId = selected; markInflight(worklist.value && worklist.value.items); submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
+                      onClick="iframeTrace('click', {target: 'drop', item: selected}); submittedItemId = selected; markInflight(worklist.value && worklist.value.items, selected); submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + JSON.stringify({ items: worklist.value.items.filter(i => i.id === selected).map(i => ({id: i.id, hash: i.hash, feedback: selectedFeedback})) }))" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -464,11 +468,11 @@
         <HStack gap="$space-2" paddingTop="$space-2">
           <Button
             label="Confirm"
-            onClick="submittedItemId = closeIssuesItemRef.id; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: [{id: closeIssuesItemRef.id, hash: closeIssuesItemRef.hash, feedback: combineFeedbackWithCloseLines(selectedFeedback, buildCloseIssueLines(closeIssuesState))}] })); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="submittedItemId = closeIssuesItemRef.id; markInflight(worklist.value && worklist.value.items, closeIssuesItemRef.id); submitting = true; toTurn('approved: ' + JSON.stringify({ items: [{id: closeIssuesItemRef.id, hash: closeIssuesItemRef.hash, feedback: combineFeedbackWithCloseLines(selectedFeedback, buildCloseIssueLines(closeIssuesState))}] })); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Approve without closing"
             variant="outlined"
-            onClick="submittedItemId = closeIssuesItemRef.id; markInflight(worklist.value && worklist.value.items); submitting = true; toTurn('approved: ' + JSON.stringify({ items: [{id: closeIssuesItemRef.id, hash: closeIssuesItemRef.hash, feedback: selectedFeedback}] })); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="submittedItemId = closeIssuesItemRef.id; markInflight(worklist.value && worklist.value.items, closeIssuesItemRef.id); submitting = true; toTurn('approved: ' + JSON.stringify({ items: [{id: closeIssuesItemRef.id, hash: closeIssuesItemRef.hash, feedback: selectedFeedback}] })); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Cancel"
             variant="ghost"

@@ -1,10 +1,11 @@
 {
-  "id": "narrow",
-  "name": "Narrow viewport",
+  "id": "bram",
+  "name": "Bram theme",
   "extends": "xmlui",
   "themeVars": {
     "maxWidth-phone": "320px",
     "maxWidth-landscape-phone": "360px",
-    "maxWidth-tablet": "400px"
+    "maxWidth-tablet": "400px",
+    "paddingHorizontal-Button-sm": "$space-1"
   }
 }

@@ -3,8 +3,8 @@
     "xsVerbose": true,
     "xsVerboseLogMax": 200
   },
-  "themes": ["themes/narrow.json"],
-  "defaultTheme": "narrow",
+  "themes": ["themes/bram.json"],
+  "defaultTheme": "bram",
   "resources": {
     "logo": "resources/xmlui-logo.svg",
     "icon.code": "resources/code.svg",

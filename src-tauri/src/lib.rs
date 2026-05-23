@@ -305,6 +305,104 @@ fn first_nonempty_env(names: &[&str]) -> Option<String> {
     None
 }
 
+// --- Comms-path trace foundation -----------------------------------------
+//
+// Process-global toggle for the comms-path trace log
+// (`resources/bram-trace.log`). Set once at startup by
+// `init_bram_trace_from_env`; every potential waypoint checks
+// `bram_trace_enabled()` (a single atomic load) before doing any work,
+// so the cost when off is essentially zero. Spec:
+// https://github.com/judell/bram/issues/49#issuecomment-4524234976
+//
+// This commit installs the foundation only. NO call sites are wired up
+// yet — `append_bram_trace_line` is intentionally unused. Subsequent
+// commits add one trace category at a time, per the spec's verification
+// discipline.
+static BRAM_TRACE_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+// Tracks whether the log file has been truncated yet this session.
+// First successful `set(())` wins; remaining writers append.
+static BRAM_TRACE_FIRST_WRITE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+#[allow(dead_code)]
+fn bram_trace_enabled() -> bool {
+    BRAM_TRACE_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn init_bram_trace_from_env() {
+    let on = std::env::var("BRAM_TRACE")
+        .map(|v| {
+            let s = v.trim();
+            s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(false);
+    BRAM_TRACE_ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
+    if on {
+        eprintln!(
+            "[bram-trace] enabled (BRAM_TRACE=1); trace destination: <project_root>/resources/bram-trace.log"
+        );
+    }
+}
+
+#[allow(dead_code)]
+fn bram_trace_log_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| p.join("resources/bram-trace.log"))
+}
+
+// Single write API for every trace category. Format:
+//   [<ISO-8601-UTC>] [<category>] <body>
+//
+// No-op when the toggle is off. Truncates the file on first call per
+// session and writes a `[bram-trace] event=session-start pid=<pid>`
+// header before the first real record.
+//
+// `category` is one of the closed-vocabulary tokens from the spec
+// (`bram-trace`, `pty-out`, `pty-in`, `pty-menu`, `auth-record`,
+// `watcher`, `emit`, `route`, `hook`, `iframe`). The function does not
+// validate — the caller is expected to use a token from the spec, and
+// `category` is checked in code review, not at runtime.
+#[allow(dead_code)]
+fn append_bram_trace_line<R: tauri::Runtime>(app: &AppHandle<R>, category: &str, body: &str) {
+    if !bram_trace_enabled() {
+        return;
+    }
+    let Some(path) = bram_trace_log_file(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let first = BRAM_TRACE_FIRST_WRITE.set(()).is_ok();
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true);
+    if first {
+        opts.write(true).truncate(true);
+    } else {
+        opts.append(true);
+    }
+    let Ok(mut file) = opts.open(&path) else {
+        return;
+    };
+    if first {
+        let _ = writeln!(
+            file,
+            "[{}] [bram-trace] event=session-start pid={}",
+            format_iso_utc(unix_now_ms()),
+            std::process::id()
+        );
+    }
+    let _ = writeln!(
+        file,
+        "[{}] [{}] {}",
+        format_iso_utc(unix_now_ms()),
+        category,
+        body
+    );
+}
+
+// --- End comms-path trace foundation -------------------------------------
+
 fn project_root<R: tauri::Runtime>(app: Option<&AppHandle<R>>) -> Option<PathBuf> {
     if let Some(a) = app {
         if let Some(state) = a.try_state::<ActiveProjectState>() {
@@ -6924,6 +7022,7 @@ fn raise_open_files_limit() {}
 pub fn run() {
     raise_open_files_limit();
     parse_cli_flags();
+    init_bram_trace_from_env();
     let initial_proj = determine_project_root();
     eprintln!("[bram] project root: {}", initial_proj.display());
     if !initial_proj.join("index.html").exists() {

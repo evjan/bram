@@ -59,12 +59,14 @@
     onLoaded="(data) => {
       const items = (data && data.items) || [];
       const stored = getInflight();
+      const sigForTrace = items
+        .filter(i => i && i.id)
+        .map(i => i.id + ':' + (i.status || 'proposed'))
+        .sort()
+        .join(',');
+      iframeTrace('onLoaded-entered', {sig: sigForTrace, items: items.length, has_inflight: !!stored, stored_ids: (stored && stored.ids) || ''});
       if (stored) {
-        const sig = items
-          .filter(i => i && i.id)
-          .map(i => i.id + ':' + (i.status || 'proposed'))
-          .sort()
-          .join(',');
+        const sig = sigForTrace;
         if (sig !== (stored.ids || '')) {
           iframeTrace('inflight-clear', {reason: 'sig-mismatch', sig: sig, stored_ids: stored.ids || '', item: submittedItemId || ''});
           clearInflight();
@@ -132,7 +134,11 @@
             paths: payload.paths || [],
             correlation_id: payload.id || '',
           });
-          debounce(200, () => { worklist.refetch(); history.refetch(); });
+          debounce(200, () => {
+            iframeTrace('debounce-fired', {context: 'worklist-changed'});
+            worklist.refetch();
+            history.refetch();
+          });
         });
       }
     })()">

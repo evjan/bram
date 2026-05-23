@@ -5291,6 +5291,41 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
             return;
         }
     }
+    // Detect clobber: if a prior, not-yet-consumed record exists with a
+    // different kind, the new write overwrites it. Read the file before
+    // serializing the new record so the prior_kind lookup doesn't race
+    // with our own write.
+    if bram_trace_enabled() {
+        let prior_kind = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<WorklistAuthorizationRecord>(&s).ok())
+            .and_then(|prior| {
+                if prior.consumed_at_ms.is_some() {
+                    None
+                } else if prior.kind == record.kind {
+                    None
+                } else {
+                    Some(prior.kind)
+                }
+            });
+        let op = if prior_kind.is_some() { "clobber" } else { "write" };
+        let prior_field = prior_kind
+            .as_deref()
+            .map(|k| format!(" prior_kind={}", k))
+            .unwrap_or_default();
+        append_bram_trace_line(
+            app,
+            "auth-record",
+            &format!(
+                "op={} kind={} ids={}{} source={}",
+                op,
+                record.kind,
+                serde_json::to_string(&record.ids).unwrap_or_else(|_| "[]".to_string()),
+                prior_field,
+                record.source
+            ),
+        );
+    }
     let body = match serde_json::to_string_pretty(&record) {
         Ok(s) => s,
         Err(e) => {
@@ -5332,6 +5367,17 @@ fn consume_worklist_authorization<R: tauri::Runtime>(app: &AppHandle<R>) {
     };
     if record.consumed_at_ms.is_some() {
         return;
+    }
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "auth-record",
+            &format!(
+                "op=consume kind={} ids={}",
+                record.kind,
+                serde_json::to_string(&record.ids).unwrap_or_else(|_| "[]".to_string())
+            ),
+        );
     }
     record.consumed_at_ms = Some(unix_now_ms());
     let body = match serde_json::to_string_pretty(&record) {

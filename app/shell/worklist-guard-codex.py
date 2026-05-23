@@ -30,6 +30,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timezone
 
 
 WORKLIST_REL = "resources/worklist.json"
@@ -37,11 +38,56 @@ AUTH_REL = "resources/.worklist-authorization.json"
 BYPASS_TTL_SECONDS = 60 * 60  # an authorization record is fresh for 1h
 
 
-def allow():
+# Issue #49 [hook] trace, identical shape to the Claude hook helper.
+# Writes one structured line to resources/bram-trace.log when
+# BRAM_TRACE=1 is set on the host and propagated into the agent's PTY
+# child env. Silent no-op otherwise.
+def _trace_hook(event, tool, target, decision, reason):
+    try:
+        if os.environ.get("BRAM_TRACE") != "1":
+            return
+        log_path = os.environ.get("BRAM_TRACE_LOG")
+        if not log_path:
+            return
+        now = datetime.now(timezone.utc)
+        ts = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+        line = (
+            f"[{ts}] [hook] script=worklist-guard-codex.py event={event} "
+            f"tool={tool} target={target} decision={decision} reason={reason}\n"
+        )
+        with open(log_path, "a") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
+# Module-level context for [hook] trace records. main() populates these
+# once the inbound payload is parsed; allow() / deny() read them on exit.
+_HOOK_CTX = {"event": "", "tool": "", "target": ""}
+
+
+def allow(reason="passed-checks"):
+    _trace_hook(
+        _HOOK_CTX["event"] or "PreToolUse",
+        _HOOK_CTX["tool"] or "",
+        _HOOK_CTX["target"] or "",
+        "allow",
+        reason,
+    )
     sys.exit(0)
 
 
 def deny(reason):
+    _trace_hook(
+        _HOOK_CTX["event"] or "PreToolUse",
+        _HOOK_CTX["tool"] or "",
+        _HOOK_CTX["target"] or "",
+        "deny",
+        # Trim the deny message to a short reason for the trace; the
+        # full message still goes through the permissionDecisionReason
+        # field below for codex to surface to the user/agent.
+        (reason or "").splitlines()[0][:120] if reason else "blocked",
+    )
     print(json.dumps({
         "permissionDecision": "deny",
         "permissionDecisionReason": reason,
@@ -561,6 +607,7 @@ def main():
 
     cwd = payload.get("cwd") or os.getcwd()
     event_name = payload.get("hook_event_name") or ""
+    _HOOK_CTX["event"] = event_name or "PreToolUse"
 
     if event_name == "UserPromptSubmit":
         handle_user_prompt_submit(payload, cwd)
@@ -571,6 +618,18 @@ def main():
 
     tool_name = payload.get("tool_name") or ""
     tool_input = payload.get("tool_input") or {}
+    _HOOK_CTX["tool"] = tool_name
+    # Best-effort target derivation for the trace. apply_patch gets the
+    # first patch target; Bash gets the command preview; anything else
+    # leaves target empty.
+    if tool_name == "apply_patch":
+        targets = patch_targets(tool_input) if isinstance(tool_input, dict) else []
+        if targets:
+            t0 = normalize_target(cwd, targets[0]) or targets[0]
+            _HOOK_CTX["target"] = t0
+    elif tool_name == "Bash" and isinstance(tool_input, dict):
+        cmd = tool_input.get("command") or ""
+        _HOOK_CTX["target"] = (cmd or "")[:80]
 
     items = worklist_items(cwd)
     covered = covered_files(items)

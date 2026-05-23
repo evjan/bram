@@ -1962,6 +1962,16 @@ fn pty_spawn(
         command.env("BRAM_PORT", p.to_string());
         command.env("XMLUI_DESKTOP_PORT", p.to_string());
     }
+    // Propagate trace toggle + log path into the PTY child so hook
+    // scripts (worklist-guard.py for Claude, worklist-guard-codex.py
+    // for Codex) can write [hook] records into the same trace file as
+    // the host. See trace-category-hook.
+    if bram_trace_enabled() {
+        command.env("BRAM_TRACE", "1");
+        if let Some(path) = project_root(Some(&app)).map(|p| p.join("resources/bram-trace.log")) {
+            command.env("BRAM_TRACE_LOG", path.to_string_lossy().into_owned());
+        }
+    }
 
     let _child = pair
         .slave

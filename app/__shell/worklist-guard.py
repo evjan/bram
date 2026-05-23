@@ -26,11 +26,35 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timezone
 
 
 WORKLIST_REL = "resources/worklist.json"
 AUTH_REL = "resources/.worklist-authorization.json"
 BYPASS_TTL_SECONDS = 60 * 60  # direct-edit auth records are fresh for 1h
+
+
+def _trace_hook(event, tool, target, decision, reason):
+    """Issue #49 [hook] trace. Appends one structured line to the
+    resources/bram-trace.log file the host writes to, when BRAM_TRACE=1
+    was set on the host and propagated into the agent's PTY child env.
+    Silent no-op otherwise."""
+    try:
+        if os.environ.get("BRAM_TRACE") != "1":
+            return
+        log_path = os.environ.get("BRAM_TRACE_LOG")
+        if not log_path:
+            return
+        now = datetime.now(timezone.utc)
+        ts = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+        line = (
+            f"[{ts}] [hook] script=worklist-guard.py event={event} "
+            f"tool={tool} target={target} decision={decision} reason={reason}\n"
+        )
+        with open(log_path, "a") as f:
+            f.write(line)
+    except Exception:
+        pass
 
 
 # Opt-out phrases that authorize a one-turn direct edit. Matched
@@ -174,6 +198,13 @@ def deny_coverage(target_rel, opt_out_attempted):
             "\n  - (Detected what looked like opt-out language, but it didn't "
             "match the expected phrasing. Be explicit.)"
         )
+    _trace_hook(
+        "PreToolUse",
+        os.environ.get("__BRAM_TRACE_TOOL", "Write"),
+        target_rel,
+        "deny",
+        "no-coverage-no-opt-out",
+    )
     print(msg, file=sys.stderr)
     sys.exit(2)
 
@@ -216,14 +247,25 @@ def deny_mechanical_worklist_change(removed, status_changed):
         "curl -X POST -d '{\"op\":\"prune\",\"ids\":[\"item-id\"]}' "
         "http://localhost:${BRAM_PORT:-$XMLUI_DESKTOP_PORT}/__worklist/mutate"
     )
+    _trace_hook(
+        "PreToolUse",
+        os.environ.get("__BRAM_TRACE_TOOL", "Write"),
+        WORKLIST_REL,
+        "deny",
+        "mechanical-worklist-change",
+    )
     print("\n".join(lines), file=sys.stderr)
     sys.exit(2)
 
 
 def main():
     payload = json.load(sys.stdin)
-    if payload.get("tool_name") not in ("Write", "Edit"):
+    tool_name = payload.get("tool_name", "")
+    if tool_name not in ("Write", "Edit"):
         sys.exit(0)
+    # Stash for downstream deny-path trace calls (deny_coverage and
+    # deny_mechanical_worklist_change don't otherwise have tool_name).
+    os.environ["__BRAM_TRACE_TOOL"] = tool_name
 
     ti = payload.get("tool_input", {})
     fp = ti.get("file_path", "")
@@ -246,6 +288,7 @@ def main():
     # Branch 1: writes to resources/worklist.json — existing prune validation.
     if rel == WORKLIST_REL:
         if not os.path.exists(fp):
+            _trace_hook("PreToolUse", tool_name, rel, "allow", "worklist-bootstrap")
             sys.exit(0)
         with open(fp) as f:
             old = f.read()
@@ -259,6 +302,7 @@ def main():
         new_items = items_by_id(new)
         removed, status_changed = worklist_state_changes(old_items, new_items)
         if not removed and not status_changed:
+            _trace_hook("PreToolUse", tool_name, rel, "allow", "worklist-author")
             sys.exit(0)
         deny_mechanical_worklist_change(removed, status_changed)
 
@@ -266,11 +310,14 @@ def main():
     # fresh bypass, or explicit opt-out language in the last user message.
     covered = worklist_covered_files(project_root)
     if rel in covered:
+        _trace_hook("PreToolUse", tool_name, rel, "allow", "covered-by-worklist-item")
         sys.exit(0)
     if fresh_bypass(project_root, rel):
+        _trace_hook("PreToolUse", tool_name, rel, "allow", "fresh-bypass")
         sys.exit(0)
     last_msg = last_user_text(payload.get("transcript_path", ""))
     if has_opt_out(last_msg):
+        _trace_hook("PreToolUse", tool_name, rel, "allow", "opt-out-phrase")
         sys.exit(0)
     deny_coverage(rel, opt_out_attempted=("worklist" in (last_msg or "").lower()
                                           and "no" in (last_msg or "").lower()))

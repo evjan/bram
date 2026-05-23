@@ -1951,16 +1951,103 @@ fn pty_spawn(
     let app_for_thread = app.clone();
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
+        // [pty-in] throttling state, per the issue #49 spec. Small
+        // (<16-byte) reads inside a 50ms window collapse into one
+        // summary line; larger reads flush the accumulator and log
+        // individually. All state is thread-local — no locking.
+        const SMALL_THRESHOLD: usize = 16;
+        const SMALL_WINDOW_MS: u128 = 50;
+        let mut small_bytes: usize = 0;
+        let mut small_runs: usize = 0;
+        let mut small_first_preview: String = String::new();
+        let mut small_last: Option<std::time::Instant> = None;
         loop {
             match reader.read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => {
+                    if bram_trace_enabled() && small_runs > 0 {
+                        append_bram_trace_line(
+                            &app_for_thread,
+                            "pty-in",
+                            &format!(
+                                "bytes={} runs={} preview={}",
+                                small_bytes, small_runs, small_first_preview
+                            ),
+                        );
+                    }
+                    break;
+                }
                 Ok(n) => {
+                    if bram_trace_enabled() {
+                        let data = &buf[..n];
+                        if n >= SMALL_THRESHOLD {
+                            // Flush any pending small-read accumulator
+                            // first so the order in the log matches the
+                            // order of arrivals.
+                            if small_runs > 0 {
+                                append_bram_trace_line(
+                                    &app_for_thread,
+                                    "pty-in",
+                                    &format!(
+                                        "bytes={} runs={} preview={}",
+                                        small_bytes, small_runs, small_first_preview
+                                    ),
+                                );
+                                small_bytes = 0;
+                                small_runs = 0;
+                                small_first_preview.clear();
+                                small_last = None;
+                            }
+                            let preview =
+                                bram_trace_preview(&String::from_utf8_lossy(data), 80);
+                            append_bram_trace_line(
+                                &app_for_thread,
+                                "pty-in",
+                                &format!("bytes={} preview={}", n, preview),
+                            );
+                        } else {
+                            let within_window = small_last
+                                .map(|t| t.elapsed().as_millis() < SMALL_WINDOW_MS)
+                                .unwrap_or(false);
+                            if within_window {
+                                small_bytes += n;
+                                small_runs += 1;
+                            } else {
+                                if small_runs > 0 {
+                                    append_bram_trace_line(
+                                        &app_for_thread,
+                                        "pty-in",
+                                        &format!(
+                                            "bytes={} runs={} preview={}",
+                                            small_bytes, small_runs, small_first_preview
+                                        ),
+                                    );
+                                }
+                                small_bytes = n;
+                                small_runs = 1;
+                                small_first_preview =
+                                    bram_trace_preview(&String::from_utf8_lossy(data), 80);
+                            }
+                            small_last = Some(std::time::Instant::now());
+                        }
+                    }
                     pty_menu_update(&app_for_thread, &buf[..n]);
                     if on_data.send(buf[..n].to_vec()).is_err() {
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(_) => {
+                    if bram_trace_enabled() && small_runs > 0 {
+                        append_bram_trace_line(
+                            &app_for_thread,
+                            "pty-in",
+                            &format!(
+                                "bytes={} runs={} preview={}",
+                                small_bytes, small_runs, small_first_preview
+                            ),
+                        );
+                    }
+                    break;
+                }
             }
         }
     });

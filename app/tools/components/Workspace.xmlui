@@ -157,6 +157,33 @@
           worklist.refetch();
           history.refetch();
         }).then((unlisten) => { window.__bramWorklistUnlisten = unlisten; }).catch(() => {});
+
+        // Issue #70: fast end-of-turn detection from PTY bytes,
+        // bypassing the multi-second JSONL flush chain. Host emits
+        // agent-turn-end when the Claude spinner glyphs stop for
+        // 800ms; iframe clears inflight on receipt. Same hot-reload
+        // unlisten dance as worklist-changed above.
+        if (typeof window.__bramAgentTurnEndUnlisten === 'function') {
+          try { window.__bramAgentTurnEndUnlisten(); } catch (err) {}
+          window.__bramAgentTurnEndUnlisten = null;
+        }
+        tauri.event.listen('agent-turn-end', () => {
+          iframeTrace('listener-fired', {context: 'agent-turn-end'});
+          const stored = getInflight();
+          if (!stored) return;
+          const elapsed = Date.now() - (stored.ts || 0);
+          // Same 750ms grace as the agent-idle path: skip stale
+          // inflight records from the very first ticks after a click.
+          if (elapsed < 750) return;
+          iframeTrace('inflight-clear', {reason: 'turn-end-pty', elapsed_ms: elapsed, item: submittedItemId || ''});
+          clearInflight();
+          submitting = false;
+          selected = null;
+          submittedItemId = null;
+          selectedFeedback = '';
+          feedbackExpanded = false; expandedItemId = null;
+          history.refetch();
+        }).then((unlisten) => { window.__bramAgentTurnEndUnlisten = unlisten; }).catch(() => {});
       }
     })()">
     <VStack gap="$space-3" when="{worklist.value}">

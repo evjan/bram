@@ -642,6 +642,92 @@ fn pty_tail_cell() -> &'static Mutex<Vec<u8>> {
     PTY_TAIL.get_or_init(|| Mutex::new(Vec::with_capacity(8192)))
 }
 
+// Claude TUI agent-turn state machine (issue #70). Detects end-of-turn
+// from a spinner-glyph activity heuristic: while the agent is running,
+// the bottom row redraws every 100-200ms with a spinner glyph (asterisk
+// family `✻✶✳✽✢` or braille `⠂⠐`). At end-of-turn the redraw stops
+// and the next non-spinner PTY chunk (typically the prompt-redraw)
+// fires `agent-turn-end`. The iframe consumes that event for a fast
+// inflight clear path, bypassing the multi-second JSONL flush chain.
+struct AgentTurnState {
+    last_spinner_at: Option<std::time::Instant>,
+    is_active: bool,
+    last_emit_at: Option<std::time::Instant>,
+}
+
+fn agent_turn_state_cell() -> &'static Mutex<AgentTurnState> {
+    static CELL: OnceLock<Mutex<AgentTurnState>> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Mutex::new(AgentTurnState {
+            last_spinner_at: None,
+            is_active: false,
+            last_emit_at: None,
+        })
+    })
+}
+
+// 800ms threshold: spinner ticks are 100-200ms apart while thinking;
+// 800ms of no spinner reliably indicates the agent stopped updating.
+const AGENT_TURN_IDLE_THRESHOLD_MS: u128 = 800;
+
+// Suppress repeat emits within 5s of the last one. After a real
+// end-of-turn the Claude TUI sometimes re-pulses briefly (input-box
+// re-rendering, scroll updates, etc.) — that re-arms the detector
+// and would fire a second turn-end ~1s later. The cooldown keeps
+// the trace clean and the iframe listener from doing extra no-op
+// work. State transitions still happen (is_active flips); only the
+// outbound emit is gated.
+const AGENT_TURN_EMIT_COOLDOWN_MS: u128 = 5000;
+
+// Byte-level check for spinner glyphs without allocating a String.
+// Asterisk family is U+2700..U+277F (UTF-8 prefix 0xE2 0x9C); braille
+// patterns are U+2800..U+283F (prefix 0xE2 0xA0). Middle dot U+00B7
+// is deliberately NOT matched — it appears in non-spinner TUI text
+// (e.g. token-count separators) and would over-fire the detector.
+fn pty_chunk_has_spinner_glyph(chunk: &[u8]) -> bool {
+    for w in chunk.windows(2) {
+        if w[0] == 0xE2 && (w[1] == 0x9C || w[1] == 0xA0) {
+            return true;
+        }
+    }
+    false
+}
+
+fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
+    let now = std::time::Instant::now();
+    let has_spinner = pty_chunk_has_spinner_glyph(chunk);
+    let mut emit_now = false;
+    if let Ok(mut state) = agent_turn_state_cell().lock() {
+        if has_spinner {
+            state.last_spinner_at = Some(now);
+            state.is_active = true;
+        } else if state.is_active {
+            if let Some(last) = state.last_spinner_at {
+                if now.saturating_duration_since(last).as_millis()
+                    > AGENT_TURN_IDLE_THRESHOLD_MS
+                {
+                    state.is_active = false;
+                    let in_cooldown = state.last_emit_at.map_or(false, |t| {
+                        now.saturating_duration_since(t).as_millis()
+                            < AGENT_TURN_EMIT_COOLDOWN_MS
+                    });
+                    if !in_cooldown {
+                        state.last_emit_at = Some(now);
+                        emit_now = true;
+                    }
+                }
+            }
+        }
+    }
+    if emit_now {
+        if bram_trace_enabled() {
+            append_bram_trace_line(app, "turn-end", "source=pty-spinner-stop");
+        }
+        trace_emit_signal(app, "agent-turn-end");
+        let _ = app.emit("agent-turn-end", ());
+    }
+}
+
 fn pty_menu_cell() -> &'static Mutex<Option<PtyMenu>> {
     PTY_MENU.get_or_init(|| Mutex::new(None))
 }
@@ -2070,6 +2156,7 @@ fn pty_spawn(
                         }
                     }
                     pty_menu_update(&app_for_thread, &buf[..n]);
+                    pty_agent_turn_update(&app_for_thread, &buf[..n]);
                     if on_data.send(buf[..n].to_vec()).is_err() {
                         break;
                     }

@@ -512,6 +512,20 @@ fn trace_route_entry<R: tauri::Runtime>(
     );
 }
 
+// Map a notify::EventKind into a short label for the [watcher] trace.
+// Keep the vocabulary small and stable so analysis scripts can rely on
+// it (`create`, `modify`, `remove`, `access`, `other`).
+fn notify_event_kind_label(kind: &notify::EventKind) -> &'static str {
+    use notify::EventKind;
+    match kind {
+        EventKind::Create(_) => "create",
+        EventKind::Modify(_) => "modify",
+        EventKind::Remove(_) => "remove",
+        EventKind::Access(_) => "access",
+        _ => "other",
+    }
+}
+
 // Trace an HTTP route exit. Logged just before the response is written
 // back to the socket so `duration_ms` is the full host-side handling
 // time. `body_size` is the response body's byte length, not the wire
@@ -7572,6 +7586,32 @@ pub fn run() {
                         Err(RecvTimeoutError::Timeout) => continue,
                         Err(RecvTimeoutError::Disconnected) => break,
                     };
+
+                    // [watcher] trace: one record per path per notify
+                    // event, before any dispatch. Logs project-relative
+                    // paths; absolute / outside-project paths fall back
+                    // to file_name only so no host filesystem layout
+                    // leaks into the log.
+                    if bram_trace_enabled() {
+                        let change = notify_event_kind_label(&event.kind);
+                        for p in &event.paths {
+                            let rel = p
+                                .strip_prefix(&proj_root_path)
+                                .ok()
+                                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                                .unwrap_or_else(|| {
+                                    p.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("")
+                                        .to_string()
+                                });
+                            append_bram_trace_line(
+                                &app_handle,
+                                "watcher",
+                                &format!("path={} change={} dedup=false", rel, change),
+                            );
+                        }
+                    }
 
                     // Session JSONL changes get their own dispatch. The
                     // Transcript / Workspace panes subscribe to

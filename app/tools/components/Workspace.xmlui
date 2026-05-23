@@ -27,17 +27,14 @@
     listenTo="{sessionTail.value}"
     onDidChange="(c) => {
       if (c.newValue) lastJsonl = c.newValue;
-      // Reactive turn-done check: every time the session JSONL changes,
+      // Reactive turn-done fallback: every time the session JSONL changes,
       // clear the dim once the agent's turn has actually ended. The signal
       // is isAgentIdle (looks for end_turn on Claude or task_complete on
-      // codex) rather than isWaitingForAssistant (which flips false the
+      // Codex) rather than isWaitingForAssistant (which flips false the
       // moment the assistant emits any text and would undim mid-turn
-      // during narration). Keep only a short grace so the freshly-sent
-      // user turn has time to land in the JSONL, then refetch the
-      // worklist/history immediately when the agent goes idle instead
-      // of waiting on the slower follow-on polls. The stale-timeout
-      // check in worklist onLoaded below is the long-tail safety net
-      // for sessions that never idle.
+      // during narration). The PTY-driven agent-turn-end path is the fast
+      // clear; this JSONL path remains the correctness backstop when PTY
+      // heuristics miss or session delivery wins the race.
       const stored = getInflight();
       if (!stored) return;
       const elapsed = Date.now() - (stored.ts || 0);
@@ -158,11 +155,11 @@
           history.refetch();
         }).then((unlisten) => { window.__bramWorklistUnlisten = unlisten; }).catch(() => {});
 
-        // Issue #70: fast end-of-turn detection from PTY bytes,
+        // Issue #70 / #74: fast end-of-turn detection from PTY bytes,
         // bypassing the multi-second JSONL flush chain. Host emits
-        // agent-turn-end when the Claude spinner glyphs stop for
-        // 800ms; iframe clears inflight on receipt. Same hot-reload
-        // unlisten dance as worklist-changed above.
+        // agent-turn-end when PTY turn activity stops for ~800ms;
+        // iframe clears inflight on receipt. Same hot-reload unlisten
+        // dance as worklist-changed above.
         if (typeof window.__bramAgentTurnEndUnlisten === 'function') {
           try { window.__bramAgentTurnEndUnlisten(); } catch (err) {}
           window.__bramAgentTurnEndUnlisten = null;

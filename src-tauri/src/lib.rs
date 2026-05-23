@@ -642,13 +642,13 @@ fn pty_tail_cell() -> &'static Mutex<Vec<u8>> {
     PTY_TAIL.get_or_init(|| Mutex::new(Vec::with_capacity(8192)))
 }
 
-// Claude TUI agent-turn state machine (issue #70). Detects end-of-turn
-// from a spinner-glyph activity heuristic: while the agent is running,
-// the bottom row redraws every 100-200ms with a spinner glyph (asterisk
-// family `✻✶✳✽✢` or braille `⠂⠐`). At end-of-turn the redraw stops
-// and the next non-spinner PTY chunk (typically the prompt-redraw)
-// fires `agent-turn-end`. The iframe consumes that event for a fast
-// inflight clear path, bypassing the multi-second JSONL flush chain.
+// PTY agent-turn state machine (issue #70, later extended for Codex
+// parity in #74). Detects end-of-turn from spinner/activity glyphs in
+// the PTY stream: while the agent is running, the terminal redraws
+// every 100-200ms with a spinner-like glyph. When that activity stops,
+// the next non-spinner PTY chunk (typically the prompt redraw) fires
+// `agent-turn-end`. The iframe consumes that event for a fast inflight
+// clear path, bypassing the multi-second JSONL flush chain.
 struct AgentTurnState {
     last_spinner_at: Option<std::time::Instant>,
     is_active: bool,
@@ -666,25 +666,28 @@ fn agent_turn_state_cell() -> &'static Mutex<AgentTurnState> {
     })
 }
 
-// 800ms threshold: spinner ticks are 100-200ms apart while thinking;
-// 800ms of no spinner reliably indicates the agent stopped updating.
+// 800ms threshold: activity ticks are 100-200ms apart while thinking;
+// 800ms of no spinner/activity reliably indicates the agent stopped
+// updating.
 const AGENT_TURN_IDLE_THRESHOLD_MS: u128 = 800;
 
 // Suppress repeat emits within 5s of the last one. After a real
-// end-of-turn the Claude TUI sometimes re-pulses briefly (input-box
-// re-rendering, scroll updates, etc.) — that re-arms the detector
-// and would fire a second turn-end ~1s later. The cooldown keeps
-// the trace clean and the iframe listener from doing extra no-op
-// work. State transitions still happen (is_active flips); only the
-// outbound emit is gated.
+// end-of-turn the TUIs sometimes re-pulse briefly (input-box re-render,
+// scroll update, title refresh, etc.) — that re-arms the detector and
+// would fire a second turn-end ~1s later. The cooldown keeps the trace
+// clean and the iframe listener from doing extra no-op work. State
+// transitions still happen (is_active flips); only the outbound emit is
+// gated.
 const AGENT_TURN_EMIT_COOLDOWN_MS: u128 = 5000;
 
-// Byte-level check for spinner glyphs without allocating a String.
-// Asterisk family is U+2700..U+277F (UTF-8 prefix 0xE2 0x9C); braille
-// patterns are U+2800..U+283F (prefix 0xE2 0xA0). Middle dot U+00B7
-// is deliberately NOT matched — it appears in non-spinner TUI text
-// (e.g. token-count separators) and would over-fire the detector.
-fn pty_chunk_has_spinner_glyph(chunk: &[u8]) -> bool {
+// Byte-level check for turn-activity glyphs without allocating a
+// String. Asterisk family is U+2700..U+277F (UTF-8 prefix 0xE2 0x9C);
+// braille patterns are U+2800..U+283F (prefix 0xE2 0xA0). In practice
+// this covers both Claude's spinner redraws and Codex's braille/title
+// activity updates. Middle dot U+00B7 is deliberately NOT matched — it
+// appears in non-spinner TUI text (for example token-count separators)
+// and would over-fire the detector.
+fn pty_chunk_has_turn_activity_glyph(chunk: &[u8]) -> bool {
     for w in chunk.windows(2) {
         if w[0] == 0xE2 && (w[1] == 0x9C || w[1] == 0xA0) {
             return true;
@@ -695,7 +698,7 @@ fn pty_chunk_has_spinner_glyph(chunk: &[u8]) -> bool {
 
 fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     let now = std::time::Instant::now();
-    let has_spinner = pty_chunk_has_spinner_glyph(chunk);
+    let has_spinner = pty_chunk_has_turn_activity_glyph(chunk);
     let mut emit_now = false;
     if let Ok(mut state) = agent_turn_state_cell().lock() {
         if has_spinner {
@@ -721,7 +724,7 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     }
     if emit_now {
         if bram_trace_enabled() {
-            append_bram_trace_line(app, "turn-end", "source=pty-spinner-stop");
+            append_bram_trace_line(app, "turn-end", "source=pty-turn-activity-stop");
         }
         trace_emit_signal(app, "agent-turn-end");
         let _ = app.emit("agent-turn-end", ());

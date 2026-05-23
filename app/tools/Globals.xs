@@ -122,8 +122,9 @@ function isWaitingForAssistant(jsonlText) {
 // its turn (not just emitted a first text response). isWaitingForAssistant
 // flips false the moment the assistant says anything, which is too early for
 // UX surfaces that want to dim through the whole turn — mid-turn narration
-// would clear the dim while the agent is still working. This helper walks
-// for the real turn-boundary markers each provider emits:
+// would clear the dim while the agent is still working. This is the JSONL
+// fallback for the faster PTY-side `agent-turn-end` signal, so it walks for
+// the real turn-boundary markers each provider emits:
 //   Claude: assistant record with `message.stop_reason: "end_turn"`. Records
 //     with stop_reason: "tool_use" (mid-turn narration that ends in a tool
 //     call) keep the state as `assistant_busy`, not idle.
@@ -901,4 +902,3 @@ function combineFeedbackWithCloseLines(base, lines) {
   if (!baseTrim) return lines.join('\n');
   return baseTrim + '\n\n' + lines.join('\n');
 }
-

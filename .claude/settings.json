@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Write(./resources/worklist.json)",
-      "Edit(./resources/worklist.json)"
+      "Edit(./resources/worklist.json)",
+      "Bash(curl -s \"http://localhost*__worklist*)",
+      "Bash(curl -s -X POST -d * \"http://localhost*__worklist*)"
     ]
   },
   "hooks": {

@@ -77,56 +77,17 @@ chose) as a fresh user message.
 
 ## Coordinating via worklist.json (canonical worklist)
 
-`resources/worklist.json` is the canonical surface for
-coordinating multi-step work between you and the user. The Worklist
-tab in the agent-tools drawer renders it as a checklist under the
-heading "Worklist". Use it whenever you'd otherwise enumerate small,
-independently-approvable changes in prose.
+`resources/worklist.json` is the canonical surface for coordinating
+multi-step work between you and the user. The Worklist tab in the
+agent-tools drawer renders it under the heading "Worklist". Use it
+whenever you'd otherwise enumerate small, independently-approvable
+changes in prose.
 
-Schema:
-
-```json
-{
-  "description": "one-line context for this batch",
-  "items": [
-    { "id": "...", "file": "...", "before": "...", "after": "..." }
-  ]
-}
-```
-
-The Worklist tab UI:
-
-- "Worklist" heading is hard-coded; don't try to override it via JSON.
-- `description` renders only when `items` is non-empty.
-- Each item shows: checkbox (default checked) | filename (mono) | `before → after`.
-- Two action buttons (only shown when items exist):
-  - **Approve selected (N)**: sends `approved: <JSON array of full items>` via `toTurn`.
-  - **Drop selected (N)**: sends `drop: <JSON array of ids>` via `toTurn`.
-- When `items` is empty, the section shows just the heading + `(none)`.
-
-Lifecycle:
-
-1. **Propose** — write items to `worklist.json`. Each item should be
-   small, discrete, and independently rejectable. Surface dependencies
-   in `description`; don't bake them into ordering.
-2. **User triages** — unchecks anything they don't want in this round,
-   then clicks one of:
-   - *Approve selected* → you receive `approved: [...]` and execute those items.
-   - *Drop selected* → you receive `drop: [ids]` and remove them from the list without acting.
-3. **Prune** — after either action, rewrite `worklist.json` with only
-   the still-pending items, plus any newly-surfaced consequences
-   (e.g., orphans revealed by a deletion). The worklist represents
-   pending work, not history — completed items belong in commit
-   messages.
-4. **Empty state is fine** — when there's no pending work, leave
-   `worklist.json` as `{ "description": "", "items": [] }`. The
-   Worklist tab will render the heading and a `(none)` placeholder.
-5. **Commit** when an executed batch is a meaningful unit.
-
-When *not* to use this: one-or-two-item decisions, free-text input, or
-anything where typing in chat is faster than rendering UI. The
-worklist earns its keep when prose enumeration would be tedious or the
-response ambiguous.
+The full lifecycle (proposed → applied → committed), payload shapes,
+authorization flow (`/__worklist/resolve`, `/__worklist/mutate`), and
+edge cases live in `@app/__shell/conventions.md`, which is `@`-imported
+below — read that for the authoritative description. Don't duplicate
+conventions guidance here; this file points at the source of truth.
 
 ## Charting
 

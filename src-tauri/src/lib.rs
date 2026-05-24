@@ -308,7 +308,8 @@ fn first_nonempty_env(names: &[&str]) -> Option<String> {
 // --- Comms-path trace foundation -----------------------------------------
 //
 // Process-global toggle for the comms-path trace log
-// (`resources/bram-trace.log`). Set once at startup by
+// (`resources/bram-trace.log`, with prior runs archived at startup as
+// `resources/bram-trace-YYYY-MM-DD*.log`). Set once at startup by
 // `init_bram_trace_from_env`; every potential waypoint checks
 // `bram_trace_enabled()` (a single atomic load) before doing any work,
 // so the cost when off is essentially zero. Spec:
@@ -339,7 +340,7 @@ fn init_bram_trace_from_env() {
     BRAM_TRACE_ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
     if on {
         eprintln!(
-            "[bram-trace] enabled (BRAM_TRACE=1); trace destination: <project_root>/resources/bram-trace.log"
+            "[bram-trace] enabled (BRAM_TRACE=1); live trace destination: <project_root>/resources/bram-trace.log; previous runs archived at startup as <project_root>/resources/bram-trace-YYYY-MM-DD*.log"
         );
     }
 }
@@ -347,6 +348,127 @@ fn init_bram_trace_from_env() {
 #[allow(dead_code)]
 fn bram_trace_log_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     project_root(Some(app)).map(|p| p.join("resources/bram-trace.log"))
+}
+
+fn is_bram_trace_archive_rel(rel: &str) -> bool {
+    rel.starts_with("resources/bram-trace-") && rel.ends_with(".log")
+}
+
+fn bram_trace_date_stamp_local() -> String {
+    #[cfg(unix)]
+    {
+        if let Ok(out) = std::process::Command::new("date").arg("+%Y-%m-%d").output() {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !s.is_empty() {
+                    return s;
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(out) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "(Get-Date).ToString('yyyy-MM-dd')"])
+            .output()
+        {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !s.is_empty() {
+                    return s;
+                }
+            }
+        }
+    }
+    let secs = unix_now_ms() / 1000;
+    let days = secs.div_euclid(86400);
+    let (y, mo, d) = civil_from_days(days);
+    format!("{:04}-{:02}-{:02}", y, mo, d)
+}
+
+fn next_bram_trace_archive_path(active_path: &Path) -> Option<PathBuf> {
+    let parent = active_path.parent()?;
+    let stamp = bram_trace_date_stamp_local();
+    for n in 1.. {
+        let name = if n == 1 {
+            format!("bram-trace-{}.log", stamp)
+        } else {
+            format!("bram-trace-{}-{}.log", stamp, n)
+        };
+        let candidate = parent.join(name);
+        if !candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn prepare_bram_trace_log<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if !bram_trace_enabled() {
+        return;
+    }
+    let Some(active_path) = bram_trace_log_file(app) else {
+        return;
+    };
+    if let Some(parent) = active_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!(
+                "[bram-trace] failed to create trace directory {}: {}",
+                parent.display(),
+                e
+            );
+            return;
+        }
+    }
+
+    let had_prior_log = std::fs::metadata(&active_path)
+        .map(|m| m.len() > 0)
+        .unwrap_or(false);
+    if had_prior_log {
+        let Some(archive_path) = next_bram_trace_archive_path(&active_path) else {
+            eprintln!("[bram-trace] failed to choose archive path for previous live log");
+            return;
+        };
+        let archived = std::fs::rename(&active_path, &archive_path).or_else(|rename_err| {
+            std::fs::copy(&active_path, &archive_path)
+                .map(|_| ())
+                .map_err(|copy_err| {
+                    std::io::Error::other(format!(
+                        "rename failed: {}; copy failed: {}",
+                        rename_err, copy_err
+                    ))
+                })
+        });
+        match archived {
+            Ok(()) => {
+                eprintln!(
+                    "[bram-trace] archived previous live log to {}",
+                    archive_path.display()
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "[bram-trace] failed to archive previous live log {}: {}",
+                    active_path.display(),
+                    e
+                );
+                return;
+            }
+        }
+    }
+
+    if let Err(e) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&active_path)
+    {
+        eprintln!(
+            "[bram-trace] failed to create fresh live log {}: {}",
+            active_path.display(),
+            e
+        );
+    }
 }
 
 // Single write API for every trace category. Format:
@@ -7561,6 +7683,7 @@ pub fn run() {
                 .map(|sa| sa.port())
                 .ok_or("right-pane server bound to non-ip address")?;
             let _ = LOOPBACK_PORT.set(port);
+            prepare_bram_trace_log(app.handle());
             let internal_origin = format!("http://127.0.0.1:{}", port);
             eprintln!("[bram] internal HTTP server: {}", internal_origin);
             // Tools pane lives at xd's app/tools/index.html, served via
@@ -7809,12 +7932,13 @@ pub fn run() {
                     // to file_name only so no host filesystem layout
                     // leaks into the log.
                     //
-                    // Skip resources/bram-trace.log to avoid a
-                    // self-feeding loop: append_bram_trace_line writes
-                    // to that file, which triggers a notify event,
-                    // which would emit another [watcher] record, which
-                    // appends again, ad infinitum. See
-                    // fix-watcher-trace-self-feeding-loop.
+                    // Skip the live trace log and dated trace archives
+                    // to avoid self-feeding loop / reload noise: the
+                    // live file is written by append_bram_trace_line,
+                    // and startup archiving may create
+                    // resources/bram-trace-YYYY-MM-DD*.log files.
+                    // Neither should emit more watcher trace or reload
+                    // behavior. See fix-watcher-trace-self-feeding-loop.
                     if bram_trace_enabled() {
                         let change = notify_event_kind_label(&event.kind);
                         for p in &event.paths {
@@ -7828,7 +7952,9 @@ pub fn run() {
                                         .unwrap_or("")
                                         .to_string()
                                 });
-                            if rel == "resources/bram-trace.log" {
+                            if rel == "resources/bram-trace.log"
+                                || is_bram_trace_archive_rel(&rel)
+                            {
                                 continue;
                             }
                             append_bram_trace_line(

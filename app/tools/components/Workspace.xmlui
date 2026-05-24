@@ -19,7 +19,8 @@
   var.newItemHelp="{false}"
   var.newItemIssue="{null}"
   var.newItemText="{''}"
-  var.pendingMenu="{null}">
+  var.pendingMenu="{null}"
+  var.pendingClearAt="{0}">
   <DataSource
     id="sessionTail"
     url="/__sessions/latest-tail?lines=200&amp;t={sessionTick}"
@@ -28,6 +29,16 @@
     listenTo="{sessionTail.value}"
     onDidChange="(c) => {
       if (c.newValue) lastJsonl = c.newValue;
+      // Cancel any pending deferred inflight-clear: a JSONL write
+      // arrived inside the quiet window, so the prior agent-turn-end
+      // was either premature or the agent is still working. Setting
+      // pendingClearAt to 0 flips the quietDebounce Timer's `enabled`
+      // binding off, and the onTick guard exits if it does fire.
+      // Refs #80 inflight-clear-jsonl-quiet-debounce.
+      if (pendingClearAt > 0) {
+        iframeTrace('inflight-clear-deferred-cancelled', {reason: 'jsonl-write', remaining_ms: pendingClearAt - Date.now()});
+        pendingClearAt = 0;
+      }
       // Reactive turn-done fallback: every time the session JSONL changes,
       // clear the dim once the agent's turn has actually ended. The signal
       // is isAgentIdle (looks for end_turn on Claude or task_complete on
@@ -113,6 +124,37 @@
     id="openIssues"
     url="/__issues"
     when="{newItemHelp}" />
+  <!-- Quiet-debounce Timer for the agent-turn-end → inflight clear path.
+       The agent-turn-end listener sets pendingClearAt to (now + 1500 ms)
+       when JSONL doesn't yet show end_turn. The Timer polls every 200 ms
+       while pendingClearAt > 0; once Date.now() reaches pendingClearAt,
+       it fires the clear. A JSONL write inside the window resets
+       pendingClearAt to 0, which both disables the Timer and short
+       -circuits the onTick guard. Refs #80
+       inflight-clear-jsonl-quiet-debounce. -->
+  <Timer
+    id="quietDebounce"
+    initialDelay="0"
+    interval="200"
+    enabled="{pendingClearAt > 0}"
+    onTick="
+      if (pendingClearAt === 0) return;
+      if (Date.now() < pendingClearAt) return;
+      const stored = getInflight();
+      if (!stored) {
+        pendingClearAt = 0;
+        return;
+      }
+      iframeTrace('inflight-clear', {reason: 'turn-end-pty-quiet', elapsed_ms: Date.now() - (stored.ts || 0), item: submittedItemId || ''});
+      clearInflight();
+      pendingClearAt = 0;
+      submitting = false;
+      selected = null;
+      submittedItemId = null;
+      selectedFeedback = '';
+      feedbackExpanded = false; expandedItemId = null;
+      history.refetch();
+    " />
 
   <VStack
     padding="$space-6"
@@ -173,31 +215,38 @@
           // Same 750ms grace as the agent-idle path: skip stale
           // inflight records from the very first ticks after a click.
           if (elapsed < 750) return;
-          // PTY silence alone is unreliable: Claude pauses its spinner
-          // while a permission prompt is up, and Codex pauses spinner
-          // activity between tool calls. The PTY detector emits
-          // `agent-turn-end` in both of those mid-turn pauses. Treat
-          // the PTY signal as a fast trigger to recheck JSONL —
-          // corroborate against the stop_reason / task_complete signal
-          // before clearing. The cross-check is in-memory (~1 ms); when
-          // it fails, the forced sessionTick increment below skips the
-          // watcher's debounce so the recheck happens within ~50 ms.
-          if (!isAgentIdle(lastJsonl)) {
-            iframeTrace('inflight-clear-suppressed', {reason: 'jsonl-not-idle', elapsed_ms: elapsed, item: submittedItemId || ''});
-            // Force a JSONL refetch in case the watcher event hasn't
-            // fired yet — the resulting ChangeListener invocation will
-            // clear if JSONL is now idle, or stay quiet otherwise.
-            sessionTick = sessionTick + 1;
+          // Fast path: JSONL already shows stop_reason=end_turn (or
+          // task_complete on Codex). The agent is confirmed idle —
+          // clear immediately.
+          if (isAgentIdle(lastJsonl)) {
+            iframeTrace('inflight-clear', {reason: 'turn-end-pty', elapsed_ms: elapsed, item: submittedItemId || ''});
+            clearInflight();
+            submitting = false;
+            selected = null;
+            submittedItemId = null;
+            selectedFeedback = '';
+            feedbackExpanded = false; expandedItemId = null;
+            history.refetch();
             return;
           }
-          iframeTrace('inflight-clear', {reason: 'turn-end-pty', elapsed_ms: elapsed, item: submittedItemId || ''});
-          clearInflight();
-          submitting = false;
-          selected = null;
-          submittedItemId = null;
-          selectedFeedback = '';
-          feedbackExpanded = false; expandedItemId = null;
-          history.refetch();
+          // JSONL doesn't yet show end_turn. Two possibilities:
+          //
+          //   (a) PTY spinner stopped before Claude's end_turn record
+          //       flushed — the clear is right, we just need to wait.
+          //   (b) PTY spinner stopped during a mid-turn pause (#78
+          //       premature fire) — the clear would be wrong, agent
+          //       will resume and JSONL will keep growing.
+          //
+          // Defer the clear by setting pendingClearAt; the quietDebounce
+          // Timer below polls and fires the clear once Date.now() reaches
+          // pendingClearAt. If a JSONL write arrives inside the quiet
+          // window, the sessionTail ChangeListener resets pendingClearAt
+          // to 0, which both disables the Timer and short-circuits the
+          // onTick guard. Refs #80 inflight-clear-jsonl-quiet-debounce,
+          // supersedes the prior synchronous `jsonl-not-idle` suppression.
+          const JSONL_QUIET_DEBOUNCE_MS = 1500;
+          pendingClearAt = Date.now() + JSONL_QUIET_DEBOUNCE_MS;
+          iframeTrace('inflight-clear-deferred', {ms: JSONL_QUIET_DEBOUNCE_MS, elapsed_ms: elapsed});
         }).then((unlisten) => { window.__bramAgentTurnEndUnlisten = unlisten; }).catch(() => {});
 
         // Issue #75 step 1: mirror the Transcript tab's pty-menu-changed

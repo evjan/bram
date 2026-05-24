@@ -763,11 +763,35 @@ const MENU_EVICTION_GRACE_MS: u128 = 350;
 // the random port each turn.
 static LOOPBACK_PORT: OnceLock<u16> = OnceLock::new();
 
-#[derive(serde::Serialize, Clone, PartialEq, Eq)]
+#[derive(serde::Serialize, Clone)]
 struct PtyMenu {
     tool: String,
     text: String,
 }
+
+// PtyMenu equality compares only `tool` — `text` carries surrounding
+// PTY bytes captured by position (`pos1 - 200`..`pos2 + 200`), which
+// shifts as the rolling 8 KB tail evolves even when the user-visible
+// menu is unchanged. Comparing text would defeat dedup-on-emit and
+// produce bursty `state=shown` re-emits for the same on-screen prompt.
+// Refs #77 tighten-pty-menu-emit-cadence.
+impl PartialEq for PtyMenu {
+    fn eq(&self, other: &Self) -> bool {
+        self.tool == other.tool
+    }
+}
+impl Eq for PtyMenu {}
+
+// Sentinel for "menu detected via `❯1.` cursor bytes but the
+// `Do you want to use X?` header text has not yet landed in the
+// rolling buffer". First detection cycle stores this state but does
+// NOT emit `state=shown`; the second cycle either resolves a real
+// tool name from the now-buffered header or falls back to the
+// pre-menu grep. Race observed when a user-input dismissal arrives
+// between the cursor's PTY chunk and the header's PTY chunk, which
+// previously caused `tool=Bash` to leak from a prior prompt onto a
+// Read prompt's shown emit. Refs #77 tighten-pty-menu-emit-cadence.
+const PENDING_TOOL: &str = "<pending>";
 
 fn pty_tail_cell() -> &'static Mutex<Vec<u8>> {
     PTY_TAIL.get_or_init(|| Mutex::new(Vec::with_capacity(8192)))
@@ -963,7 +987,25 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             }
         }
 
+        // Don't downgrade a known menu to pending. If detection returned
+        // a pending menu but the previous cycle had a definitive tool
+        // name, this is just the rolling buffer drifting the header out
+        // of the captured `text` window — the on-screen menu hasn't
+        // changed. Carry the previous tool forward. Refs #77
+        // tighten-pty-menu-emit-cadence.
+        if let (Some(d), Some(p)) = (detected.as_mut(), prev_menu.as_ref()) {
+            if d.tool == PENDING_TOOL && p.tool != PENDING_TOOL {
+                d.tool = p.tool.clone();
+            }
+        }
+
         let state_changed = prev_menu.as_ref() != detected.as_ref();
+        // First-cycle pending: store the state so the next detect cycle
+        // can see we've already waited one, but suppress the `shown`
+        // emit and trace until the tool name resolves. Refs #77.
+        let detected_is_pending =
+            matches!(detected.as_ref(), Some(d) if d.tool == PENDING_TOOL);
+        let should_emit_change = state_changed && !detected_is_pending;
 
         match (&prev_menu, &detected) {
             (None, Some(nm)) => eprintln!("[pty-menu] None -> Some(tool={})", nm.tool),
@@ -976,7 +1018,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             _ => {}
         }
 
-        if state_changed && bram_trace_enabled() {
+        if should_emit_change && bram_trace_enabled() {
             // Structured [pty-menu] trace, distinct from the operator
             // -facing eprintln! above. `reason=byte-pattern` for shows,
             // `reason=buffer-evicted` when the detector lost the
@@ -989,7 +1031,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                     "pty-menu",
                     &format!("state=shown tool={} reason=byte-pattern", nm.tool),
                 ),
-                (None, Some(prev)) => append_bram_trace_line(
+                (None, Some(prev)) if prev.tool != PENDING_TOOL => append_bram_trace_line(
                     app,
                     "pty-menu",
                     &format!("state=dismissed tool={} reason=buffer-evicted", prev.tool),
@@ -1000,11 +1042,10 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
 
         *menu = detected;
 
-        if state_changed {
-            // Emit only when the menu payload actually changes. This
-            // suppresses identical repeated detections for a stable menu
-            // while still allowing meaningful same-tool payload changes
-            // to propagate to subscribers.
+        if should_emit_change {
+            // Emit only when the user-visible menu state changes.
+            // PtyMenu's PartialEq compares `tool` only — text/cursor
+            // drift no longer flaps the emit cadence. Refs #77.
             emit_payload = Some(menu.clone());
         }
     }
@@ -1110,8 +1151,29 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
         // the 200-byte pre-context window. Refs #77 menu-detector
         // stabilization (the 18:52:51Z 31-events-in-one-second burst
         // with Bash <-> Tool <-> Read flapping).
-        let tool = pty_menu_tool_from_header(&text)
-            .unwrap_or_else(|| pty_menu_guess_tool(&tail[..pos1]));
+        let tool = match pty_menu_tool_from_header(&text) {
+            Some(t) => t,
+            None => {
+                // Header text hasn't landed in this cycle's tail. If
+                // the previous cycle was already pending, we've waited
+                // a full cycle and the header still isn't here — fall
+                // back to the pre-menu grep now. Otherwise mark the
+                // menu pending so `pty_menu_update` suppresses the
+                // shown emit until we either get a header next cycle
+                // or convert to grep on the cycle after. Refs #77
+                // tighten-pty-menu-emit-cadence.
+                let prev_was_pending = pty_menu_cell()
+                    .lock()
+                    .ok()
+                    .and_then(|m| m.as_ref().map(|p| p.tool == PENDING_TOOL))
+                    .unwrap_or(false);
+                if prev_was_pending {
+                    pty_menu_guess_tool(&tail[..pos1])
+                } else {
+                    PENDING_TOOL.to_string()
+                }
+            }
+        };
         Some(PtyMenu { tool, text })
     })();
 
@@ -1220,6 +1282,16 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>) {
         *grace = None;
     }
     if let Some(tool) = dismissed_tool {
+        // Pending menus never emitted `state=shown` to subscribers
+        // (their tool name hadn't resolved yet). Don't emit the matching
+        // `state=dismissed` trace and don't add a re-detection
+        // suppression entry — there's no concrete tool name to suppress
+        // against, and the iframe was never told about the menu so it
+        // has nothing to clear. Refs #77 tighten-pty-menu-emit-cadence.
+        if tool == PENDING_TOOL {
+            eprintln!("[pty-menu] cleared by user input (pending menu — shown emit was deferred)");
+            return;
+        }
         eprintln!(
             "[pty-menu] cleared by user input (tool={}, suppressing for 2s)",
             tool

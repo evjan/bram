@@ -322,9 +322,18 @@ fn first_nonempty_env(names: &[&str]) -> Option<String> {
 static BRAM_TRACE_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-// Tracks whether the log file has been truncated yet this session.
-// First successful `set(())` wins; remaining writers append.
-static BRAM_TRACE_FIRST_WRITE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+// Cached open handle for the live trace file. Lazy-init on first
+// write: truncate-open, emit the session-start line, store the handle.
+// Subsequent writes reuse the handle, dropping the per-event cost from
+// open + write + close (3 syscalls) to write (1 syscall). Refs #82
+// trace-cache-file-handle. Replaces the previous BRAM_TRACE_FIRST_WRITE
+// flag — `guard.is_none()` IS the "first write" check now.
+static BRAM_TRACE_FILE: std::sync::OnceLock<Mutex<Option<std::fs::File>>> =
+    std::sync::OnceLock::new();
+
+fn bram_trace_file_cell() -> &'static Mutex<Option<std::fs::File>> {
+    BRAM_TRACE_FILE.get_or_init(|| Mutex::new(None))
+}
 
 fn bram_trace_enabled() -> bool {
     BRAM_TRACE_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
@@ -490,35 +499,43 @@ fn append_bram_trace_line<R: tauri::Runtime>(app: &AppHandle<R>, category: &str,
     let Some(path) = bram_trace_log_file(app) else {
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let first = BRAM_TRACE_FIRST_WRITE.set(()).is_ok();
-    let mut opts = std::fs::OpenOptions::new();
-    opts.create(true);
-    if first {
-        opts.write(true).truncate(true);
-    } else {
-        opts.append(true);
-    }
-    let Ok(mut file) = opts.open(&path) else {
+    let Ok(mut guard) = bram_trace_file_cell().lock() else {
         return;
     };
-    if first {
+    // First write of the session: ensure the parent dir exists, open
+    // with truncate, write the session-start line, then cache the
+    // handle. Every subsequent write reuses the cached handle and
+    // pays only a single `write(2)` per line — measurably keeps the
+    // PTY read loop responsive under heavy TUI animation. Refs #82.
+    if guard.is_none() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let opened = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path);
+        let Ok(mut file) = opened else {
+            return;
+        };
         let _ = writeln!(
             file,
             "[{}] [bram-trace] event=session-start pid={}",
             format_iso_utc(unix_now_ms()),
             std::process::id()
         );
+        *guard = Some(file);
     }
-    let _ = writeln!(
-        file,
-        "[{}] [{}] {}",
-        format_iso_utc(unix_now_ms()),
-        category,
-        body
-    );
+    if let Some(file) = guard.as_mut() {
+        let _ = writeln!(
+            file,
+            "[{}] [{}] {}",
+            format_iso_utc(unix_now_ms()),
+            category,
+            body
+        );
+    }
 }
 
 // Render a short, single-line, escape-aware preview of `data` capped at

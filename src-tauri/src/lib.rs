@@ -808,6 +808,12 @@ struct AgentTurnState {
     last_spinner_at: Option<std::time::Instant>,
     is_active: bool,
     last_emit_at: Option<std::time::Instant>,
+    // Set when is_active transitions false → true; cleared on the
+    // reverse transition. Lets pty_agent_turn_update emit
+    // `[spinner-period] state=ended duration_ms=<n>` carrying the
+    // active-period length, so #78 analysis can see whether premature
+    // turn-end fires correlate with short active periods. Refs #78.
+    active_since: Option<std::time::Instant>,
 }
 
 fn agent_turn_state_cell() -> &'static Mutex<AgentTurnState> {
@@ -817,6 +823,7 @@ fn agent_turn_state_cell() -> &'static Mutex<AgentTurnState> {
             last_spinner_at: None,
             is_active: false,
             last_emit_at: None,
+            active_since: None,
         })
     })
 }
@@ -855,15 +862,33 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     let now = std::time::Instant::now();
     let has_spinner = pty_chunk_has_turn_activity_glyph(chunk);
     let mut emit_now = false;
+    let mut spinner_started = false;
+    let mut spinner_ended_duration_ms: Option<u128> = None;
+    let mut turn_end_silence_ms: Option<u128> = None;
     if let Ok(mut state) = agent_turn_state_cell().lock() {
         if has_spinner {
+            if !state.is_active {
+                // false -> true transition: start of a spinner-active
+                // period. Refs #78 detector instrumentation.
+                spinner_started = true;
+                state.active_since = Some(now);
+            }
             state.last_spinner_at = Some(now);
             state.is_active = true;
         } else if state.is_active {
             if let Some(last) = state.last_spinner_at {
-                if now.saturating_duration_since(last).as_millis()
-                    > AGENT_TURN_IDLE_THRESHOLD_MS
-                {
+                let silence = now.saturating_duration_since(last).as_millis();
+                if silence > AGENT_TURN_IDLE_THRESHOLD_MS {
+                    // true -> false transition: spinner-active period
+                    // ends. Capture duration_ms (active_since → now)
+                    // and silence_ms (last spinner glyph → now) for
+                    // the [spinner-period] and [turn-end] traces.
+                    // Refs #78 detector instrumentation.
+                    if let Some(started) = state.active_since {
+                        spinner_ended_duration_ms =
+                            Some(now.saturating_duration_since(started).as_millis());
+                    }
+                    state.active_since = None;
                     state.is_active = false;
                     let in_cooldown = state.last_emit_at.map_or(false, |t| {
                         now.saturating_duration_since(t).as_millis()
@@ -872,14 +897,38 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                     if !in_cooldown {
                         state.last_emit_at = Some(now);
                         emit_now = true;
+                        turn_end_silence_ms = Some(silence);
                     }
                 }
             }
         }
     }
+    if bram_trace_enabled() {
+        if spinner_started {
+            append_bram_trace_line(app, "spinner-period", "state=started");
+        }
+        if let Some(d) = spinner_ended_duration_ms {
+            append_bram_trace_line(
+                app,
+                "spinner-period",
+                &format!("state=ended duration_ms={}", d),
+            );
+        }
+    }
     if emit_now {
         if bram_trace_enabled() {
-            append_bram_trace_line(app, "turn-end", "source=pty-turn-activity-stop");
+            // Include the silence gap that triggered the fire. A
+            // premature fire (#78) typically shows silence_ms close to
+            // AGENT_TURN_IDLE_THRESHOLD_MS (~800-1000); a real
+            // end-of-turn fire shows much longer silence (5s+).
+            let silence_str = turn_end_silence_ms
+                .map(|s| format!(" silence_ms={}", s))
+                .unwrap_or_default();
+            append_bram_trace_line(
+                app,
+                "turn-end",
+                &format!("source=pty-turn-activity-stop{}", silence_str),
+            );
         }
         trace_emit_signal(app, "agent-turn-end");
         let _ = app.emit("agent-turn-end", ());
@@ -2375,16 +2424,25 @@ fn pty_spawn(
         let mut small_runs: usize = 0;
         let mut small_first_preview: String = String::new();
         let mut small_last: Option<std::time::Instant> = None;
+        // Time of the previous `[pty-in]` trace emission, used to compute
+        // `gap_ms=<n>` for each emit. Lets #78 analysis correlate
+        // turn-end fires with the silence gap that triggered them — a
+        // premature fire would show `gap_ms` just past the 800 ms
+        // threshold; a real end-of-turn shows a much larger gap.
+        let mut last_pty_in_emit_at: Option<std::time::Instant> = None;
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => {
                     if bram_trace_enabled() && small_runs > 0 {
+                        let gap_ms = last_pty_in_emit_at
+                            .map(|t| t.elapsed().as_millis())
+                            .unwrap_or(0);
                         append_bram_trace_line(
                             &app_for_thread,
                             "pty-in",
                             &format!(
-                                "bytes={} runs={} preview={}",
-                                small_bytes, small_runs, small_first_preview
+                                "gap_ms={} bytes={} runs={} preview={}",
+                                gap_ms, small_bytes, small_runs, small_first_preview
                             ),
                         );
                     }
@@ -2398,14 +2456,18 @@ fn pty_spawn(
                             // first so the order in the log matches the
                             // order of arrivals.
                             if small_runs > 0 {
+                                let gap_ms = last_pty_in_emit_at
+                                    .map(|t| t.elapsed().as_millis())
+                                    .unwrap_or(0);
                                 append_bram_trace_line(
                                     &app_for_thread,
                                     "pty-in",
                                     &format!(
-                                        "bytes={} runs={} preview={}",
-                                        small_bytes, small_runs, small_first_preview
+                                        "gap_ms={} bytes={} runs={} preview={}",
+                                        gap_ms, small_bytes, small_runs, small_first_preview
                                     ),
                                 );
+                                last_pty_in_emit_at = Some(std::time::Instant::now());
                                 small_bytes = 0;
                                 small_runs = 0;
                                 small_first_preview.clear();
@@ -2413,11 +2475,15 @@ fn pty_spawn(
                             }
                             let preview =
                                 bram_trace_preview(&String::from_utf8_lossy(data), 80);
+                            let gap_ms = last_pty_in_emit_at
+                                .map(|t| t.elapsed().as_millis())
+                                .unwrap_or(0);
                             append_bram_trace_line(
                                 &app_for_thread,
                                 "pty-in",
-                                &format!("bytes={} preview={}", n, preview),
+                                &format!("gap_ms={} bytes={} preview={}", gap_ms, n, preview),
                             );
+                            last_pty_in_emit_at = Some(std::time::Instant::now());
                         } else {
                             let within_window = small_last
                                 .map(|t| t.elapsed().as_millis() < SMALL_WINDOW_MS)
@@ -2427,14 +2493,18 @@ fn pty_spawn(
                                 small_runs += 1;
                             } else {
                                 if small_runs > 0 {
+                                    let gap_ms = last_pty_in_emit_at
+                                        .map(|t| t.elapsed().as_millis())
+                                        .unwrap_or(0);
                                     append_bram_trace_line(
                                         &app_for_thread,
                                         "pty-in",
                                         &format!(
-                                            "bytes={} runs={} preview={}",
-                                            small_bytes, small_runs, small_first_preview
+                                            "gap_ms={} bytes={} runs={} preview={}",
+                                            gap_ms, small_bytes, small_runs, small_first_preview
                                         ),
                                     );
+                                    last_pty_in_emit_at = Some(std::time::Instant::now());
                                 }
                                 small_bytes = n;
                                 small_runs = 1;
@@ -2452,12 +2522,15 @@ fn pty_spawn(
                 }
                 Err(_) => {
                     if bram_trace_enabled() && small_runs > 0 {
+                        let gap_ms = last_pty_in_emit_at
+                            .map(|t| t.elapsed().as_millis())
+                            .unwrap_or(0);
                         append_bram_trace_line(
                             &app_for_thread,
                             "pty-in",
                             &format!(
-                                "bytes={} runs={} preview={}",
-                                small_bytes, small_runs, small_first_preview
+                                "gap_ms={} bytes={} runs={} preview={}",
+                                gap_ms, small_bytes, small_runs, small_first_preview
                             ),
                         );
                     }
@@ -8147,6 +8220,32 @@ pub fn run() {
                                 || codex_sessions_dir.as_ref().map_or(false, |sd| p.starts_with(sd)))
                     });
                     if is_session_event {
+                        // [jsonl] trace: ground-truth signal that the
+                        // agent is producing structured output. Lets
+                        // #78 analysis tell a premature `[turn-end]`
+                        // from a real one — a premature fire is
+                        // followed within seconds by another `[jsonl]`
+                        // line, proving the agent was still working.
+                        // One trace line per jsonl path per watcher
+                        // event (the filesystem batches at write-flush
+                        // granularity, which is the cadence we want).
+                        if bram_trace_enabled() {
+                            for p in &event.paths {
+                                if p.extension().map_or(false, |e| e == "jsonl") {
+                                    let name = p
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("");
+                                    let size =
+                                        std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+                                    append_bram_trace_line(
+                                        &app_handle,
+                                        "jsonl",
+                                        &format!("file={} bytes={}", name, size),
+                                    );
+                                }
+                            }
+                        }
                         // Removed the 100ms leading-edge debounce: it
                         // suppressed the FINAL write of an agent
                         // response burst (the one that flips

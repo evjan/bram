@@ -673,48 +673,12 @@ hot-reloaded. After editing those, run `cargo build` and have the
 user restart. Don't suggest `cargo run` as an alternative — the user
 prefers rebuild + restart, and the incremental build is fast.
 
-## Compressing screencasts for the README
 
-GitHub README videos are capped at ~10 MiB. Screencasts of
-xmlui-desktop are mostly static UI with the occasional cursor or text
-update — that's a profile h264 handles extremely well with the right
-flags. The recipe:
+## Commit messages
 
-```
-ffmpeg -i INPUT.mp4 -vf "fps=8" \
-  -c:v libx264 -preset slow -tune stillimage -crf 37 -pix_fmt yuv420p \
-  -c:a aac -ac 1 -b:a 48k -movflags +faststart OUTPUT.mp4
-```
+Summarize the worklist item that drove the commit. Use
+multiline. Reference the driving issue if there is on.
 
-Why each flag earns its place:
-
-- `-tune stillimage` is the big win. It tells x264 the source is
-  near-static, so it spends bits on text sharpness instead of motion.
-  Without it, CRF this aggressive smears UI text.
-- `fps=8` is fine for screencasts — most frames are identical anyway.
-- `-crf 37` is the starting point. Lower for sharper text, higher for
-  smaller file. CRF 40 is the floor before text starts to suffer
-  visibly. Each step of CRF roughly changes file size by ~12%.
-- `-ac 1 -b:a 48k` mono AAC — voiceover is intelligible at this
-  setting. Drop `-c:a aac -ac 1 -b:a 48k` and add `-an` to strip
-  audio entirely (buys ~3 MiB of headroom for video quality).
-- `-movflags +faststart` puts the moov atom up front so the file
-  starts playing before fully downloaded.
-
-Tuning loop: encode once, check size, adjust CRF up or down by 1-2.
-Native resolution is what makes text legible, so don't downscale
-unless you've already pushed CRF to 42-44 and are still over budget.
-
-GitHub has accepted slightly over the nominal 10 MiB limit in
-practice (10.4 MiB landed fine), so a result of 10.0-10.3 MiB is
-usually safe — but aim for 9-10 MiB to stay clear of the line.
-
-## Charting
-
-`<EChart>` is available — Apache ECharts under the hood, accepts any
-ECharts `option` configuration. References:
-https://www.xmlui.org/docs/howto/use-echarts-for-advanced-charting and
-https://echarts.apache.org/en/option.html
 
 ## Debugging xmlui apps with traces
 

@@ -419,6 +419,55 @@ Worked examples:
 - "add a chart" + "let's fix the layout too" → propose (multi-step,
   but this was always the case).
 
+### What worklist items represent (and when to drop)
+
+**Worklist items represent repository changes.** A `proposed` item
+names a `file` (or `files`) plus `before` / `after` prose describing
+what would change on disk. An `applied` item has those changes on
+disk waiting for the user to approve a commit. Items exist to give
+the user explicit veto power over what lands in their repo.
+
+Investigation work does NOT belong in the worklist. Things like:
+
+- Checking whether a port is open or a server is running.
+- Restarting a process or a Docker container.
+- Verifying CORS headers, environment variables, or other runtime
+  configuration.
+- Tailing logs to diagnose a bug.
+- Browsing GitHub issues without a planned repo change.
+
+…all happen in chat, not as worklist items. They produce no
+`before` / `after` because there's nothing to write. They produce
+no commit because there's nothing to land. Routing them through
+the worklist creates surprise-TO-COMMIT rows with empty diffs, and
+the user can't tell whether something genuinely went wrong or the
+agent just used the wrong channel.
+
+**If an investigation reveals nothing to commit, guide the user to
+Drop.** Sometimes the agent proposes an item expecting code work
+and the investigation turns up no actionable change — the bug was
+a runtime configuration issue, the fix was a process restart,
+every check passed. In that case:
+
+- Do NOT call `/__worklist/mutate op:"advance"`. Marking the item
+  as `applied` produces a TO COMMIT row with nothing to commit,
+  which is exactly the user-visible failure mode of #88.
+- Instead, summarize the finding in chat ("checked X, Y, Z; the
+  issue is runtime-only, no code change needed") and explicitly
+  recommend the user click **Drop** on that item in the Worklist
+  tab.
+- The user's Drop click works the same as any other drop —
+  `/__worklist/resolve` with `kind: "drop"`, then
+  `/__worklist/mutate op:"prune"`. Standard flow.
+
+**Recovery if you've already advanced.** If you call `advance`
+before realizing the apply was a no-op, the recovery is identical:
+explain the finding in chat, recommend Drop on the resulting TO
+COMMIT row. The user's Drop click works equally well on `proposed`
+and `applied` items. No special undo path needed.
+
+Refs #88.
+
 ### Match prose verbosity to change complexity
 
 Match `before` / `after` prose to the size and judgment-load of the

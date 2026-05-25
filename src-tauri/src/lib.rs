@@ -2582,27 +2582,36 @@ fn pty_spawn(
 
 #[tauri::command]
 fn pty_write(app: AppHandle, data: String, state: State<'_, AppState>) -> Result<(), String> {
-    // Comms-path trace, category [pty-out]. Logs even when the write
-    // ultimately fails (e.g. PTY not started) so the trace records the
-    // intent to send. Gate at the call site to skip the preview
-    // allocation entirely when tracing is off.
+    pty_write_internal(&app, &state, &data, "unknown")
+}
+
+// Shared body of `pty_write` so the disk-mediated relay (#86) can write
+// queued intents through the same trace + menu-clear + auth-record
+// pipeline as direct callers. `caller_hint` flows into the `[pty-out]`
+// trace so we can distinguish direct writes from `pty-intent-*` drains
+// at investigation time.
+fn pty_write_internal<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, AppState>,
+    data: &str,
+    caller_hint: &str,
+) -> Result<(), String> {
     if bram_trace_enabled() && !data.is_empty() {
         append_bram_trace_line(
-            &app,
+            app,
             "pty-out",
             &format!(
-                "bytes={} preview={} is_structured={} caller_hint=unknown",
+                "bytes={} preview={} is_structured={} caller_hint={}",
                 data.len(),
-                bram_trace_preview(&data, 80),
-                is_structured_intent_prefix(&data),
+                bram_trace_preview(data, 80),
+                is_structured_intent_prefix(data),
+                caller_hint,
             ),
         );
     }
-    // User input dismisses any visible permission menu. Clear before
-    // writing so the agent-pane menu disappears immediately on click.
     if !data.is_empty() {
-        pty_menu_clear(&app);
-        record_worklist_authorization_from_input(&app, &data);
+        pty_menu_clear(app);
+        record_worklist_authorization_from_input(app, data);
     }
     let mut guard = state.0.lock().unwrap();
     let pty = guard.as_mut().ok_or("pty not started")?;
@@ -2610,6 +2619,167 @@ fn pty_write(app: AppHandle, data: String, state: State<'_, AppState>) -> Result
         .write_all(data.as_bytes())
         .map_err(|e| e.to_string())?;
     pty.writer.flush().map_err(|e| e.to_string())
+}
+
+// Disk-mediated relay for right-pane click intents (#86). The right-pane
+// helpers (`toShell` / `toTurn` / `sendKeys` in `app/__shell/helpers.js`)
+// call this instead of `pty_write` directly. Each invocation appends a
+// JSONL line to `resources/.pty-intent.jsonl` then drains the queue
+// under a process-wide mutex so concurrent calls can't race the
+// read-then-truncate phase. Bracketed-paste framing for `kind:
+// "toTurn"` is applied here (in the drain) so the right pane stays
+// ignorant of PTY framing.
+#[tauri::command]
+fn queue_pty_intent(
+    app: AppHandle,
+    payload: serde_json::Value,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let kind = payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .ok_or("missing kind")?
+        .to_string();
+    let data = payload
+        .get("data")
+        .and_then(|v| v.as_str())
+        .ok_or("missing data")?
+        .to_string();
+    if !matches!(kind.as_str(), "toShell" | "toTurn" | "sendKeys") {
+        return Err(format!("unknown kind: {}", kind));
+    }
+    let Some(path) = pty_intent_file(&app) else {
+        return Err("project root unknown".to_string());
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let seq = PTY_INTENT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let id = format!("intent-{}-{}", unix_now_ms(), seq);
+    let line = serde_json::json!({
+        "id": id,
+        "kind": kind,
+        "data": data,
+        "at": unix_now_ms(),
+    });
+    let line_str = serde_json::to_string(&line).map_err(|e| e.to_string())?;
+
+    let _drain_guard = pty_intent_lock().lock().map_err(|e| e.to_string())?;
+
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| e.to_string())?;
+        writeln!(file, "{}", line_str).map_err(|e| e.to_string())?;
+    }
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            &app,
+            "pty-intent",
+            &format!(
+                "op=enqueue id={} kind={} bytes={}",
+                id,
+                kind,
+                data.len()
+            ),
+        );
+    }
+    drain_pty_intents(&app, &state)
+}
+
+// Drains every queued intent in `resources/.pty-intent.jsonl` through
+// `pty_write_internal` (preserves the [pty-out] trace + menu-clear +
+// worklist-auth-record pipeline). On a PTY write failure, the failing
+// line and all subsequent lines stay in the file for the next drain
+// attempt; on success the file is removed. Caller must hold
+// `pty_intent_lock()`.
+fn drain_pty_intents<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, AppState>,
+) -> Result<(), String> {
+    let Some(path) = pty_intent_file(app) else {
+        return Ok(());
+    };
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => {
+            if bram_trace_enabled() {
+                append_bram_trace_line(app, "pty-intent", "op=drain-read-failed");
+            }
+            return Ok(());
+        }
+    };
+    if content.trim().is_empty() {
+        let _ = std::fs::remove_file(&path);
+        if bram_trace_enabled() {
+            append_bram_trace_line(app, "pty-intent", "op=drain-empty");
+        }
+        return Ok(());
+    }
+
+    let mut wrote: usize = 0;
+    let mut remaining: Vec<String> = Vec::new();
+    let mut drain_error: Option<String> = None;
+
+    for line in content.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        if drain_error.is_some() {
+            remaining.push(line.to_string());
+            continue;
+        }
+        let intent: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let kind = intent.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let data = intent.get("data").and_then(|v| v.as_str()).unwrap_or("");
+        let wrapped: String = match kind {
+            "toShell" => format!("{}\n", data),
+            "toTurn" => format!("\x15\x1b[200~{}\x1b[201~\r", data),
+            "sendKeys" => data.to_string(),
+            _ => continue,
+        };
+        let hint = format!("pty-intent-{}", kind);
+        match pty_write_internal(app, state, &wrapped, &hint) {
+            Ok(()) => {
+                wrote += 1;
+            }
+            Err(e) => {
+                drain_error = Some(e);
+                remaining.push(line.to_string());
+            }
+        }
+    }
+
+    if remaining.is_empty() {
+        let _ = std::fs::remove_file(&path);
+    } else if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+    {
+        for line in &remaining {
+            let _ = writeln!(file, "{}", line);
+        }
+    }
+
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "pty-intent",
+            &format!("op=drain wrote={} remaining={}", wrote, remaining.len()),
+        );
+    }
+
+    match drain_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 #[tauri::command]
@@ -4412,6 +4582,11 @@ const WORKLIST_AUTH_REL: &str = "resources/.worklist-authorization.json";
 // the sentinel is informational and verifiable via the
 // [inflight-sentinel] trace.
 const INFLIGHT_CLAIM_REL: &str = "resources/.inflight-claim.json";
+// Right-pane pty-intent relay (#86). Append-only JSONL queue persisted
+// to disk so right-pane clicks (toShell / toTurn / sendKeys) survive an
+// iframe-reload-mid-click. Drained synchronously by queue_pty_intent;
+// startup cleanup deletes any stale queue from a prior session.
+const PTY_INTENT_REL: &str = "resources/.pty-intent.jsonl";
 // On Unix, the bare path runs via the script's `#!/usr/bin/env python3`
 // shebang (set executable by run_enhance under #[cfg(unix)]). On Windows
 // there's no shebang resolution and no chmod, so we invoke through the
@@ -5605,6 +5780,37 @@ fn cleanup_stale_inflight_claim<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
     trace_emit_signal(app, "inflight-claim-changed");
     let _ = app.emit("inflight-claim-changed", ());
+}
+
+fn pty_intent_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| p.join(PTY_INTENT_REL))
+}
+
+// Serializes append + drain in queue_pty_intent so concurrent calls
+// don't race the read-then-truncate phase and lose intents.
+static PTY_INTENT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+fn pty_intent_lock() -> &'static Mutex<()> {
+    PTY_INTENT_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+// Monotonic counter for `[pty-intent]` trace ids. Doesn't need to be
+// globally unique — only readable within one session's trace log.
+static PTY_INTENT_COUNTER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+// Startup cleanup. Removes any stale pty-intent queue from a prior
+// session so its intents don't replay into a fresh PTY (#86).
+fn cleanup_stale_pty_intents<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(path) = pty_intent_file(app) else {
+        return;
+    };
+    if !path.exists() {
+        return;
+    }
+    let _ = std::fs::remove_file(&path);
+    if bram_trace_enabled() {
+        append_bram_trace_line(app, "pty-intent", "op=stale-startup-clear");
+    }
 }
 
 fn empty_worklist_json() -> &'static str {
@@ -7337,6 +7543,23 @@ fn route_request<R: tauri::Runtime>(
         return (200, "application/json; charset=utf-8", body.into_bytes());
     }
 
+    // /__pty-intent — diagnostic readout of the right-pane intent queue
+    // (#86). Returns `{"queue": [<parsed-jsonl-line>, ...]}`. Empty
+    // queue or missing file returns `{"queue": []}`. Read-only.
+    if path == "__pty-intent" {
+        let queue: Vec<serde_json::Value> = pty_intent_file(app)
+            .and_then(|p| std::fs::read_to_string(&p).ok())
+            .map(|s| {
+                s.lines()
+                    .filter(|l| !l.is_empty())
+                    .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let body = serde_json::json!({ "queue": queue }).to_string();
+        return (200, "application/json; charset=utf-8", body.into_bytes());
+    }
+
     // /__git-diff?path=<file> — plain text `git diff -- <path>` output.
     if path == "__git-diff" {
         let mut file_path = String::new();
@@ -8189,6 +8412,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
+            queue_pty_intent,
             pty_resize,
             log_from_right_pane,
             open_devtools,
@@ -8241,6 +8465,9 @@ pub fn run() {
             // Remove any stale inflight sentinel from a prior session
             // that didn't complete cleanly. Refs #84.
             cleanup_stale_inflight_claim(app.handle());
+            // Remove any stale pty-intent queue from a prior session so
+            // its intents don't replay into the fresh PTY. Refs #86.
+            cleanup_stale_pty_intents(app.handle());
             let internal_origin = format!("http://127.0.0.1:{}", port);
             eprintln!("[bram] internal HTTP server: {}", internal_origin);
             // Tools pane lives at xd's app/tools/index.html, served via

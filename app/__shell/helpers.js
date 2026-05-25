@@ -92,15 +92,27 @@ window._xsLogs = window._xsLogs || [];
   }, TICK_MS);
 })();
 
+// Outbound right-pane → PTY intents route through `queue_pty_intent`
+// (#86), which appends to `resources/.pty-intent.jsonl` and drains
+// under a process-wide mutex. The disk hop keeps each click durably
+// recorded even if the iframe context is unsettled when the IPC fires
+// — the host drains independently of the originating iframe state.
+//
+// `toShell` / `toTurn` / `sendKeys` keep their application-level
+// responsibilities (whitespace normalization in `toTurn`, the
+// implicit "\n" semantic in `toShell`, the "no framing" contract in
+// `sendKeys`); PTY framing (bracketed-paste markers around toTurn
+// data, trailing newline for toShell) is applied host-side in the
+// drain so the right pane stays ignorant of terminal escape
+// sequences.
 window.toShell = function (text) {
   var s = String(text);
   // Trace the entry so #86's "click swallowed" diagnostic flow can
   // distinguish between "helper never invoked" (no trace line) and
-  // "helper invoked but pty_write lost" (trace line present but no
-  // [pty-out] follows). kind: "iframe-trace" routes through
-  // log_from_right_pane's iframe-trace branch into the [iframe]
-  // category of resources/bram-trace.log. Refs #86
-  // instrument-toshell-toturn.
+  // "helper invoked but queue / drain lost" (trace line present but
+  // no [pty-intent] op=enqueue follows). kind: "iframe-trace" routes
+  // through log_from_right_pane's iframe-trace branch into the
+  // [iframe] category of resources/bram-trace.log.
   try {
     window.logToHost({
       kind: "iframe-trace",
@@ -113,16 +125,20 @@ window.toShell = function (text) {
   } catch (e) {}
   var invoke = getTauriInvoke();
   if (!invoke) return;
-  invoke("pty_write", { data: s + "\n" }).catch(function (e) {
-    console.error("toShell pty_write", e);
+  invoke("queue_pty_intent", { payload: { kind: "toShell", data: s } }).catch(function (e) {
+    console.error("toShell queue_pty_intent", e);
+    try {
+      window.logToHost({
+        kind: "iframe-trace",
+        subkind: "to-shell-invoke-failed",
+        error: String((e && e.message) || e),
+        at: new Date().toISOString(),
+      });
+    } catch (le) {}
   });
 };
 window.toTurn = function (text) {
   var s = String(text);
-  // kind: "iframe-trace" routes through log_from_right_pane's
-  // iframe-trace branch into [iframe] in bram-trace.log. Pre-#86 the
-  // payloads here used kind: "to-turn" which fell through to stderr-
-  // only logging — present in dev logs but missing from the trace.
   try {
     window.logToHost({
       kind: "iframe-trace",
@@ -146,10 +162,16 @@ window.toTurn = function (text) {
       at: new Date().toISOString(),
     },
   }).catch(function () {});
-  invoke("pty_write", {
-    data: "\x15\x1b[200~" + normalized + "\x1b[201~\r",
-  }).catch(function (e) {
-    console.error("toTurn pty_write", e);
+  invoke("queue_pty_intent", { payload: { kind: "toTurn", data: normalized } }).catch(function (e) {
+    console.error("toTurn queue_pty_intent", e);
+    try {
+      window.logToHost({
+        kind: "iframe-trace",
+        subkind: "to-turn-invoke-failed",
+        error: String((e && e.message) || e),
+        at: new Date().toISOString(),
+      });
+    } catch (le) {}
   });
 };
 // sendKeys writes raw bytes to the PTY with NO trailing newline (unlike
@@ -158,8 +180,16 @@ window.toTurn = function (text) {
 window.sendKeys = function (text) {
   var invoke = getTauriInvoke();
   if (!invoke) return;
-  invoke("pty_write", { data: String(text) }).catch(function (e) {
-    console.error("sendKeys pty_write", e);
+  invoke("queue_pty_intent", { payload: { kind: "sendKeys", data: String(text) } }).catch(function (e) {
+    console.error("sendKeys queue_pty_intent", e);
+    try {
+      window.logToHost({
+        kind: "iframe-trace",
+        subkind: "send-keys-invoke-failed",
+        error: String((e && e.message) || e),
+        at: new Date().toISOString(),
+      });
+    } catch (le) {}
   });
 };
 window.logToHost = function (payload) {

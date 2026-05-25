@@ -132,16 +132,18 @@
             paths: payload.paths || [],
             correlation_id: payload.id || '',
           });
-          // Direct refetch (no debounce). XMLUI's `debounce(ms, fn)`
-          // silently never invoked `fn` when listener-fired calls
-          // arrived ≤300ms apart — see fix-iframe-drop-broken-debounce
-          // for the trace data. The watcher's 6× notify fanout per
-          // logical write produces 6 refetches; DataSource structural
-          // sharing keeps re-renders to one when the response is
-          // identical. Cheap enough to accept.
+          // Direct refetch — the host-side watcher debounce (#85)
+          // coalesces notify-rs's ~6× cascade per worklist.json write
+          // into one emit per logical change, so this fires once per
+          // logical change. history.refetch() is intentionally NOT
+          // called here: worklist transitions don't change the
+          // worklist-history snapshot index — snapshots only land on
+          // commit, which clears the inflight sentinel and routes
+          // through inflightClaim's onLoaded path (which DOES
+          // refetch history). Refs #85
+          // worklist-changed-no-history-refetch.
           iframeTrace('refetch-called', {context: 'worklist-changed'});
           worklist.refetch();
-          history.refetch();
         }).then((unlisten) => { window.__bramWorklistUnlisten = unlisten; }).catch(() => {});
 
         // #84 item 3: subscribe to `inflight-claim-changed` from the

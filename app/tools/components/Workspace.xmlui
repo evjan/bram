@@ -20,7 +20,8 @@
   var.newItemIssue="{null}"
   var.newItemText="{''}"
   var.pendingMenu="{null}"
-  var.inflightTick="{0}">
+  var.inflightTick="{0}"
+  var.lastSessionTickAt="{0}">
   <DataSource
     id="sessionTail"
     url="/__sessions/latest-tail?lines=200&amp;t={sessionTick}"
@@ -106,10 +107,22 @@
     padding="$space-6"
     gap="$space-6"
     onInit="onTalkSessionChange(() => {
+      // Throttle sessionTick bumps to once per 2s during active turns.
+      // Pre-fix this handler fired sessionTick++ on every JSONL append
+      // (multiple per second during agent activity), causing
+      // sessionTail to refetch and ChangeListener to re-fire each
+      // time. Inspector trace showed ~27 value:change events per
+      // session capture — the existing debounce() call coalesced
+      // nothing because each fire scheduled a fresh debounce. The
+      // `lastSessionTickAt` guard is the actual throttle.
+      // lastJsonl is now only read by lastAssistantText() for
+      // rendering, so 2s staleness is fine. Refs #85
+      // sessionTail-throttle-or-drop.
       if (!submitting) return;
-      debounce(400, () => {
-        if (submitting) sessionTick = sessionTick + 1;
-      });
+      const now = Date.now();
+      if (now - lastSessionTickAt < 2000) return;
+      lastSessionTickAt = now;
+      sessionTick = sessionTick + 1;
     });
     (() => {
       // Iframe-side trace records for the [iframe] category of the

@@ -55,6 +55,7 @@ the source of truth; this is the announcement surface.
 | 8 | [Context](#8-context) | `CLAUDE.md` / `AGENTS.md` import chain + memory + hooks + settings | agent-tools iframe |
 | 9 | [Voice / transcription](#9-voice--transcription) | Whisper subprocess lifecycle | parent shell |
 | 10 | [Static & hot-reload](#10-static--hot-reload) | Files served from disk or embedded; iframe reload coupling | both iframes |
+| 11 | [Inflight sentinel](#11-inflight-sentinel) | Host-managed claim file driving the Worklist tab's spinner state | agent-tools iframe, agent (curl) |
 
 ## 1. App & shell meta
 
@@ -151,6 +152,13 @@ without re-shipping content.
   `approved` record becomes `no_active_authorization` for subsequent
   `/__worklist/resolve` reads after the first GET, but `/__worklist/mutate`
   still uses the stored auth record from that turn.
+- **Side effect: inflight sentinel.** `/__worklist/resolve` writes
+  `resources/.inflight-claim.json` (with `kind` matching the auth
+  record) as part of serving an `approved` or `drop` record;
+  `/__worklist/mutate` clears the file as part of a successful
+  advance or prune. Both writes emit the `inflight-claim-changed`
+  Tauri event so iframe subscribers re-fetch `/__inflight`. See
+  section 11 for the full mechanism.
 
 ## 4. Worklist history
 
@@ -281,6 +289,58 @@ change.
   `404` when the file doesn't exist yet, so the Workspace tab's polling
   loop doesn't flood devtools with 404s in guest projects that haven't
   opted in to the worklist flow.
+
+## 11. Inflight sentinel
+
+The Worklist tab's spinner state derives from a single on-disk file,
+`resources/.inflight-claim.json`, written and cleared by host-side
+HTTP handlers. Replaces an earlier iframe-side heuristic chain that
+accumulated false-clears, premature clears, and silent
+inconsistencies. See `app/__shell/conventions.md` for the agent-side
+convention prose and failure-mode guide; this section is the HTTP /
+file / event reference.
+
+| Surface | Kind | Query / params | Response | Consumer |
+| --- | --- | --- | --- | --- |
+| `/__inflight` | HTTP GET | — | sentinel JSON or `{}` if no claim | agent-tools iframe |
+| `/__iterate/begin` | HTTP POST | body `{ ids: [...] }` | `{ ok: true }` / 400 `{ error: "…" }` | agent (curl) |
+| `/__iterate/end` | HTTP POST | body `{ ids: [...] }` | `{ ok: true }` / 400 `{ error: "…" }` | agent (curl) |
+| `resources/.inflight-claim.json` | file | — | `{ ids: [...], claimedAt: <ms>, kind: "approved" \| "drop" \| "iterate" }` or absent | host write, iframe via `/__inflight` |
+| `inflight-claim-changed` | Tauri event | — | empty payload | agent-tools iframe |
+
+- **File invariants.** Either absent or contains valid JSON with all
+  three fields (`ids`, `claimedAt`, `kind`). Writes are atomic via
+  `.tmp` + rename. The host serializes writes (single-process).
+- **Lifecycle by `kind`.**
+  - `approved` — written as a side effect of `/__worklist/resolve`
+    serving a `kind:"approved"` record; cleared by `/__worklist/mutate`
+    `advance` or `prune` covering every claimed id.
+  - `drop` — written as a side effect of `/__worklist/resolve` serving a
+    `kind:"drop"` record; cleared by `/__worklist/mutate prune`.
+  - `iterate` — written by `POST /__iterate/begin`; cleared by
+    `POST /__iterate/end` covering every claimed id. The agent is
+    responsible for calling these around iterate processing (see
+    `conventions.md`).
+- **Coverage rule for clears.** `clear` operations are no-ops unless
+  every id currently claimed is in the supplied ids. Partial coverage
+  intentionally leaves the file in place — a stuck sentinel is the
+  diagnostic for an incomplete agent contract.
+- **No live-session timeout.** Stuck claims stay claimed until the
+  matching end / mutate call arrives, or until Bram restart (the
+  startup helper `cleanup_stale_inflight_claim` deletes any leftover
+  sentinel and emits one final `inflight-claim-changed`). This is by
+  design: a stuck spinner surfaces the failure case instead of hiding
+  it.
+- **`inflight-claim-changed`** is emitted from inside each of the three
+  host helpers after the file write / delete completes. Iframe
+  subscribers refetch `/__inflight` on receipt; the `Workspace.xmlui`
+  `inflightClaim` DataSource is the primary consumer.
+- **Trace categories.** `[inflight-sentinel] op=write kind=<…> ids=[…]`
+  on writes, `[inflight-sentinel] op=clear ids=[…]` on clears,
+  `[inflight-sentinel] op=stale-startup-clear` on startup-time cleanup.
+  Paired with `[emit] kind=inflight-claim-changed` and
+  `[iframe] subkind=listener-fired context=inflight-claim-changed`
+  downstream.
 
 ## Drift policy
 

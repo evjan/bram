@@ -152,19 +152,36 @@ Lifecycle:
      writes the verified item content into
      `resources/.worklist-authorization.json`.
      **To act on the approval, GET `/__worklist/resolve` from the
-     loopback HTTP server.** Bram injects `BRAM_PORT`
-     (legacy `XMLUI_DESKTOP_PORT` also supported)
-     into the PTY child's environment at spawn time, so the agent can
-     reach the endpoint without rediscovering the random loopback port:
+     loopback HTTP server.** Bram writes its bound port at startup to
+     `resources/.bram-port` (plain decimal, no newline). Read that
+     file once via your `Read` tool at the start of any
+     worklist-handling work and substitute the literal number into
+     your curl calls:
 
      ```
-     curl -s "http://localhost:${BRAM_PORT:-$XMLUI_DESKTOP_PORT}/__worklist/resolve"
+     curl -s "http://localhost:61455/__worklist/resolve"
      ```
 
-     If the env var is unset (the rare case where the agent was launched
-     outside the wrapped PTY shell), fall back to discovering the port
-     via `lsof -nP -iTCP -sTCP:LISTEN | grep bram`. The
-     response is one of:
+     (replace `61455` with whatever `Read resources/.bram-port`
+     returned). The literal port matches the
+     `Bash(curl -s "http://localhost*__worklist*)` allowlist pattern
+     in `.claude/settings.json` and runs without a prompt.
+
+     Do **not** embed `$BRAM_PORT` or `${BRAM_PORT:-$XMLUI_DESKTOP_PORT}`
+     directly in the curl command — Claude Code's Bash permission
+     matcher does not expand variables before matching, and any `$` in
+     the command makes the allowlist match fail (the "shell-expansion
+     permission guard"; see
+     https://code.claude.com/docs/en/permissions.md). The `BRAM_PORT`
+     and legacy `XMLUI_DESKTOP_PORT` env vars are still set on the PTY
+     child for callers (scripts, etc.) that resolve them in their own
+     shell before invoking curl. They are deprecated only as inline
+     expansion in permission-gated Bash tool calls.
+
+     If `resources/.bram-port` is missing (the rare case where the
+     agent was launched outside the wrapped PTY shell), fall back to
+     `lsof -nP -iTCP -sTCP:LISTEN | grep bram`. The response is one
+     of:
      - `{"kind":"approved", "items":[<full verified content>], ...}` —
        execute these items. The user has already triaged; do NOT
        re-read `resources/worklist.json` to second-guess what was
@@ -226,8 +243,11 @@ Lifecycle:
 
      ```
      curl -s -X POST -d '{"ids":["<id1>","<id2>"]}' \
-       "http://localhost:${BRAM_PORT}/__iterate/begin"
+       "http://localhost:61455/__iterate/begin"
      ```
+
+     (substitute the literal port from `resources/.bram-port`; see the
+     port-discovery paragraph above for the rationale).
 
      ...with the ids from the iterate payload. The last action
      before ending your turn MUST be the matching `/__iterate/end`
@@ -593,10 +613,12 @@ and renders no diff in the chat. Two ops:
 
 ```
 curl -X POST -d '{"op":"prune","ids":["item-a"]}' \
-  http://localhost:${BRAM_PORT:-$XMLUI_DESKTOP_PORT}/__worklist/mutate
+  http://localhost:61455/__worklist/mutate
 curl -X POST -d '{"op":"advance","ids":["item-a"],"status":"applied"}' \
-  http://localhost:${BRAM_PORT:-$XMLUI_DESKTOP_PORT}/__worklist/mutate
+  http://localhost:61455/__worklist/mutate
 ```
+
+(substitute the literal port read from `resources/.bram-port`).
 
 Server-side auth check: `prune` requires `kind: "drop"` for those ids
 in `.worklist-authorization.json`; `advance` requires `kind: "approved"`.

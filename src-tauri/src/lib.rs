@@ -8215,6 +8215,28 @@ pub fn run() {
                 .map(|sa| sa.port())
                 .ok_or("right-pane server bound to non-ip address")?;
             let _ = LOOPBACK_PORT.set(port);
+            // Write the bound port as a plain decimal to a known file
+            // so PTY-child agents can read the literal port via their
+            // Read tool and substitute it into curl URLs — `${BRAM_PORT}`
+            // expansion trips Claude Code's Bash permission matcher
+            // (variable expansion is fragile per the permissions spec).
+            // No cleanup on shutdown: overwritten on next startup;
+            // staleness manifests as connection-refused, a clearer
+            // signal than a misleading-but-valid path.
+            if let Some(proj) = project_root(Some(app.handle())) {
+                let port_path = proj.join("resources/.bram-port");
+                if let Some(parent) = port_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match std::fs::write(&port_path, port.to_string()) {
+                    Ok(()) => eprintln!("[bram] wrote port file: {}", port_path.display()),
+                    Err(e) => eprintln!(
+                        "[bram] failed to write port file {}: {}",
+                        port_path.display(),
+                        e
+                    ),
+                }
+            }
             prepare_bram_trace_log(app.handle());
             // Remove any stale inflight sentinel from a prior session
             // that didn't complete cleanly. Refs #84.

@@ -1,5 +1,5 @@
 <App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.recording="{false}"
-  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); (() => { try { updateBannerDismissedVersion = (window.localStorage &amp;&amp; window.localStorage.getItem('bram.updateBannerDismissedVersion')) || ''; } catch (e) {} })(); (() => { const tauri = (window.parent &amp;&amp; window.parent.__TAURI__) || window.__TAURI__; if (tauri &amp;&amp; tauri.event &amp;&amp; tauri.event.listen) { if (typeof window.__bramEnhanceStatusUnlisten === 'function') { try { window.__bramEnhanceStatusUnlisten(); } catch (err) {} window.__bramEnhanceStatusUnlisten = null; } tauri.event.listen('enhance-status-changed', () => enhanceStatus.refetch()).then((unlisten) => { window.__bramEnhanceStatusUnlisten = unlisten; }).catch(() => {}); } })()">
+  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); (() => { const tauri = (window.parent &amp;&amp; window.parent.__TAURI__) || window.__TAURI__; if (tauri &amp;&amp; tauri.event &amp;&amp; tauri.event.listen) { if (typeof window.__bramEnhanceStatusUnlisten === 'function') { try { window.__bramEnhanceStatusUnlisten(); } catch (err) {} window.__bramEnhanceStatusUnlisten = null; } tauri.event.listen('enhance-status-changed', () => enhanceStatus.refetch()).then((unlisten) => { window.__bramEnhanceStatusUnlisten = unlisten; }).catch(() => {}); } })()">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
   <DataSource id="appInfo" url="/__app-info" />
@@ -124,7 +124,7 @@
       variant="ghost"
       size="xs"
       tooltip="Dismiss — banner returns when a newer version is released"
-      onClick="updateBannerDismissedVersion = appInfo.value.latest; try { window.localStorage &amp;&amp; window.localStorage.setItem('bram.updateBannerDismissedVersion', appInfo.value.latest); } catch (e) {}" />
+      onClick="updateBannerDismissedVersion = appInfo.value.latest; writeLocalStorage('bram.updateBannerDismissedVersion', appInfo.value.latest)" />
   </HStack>
 
   <AppHeader>

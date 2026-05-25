@@ -32,8 +32,8 @@
       // etc.) resolve through that table. Anything added to `window`
       // AFTER xmlui-standalone runs is invisible to markup. Hence:
       // helpers.js MUST load before xmlui-standalone.
-      document.write('<script src="/__vendor/xmlui-standalone.umd.js?v=' + window.APP_VERSION + '"><\/script>');
-      document.write('<script src="/__vendor/xmlui-echart.js?v=' + window.APP_VERSION + '"><\/script>');
+      document.write('<script src="/__vendor/xmlui-standalone.umd.js?v=' + Date.now() + '"><\/script>');
+      document.write('<script src="/__vendor/xmlui-echart.js?v=' + Date.now() + '"><\/script>');
     </script>
     <script>
       logToHost({ kind: "tools-boot", stage: "after-xmlui-load", at: new Date().toISOString() });

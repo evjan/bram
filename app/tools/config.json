@@ -1,7 +1,7 @@
 {
   "appGlobals": {
     "xsVerbose": true,
-    "xsVerboseLogMax": 200
+    "xsVerboseLogMax": 300
   },
   "themes": ["themes/bram.json"],
   "defaultTheme": "bram",

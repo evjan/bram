@@ -85,15 +85,46 @@ function stripMarkdownImages(text) {
     .replace(/\n*<img\b[^>]*\bsrc=["'][^"']+["'][^>]*>/gi, '');
 }
 
+// Return the suffix of jsonlText containing the trailing `n` records.
+// Walks backward counting newlines; returns the whole text if there are
+// fewer than n records. Used as a stable, small cache key for helpers
+// that only need the trailing window of an append-only session JSONL
+// (issue #100 suffix-keying — keeps re-derivation O(suffix) instead of
+// O(file) as sessions grow into the megabytes).
+function _lastNRecords(jsonlText, n) {
+  if (!jsonlText || n <= 0) return '';
+  let pos = jsonlText.length;
+  // Skip a trailing newline so the last non-empty record counts.
+  if (pos > 0 && jsonlText.charCodeAt(pos - 1) === 10) pos--;
+  let count = 0;
+  while (pos > 0) {
+    pos--;
+    if (jsonlText.charCodeAt(pos) === 10) {
+      count++;
+      if (count >= n) return jsonlText.substring(pos + 1);
+    }
+  }
+  return jsonlText;
+}
+
 // True when the most recent textful turn in the session is a user turn —
 // i.e. the user has spoken (or a worklist button submitted via toTurn) but
 // the assistant has not yet emitted text. tool_use-only assistant records
 // and tool_result-only user records are skipped so a long tool cycle still
 // reads as "waiting". Used by Transcript's "agent is thinking" spinner.
+//
+// Suffix-keyed (issue #100): the answer depends only on the trailing few
+// records — anything before the most recent text-bearing record is
+// irrelevant. We cache on the suffix string, so identical trailing
+// content hits the cache even when the upstream JSONL has grown.
 function isWaitingForAssistant(jsonlText) {
   if (!jsonlText) return false;
+  const suffix = _lastNRecords(jsonlText, 50);
+  if (isWaitingForAssistant._cacheKey === suffix) {
+    return isWaitingForAssistant._cacheValue;
+  }
   const _t0 = App.now();
-  const lines = jsonlText.split('\n');
+  const lines = suffix.split('\n');
   let lastRole = null;
   for (const line of lines) {
     if (!line) continue;
@@ -116,8 +147,11 @@ function isWaitingForAssistant(jsonlText) {
       if (r.payload.type === 'agent_message') lastRole = 'assistant';
     }
   }
-  _traceHelperTiming('isWaitingForAssistant', _t0, { len: jsonlText.length, lines: lines.length });
-  return lastRole === 'user';
+  const value = (lastRole === 'user');
+  isWaitingForAssistant._cacheKey = suffix;
+  isWaitingForAssistant._cacheValue = value;
+  _traceHelperTiming('isWaitingForAssistant', _t0, { len: jsonlText.length, suffixLen: suffix.length, lines: lines.length });
+  return value;
 }
 
 // True when the most recent meaningful record signals the agent has FINISHED
@@ -346,33 +380,36 @@ function editDiffLines(input) {
 // Bash, Grep, Glob, and all other read-only tools.
 function currentTurnEdits(jsonlText) {
   if (!jsonlText) return currentTurnEdits._cache || [];
-  if (currentTurnEdits._cacheKey === jsonlText && currentTurnEdits._cache) {
+  // Suffix-keyed (issue #100): the current turn lives in the trailing
+  // records. 100 records covers virtually all tool cycles; an extreme
+  // run-on turn would simply degrade to under-counting at the boundary.
+  const suffix = _lastNRecords(jsonlText, 100);
+  if (currentTurnEdits._cacheKey === suffix && currentTurnEdits._cache) {
     return currentTurnEdits._cache;
   }
   const _t0 = App.now();
-  // Fast path: skip parsing entirely if the text has no tool-call
-  // signal of either provider. The expensive split + per-line
-  // JSON.parse below would otherwise run on every render against the
-  // full JSONL tail. Takes the common case (idle session, no in-flight
-  // edits) from O(lines) to a single O(text.length) byte scan.
+  // Fast path: skip parsing entirely if the SUFFIX has no tool-call
+  // signal of either provider. Older tool calls in earlier turns don't
+  // matter — we only care about the current turn's edits. O(suffix.length)
+  // byte scan instead of O(file).
   // - "tool_use" -> Claude assistant content[*].type
   // - "function_call" / "custom_tool_call" -> Codex response_item payload types
-  if (jsonlText.indexOf('"tool_use"') === -1 &&
-      jsonlText.indexOf('"function_call"') === -1 &&
-      jsonlText.indexOf('"custom_tool_call"') === -1) {
-    currentTurnEdits._cacheKey = jsonlText;
+  if (suffix.indexOf('"tool_use"') === -1 &&
+      suffix.indexOf('"function_call"') === -1 &&
+      suffix.indexOf('"custom_tool_call"') === -1) {
+    currentTurnEdits._cacheKey = suffix;
     currentTurnEdits._cache = [];
-    _traceHelperTiming('currentTurnEdits', _t0, { len: jsonlText.length, path: 'fast-bytes-scan' });
+    _traceHelperTiming('currentTurnEdits', _t0, { len: jsonlText.length, suffixLen: suffix.length, path: 'fast-bytes-scan' });
     return currentTurnEdits._cache;
   }
 
-  // Walk lines in chronological order to find the index of the most
-  // recent user-message line (i.e., the boundary between previous turn
-  // and current turn). All assistant tool-use entries AFTER that index
-  // belong to the in-flight turn. Handles both Claude (`type:"user"`
+  // Walk suffix lines in chronological order to find the index of the
+  // most recent user-message line (i.e., the boundary between previous
+  // turn and current turn). All assistant tool-use entries AFTER that
+  // index belong to the in-flight turn. Handles both Claude (`type:"user"`
   // with non-tool_result content) and Codex (`type:"event_msg"`,
   // `payload.type:"user_message"`).
-  const lines = jsonlText.split('\n');
+  const lines = suffix.split('\n');
   let lastUserIdx = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (!lines[i]) continue;
@@ -512,9 +549,9 @@ function currentTurnEdits(jsonlText) {
   }
 
   const result = order.map(fp => byFile[fp]);
-  currentTurnEdits._cacheKey = jsonlText;
+  currentTurnEdits._cacheKey = suffix;
   currentTurnEdits._cache = result;
-  _traceHelperTiming('currentTurnEdits', _t0, { len: jsonlText.length, edits: result.length, path: 'full-parse' });
+  _traceHelperTiming('currentTurnEdits', _t0, { len: jsonlText.length, suffixLen: suffix.length, edits: result.length, path: 'full-parse' });
   return result;
 }
 
@@ -711,48 +748,61 @@ function visibleTurns(turns, n) {
 // "final response" readout next to the worklist, without reproducing
 // Transcript's full timeline / tool-call rendering. Returns '' if no
 // assistant text turn is present in the tail.
+// Returns the text of the most recent assistant message in the session.
+// Suffix-keyed (issue #100): the answer lives in one of the trailing
+// records. Was previously delegating to sessionTurns(jsonlText), which
+// re-parsed the full file on every change; this scans the trailing
+// suffix directly and caches on it.
 function lastAssistantText(jsonlText) {
+  if (!jsonlText) return '';
+  const suffix = _lastNRecords(jsonlText, 50);
+  if (lastAssistantText._cacheKey === suffix) {
+    return lastAssistantText._cacheValue;
+  }
   const _t0 = App.now();
-  const turns = sessionTurns(jsonlText);
-  for (let i = turns.length - 1; i >= 0; i--) {
-    if (turns[i].role === 'assistant') {
-      const text = (turns[i].entries || [])
-        .filter(e => e.kind === 'text')
-        .map(e => e.text)
-        .join('\n\n');
-      if (text) {
-        _traceHelperTiming('lastAssistantText', _t0, { len: (jsonlText || '').length, textLen: text.length });
-        return text;
+  const lines = suffix.split('\n');
+  let text = '';
+  // Walk records backward; first assistant record with text wins.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line) continue;
+    let r;
+    try { r = JSON.parse(line); } catch (e) { continue; }
+    if (r.type === 'assistant' && r.message && r.message.content) {
+      const c = r.message.content;
+      if (typeof c === 'string' && c) { text = c; break; }
+      if (Array.isArray(c)) {
+        const texts = [];
+        for (const e of c) {
+          if (e && e.type === 'text' && e.text) texts.push(e.text);
+        }
+        if (texts.length) { text = texts.join('\n\n'); break; }
       }
+    } else if (r.type === 'event_msg' && r.payload &&
+               r.payload.type === 'agent_message' && r.payload.message) {
+      text = r.payload.message;
+      break;
     }
   }
-  _traceHelperTiming('lastAssistantText', _t0, { len: (jsonlText || '').length, textLen: 0 });
-  return '';
+  // Match the transformations sessionTurns applies to assistant text
+  // (so the Markdown render in Workspace.xmlui sees the same content).
+  if (text) text = stripImagePaths(rewriteXmluiDocUrls(text));
+  lastAssistantText._cacheKey = suffix;
+  lastAssistantText._cacheValue = text;
+  _traceHelperTiming('lastAssistantText', _t0, { len: jsonlText.length, suffixLen: suffix.length, textLen: text.length });
+  return text;
 }
 
-function sessionTurns(jsonlText) {
-  // Sticky empty: during a refetch the DataSource value can briefly be
-  // null/undefined. Returning [] would blank the transcript and cause a
-  // dramatic flash; instead, hold the last result until the new value
-  // arrives.
-  if (!jsonlText) return sessionTurns._cacheValue || [];
-  // Function-property memoization: skip the reparse when the polled
-  // JSONL hasn't changed since last call. Identity comparison is enough
-  // because the DataSource hands us a fresh string only when the file
-  // actually grew.
-  if (sessionTurns._cacheKey === jsonlText && sessionTurns._cacheValue) {
-    return sessionTurns._cacheValue;
-  }
-  // Instrumentation: log cache-miss parses. Tracks how often we do real
-  // work and how long it takes. App.now is the xmlui-native managed
-  // replacement for performance.now (banned under strictDomSandbox).
-  const _t0 = App.now();
-  sessionTurns._parseCount = (sessionTurns._parseCount || 0) + 1;
+// Parse a slice of JSONL lines into the turn-list shape sessionTurns
+// returns. `toolIndex` (optional) lets the caller pre-populate the
+// tool_use_id → entry map so cross-boundary tool_results (in an
+// incremental parse) can still find their originating tool. Returns
+// only the NEW turns generated from `lines` (no structural-share with
+// any prior result — that's the caller's responsibility).
+function _parseLinesToTurns(lines, toolIndex) {
+  toolIndex = toolIndex || {};
   const turns = [];
-  // tool_use_id → entry, so a later user-turn tool_result can flag the
-  // originating tool as errored.
-  const toolIndex = {};
-  for (const line of jsonlText.split('\n')) {
+  for (const line of lines) {
     if (!line) continue;
     let r;
     try { r = JSON.parse(line); } catch (e) { continue; }
@@ -771,9 +821,6 @@ function sessionTurns(jsonlText) {
           if (c.type === 'text' && c.text) {
             entries.push({ kind: 'text', text: c.text });
           } else if (c.type === 'tool_use') {
-            // Keep entries lightweight — only what the collapsed row
-            // needs. Full input/result are fetched on expand via
-            // getToolDetail.
             const entry = {
               kind: 'tool',
               id: c.id,
@@ -828,23 +875,16 @@ function sessionTurns(jsonlText) {
     }
     if (!role) continue;
     if (entries.length === 0 && inlineImages.length === 0) continue;
-    // Capture image paths from the ORIGINAL text before stripping — strip
-    // and extract operate on the same patterns, so we have to read before
-    // we clean. (Was previously running extract on already-stripped text,
-    // which made the [Image: source: ...] fallback dead code.)
     const originalJoined = entries.filter(e => e.kind === 'text').map(e => e.text).join('\n\n');
     const pathsFromText = extractImagePaths(originalJoined);
-    // Apply text rewrites + strip image-path footers from text entries.
     for (const e of entries) {
       if (e.kind === 'text') {
         e.text = stripImagePaths(rewriteXmluiDocUrls(e.text));
       }
     }
     const textJoined = entries.filter(e => e.kind === 'text').map(e => e.text).join('\n\n');
-    // Skip user turns that are pure image-path bookkeeping (preserved from prior behavior).
     if (role === 'user' && inlineImages.length === 0 && entries.every(e => e.kind === 'text')
         && /^(\[Image: source: [^\]]+\]\s*)+$/.test(originalJoined.trim())) continue;
-    // After tool_result filtering, a user turn may have nothing left.
     if (entries.length === 0 && inlineImages.length === 0) continue;
     turns.push({
       role,
@@ -853,6 +893,77 @@ function sessionTurns(jsonlText) {
       images: inlineImages.length > 0 ? inlineImages : pathsFromText,
     });
   }
+  return turns;
+}
+
+function sessionTurns(jsonlText) {
+  // Sticky empty: during a refetch the DataSource value can briefly be
+  // null/undefined. Returning [] would blank the transcript and cause a
+  // dramatic flash; instead, hold the last result until the new value
+  // arrives.
+  if (!jsonlText) return sessionTurns._cacheValue || [];
+  // Function-property memoization: skip the reparse when the polled
+  // JSONL hasn't changed since last call. Identity comparison is enough
+  // because the DataSource hands us a fresh string only when the file
+  // actually grew.
+  if (sessionTurns._cacheKey === jsonlText && sessionTurns._cacheValue) {
+    return sessionTurns._cacheValue;
+  }
+
+  // Incremental parse (issue #100): if the prior cacheKey is a strict
+  // prefix of the new jsonlText, parse only the suffix and concatenate
+  // onto the prior turns. Existing turn objects are reused by reference
+  // so XMLUI's reactivity sees only the new turns as changed. Works
+  // because the live session JSONL is append-only — the diff-based
+  // latest-tail route hands us new bytes that are always strictly
+  // additive. tool_result records in the suffix that point to a
+  // prior tool_use mutate the cached tool entry directly; rare in
+  // practice (tool_use/tool_result usually land in the same suffix),
+  // and even when it happens the data update is correct, only the
+  // XMLUI re-render may lag a poll.
+  const prevKey = sessionTurns._cacheKey;
+  const prevValue = sessionTurns._cacheValue;
+  if (prevKey && prevValue && jsonlText.length > prevKey.length &&
+      jsonlText.substring(0, prevKey.length) === prevKey) {
+    const _t0 = App.now();
+    const suffix = jsonlText.substring(prevKey.length);
+    // Pre-populate toolIndex from prior tool entries so suffix
+    // tool_results can locate their originating tool_use.
+    const toolIndex = {};
+    for (const t of prevValue) {
+      for (const e of (t.entries || [])) {
+        if (e && e.kind === 'tool' && e.id) toolIndex[e.id] = e;
+      }
+    }
+    const newTurns = _parseLinesToTurns(suffix.split('\n'), toolIndex);
+    sessionTurns._cacheKey = jsonlText;
+    sessionTurns._cacheValue = newTurns.length > 0
+      ? prevValue.concat(newTurns)
+      : prevValue;
+    sessionTurns._parseCount = (sessionTurns._parseCount || 0) + 1;
+    const _elapsed = App.now() - _t0;
+    if (_elapsed > 2 || newTurns.length > 0) {
+      iframeTrace('sessionTurns-parse', {
+        ms: Math.round(_elapsed),
+        len: jsonlText.length,
+        suffixLen: suffix.length,
+        turns: sessionTurns._cacheValue.length,
+        newTurns: newTurns.length,
+        n: sessionTurns._parseCount,
+        path: 'incremental',
+      });
+    }
+    return sessionTurns._cacheValue;
+  }
+
+  // Full parse fallback: no prior cache, or the new jsonlText doesn't
+  // extend the prior key (session rotation, manual replace, etc.).
+  // Instrumentation: log cache-miss parses. Tracks how often we do real
+  // work and how long it takes. App.now is the xmlui-native managed
+  // replacement for performance.now (banned under strictDomSandbox).
+  const _t0 = App.now();
+  sessionTurns._parseCount = (sessionTurns._parseCount || 0) + 1;
+  const turns = _parseLinesToTurns(jsonlText.split('\n'));
   // Structural-share with the previous result: for each turn that's
   // structurally equal to the previous turn at the same index, reuse
   // the previous reference. XMLUI's reactivity treats reference

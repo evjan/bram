@@ -5825,7 +5825,12 @@ fn clear_active_sentinel<R: tauri::Runtime>(app: &AppHandle<R>) {
 // message of a turn, which is the durable, structured signal we want.
 //
 // First cut: Claude Code sessions only (detected by the `.claude`
-// segment in the path). Codex follow-up if needed.
+// segment in the path). Codex sessions don't carry a `stop_reason`
+// field on assistant messages, so this parser's `end_turn` branch
+// would never fire for them — the silence-detector fallback at
+// `MIN_SILENCE_FOR_SENTINEL_CLEAR_MS=3000ms` covers Codex today.
+// A Codex-shaped detector is only worth adding if that 3s floor
+// becomes user-visibly slow.
 //
 // Stale-line guard: if the file's mtime predates the sentinel's
 // `claimedAt`, the last line is from a prior turn that ended before
@@ -5834,6 +5839,18 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
     let path_str = path.to_string_lossy();
     if !path_str.contains("/.claude/") {
         return;
+    }
+
+    let basename = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "jsonl-turn-end",
+            &format!("op=enter path={}", basename),
+        );
     }
 
     let Ok(metadata) = std::fs::metadata(path) else {
@@ -5849,16 +5866,30 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
-    let Some(last_line) = content.lines().rev().find(|l| !l.trim().is_empty()) else {
-        return;
-    };
-    let Ok(entry) = serde_json::from_str::<serde_json::Value>(last_line) else {
+
+    // Claude Code appends `last-prompt` and `permission-mode` metadata
+    // lines after every assistant turn, so the file's last non-empty
+    // line is reliably NOT the assistant message. Scan backwards,
+    // skipping unparseable lines and non-assistant types, to find the
+    // most recent `type=assistant` entry.
+    let mut assistant_entry: Option<serde_json::Value> = None;
+    for line in content.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        if entry.get("type").and_then(|v| v.as_str()) == Some("assistant") {
+            assistant_entry = Some(entry);
+            break;
+        }
+    }
+    let Some(entry) = assistant_entry else {
         return;
     };
 
-    if entry.get("type").and_then(|v| v.as_str()) != Some("assistant") {
-        return;
-    }
     let stop_reason = entry
         .get("message")
         .and_then(|m| m.get("stop_reason"))

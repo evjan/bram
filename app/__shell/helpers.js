@@ -39,7 +39,7 @@ window._xsLogs = window._xsLogs || [];
 // Scoped to the tools iframe — user-project apps in the right pane have
 // their own route conventions and should not be affected.
 (function persistToolsRoute() {
-  if (window.location.pathname.indexOf("/__tools/") === -1) return;
+  if (window.location.pathname.indexOf("/tools/") === -1) return;
   var key = "bram.tools.route";
   var legacyKey = "xmlui-desktop.tools.route";
   try {
@@ -71,7 +71,7 @@ window._xsLogs = window._xsLogs || [];
 // where worklist clicks live; the right pane is a separate iframe with
 // its own load profile.
 (function heartbeat() {
-  if (window.location.pathname.indexOf("/__tools/") === -1) return;
+  if (window.location.pathname.indexOf("/tools/") === -1) return;
   var TICK_MS = 200;
   // Threshold is configurable via appGlobals.heartbeatDriftThresholdMs
   // (see config.json). Defaults to 500ms when unset. Lower values
@@ -106,7 +106,7 @@ window._xsLogs = window._xsLogs || [];
 // failure modes that helpers.js can't otherwise detect. Capture phase
 // (true) ensures this runs before bubbling-phase handlers.
 (function captureClicks() {
-  if (window.location.pathname.indexOf("/__tools/") === -1) return;
+  if (window.location.pathname.indexOf("/tools/") === -1) return;
   document.addEventListener("click", function (e) {
     try {
       var t = e.target;

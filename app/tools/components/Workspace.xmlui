@@ -20,31 +20,22 @@
   var.newItemText="{''}"
   var.pendingMenu="{null}"
   var.inflightTick="{0}"
-  var.lastSessionTickAt="{0}"
-  var.sinceOffset="{0}"
-  var.sessionSid="{''}">
+  var.lastSessionTickAt="{0}">
   <DataSource
     id="sessionTail"
-    url="/__sessions/latest-tail?lines=200&amp;since={sinceOffset}&amp;sid={sessionSid}&amp;t={sessionTick}"
-    dataType="json" />
+    url="/__sessions/latest-tail?lines=200&amp;t={sessionTick}"
+    dataType="text" />
   <ChangeListener
     listenTo="{sessionTail.value}"
     onDidChange="(c) => {
-      // Issue #100 / #71: diff-based session-tail envelope.
-      // Server returns { sid, offset, content, reset }. reset=true means
-      // replace the buffer (fresh fetch / session rotation / file shrink);
-      // reset=false means append the new bytes. sinceOffset feeds the next
-      // poll's ?since= cursor.
-      if (!c.newValue) return;
-      const env = c.newValue;
-      if (env.reset) {
-        lastJsonl = env.content || '';
-      } else if (env.content) {
-        lastJsonl = (lastJsonl || '') + env.content;
+      // Update lastJsonl for the lastAssistantText rendering below.
+      // Inflight-clear logic moved to inflightClaim's onLoaded (#84
+      // item 3) — the host-managed sentinel is now the authoritative
+      // spinner signal.
+      if (c.newValue) {
+        iframeTrace('jsonl-fanout', { tab: 'Workspace', len: c.newValue.length, submitting: submitting });
+        lastJsonl = c.newValue;
       }
-      sessionSid = env.sid || '';
-      sinceOffset = env.offset || 0;
-      iframeTrace('jsonl-fanout', { tab: 'Workspace', len: (lastJsonl || '').length, appended: (env.content || '').length, reset: !!env.reset, submitting: submitting });
     }" />
   <ChangeListener
     listenTo="{selectedFeedback}"

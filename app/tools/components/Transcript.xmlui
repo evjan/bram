@@ -7,13 +7,11 @@
   var.sessionTick="{0}"
   var.lastTickAt="{0}"
   var.showAll="{false}"
-  var.pendingMenu="{null}"
-  var.sinceOffset="{0}"
-  var.sessionSid="{''}">
+  var.pendingMenu="{null}">
   <DataSource
     id="latestSession"
-    url="/__sessions/latest-tail?provider={activeProvider || ''}&amp;lines={showAll ? 'all' : '200'}&amp;since={sinceOffset}&amp;sid={sessionSid}&amp;t={sessionTick}"
-    dataType="json"
+    url="/__sessions/latest-tail?provider={activeProvider || ''}&amp;lines={showAll ? 'all' : '200'}&amp;t={sessionTick}"
+    dataType="text"
   />
 
   <ChangeListener
@@ -22,20 +20,7 @@
 
   <ChangeListener
     listenTo="{latestSession.value}"
-    onDidChange="(c) => {
-      // Issue #100 / #71: diff-based session-tail envelope. See Workspace.xmlui
-      // for the matching handler; reset=true ⇒ replace, reset=false ⇒ append.
-      if (!c.newValue) return;
-      const env = c.newValue;
-      if (env.reset) {
-        lastJsonl = env.content || '';
-      } else if (env.content) {
-        lastJsonl = (lastJsonl || '') + env.content;
-      }
-      sessionSid = env.sid || '';
-      sinceOffset = env.offset || 0;
-      iframeTrace('jsonl-fanout', { tab: 'Transcript', len: (lastJsonl || '').length, appended: (env.content || '').length, reset: !!env.reset });
-    }" />
+    onDidChange="(c) => { if (c.newValue) { iframeTrace('jsonl-fanout', { tab: 'Transcript', len: c.newValue.length }); lastJsonl = c.newValue; } }" />
 
 
   <ModalDialog
@@ -167,7 +152,7 @@
 
     <Link
       when="{!showAll || turns.length > turnLimit}"
-      onClick="if (!showAll) { showAll = true; sinceOffset = 0; sessionSid = ''; sessionTick = sessionTick + 1; } else { turnLimit = turns.length; }"
+      onClick="if (!showAll) { showAll = true; sessionTick = sessionTick + 1; } else { turnLimit = turns.length; }"
       noIndicator="true">
       <Text fontSize="$fontSize-sm" color="$textColor-secondary"
         value="{showAll ? ('Show all (' + (turns.length - turnLimit) + ' earlier)') : 'Show earlier turns'}" />

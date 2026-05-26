@@ -7484,99 +7484,30 @@ fn route_request<R: tauri::Runtime>(
                 read_latest_session_pending(app, provider),
             )
         } else if rest == "latest-tail" {
-            // Issue #100 / #71: diff-based response. Clients pass `?since=<N>`
-            // and `?sid=<id>`; when sid matches the current latest session,
-            // server returns bytes from offset `since` to EOF. Otherwise it
-            // falls back to last-N-lines (or full file with `lines=all`).
-            // Response is always a JSON envelope: { sid, offset, content }
-            // so the client can detect session rotation (sid change ⇒ reset)
-            // and update its `since` cursor for the next poll.
+            // ?lines=N → last N records. ?lines=all (or absent) → full file.
             let mut lines_param: Option<String> = None;
-            let mut since: u64 = 0;
-            let mut expected_sid = String::new();
             for pair in query.split('&') {
                 if let Some(v) = pair.strip_prefix("lines=") {
                     lines_param = Some(percent_decode(v));
-                } else if let Some(v) = pair.strip_prefix("since=") {
-                    since = percent_decode(v).parse().unwrap_or(0);
-                } else if let Some(v) = pair.strip_prefix("sid=") {
-                    expected_sid = percent_decode(v);
                 }
             }
-            // Resolve current latest session path; derive a stable sid from
-            // the file stem so the diff response can carry it back to the client.
-            let path_opt = latest_session_path(app, provider).unwrap_or(None);
-            let (current_sid, file_size) = match &path_opt {
-                Some(path) => {
-                    let sid = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-                    (sid, size)
-                }
-                None => (String::new(), 0),
+            eprintln!(
+                "[latest-tail] query={:?} lines_param={:?}",
+                query, lines_param
+            );
+            // Default-safe: when lines is absent or unparseable, tail to
+            // the last 200 records. `?lines=all` is the only way to
+            // request the full file via this route. Prevents accidental
+            // 17MB fetches when XMLUI doesn't pass our queryParam.
+            let body = match lines_param.as_deref() {
+                Some("all") => read_latest_session(app, provider),
+                None => read_latest_session_tail(app, provider, 200),
+                Some(s) => match s.parse::<usize>() {
+                    Ok(n) => read_latest_session_tail(app, provider, n),
+                    Err(_) => read_latest_session_tail(app, provider, 200),
+                },
             };
-            // since > 0 guards against the iframe reactivity race where
-            // sessionSid is updated before sinceOffset — without this,
-            // `since=0&sid=X` would read the whole file as an "incremental
-            // delta from byte 0" (issue #100 smoke-test caught this).
-            let incremental = !expected_sid.is_empty()
-                && expected_sid == current_sid
-                && since > 0
-                && since <= file_size;
-            let content_result: Result<Vec<u8>, String> = if incremental {
-                match &path_opt {
-                    Some(path) => {
-                        use std::io::{Read, Seek, SeekFrom};
-                        std::fs::File::open(path)
-                            .map_err(|e| e.to_string())
-                            .and_then(|mut f| {
-                                f.seek(SeekFrom::Start(since)).map_err(|e| e.to_string())?;
-                                let mut out =
-                                    Vec::with_capacity((file_size - since) as usize);
-                                f.read_to_end(&mut out).map_err(|e| e.to_string())?;
-                                Ok(out)
-                            })
-                    }
-                    None => Ok(Vec::new()),
-                }
-            } else {
-                // Fresh fetch (no sid yet, or sid mismatch, or since past EOF).
-                // Default-safe: lines absent or unparseable → last 200 records.
-                // `lines=all` is the only path to the full file.
-                match lines_param.as_deref() {
-                    Some("all") => read_latest_session(app, provider),
-                    None => read_latest_session_tail(app, provider, 200),
-                    Some(s) => match s.parse::<usize>() {
-                        Ok(n) => read_latest_session_tail(app, provider, n),
-                        Err(_) => read_latest_session_tail(app, provider, 200),
-                    },
-                }
-            };
-            let result = content_result.and_then(|content| {
-                let appended = content.len();
-                eprintln!(
-                    "[latest-tail] mode={} sid={} since={} eof={} bytes={}",
-                    if incremental { "diff" } else { "fresh" },
-                    current_sid,
-                    since,
-                    file_size,
-                    appended,
-                );
-                let envelope = serde_json::json!({
-                    "sid": current_sid,
-                    "offset": file_size,
-                    "content": String::from_utf8_lossy(&content).into_owned(),
-                    // reset=true ⇒ client REPLACES its lastJsonl buffer.
-                    // reset=false ⇒ client APPENDS content. Authoritative
-                    // signal so the client doesn't have to infer from
-                    // sid equality (handles file-shrink case too).
-                    "reset": !incremental,
-                });
-                serde_json::to_vec(&envelope).map_err(|e| e.to_string())
-            });
-            ("application/json; charset=utf-8", result)
+            ("text/plain; charset=utf-8", body)
         } else if rest == "content" {
             (
                 "text/plain; charset=utf-8",

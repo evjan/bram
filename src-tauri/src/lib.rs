@@ -850,6 +850,13 @@ fn agent_turn_state_cell() -> &'static Mutex<AgentTurnState> {
 // updating.
 const AGENT_TURN_IDLE_THRESHOLD_MS: u128 = 800;
 
+// Sentinel-clear gate (#91 follow-up). The emit threshold above
+// (~800ms) misfires on natural inter-burst pauses; a real
+// end-of-turn typically shows silence >= 3s. clear_active_sentinel
+// fires only when the silence-detected turn-end exceeds this gate,
+// avoiding premature spinner clears mid-burst.
+const MIN_SILENCE_FOR_SENTINEL_CLEAR_MS: u128 = 3000;
+
 // Suppress repeat emits within 5s of the last one. After a real
 // end-of-turn the TUIs sometimes re-pulse briefly (input-box re-render,
 // scroll update, title refresh, etc.) — that re-arms the detector and
@@ -949,6 +956,22 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         }
         trace_emit_signal(app, "agent-turn-end");
         let _ = app.emit("agent-turn-end", ());
+
+        // Host-side guarantee: clear any active inflight sentinel when
+        // the agent's turn truly ends. Gated on a higher silence
+        // threshold than the emit threshold — premature fires
+        // (silence ~800-1000ms during inter-burst pauses) would clear
+        // the spinner mid-turn; real turn-ends show silence_ms
+        // >= 3000ms (typically much more after the emit cooldown).
+        // Refs #91 follow-up. Agents have trouble making
+        // /__worklist/end or /__iterate/end their literal LAST action
+        // — they tend to acknowledge tool results with one more
+        // sentence. Tying the sentinel-clear to silence-detected
+        // turn-end removes that risk class. The explicit end routes
+        // still work for agents that want to clear early.
+        if turn_end_silence_ms.map_or(false, |s| s >= MIN_SILENCE_FOR_SENTINEL_CLEAR_MS) {
+            clear_active_sentinel(app);
+        }
     }
 }
 
@@ -5764,6 +5787,35 @@ fn clear_inflight_claim_sentinel<R: tauri::Runtime>(
     let _ = app.emit("inflight-claim-changed", ());
 }
 
+// Read the current sentinel's claimed ids and call the regular clear
+// path with them — used by the agent-turn-end hook to fire a clear
+// without the caller having to know who's claimed. No-op if the
+// sentinel is absent or has no ids. Refs #91 follow-up.
+fn clear_active_sentinel<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(path) = inflight_claim_file(app) else {
+        return;
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let claim: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let ids: Vec<String> = claim
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !ids.is_empty() {
+        clear_inflight_claim_sentinel(app, &ids);
+    }
+}
+
 // Startup cleanup. Removes any stale inflight sentinel from a prior
 // session that didn't complete (Bram killed mid-cycle, agent crashed
 // before mutate, etc.).
@@ -8038,10 +8090,13 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
         );
     }
 
-    // Clear the inflight sentinel (#84) when mutate succeeds for the
-    // ids currently claimed. No-op if the sentinel doesn't fully cover
-    // `affected` — partial-coverage is intentionally left visible.
-    clear_inflight_claim_sentinel(app, &affected);
+    // Inflight sentinel clear is no longer a side effect of mutate.
+    // The sentinel now clears either when the agent calls
+    // POST /__worklist/end (or /__iterate/end — same alias handler),
+    // OR when the host-side `pty_agent_turn_update` silence-detector
+    // fires a real turn-end (silence >= MIN_SILENCE_FOR_SENTINEL_CLEAR_MS).
+    // Both anchor the spinner-clear to actual end-of-turn rather than
+    // to the mid-turn state transition. Closes #91.
 
     let result_key = if op == "prune" { "pruned" } else { "advanced" };
     let response = format!(
@@ -8086,7 +8141,7 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Re
             let _ = request.as_reader().read_to_end(&mut buf);
             handle_iterate_begin(app, &buf)
         }
-    } else if path == "__iterate/end" {
+    } else if path == "__iterate/end" || path == "__worklist/end" {
         if method != "POST" {
             (405, "text/plain; charset=utf-8", b"POST only".to_vec())
         } else {

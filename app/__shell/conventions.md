@@ -255,11 +255,20 @@ Lifecycle:
      `resources/.inflight-claim.json` on begin and clears it on
      end; the iframe derives its inflight-spinner state from this
      file (refs #84). Failure to call `end` leaves the spinner up
-     indefinitely — the stuck claim file surfaces unfinished
-     cycles. Approved/drop cycles do NOT need begin/end calls;
-     their lifecycle is bracketed automatically by the host's
-     `/__worklist/resolve` (write) and `/__worklist/mutate`
-     (clear) handlers.
+     indefinitely until the agent's turn ends — at which point the
+     host clears the sentinel via the `agent-turn-end` event hook,
+     regardless of whether the agent called an explicit end route.
+     Agents MAY call `POST /__worklist/end` (alias of
+     `/__iterate/end`) for a fast clear before turn-end, but this
+     is optional and is **not** load-bearing for spinner correctness.
+     Iterate cycles still need `POST /__iterate/begin` as the
+     agent's first action (writes the sentinel — no equivalent
+     side-effect path for iterate, unlike resolve for approved/drop);
+     the matching `/__iterate/end` is symmetric but, like
+     `/__worklist/end`, now optional. Closes #91 — the mutate call
+     no longer touches the sentinel, and the agent's
+     end-call discipline is no longer load-bearing because the
+     host clears at agent-turn-end as a safety net.
 3. **Mechanical transitions** — use `POST /__worklist/mutate` for
    approval-driven state changes:
    - `{"op":"advance","ids":[...],"status":"applied"}` after an
@@ -695,20 +704,40 @@ in practice).
 
 ### Lifecycle by kind
 
+**Clear (all kinds):** the host clears any active sentinel when
+the silence-detected `agent-turn-end` event fires (`pty_agent_turn_update`
+in `src-tauri/src/lib.rs`), gated on
+`MIN_SILENCE_FOR_SENTINEL_CLEAR_MS` (3000ms) to filter premature
+fires on inter-burst pauses. This is the primary mechanism — it
+fires after the agent's last text token has settled, with no
+dependency on the agent calling an explicit end route. The
+`/__worklist/end` and `/__iterate/end` POST routes still work
+and clear immediately when called, but they are now optional
+"fast clear" hints rather than required convention. An agent
+that wants the spinner to drop before its narration finishes can
+call them; an agent that doesn't (or that gets the ordering
+wrong) still sees the spinner clear correctly at turn-end.
+
+**Write (per kind):**
+
 - **`approved`**: written when `GET /__worklist/resolve` serves a
-  record with `kind: "approved"`. Cleared when `POST /__worklist
-  /mutate` succeeds for `op:"advance"` or `op:"prune"` covering
-  all claimed ids.
+  record with `kind: "approved"`. `POST /__worklist/mutate
+  op:"advance"` does the state transition (proposed → applied)
+  but does NOT touch the sentinel.
 - **`drop`**: written when `GET /__worklist/resolve` serves a
-  record with `kind: "drop"`. Cleared by the matching `/__worklist
-  /mutate prune`.
+  record with `kind: "drop"`. `POST /__worklist/mutate op:"prune"`
+  does the state transition (item removed) but does NOT touch
+  the sentinel.
 - **`iterate`**: written when the agent calls `POST /__iterate
-  /begin`. Cleared when the agent calls `POST /__iterate/end` with
-  the same ids.
+  /begin`. The begin call is still required for iterate cycles
+  (no equivalent side-effect path, unlike resolve for
+  approved/drop).
 
 The `clear` step is a no-op if the supplied ids don't fully cover
 what's currently claimed. Partial coverage leaves the sentinel in
 place — a deliberate diagnostic signal.
+
+Refs #91.
 
 ### Stale-claim handling
 
@@ -727,7 +756,21 @@ only automatic stale-cleanup path.
 |---|---|---|
 | `/__inflight` | GET | Returns the sentinel content or `{}`. Iframe's `inflightClaim` DataSource consumes this. |
 | `/__iterate/begin` | POST | Body `{"ids":["..."]}`. Writes sentinel with `kind:"iterate"`. Returns `{"ok":true}`. |
-| `/__iterate/end` | POST | Body `{"ids":["..."]}`. Clears sentinel if it fully covers the ids. Returns `{"ok":true}`. |
+| `/__iterate/end` | POST | Body `{"ids":["..."]}`. Clears sentinel if it fully covers the ids. Kind-agnostic. Optional fast-clear hint. Returns `{"ok":true}`. |
+| `/__worklist/end` | POST | Alias of `/__iterate/end` — same handler, more natural name when ending an approved/drop turn. Closes #91. |
+
+Side-effect writes / clears from other routes and events:
+
+- `GET /__worklist/resolve` writes the sentinel as a side effect
+  of consuming a `kind: "approved"` or `"drop"` auth record.
+- `POST /__worklist/mutate` does the state transition for advance
+  / prune. Does NOT touch the sentinel — left to the host's
+  turn-end hook (or to an optional explicit end call).
+- The host's `pty_agent_turn_update` hook clears any active
+  sentinel when the silence-detected `agent-turn-end` event fires
+  (`clear_active_sentinel` in `lib.rs`), gated on
+  `MIN_SILENCE_FOR_SENTINEL_CLEAR_MS`. This is the primary clear
+  path; refs #91 follow-up.
 
 Side-effect writes from existing routes:
 

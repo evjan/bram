@@ -107,6 +107,17 @@ commit X" phrasing is that it nudges the user toward approving a
 commit they hadn't yet thought through, defeating the purpose of
 the two-stage flow.
 
+**Don't solicit commit approval in chat either.** "Want me to commit
+it now?" / "Should I commit?" / "Ready to commit?" all push the
+authorization onto a casual chat "yes" instead of the deliberate
+Approve click. The structured Approve button IS the channel; chat
+solicitation bypasses the deliberation the two-stage flow exists to
+preserve. Describe the TO COMMIT state factually ("relay is TO
+COMMIT — confidence high on happy path, untested edges noted
+above") and stop there. The user reads it and clicks Approve when
+ready, or doesn't. Same reasoning as the framing rule above:
+nudging the user toward approval cheapens the approval.
+
 The exception is a *minor* change the user explicitly asks you to
 commit directly — a typo fix, a one-line doc tweak, a small
 correction surfaced in chat ("just commit it", "commit this
@@ -706,9 +717,7 @@ in practice).
 
 **Clear (all kinds):** the host clears any active sentinel when
 the silence-detected `agent-turn-end` event fires (`pty_agent_turn_update`
-in `src-tauri/src/lib.rs`), gated on
-`MIN_SILENCE_FOR_SENTINEL_CLEAR_MS` (3000ms) to filter premature
-fires on inter-burst pauses. This is the primary mechanism — it
+in `src-tauri/src/lib.rs`). This is the primary mechanism — it
 fires after the agent's last text token has settled, with no
 dependency on the agent calling an explicit end route. The
 `/__worklist/end` and `/__iterate/end` POST routes still work
@@ -733,11 +742,11 @@ wrong) still sees the spinner clear correctly at turn-end.
   (no equivalent side-effect path, unlike resolve for
   approved/drop).
 
+Refs #91.
+
 The `clear` step is a no-op if the supplied ids don't fully cover
 what's currently claimed. Partial coverage leaves the sentinel in
 place — a deliberate diagnostic signal.
-
-Refs #91.
 
 ### Stale-claim handling
 
@@ -756,7 +765,7 @@ only automatic stale-cleanup path.
 |---|---|---|
 | `/__inflight` | GET | Returns the sentinel content or `{}`. Iframe's `inflightClaim` DataSource consumes this. |
 | `/__iterate/begin` | POST | Body `{"ids":["..."]}`. Writes sentinel with `kind:"iterate"`. Returns `{"ok":true}`. |
-| `/__iterate/end` | POST | Body `{"ids":["..."]}`. Clears sentinel if it fully covers the ids. Kind-agnostic. Optional fast-clear hint. Returns `{"ok":true}`. |
+| `/__iterate/end` | POST | Body `{"ids":["..."]}`. Clears sentinel if it fully covers the ids. Kind-agnostic. Returns `{"ok":true}`. |
 | `/__worklist/end` | POST | Alias of `/__iterate/end` — same handler, more natural name when ending an approved/drop turn. Closes #91. |
 
 Side-effect writes / clears from other routes and events:
@@ -768,16 +777,8 @@ Side-effect writes / clears from other routes and events:
   turn-end hook (or to an optional explicit end call).
 - The host's `pty_agent_turn_update` hook clears any active
   sentinel when the silence-detected `agent-turn-end` event fires
-  (`clear_active_sentinel` in `lib.rs`), gated on
-  `MIN_SILENCE_FOR_SENTINEL_CLEAR_MS`. This is the primary clear
-  path; refs #91 follow-up.
-
-Side-effect writes from existing routes:
-
-- `GET /__worklist/resolve` writes the sentinel as a side effect
-  of consuming a `kind: "approved"` or `"drop"` auth record.
-- `POST /__worklist/mutate` clears the sentinel as a side effect
-  of a successful advance or prune.
+  (`clear_active_sentinel` in `lib.rs`). This is the primary
+  clear path; refs #91 follow-up.
 
 ### Tauri event
 

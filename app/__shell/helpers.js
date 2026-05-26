@@ -73,7 +73,12 @@ window._xsLogs = window._xsLogs || [];
 (function heartbeat() {
   if (window.location.pathname.indexOf("/__tools/") === -1) return;
   var TICK_MS = 200;
-  var DRIFT_THRESHOLD_MS = 500;
+  // Threshold is configurable via appGlobals.heartbeatDriftThresholdMs
+  // (see config.json). Defaults to 500ms when unset. Lower values
+  // catch sub-second blockages at the cost of more records during
+  // normal hot-render bursts.
+  var DRIFT_THRESHOLD_MS =
+    (window.appGlobals && Number(window.appGlobals.heartbeatDriftThresholdMs)) || 500;
   var last = performance.now();
   setInterval(function () {
     var now = performance.now();
@@ -90,6 +95,38 @@ window._xsLogs = window._xsLogs || [];
       } catch (e) {}
     }
   }, TICK_MS);
+})();
+
+// Capture-phase click listener on `document` for the drawer iframe.
+// Fires for EVERY click that reaches the DOM, BEFORE XMLUI's own
+// onClick handlers. Distinguishes "click reached document but XMLUI's
+// onClick didn't run" from "click never registered at all" — the
+// former produces a `dom-click` record without a matching XMLUI
+// `subkind=click`, pointing at button-disabled/re-rendered/dead-space
+// failure modes that helpers.js can't otherwise detect. Capture phase
+// (true) ensures this runs before bubbling-phase handlers.
+(function captureClicks() {
+  if (window.location.pathname.indexOf("/__tools/") === -1) return;
+  document.addEventListener("click", function (e) {
+    try {
+      var t = e.target;
+      var tagName = t && t.tagName;
+      var ariaLabel = (t && t.getAttribute && t.getAttribute("aria-label")) || "";
+      var role = (t && t.getAttribute && t.getAttribute("role")) || "";
+      var disabled = !!(t && t.disabled);
+      window.logToHost({
+        kind: "iframe-trace",
+        subkind: "dom-click",
+        tagName: String(tagName || ""),
+        ariaLabel: String(ariaLabel),
+        role: String(role),
+        disabled: disabled,
+        x: e.clientX,
+        y: e.clientY,
+        at: new Date().toISOString(),
+      });
+    } catch (le) {}
+  }, true);
 })();
 
 // Outbound right-pane → PTY intents route through `queue_pty_intent`

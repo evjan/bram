@@ -1,7 +1,8 @@
 {
   "appGlobals": {
     "xsVerbose": true,
-    "xsVerboseLogMax": 300
+    "xsVerboseLogMax": 300,
+    "heartbeatDriftThresholdMs": 250
   },
   "themes": ["themes/bram.json"],
   "defaultTheme": "bram",

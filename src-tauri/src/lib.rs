@@ -5816,6 +5816,113 @@ fn clear_active_sentinel<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
+// JSONL-driven turn-end detection (#91 follow-up). The PTY-silence
+// path (`pty_agent_turn_update`) fires `agent-turn-end` events on
+// silence_ms exceeding a threshold, then clears the sentinel — but
+// a multi-second silence between bursts is indistinguishable from a
+// real end-of-turn via PTY signal alone. The session JSONL has an
+// explicit `stop_reason: "end_turn"` marker on the assistant's final
+// message of a turn, which is the durable, structured signal we want.
+//
+// First cut: Claude Code sessions only (detected by the `.claude`
+// segment in the path). Codex follow-up if needed.
+//
+// Stale-line guard: if the file's mtime predates the sentinel's
+// `claimedAt`, the last line is from a prior turn that ended before
+// the current click — skip and trace as `skipped=stale-prior-turn`.
+fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::path::Path) {
+    let path_str = path.to_string_lossy();
+    if !path_str.contains("/.claude/") {
+        return;
+    }
+
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    let file_mtime_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Some(last_line) = content.lines().rev().find(|l| !l.trim().is_empty()) else {
+        return;
+    };
+    let Ok(entry) = serde_json::from_str::<serde_json::Value>(last_line) else {
+        return;
+    };
+
+    if entry.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+        return;
+    }
+    let stop_reason = entry
+        .get("message")
+        .and_then(|m| m.get("stop_reason"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if stop_reason != "end_turn" {
+        return;
+    }
+
+    let Some(sentinel_path) = inflight_claim_file(app) else {
+        return;
+    };
+    let Ok(sentinel_content) = std::fs::read_to_string(&sentinel_path) else {
+        return;
+    };
+    let Ok(claim) = serde_json::from_str::<serde_json::Value>(&sentinel_content) else {
+        return;
+    };
+
+    let claimed_ids: Vec<String> = claim
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if claimed_ids.is_empty() {
+        return;
+    }
+
+    let claimed_at = claim
+        .get("claimedAt")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    if file_mtime_ms < claimed_at {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "jsonl-turn-end",
+                &format!(
+                    "op=detect kind=claude stop_reason=end_turn skipped=stale-prior-turn claimed={}",
+                    serde_json::to_string(&claimed_ids).unwrap_or_else(|_| "[]".to_string())
+                ),
+            );
+        }
+        return;
+    }
+
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "jsonl-turn-end",
+            &format!(
+                "op=detect kind=claude stop_reason=end_turn claimed={}",
+                serde_json::to_string(&claimed_ids).unwrap_or_else(|_| "[]".to_string())
+            ),
+        );
+    }
+
+    clear_inflight_claim_sentinel(app, &claimed_ids);
+}
+
 // Startup cleanup. Removes any stale inflight sentinel from a prior
 // session that didn't complete (Bram killed mid-cycle, agent crashed
 // before mutate, etc.).
@@ -8142,6 +8249,13 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Re
             handle_iterate_begin(app, &buf)
         }
     } else if path == "__iterate/end" || path == "__worklist/end" {
+        // `/__worklist/end` is the alias agents call as the last action
+        // of approved/drop turns (closing the cycle the resolve handler
+        // opened by writing the sentinel). Both names route through the
+        // same kind-agnostic handler — the sentinel doesn't care
+        // whether it was written with kind:"approved", "drop", or
+        // "iterate", and the clear logic only needs the id set.
+        // Closes #91.
         if method != "POST" {
             (405, "text/plain; charset=utf-8", b"POST only".to_vec())
         } else {
@@ -8863,6 +8977,22 @@ pub fn run() {
                                         &format!("file={} bytes={}", name, size),
                                     );
                                 }
+                            }
+                        }
+                        // JSONL-driven turn-end detection (#91 follow-up).
+                        // Parses each changed JSONL for a Claude
+                        // `stop_reason: "end_turn"` last-line marker; if
+                        // present and the sentinel is claimed, clears it
+                        // directly. More reliable than the PTY-silence
+                        // path for cycles where the agent has multi-second
+                        // pauses between bursts. The silence-driven path
+                        // remains as fallback (gated by
+                        // MIN_SILENCE_FOR_SENTINEL_CLEAR_MS); if this
+                        // detector fires first, the silence-driven clear
+                        // is a no-op because the sentinel is already gone.
+                        for p in &event.paths {
+                            if p.extension().map_or(false, |e| e == "jsonl") {
+                                check_jsonl_for_turn_end(&app_handle, p);
                             }
                         }
                         // Removed the 100ms leading-edge debounce: it

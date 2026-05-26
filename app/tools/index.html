@@ -20,7 +20,12 @@
         window.APP_VERSION = "dev-" + Date.now();
       })();
     </script>
-    <script src="/__shell/helpers.js"></script>
+    <script>
+      // Cachebust helpers.js using APP_VERSION (set above to dev-Date.now()).
+      // Without this, browsers cache /__shell/helpers.js indefinitely and
+      // edits don't take effect across iframe reloads.
+      document.write('<script src="/__shell/helpers.js?v=' + window.APP_VERSION + '"><\/script>');
+    </script>
     <script>
       logToHost({ kind: "tools-boot", stage: "before-xmlui-load", at: new Date().toISOString() });
     </script>

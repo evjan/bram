@@ -92,6 +92,7 @@ function stripMarkdownImages(text) {
 // reads as "waiting". Used by Transcript's "agent is thinking" spinner.
 function isWaitingForAssistant(jsonlText) {
   if (!jsonlText) return false;
+  const _t0 = App.now();
   const lines = jsonlText.split('\n');
   let lastRole = null;
   for (const line of lines) {
@@ -115,6 +116,7 @@ function isWaitingForAssistant(jsonlText) {
       if (r.payload.type === 'agent_message') lastRole = 'assistant';
     }
   }
+  _traceHelperTiming('isWaitingForAssistant', _t0, { len: jsonlText.length, lines: lines.length });
   return lastRole === 'user';
 }
 
@@ -136,6 +138,7 @@ function isWaitingForAssistant(jsonlText) {
 // only when we end on 'idle'.
 function isAgentIdle(jsonlText) {
   if (!jsonlText) return false;
+  const _t0 = App.now();
   const lines = jsonlText.split('\n');
   let lastState = null;
   for (const line of lines) {
@@ -159,6 +162,7 @@ function isAgentIdle(jsonlText) {
       else if (r.payload.type === 'task_complete') lastState = 'idle';
     }
   }
+  _traceHelperTiming('isAgentIdle', _t0, { len: jsonlText.length, lines: lines.length });
   return lastState === 'idle';
 }
 
@@ -177,6 +181,22 @@ function iframeTrace(subkind, fields) {
     if (fields && typeof fields === 'object') {
       Object.assign(payload, fields);
     }
+    logToHost(payload);
+  } catch (e) {}
+}
+
+// Cascade-diagnosis instrumentation (refs #93). Emits a helper-call
+// record to bram-trace when a hot JSONL-walking helper exceeds the
+// threshold. Cheap paths (no-op early returns, cache hits) don't log
+// because their _t0 measurement is sub-ms. Threshold deliberately
+// low to catch sub-frame stalls that compound across the cascade.
+function _traceHelperTiming(name, t0, extra) {
+  try {
+    const _elapsed = App.now() - t0;
+    if (_elapsed < 2) return;
+    if (typeof logToHost !== 'function') return;
+    const payload = { kind: 'iframe-trace', subkind: 'helper-call', name: name, ms: Math.round(_elapsed), at: new Date().toISOString() };
+    if (extra && typeof extra === 'object') Object.assign(payload, extra);
     logToHost(payload);
   } catch (e) {}
 }
@@ -329,6 +349,7 @@ function currentTurnEdits(jsonlText) {
   if (currentTurnEdits._cacheKey === jsonlText && currentTurnEdits._cache) {
     return currentTurnEdits._cache;
   }
+  const _t0 = App.now();
   // Fast path: skip parsing entirely if the text has no tool-call
   // signal of either provider. The expensive split + per-line
   // JSON.parse below would otherwise run on every render against the
@@ -341,6 +362,7 @@ function currentTurnEdits(jsonlText) {
       jsonlText.indexOf('"custom_tool_call"') === -1) {
     currentTurnEdits._cacheKey = jsonlText;
     currentTurnEdits._cache = [];
+    _traceHelperTiming('currentTurnEdits', _t0, { len: jsonlText.length, path: 'fast-bytes-scan' });
     return currentTurnEdits._cache;
   }
 
@@ -492,6 +514,7 @@ function currentTurnEdits(jsonlText) {
   const result = order.map(fp => byFile[fp]);
   currentTurnEdits._cacheKey = jsonlText;
   currentTurnEdits._cache = result;
+  _traceHelperTiming('currentTurnEdits', _t0, { len: jsonlText.length, edits: result.length, path: 'full-parse' });
   return result;
 }
 
@@ -689,6 +712,7 @@ function visibleTurns(turns, n) {
 // Transcript's full timeline / tool-call rendering. Returns '' if no
 // assistant text turn is present in the tail.
 function lastAssistantText(jsonlText) {
+  const _t0 = App.now();
   const turns = sessionTurns(jsonlText);
   for (let i = turns.length - 1; i >= 0; i--) {
     if (turns[i].role === 'assistant') {
@@ -696,9 +720,13 @@ function lastAssistantText(jsonlText) {
         .filter(e => e.kind === 'text')
         .map(e => e.text)
         .join('\n\n');
-      if (text) return text;
+      if (text) {
+        _traceHelperTiming('lastAssistantText', _t0, { len: (jsonlText || '').length, textLen: text.length });
+        return text;
+      }
     }
   }
+  _traceHelperTiming('lastAssistantText', _t0, { len: (jsonlText || '').length, textLen: 0 });
   return '';
 }
 
@@ -843,16 +871,13 @@ function sessionTurns(jsonlText) {
   sessionTurns._cacheKey = jsonlText;
   sessionTurns._cacheValue = turns;
   const _elapsed = App.now() - _t0;
-  if (_elapsed > 5) {
-    try {
-      logToHost({
-        kind: 'sessionTurns-parse',
-        ms: Math.round(_elapsed),
-        len: jsonlText.length,
-        turns: turns.length,
-        n: sessionTurns._parseCount,
-      });
-    } catch (e) {}
+  if (_elapsed > 2) {
+    iframeTrace('sessionTurns-parse', {
+      ms: Math.round(_elapsed),
+      len: jsonlText.length,
+      turns: turns.length,
+      n: sessionTurns._parseCount,
+    });
   }
   return turns;
 }

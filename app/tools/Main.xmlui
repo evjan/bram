@@ -196,6 +196,7 @@
     <NavLink label="Commits" to="/commits" />
     <NavLink label="Transcript" to="/" exact="true" />
     <NavLink label="Sessions" to="/sessions" />
+    <NavLink label="History" to="/history" />
     <NavLink label="Context" to="/context" />
   </NavPanel>
 
@@ -243,6 +244,7 @@
     <Page url="/"><Transcript activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
     <Page url="/worklist"><Workspace activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
     <Page url="/sessions"><Sessions /></Page>
+    <Page url="/history"><History /></Page>
     <Page url="/context"><Context activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
     <Page url="/issues"><Issues /></Page>
     <Page url="/commits"><Commits /></Page>

@@ -322,6 +322,14 @@ fn first_nonempty_env(names: &[&str]) -> Option<String> {
 static BRAM_TRACE_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+// Defer tools-pane-reload while a cycle is active (refs #93).
+// Set when the watcher would otherwise emit during sentinel-active.
+// Cleared and flushed once the sentinel is cleared. Single boolean
+// so N watcher events during one cycle coalesce into one post-cycle
+// reload — intended behavior.
+static PENDING_TOOLS_RELOAD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 // Cached open handle for the live trace file. Lazy-init on first
 // write: truncate-open, emit the session-start line, store the handle.
 // Subsequent writes reuse the handle, dropping the per-event cost from
@@ -5785,6 +5793,55 @@ fn clear_inflight_claim_sentinel<R: tauri::Runtime>(
     }
     trace_emit_signal(app, "inflight-claim-changed");
     let _ = app.emit("inflight-claim-changed", ());
+
+    // Flush a deferred tools-pane-reload if one was queued during the
+    // cycle (refs #93). Atomic swap-to-false; the previous value tells
+    // us whether to fire.
+    if PENDING_TOOLS_RELOAD.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        if bram_trace_enabled() {
+            append_bram_trace_line(app, "tools-pane-reload", "op=flushed-on-clear");
+        }
+        trace_emit_signal(app, "tools-pane-reload");
+        let _ = app.emit("tools-pane-reload", ());
+    }
+}
+
+// True iff resources/.inflight-claim.json exists, parses, and lists at
+// least one claimed id. Used by the watcher to decide whether to emit
+// tools-pane-reload now or defer it until the cycle clears (refs #93).
+fn inflight_sentinel_is_active<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    let Some(path) = inflight_claim_file(app) else {
+        return false;
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    let claim: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    claim
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| !arr.is_empty())
+        .unwrap_or(false)
+}
+
+// Emit tools-pane-reload, OR defer it if a cycle is currently active
+// (refs #93). The host owns the cycle-active signal via the inflight
+// sentinel; suppressing reloads during cycles prevents iframe remount
+// from blowing away the user's mid-cycle context and causing the 7+s
+// of drift / click swallows we measured pre-fix.
+fn emit_or_defer_tools_pane_reload<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if inflight_sentinel_is_active(app) {
+        PENDING_TOOLS_RELOAD.store(true, std::sync::atomic::Ordering::SeqCst);
+        if bram_trace_enabled() {
+            append_bram_trace_line(app, "tools-pane-reload", "op=deferred reason=sentinel-active");
+        }
+        return;
+    }
+    trace_emit_signal(app, "tools-pane-reload");
+    let _ = app.emit("tools-pane-reload", ());
 }
 
 // Read the current sentinel's claimed ids and call the regular clear
@@ -8907,8 +8964,7 @@ pub fn run() {
                     if let Some(since) = pending_tools_since {
                         if since.elapsed() >= tools_debounce {
                             eprintln!("[watcher] change detected, emitting tools-pane-reload (debounced)");
-                            trace_emit_signal(&app_handle, "tools-pane-reload");
-                            let _ = app_handle.emit("tools-pane-reload", ());
+                            emit_or_defer_tools_pane_reload(&app_handle);
                             pending_tools_since = None;
                         }
                     }

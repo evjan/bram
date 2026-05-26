@@ -10,6 +10,8 @@
       "Bash(curl -s \"http://localhost*__issues*)",
       "Bash(curl -s -X POST -d * \"http://localhost*__iterate*)",
       "Bash(curl -s \"http://localhost*__enhance*)",
+      "Bash(cat resources/.bram-port)",
+      "Bash(cat resources/.bram-port:*)",
       "mcp__xmlui"
     ]
   },

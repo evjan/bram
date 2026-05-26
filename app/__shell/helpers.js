@@ -72,6 +72,16 @@ window._xsLogs = window._xsLogs || [];
 // its own load profile.
 (function heartbeat() {
   if (window.location.pathname.indexOf("/tools/") === -1) return;
+  setTimeout(function () {
+    try {
+      window.logToHost && window.logToHost({
+        kind: "iframe-trace",
+        subkind: "helpers-js-loaded",
+        build: "batch-v2",
+        at: new Date().toISOString(),
+      });
+    } catch (e) {}
+  }, 500);
   var TICK_MS = 200;
   // Threshold is configurable via appGlobals.heartbeatDriftThresholdMs
   // (see config.json). Defaults to 500ms when unset. Lower values
@@ -80,10 +90,38 @@ window._xsLogs = window._xsLogs || [];
   var DRIFT_THRESHOLD_MS =
     (window.appGlobals && Number(window.appGlobals.heartbeatDriftThresholdMs)) || 500;
   var last = performance.now();
+  var batch = { fires: 0, sumDrift: 0, maxDrift: 0, spikes: 0, sinceMs: 0 };
+  // Batch summary every 50 fires (~10s nominal). Emits aggregate
+  // drift stats so we can see overall main-thread health independent
+  // of individual spike records.
+  function batchTick(drift) {
+    if (batch.fires === 0) batch.sinceMs = Date.now();
+    batch.fires += 1;
+    batch.sumDrift += drift;
+    if (drift > batch.maxDrift) batch.maxDrift = drift;
+    if (drift >= DRIFT_THRESHOLD_MS) batch.spikes += 1;
+    if (batch.fires >= 50) {
+      try {
+        window.logToHost({
+          kind: "iframe-trace",
+          subkind: "heartbeat-batch",
+          fires: batch.fires,
+          spanMs: Date.now() - batch.sinceMs,
+          sumDriftMs: Math.round(batch.sumDrift),
+          avgDriftMs: Math.round(batch.sumDrift / batch.fires),
+          maxDriftMs: Math.round(batch.maxDrift),
+          spikes: batch.spikes,
+          at: new Date().toISOString(),
+        });
+      } catch (e) {}
+      batch = { fires: 0, sumDrift: 0, maxDrift: 0, spikes: 0, sinceMs: 0 };
+    }
+  }
   setInterval(function () {
     var now = performance.now();
     var drift = now - last - TICK_MS;
     last = now;
+    batchTick(drift);
     if (drift >= DRIFT_THRESHOLD_MS) {
       try {
         window.logToHost({
@@ -358,12 +396,38 @@ var __talkSessionSubscriber = null;
 window.onTalkSessionChange = function (fn) {
   __talkSessionSubscriber = typeof fn === "function" ? fn : null;
 };
+// Cascade-diagnosis instrumentation (refs #93). Counts every
+// talk-session-changed delivery and emits a rolling batch record
+// every 10 events so we can see per-event cost + frequency without
+// flooding bram-trace.
+var __tscBatch = { count: 0, totalMs: 0, maxMs: 0, sinceMs: 0 };
+function __tscBatchTick(elapsedMs) {
+  if (__tscBatch.count === 0) __tscBatch.sinceMs = Date.now();
+  __tscBatch.count += 1;
+  __tscBatch.totalMs += elapsedMs;
+  if (elapsedMs > __tscBatch.maxMs) __tscBatch.maxMs = elapsedMs;
+  if (__tscBatch.count >= 10) {
+    try {
+      iframeTrace("talk-session-batch", {
+        count: __tscBatch.count,
+        sumMs: Math.round(__tscBatch.totalMs * 10) / 10,
+        avgMs: Math.round((__tscBatch.totalMs / __tscBatch.count) * 10) / 10,
+        maxMs: Math.round(__tscBatch.maxMs * 10) / 10,
+        spanMs: Date.now() - __tscBatch.sinceMs,
+      });
+    } catch (e) {}
+    __tscBatch = { count: 0, totalMs: 0, maxMs: 0, sinceMs: 0 };
+  }
+}
 try {
   if (window.parent && window.parent.__TAURI__ && window.parent.__TAURI__.event) {
     window.parent.__TAURI__.event.listen("talk-session-changed", function () {
+      var t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
       if (typeof __talkSessionSubscriber === "function") {
         __talkSessionSubscriber();
       }
+      var t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+      __tscBatchTick(t1 - t0);
     });
   }
 } catch (e) {}

@@ -20,7 +20,7 @@
 
   <ChangeListener
     listenTo="{latestSession.value}"
-    onDidChange="(c) => { if (c.newValue) lastJsonl = c.newValue }" />
+    onDidChange="(c) => { if (c.newValue) { iframeTrace('jsonl-fanout', { tab: 'Transcript', len: c.newValue.length }); lastJsonl = c.newValue; } }" />
 
 
   <ModalDialog

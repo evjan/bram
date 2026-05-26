@@ -1,0 +1,42 @@
+<Component name="History"
+  var.activeSnapshot="{null}">
+
+  <DataSource
+    id="history"
+    url="/__worklist-history/list" />
+
+  <VStack padding="$space-6" gap="$space-3">
+    <Heading level="h2">History</Heading>
+
+    <Text
+      when="{!history.value || history.value.length === 0}"
+      color="$textColor-secondary"
+      fontSize="$fontSize-sm">
+      No worklist history yet.
+    </Text>
+
+    <ModalDialog id="historySnapshotDialog" title="{activeSnapshot &amp;&amp; activeSnapshot.iso}">
+      <Markdown content="{activeSnapshot &amp;&amp; activeSnapshot.changelog}" />
+    </ModalDialog>
+
+    <Table when="{history.value && history.value.length > 0}" data="{history.value}">
+      <Column header="details" width="80px">
+        <Link
+          onClick="activeSnapshot = $item; historySnapshotDialog.open()"
+          noIndicator>
+          <Text value="show" fontSize="$fontSize-xs" />
+        </Link>
+      </Column>
+      <Column bindTo="summary" header="action" width="140px" />
+      <Column header="items">
+        <Text
+          value="{$item.ids &amp;&amp; $item.ids.join(', ')}"
+          overflowMode="flow"
+          breakMode="word" />
+      </Column>
+      <Column header="when" width="160px">
+        <Text value="{$item.iso &amp;&amp; $item.iso.slice(0, 16)}" fontSize="$fontSize-sm" />
+      </Column>
+    </Table>
+  </VStack>
+</Component>

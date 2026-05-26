@@ -4,7 +4,6 @@
   var.submittedItemId="{null}"
   var.submitting="{false}"
   var.expandedItemId="{null}"
-  var.activeSnapshot="{null}"
   var.lastJsonl="{null}"
   var.sessionTick="{0}"
   var.statusHelpFor="{null}"
@@ -33,7 +32,10 @@
       // Inflight-clear logic moved to inflightClaim's onLoaded (#84
       // item 3) — the host-managed sentinel is now the authoritative
       // spinner signal.
-      if (c.newValue) lastJsonl = c.newValue;
+      if (c.newValue) {
+        iframeTrace('jsonl-fanout', { tab: 'Workspace', len: c.newValue.length, submitting: submitting });
+        lastJsonl = c.newValue;
+      }
     }" />
   <ChangeListener
     listenTo="{selectedFeedback}"
@@ -63,9 +65,6 @@
       }
       lastWorklistSig = currentSig;
     }" />
-  <DataSource
-    id="history"
-    url="/__worklist-history/list" />
   <DataSource
     id="openIssues"
     url="/__issues"
@@ -105,7 +104,6 @@
         submittedItemId = null;
         selectedFeedback = '';
         feedbackExpanded = false; expandedItemId = null;
-        history.refetch();
       }
     }" />
 
@@ -154,13 +152,8 @@
           // Direct refetch — the host-side watcher debounce (#85)
           // coalesces notify-rs's ~6× cascade per worklist.json write
           // into one emit per logical change, so this fires once per
-          // logical change. history.refetch() is intentionally NOT
-          // called here: worklist transitions don't change the
-          // worklist-history snapshot index — snapshots only land on
-          // commit, which clears the inflight sentinel and routes
-          // through inflightClaim's onLoaded path (which DOES
-          // refetch history). Refs #85
-          // worklist-changed-no-history-refetch.
+          // logical change. The History tab owns its own DataSource
+          // now (moved out of Workspace), so no history refetch here.
           iframeTrace('refetch-called', {context: 'worklist-changed'});
           worklist.refetch();
         }).then((unlisten) => { window.__bramWorklistUnlisten = unlisten; }).catch(() => {});
@@ -462,11 +455,12 @@
         </Items>
       </VStack>
 
+    </VStack>
+
       <VStack gap="$space-1" when="{worklist.value && worklist.value.items && worklist.value.items.length > 0 && lastAssistantText(lastJsonl)}">
         <Heading level="h4">Last agent response</Heading>
         <Markdown content="{lastAssistantText(lastJsonl)}" />
       </VStack>
-    </VStack>
 
     <ModalDialog
       when="{statusHelpFor === 'proposed'}"
@@ -694,30 +688,5 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
       </VStack>
     </ModalDialog>
 
-    <VStack gap="$space-3" when="{history.value && history.value.length > 0}">
-      <Heading level="h2">History</Heading>
-      <ModalDialog id="historySnapshotDialog" title="{activeSnapshot &amp;&amp; activeSnapshot.iso}">
-        <Markdown content="{activeSnapshot &amp;&amp; activeSnapshot.changelog}" />
-      </ModalDialog>
-      <Table data="{history.value}">
-        <Column header="details" width="80px">
-          <Link
-            onClick="activeSnapshot = $item; historySnapshotDialog.open()"
-            noIndicator>
-            <Text value="show" fontSize="$fontSize-xs" />
-          </Link>
-        </Column>
-        <Column bindTo="summary" header="action" width="140px" />
-        <Column header="items">
-          <Text
-            value="{$item.ids &amp;&amp; $item.ids.join(', ')}"
-            overflowMode="flow"
-            breakMode="word" />
-        </Column>
-        <Column header="when" width="160px">
-          <Text value="{$item.iso &amp;&amp; $item.iso.slice(0, 16)}" fontSize="$fontSize-sm" />
-        </Column>
-      </Table>
-    </VStack>
   </VStack>
 </Component>

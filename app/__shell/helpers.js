@@ -489,6 +489,37 @@ window.subscribeLatestJsonl = function (key, fn) {
   }
   window[key] = window.onLatestJsonlChange(fn);
 };
+// Append a delta chunk to the shared cache (diff-based latest-tail path,
+// issue #100). Caps the cache at __latestJsonlMaxBytes by head-trimming
+// at the next newline boundary — keeps the buffer always-valid JSONL so
+// downstream parsers (sessionTurns, isWaitingForAssistant, ...) walk
+// line-by-line safely. The cap is the missing bound that caused the
+// 4138070 revert: without it, every reset:false append grew the buffer
+// forever.
+var __latestJsonlMaxBytes = 1500000; // ~1.5 MB
+window.appendLatestJsonl = function (chunk) {
+  if (!chunk) return;
+  var combined = (__latestJsonlValue || "") + chunk;
+  if (combined.length > __latestJsonlMaxBytes) {
+    var beforeLen = combined.length;
+    var dropTo = combined.length - __latestJsonlMaxBytes;
+    var nl = combined.indexOf("\n", dropTo);
+    combined = nl >= 0 ? combined.slice(nl + 1) : combined.slice(dropTo);
+    try {
+      if (window.logToHost) {
+        window.logToHost({
+          kind: "iframe-trace",
+          subkind: "jsonl-cap-trim",
+          at: new Date().toISOString(),
+          before: beforeLen,
+          after: combined.length,
+          dropped: beforeLen - combined.length,
+        });
+      }
+    } catch (e) {}
+  }
+  window.setLatestJsonl(combined);
+};
 
 // Continuous variant: register a callback that fires on every resize
 // (window.resize event inside the iframe) plus once with the current

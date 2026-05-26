@@ -554,18 +554,13 @@ disk. Approving the item then exercises the new behavior end-to-end
 — your file rewrites, the worklist pruning, the Talk-page update —
 which is the actual test.
 
-**Enforcement layers.** xmlui-desktop records structured `approved:` /
-`drop:` payloads in `resources/.worklist-authorization.json`. That is
-the provider-neutral authorization record for worklist state changes.
-Claude installs a PreToolUse hook at `.claude/hooks/worklist-guard.py`
-for `Write` / `Edit`, and Codex installs its own native PreToolUse hook
-through `~/.codex/config.toml` to cover `apply_patch`, mutation-shaped
-Bash, and filesystem/MCP writes. Both hooks validate worklist coverage
-before the tool runs. The desktop watcher remains as fallback coverage:
-it compares the old/new worklist snapshots and rewrites the old file
-back if the prune was not authorized or if a hook failed to launch. If
-you hit either path, read the error or revert message; it is the
-convention's enforcement mechanism, not a bug to work around.
+**Enforcement layers.** Structured `approved:` / `drop:` payloads land
+in `resources/.worklist-authorization.json` (provider-neutral). Claude
+and Codex each install PreToolUse hooks that validate worklist coverage
+before file-mutating tools run. The desktop watcher is fallback coverage
+(reverts unauthorized prunes). If you hit a hook error or revert
+message, that's the convention's enforcement mechanism, not a bug to
+work around.
 
 **Don't ask before editing the worklist or calling mutate.** The
 proposal-authoring write channel is already approved and guarded, and
@@ -615,177 +610,54 @@ intent shifts). Otherwise leave it; the iteration history doesn't
 need to live in the item.
 
 **Use `POST /__worklist/mutate` for mechanical prunes + status
-advances** — it's the canonical counterpart to `/__worklist/resolve`
-and renders no diff in the chat. Two ops:
-
-```
-curl -X POST -d '{"op":"prune","ids":["item-a"]}' \
-  http://localhost:61455/__worklist/mutate
-curl -X POST -d '{"op":"advance","ids":["item-a"],"status":"applied"}' \
-  http://localhost:61455/__worklist/mutate
-```
-
-(substitute the literal port read from `resources/.bram-port`).
-
-Server-side auth check: `prune` requires `kind: "drop"` for those ids
-in `.worklist-authorization.json`; `advance` requires `kind: "approved"`.
-Mismatch returns 400 with `{"error": "..."}` and no file change.
-Direct edits to `resources/worklist.json` that remove items or change
-their `status` are the wrong tool for this job and may be blocked by
-the provider hook even when the auth record is otherwise valid. A
-same-turn `resolve → edit files → mutate` sequence is valid: the
-approved record is consumed for *future resolve reads*, but mutate
-still uses the stored auth record from the current turn. Use
-this instead of `jq` + Bash for prunes, and instead of an `Edit` for
-proposed→applied status flips. Item content edits (new proposals,
-prose revisions on iterate) still go through `Write` / `Edit` — the
-endpoint is only for the mechanical mutations enumerated above.
+advances.** Two ops: `{"op":"prune","ids":[...]}` after a drop,
+`{"op":"advance","ids":[...],"status":"applied"}` after an approved
+apply. Server-side auth check requires the matching `kind` in
+`.worklist-authorization.json` from the current turn's resolve; same-turn
+`resolve → edit files → mutate` is valid because mutate reads the stored
+auth record, not just `resolve`'s consumption state. Direct `Edit`s to
+`worklist.json` that change `status` or remove items are the wrong
+channel — may be blocked by the provider hook. Item content edits
+(proposal authoring, iterate prose revisions) still go through
+`Write` / `Edit`; only the mechanical mutations route through `mutate`.
 
 ## Host-managed inflight sentinel
 
-The Worklist tab's spinner state derives from a single on-disk
-file, `resources/.inflight-claim.json`, written and cleared by
-host-side HTTP handlers. This replaces the earlier iframe-side
-heuristic chain (agent-turn-end listener + debounce Timer + JSONL
-ChangeListener + 60 s stale-timeout + item-gone path), which
-accumulated false-clears, premature-clears, and silent
-inconsistencies as the system grew. The sentinel is authoritative:
-spinner is up while the file claims the targeted item, off when it
-doesn't.
+The Worklist tab's spinner derives from `resources/.inflight-claim.json`,
+written and cleared by host-side HTTP handlers. Spinner is up while the
+file claims the targeted item, off when it doesn't. Full route /
+file-shape / event reference lives in `docs/apis.md` §11; this section
+is the agent-side convention only.
 
-### The sentinel file
+### What the agent calls
 
-Path: `resources/.inflight-claim.json`. Shape:
-
-```json
-{
-  "ids": ["item-id-1", "item-id-2"],
-  "claimedAt": 1779660000000,
-  "kind": "approved"
-}
-```
-
-`kind` is one of `"approved"`, `"drop"`, `"iterate"`. `claimedAt`
-is Unix milliseconds at write time. `ids` are the targeted
-worklist item ids for this cycle.
-
-Invariants: the file is either absent or contains valid JSON with
-all three fields. Writes are atomic via `.tmp` + rename. Writes
-are serialized at the host (single-process; no concurrent writes
-in practice).
-
-### Lifecycle by kind
-
-**Clear (all kinds):** the host clears any active sentinel when
-the silence-detected `agent-turn-end` event fires (`pty_agent_turn_update`
-in `src-tauri/src/lib.rs`). This is the primary mechanism — it
-fires after the agent's last text token has settled, with no
-dependency on the agent calling an explicit end route. The
-`/__worklist/end` and `/__iterate/end` POST routes still work
-and clear immediately when called, but they are now optional
-"fast clear" hints rather than required convention. An agent
-that wants the spinner to drop before its narration finishes can
-call them; an agent that doesn't (or that gets the ordering
-wrong) still sees the spinner clear correctly at turn-end.
-
-**Write (per kind):**
-
-- **`approved`**: written when `GET /__worklist/resolve` serves a
-  record with `kind: "approved"`. `POST /__worklist/mutate
-  op:"advance"` does the state transition (proposed → applied)
-  but does NOT touch the sentinel.
-- **`drop`**: written when `GET /__worklist/resolve` serves a
-  record with `kind: "drop"`. `POST /__worklist/mutate op:"prune"`
-  does the state transition (item removed) but does NOT touch
-  the sentinel.
-- **`iterate`**: written when the agent calls `POST /__iterate
-  /begin`. The begin call is still required for iterate cycles
-  (no equivalent side-effect path, unlike resolve for
-  approved/drop).
-
-Refs #91.
-
-The `clear` step is a no-op if the supplied ids don't fully cover
-what's currently claimed. Partial coverage leaves the sentinel in
-place — a deliberate diagnostic signal.
-
-### Stale-claim handling
-
-The sentinel does NOT time out during a live session. A long-lived
-claim is the convention enforcement mechanism: stuck spinner =
-stuck claim = something to investigate (most commonly an agent
-contract violation, see the failure-modes section below).
-
-On Bram startup, any sentinel left over from a prior session is
-deleted by `cleanup_stale_inflight_claim`. A Bram restart is the
-only automatic stale-cleanup path.
-
-### HTTP routes
-
-| Route | Method | Purpose |
-|---|---|---|
-| `/__inflight` | GET | Returns the sentinel content or `{}`. Iframe's `inflightClaim` DataSource consumes this. |
-| `/__iterate/begin` | POST | Body `{"ids":["..."]}`. Writes sentinel with `kind:"iterate"`. Returns `{"ok":true}`. |
-| `/__iterate/end` | POST | Body `{"ids":["..."]}`. Clears sentinel if it fully covers the ids. Kind-agnostic. Returns `{"ok":true}`. |
-| `/__worklist/end` | POST | Alias of `/__iterate/end` — same handler, more natural name when ending an approved/drop turn. Closes #91. |
-
-Side-effect writes / clears from other routes and events:
-
-- `GET /__worklist/resolve` writes the sentinel as a side effect
-  of consuming a `kind: "approved"` or `"drop"` auth record.
-- `POST /__worklist/mutate` does the state transition for advance
-  / prune. Does NOT touch the sentinel — left to the host's
-  turn-end hook (or to an optional explicit end call).
-- The host's `pty_agent_turn_update` hook clears any active
-  sentinel when the silence-detected `agent-turn-end` event fires
-  (`clear_active_sentinel` in `lib.rs`). This is the primary
-  clear path; refs #91 follow-up.
-
-### Tauri event
-
-`inflight-claim-changed` — emitted from inside each of the three
-host helpers (`write_inflight_claim_sentinel`,
-`clear_inflight_claim_sentinel`, `cleanup_stale_inflight_claim`)
-after the file write or delete completes. Payload is empty;
-subscribers refetch `/__inflight` to get the new state.
-
-The iframe's `Workspace.xmlui` listens for this and bumps a tick
-var that forces the `inflightClaim` DataSource to refetch. The
-DataSource's `onLoaded` clears localStorage when the sentinel no
-longer claims the targeted item.
-
-### Trace categories
-
-A complete cycle logs `[inflight-sentinel] op=write kind=<approved|drop|iterate>`
-then `op=clear` in `resources/bram-trace.log`, each paired with
-`[emit] kind=inflight-claim-changed` and `[iframe] subkind=listener-fired`.
-Startup cleanup logs `op=stale-startup-clear`.
+- **`approved:` payload** → `GET /__worklist/resolve` (writes the
+  sentinel as a side effect; consumes the auth record), do the work,
+  `POST /__worklist/mutate op:"advance"`. The host's silence-detected
+  turn-end clears the sentinel after your last text token settles, so
+  no explicit `/__worklist/end` is required.
+- **`drop:` payload** → same shape with `op:"prune"` instead.
+- **`iterate:` payload** → bracket your response with
+  `POST /__iterate/begin` (writes the sentinel) as the first action
+  and `POST /__iterate/end` (clears it) as the last. Required because
+  iterate has no side-effect write path equivalent to `resolve`.
 
 ### Failure modes
 
-**Spinner stuck for an approved/drop item.** Means `/__worklist
-/mutate` was never called for the targeted ids. The agent either
-finished without calling mutate (forgot, errored out, or a
-provider-specific contract violation — see #60), or mutate
-returned an error and the agent didn't retry. Recovery: agent
-calls mutate manually for those ids, or restart Bram (the startup
-cleanup deletes the stale claim).
+A stuck spinner is the convention's enforcement mechanism; there's no
+live-session timeout. Most commonly:
 
-**Spinner stuck for an iterate cycle.** Means `/__iterate/end`
-was never called. The convention requires it as the agent's last
-action of the response; missing the call is a convention
-violation. Same recovery as above. If you (a future agent) see
-this in your own past trace, the lesson is to bracket every
-iterate response religiously — `begin` first, `end` last,
-regardless of how trivial the iterate body is.
-
-**Spinner clears prematurely.** Should be structurally impossible
-post-#84 — no iframe-side heuristic infers "agent done" from
-indirect signals anymore. If observed: grep `[inflight-sentinel]`
-in the trace for the cycle. The clear came from a host-side
-trigger (mutate, end, or stale-cleanup). Most likely a coverage
-bug in `clear_inflight_claim_sentinel` (full-coverage check is
-wrong) or the agent called end/mutate prematurely.
+- **Approved/drop stuck:** `/__worklist/mutate` was never called for
+  those ids — agent finished without calling it, or mutate errored and
+  the agent didn't retry. Recovery: call mutate manually, or restart
+  Bram (startup `cleanup_stale_inflight_claim` deletes leftover
+  sentinels).
+- **Iterate stuck:** `/__iterate/end` was never called. Convention
+  violation. Bracket every iterate response — `begin` first, `end`
+  last — regardless of how trivial the body.
+- **Premature clear:** should be structurally impossible post-#84.
+  If observed, grep `[inflight-sentinel]` in `bram-trace.log` to
+  trace the clear source.
 
 ## Right-pane helpers (opt-in, only needed for project-side hooks)
 
@@ -927,3 +799,20 @@ huge):
 - **`xmlui_find_trace`** — locate the export by timestamp or content.
 - **`xmlui_distill_trace`** — reduce to interactions / state changes
   / handler boundaries relevant to a specific question.
+
+### Trace subkind vocabulary
+
+`bram-trace.log` records iframe-side events as
+`[iframe] subkind=<name> {…fields}`. Common subkinds you'll grep for:
+
+| Subkind | Emitter | Fields | Used for |
+| --- | --- | --- | --- |
+| `jsonl-fanout` | `Main.xmlui` App-level `ChangeListener` | `source` (`shared`), `len`, `reset` | Counting `/__sessions/latest-tail` envelope deliveries; `reset:true` only on first load / session rotation. |
+| `jsonl-broadcast` | `setLatestJsonl` in `helpers.js` | `len`, `subscribers` | Counting how many iframe components received the broadcast (1 after one tab visit, 2 after both tabs have mounted). |
+| `jsonl-cap-trim` | `appendLatestJsonl` in `helpers.js` | `before`, `after`, `dropped` | Fires only when the 1.5 MB cap is exceeded and the cache is head-trimmed. Absence on a long session means the cap was never hit. |
+| `sessionTurns-parse` | `sessionTurns` in `Globals.xs` | `ms`, `len`, `suffixLen`, `turns`, `newTurns`, `path` (`full` \| `incremental`), `n` | Per-parse timing. `path:incremental` should dominate after the first poll within a session; `path:full` only on rotation / cap-trim head-drop. |
+| `helper-call` | `_traceHelperTiming` in `Globals.xs` | `name` (`isWaitingForAssistant` \| `currentTurnEdits` \| `lastAssistantText`), `ms`, `len`, `suffixLen` | Per-helper timing on cache miss. With identity fast-path in place, this should only fire on the first call after a fanout. Repeated firings on the same `len` indicate a cache regression. |
+| `heartbeat-batch` | iframe heartbeat `Timer` | `fires`, `avgDriftMs`, `maxDriftMs`, `spikes`, `sumDriftMs`, `spanMs` | Iframe main-thread drift signal. Spikes correlate with fanouts that did real work; steady-state `maxDriftMs:11, spikes:0` is the green target between fanouts. |
+| `listener-fired` | various `tauri.event.listen` handlers | `context` (`worklist-changed` \| `inflight-claim-changed` \| `pty-menu-changed` \| `talk-session-changed`) | Tauri event delivery into the iframe. |
+| `click` | UI Button onClick handlers (Workspace) | `target` (`approve` \| `drop` \| `iterate`), `item` | Worklist tab user actions. |
+| `inflight-set` / `inflight-clear` | Workspace selectors + `inflightClaim` DataSource | `item`, `via`, `target`, `reason` | Inflight sentinel transitions; complements the host-side `[inflight-sentinel]` log entries. |

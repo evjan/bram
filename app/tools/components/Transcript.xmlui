@@ -140,7 +140,7 @@
 
     <Link
       when="{!showAll || turns.length > turnLimit}"
-      onClick="if (!showAll) { showAll = true; window.fetch('/__sessions/latest-tail?provider=' + encodeURIComponent(activeProvider || '') + '&amp;lines=all').then((r) => r.text()).then((t) => { window.setLatestJsonl(t); }); } else { turnLimit = turns.length; }"
+      onClick="if (!showAll) { showAll = true; window.fetch('/__sessions/latest-tail?provider=' + encodeURIComponent(activeProvider || '') + '&amp;lines=all').then((r) => r.json()).then((env) => { if (env &amp;&amp; env.content !== undefined) { window.setLatestJsonl(env.content); } }); } else { turnLimit = turns.length; }"
       noIndicator="true">
       <Text fontSize="$fontSize-sm" color="$textColor-secondary"
         value="{showAll ? ('Show all (' + (turns.length - turnLimit) + ' earlier)') : 'Show earlier turns'}" />

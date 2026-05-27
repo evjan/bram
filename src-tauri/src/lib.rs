@@ -5995,11 +5995,11 @@ Full convention: .claude/bram-conventions.md \
 const WORKLIST_AUTH_REL: &str = "resources/.worklist-authorization.json";
 // Host-managed inflight sentinel (#84). Written when /__worklist/resolve
 // serves an approved or drop record, OR when /__iterate/begin is
-// called. Cleared by /__worklist/mutate (advance/prune covering the
-// claimed ids) or /__iterate/end. The iframe will derive its spinner
-// state from this file once item 3 of the #84 sequence lands; for now
-// the sentinel is informational and verifiable via the
-// [inflight-sentinel] trace.
+// called. Approved/drop sentinels clear at host silence-detected
+// turn-end, with /__worklist/end available as an explicit endpoint.
+// Iterate sentinels clear via /__iterate/end. The iframe derives its
+// spinner state from this file and the [inflight-sentinel] trace makes
+// the lifecycle verifiable.
 const INFLIGHT_CLAIM_REL: &str = "resources/.inflight-claim.json";
 // Right-pane pty-intent relay (#86). Append-only JSONL queue persisted
 // to disk so right-pane clicks (toShell / toTurn / sendKeys) survive an

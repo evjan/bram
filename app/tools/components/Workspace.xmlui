@@ -52,9 +52,10 @@
     when="{newItemHelp}" />
   <!-- Sentinel-derived inflight consumer (#84 item 3). The host writes
        resources/.inflight-claim.json on /__worklist/resolve (approved
-       / drop) and /__iterate/begin; it clears the file on
-       /__worklist/mutate and /__iterate/end. Each write/clear emits
-       the `inflight-claim-changed` Tauri event, which bumps
+       / drop) and /__iterate/begin. Approved/drop sentinels clear at
+       host silence-detected turn-end, with /__worklist/end available
+       as an explicit endpoint; iterate sentinels clear via
+       /__iterate/end. Each write/clear emits
        inflightTick below and forces this DataSource to refetch. When
        the sentinel no longer claims the targeted item, the onLoaded
        handler clears localStorage and resets per-cycle state.

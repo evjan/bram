@@ -1766,6 +1766,12 @@ fn git_log_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Result<
 // JSON bytes from `gh`. On any failure (gh missing, not a GitHub repo,
 // auth missing, etc) returns an empty JSON array so the frontend renders
 // a friendly empty state rather than a 500.
+// gh issue list caps at the N newest issues across all states; set well
+// above the repo's total issue count so no open issue is dropped (issue
+// #104). Both gh_issues_list and gh_issues_search must share this so they
+// can't drift. Bump if the repo ever approaches this many issues.
+const GH_ISSUE_LIST_LIMIT: &str = "500";
+
 fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
     let repo_slug = repo_owner_name(app);
@@ -1777,7 +1783,7 @@ fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
             "--json",
             "number,title,state,author,createdAt,updatedAt,labels,url,comments",
             "--limit",
-            "50",
+            GH_ISSUE_LIST_LIMIT,
             "--state",
             "all",
         ])
@@ -1827,9 +1833,10 @@ fn gh_issues_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Resul
 
     let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
     let repo_slug = repo_owner_name(app);
-    // Fetch the same 50-issue window as gh_issues_list (no --search flag);
-    // local grep over title + body + comment bodies. One gh call, ~1.7s,
-    // gains comment-text search for free without doubling latency.
+    // Fetch the same issue window as gh_issues_list (shared
+    // GH_ISSUE_LIST_LIMIT, no --search flag); local grep over title + body
+    // + comment bodies. One gh call; latency scales with the actual issue
+    // count, gaining comment-text search for free without doubling it.
     let out = std::process::Command::new("gh")
         .current_dir(&root)
         .args(&[
@@ -1838,7 +1845,7 @@ fn gh_issues_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Resul
             "--json",
             "number,title,state,author,createdAt,updatedAt,labels,url,body,comments",
             "--limit",
-            "50",
+            GH_ISSUE_LIST_LIMIT,
             "--state",
             "all",
         ])

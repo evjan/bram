@@ -62,6 +62,46 @@ Schema:
 }
 ```
 
+Recommended proposal layout separates review prose from metadata:
+
+```text
+resources/worklist.json
+resources/worklist-drafts/<id>.md
+```
+
+For a new proposal, first write
+`resources/worklist-drafts/<id>.md`:
+
+```markdown
+# Before
+
+what's there now, relevant context, rejected alternatives
+
+# After
+
+what you'll change it to
+```
+
+Then add a metadata-only item to `resources/worklist.json`:
+
+```json
+{
+  "id": "kebab-case-id",
+  "status": "proposed",
+  "files": ["path/to/file.xmlui"]
+}
+```
+
+The server merges the draft prose into `/__worklist` and
+`/__worklist/resolve`, so the Worklist tab and approval flow render the
+same `before` / `after` content as inline items. Hashes are computed
+from the combined metadata plus resolved prose. If the draft file is
+missing, `/__worklist` returns empty `before` / `after` plus
+`"_draftMissing": true` so the UI can show an explicit placeholder.
+Inline `before` / `after` in `worklist.json` remains valid and takes
+precedence when both are non-empty; use inline prose only when it is
+more convenient or for compatibility with older items.
+
 For items that span 2+ files, use `files: ["path/a", "path/b"]`
 instead of `file`. The TO COMMIT inline diff renders all listed
 files concatenated, so the reviewer sees the full scope of the
@@ -132,10 +172,14 @@ worklist flow.
 
 Lifecycle:
 
-1. **Propose** — write items to `resources/worklist.json`. Each item
-   should be small, discrete, and independently rejectable. Writing
-   items to the file does **not** mean they are approved — it means
-   you are *asking* the user to approve them.
+1. **Propose** — write draft prose to
+   `resources/worklist-drafts/<id>.md`, then write a metadata item to
+   `resources/worklist.json`. Each item should be small, discrete, and
+   independently rejectable. Writing items to the file does **not**
+   mean they are approved — it means you are *asking* the user to
+   approve them. Inline `before` / `after` fields in
+   `worklist.json` are still accepted, but draft files are the
+   preferred path because iterate-time prose edits stay small.
 2. **User triages** — unchecks anything they don't want, then clicks
    one of these buttons:
    - *Talk to agent* (with a comment typed above it) → you receive
@@ -220,15 +264,20 @@ Lifecycle:
      **Unlike approved/drop, iterate does NOT route through
      `/__worklist/resolve`** — no worklist state change is being
      authorized, so the watcher doesn't write an auth record for it.
-     Re-read items directly from `resources/worklist.json` and act
-     per each item's current status, scoped by that item's own
-     feedback:
+     Re-read items from `/__worklist` when you need resolved draft
+     prose, or from `resources/worklist.json` when metadata alone is
+     enough, and act per each item's current status, scoped by that
+     item's own feedback:
      - **`proposed` (TO APPLY):** revise the item's `before` /
-       `after` / `files` in `resources/worklist.json` per the
-       feedback. Item stays `proposed`. No file edits on disk.
+       `after` prose in `resources/worklist-drafts/<id>.md` when the
+       item uses a draft file; otherwise revise inline `before` /
+       `after` in `resources/worklist.json`. Update `files` in
+       `worklist.json` only when scope changes. Item stays
+       `proposed`. No project file edits on disk.
      - **`applied` (TO COMMIT):** edit the on-disk files per the
-       feedback AND update the item's `after` (and `files` if scope
-       expanded) to reflect the new scope. Item stays `applied`.
+       feedback AND update the draft file or inline `after` (and
+       `files` if scope expanded) to reflect the new scope. Item stays
+       `applied`.
      Iterate is the channel for "refine in place" — the user wants
      to keep working these items without yet approving or dropping.
      After iterating, the items are ready for the user to re-triage
@@ -248,8 +297,9 @@ Lifecycle:
    - `{"op":"prune","ids":[...]}` after a drop, or after a commit of
      already-`applied` items
    Direct edits to `resources/worklist.json` are for proposal
-   authoring and iterate-time prose refinement, not mechanical
-   prune/advance.
+   metadata authoring and scope refinement; direct edits to
+   `resources/worklist-drafts/<id>.md` are for proposal prose
+   refinement. Neither direct path is for mechanical prune/advance.
 4. **Empty state is fine** — leave it as `{ "description": "", "items": [] }`.
 
 If you ever do receive `approved: {"items":[]}`, `drop: {"items":[]}`,
@@ -449,10 +499,11 @@ Worked examples:
 ### What worklist items represent (and when to drop)
 
 **Worklist items represent repository changes.** A `proposed` item
-names a `file` (or `files`) plus `before` / `after` prose describing
-what would change on disk. An `applied` item has those changes on
-disk waiting for the user to approve a commit. Items exist to give
-the user explicit veto power over what lands in their repo.
+names a `file` (or `files`) plus `before` / `after` prose, either
+inline or in `resources/worklist-drafts/<id>.md`, describing what
+would change on disk. An `applied` item has those changes on disk
+waiting for the user to approve a commit. Items exist to give the
+user explicit veto power over what lands in their repo.
 
 Investigation work does NOT belong in the worklist. Things like:
 
@@ -528,9 +579,10 @@ No → fulsome.
 
 ### Use Markdown in item prose
 
-Worklist `before` / `after` fields and worklist-history `changelog`
-entries render as Markdown in the agent-tools drawer, so use real
-Markdown syntax instead of inline ad-hoc formatting:
+Worklist `before` / `after` prose (inline or in draft files) and
+worklist-history `changelog` entries render as Markdown in the
+agent-tools drawer, so use real Markdown syntax instead of inline
+ad-hoc formatting:
 
 - Bullet lists need `- ` (or `* `) at the start of each line; inline
   enumerations like `(a) ... (b) ... (c) ...` collapse into a
@@ -574,23 +626,22 @@ already-approved advance/prune.
 Save the verbal back-and-forth for design decisions (which items to
 propose, what choices to bake in), not for the mechanical transition.
 
-**Minimize the bytes of each worklist edit.** Worklist items often have
-multi-paragraph `before` / `after` prose. A naive `Edit` with the
-whole item as `old_string` and the slightly-changed item as
-`new_string` doubles the per-edit token cost and floods the user's
-transcript with redundant text. Prefer:
+**Minimize the bytes of each worklist edit.** Prefer per-item draft
+files for new proposals. The first draft write still has to carry the
+prose, but later iterate-time prose refinements edit only
+`resources/worklist-drafts/<id>.md`; `worklist.json` stays a compact
+metadata index. For older inline items:
 
 - Narrow `Edit` targets for the smallest possible string that uniquely
   identifies the change. Appending a paragraph to an item's `after`
   only needs the tail paragraph as the anchor, not the whole item.
-- When you're appending to an item's `after` (e.g., adding a new
-  sub-section after an iterate), `old_string` is the last paragraph
-  you want to preserve and `new_string` is that same paragraph plus
-  the appended content — not the entire `after`.
+- When you're appending to an item's `after`, `old_string` is the last
+  paragraph you want to preserve and `new_string` is that same
+  paragraph plus the appended content — not the entire `after`.
 - Full-item rewrites (`Write` over `worklist.json` from scratch) are
-  fine for batch proposal authoring or broad prose reshaping, but
-  avoid them for one-paragraph tweaks. Mechanical prune / advance
-  transitions go through `/__worklist/mutate`, not a direct rewrite.
+  acceptable for compatibility, but avoid them for one-paragraph
+  tweaks. Mechanical prune / advance transitions go through
+  `/__worklist/mutate`, not a direct rewrite.
 
 The hook validates the resulting file regardless of edit shape, so the
 choice is purely about token economy and transcript noise.
@@ -601,13 +652,13 @@ file, and the grep tool result dumps it into the transcript. Find
 your anchor by recalling the structure from prior turns, using
 `Read` with `offset`/`limit`, or `jq` to extract just what you need.
 
-**Don't update an item's `after` field on every iterate.** Small
+**Don't update an item's `after` prose on every iterate.** Small
 refinements during TO-COMMIT iteration don't need an audit trail in
 the worklist — the commit message captures the final state and the
-file diff is reviewable in git. Only update `after` when scope
-materially expands (new file added to `files`, or the change's
-intent shifts). Otherwise leave it; the iteration history doesn't
-need to live in the item.
+file diff is reviewable in git. Only update the draft or inline
+`after` when scope materially expands (new file added to `files`, or
+the change's intent shifts). Otherwise leave it; the iteration
+history doesn't need to live in the item.
 
 **Use `POST /__worklist/mutate` for mechanical prunes + status
 advances.** Two ops: `{"op":"prune","ids":[...]}` after a drop,

@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 
 
 WORKLIST_REL = "resources/worklist.json"
+WORKLIST_DRAFTS_PREFIX = "resources/worklist-drafts/"
 AUTH_REL = "resources/.worklist-authorization.json"
 BYPASS_TTL_SECONDS = 60 * 60  # direct-edit auth records are fresh for 1h
 
@@ -162,6 +163,15 @@ def normalize_target(project_root, target):
     if abs_target.startswith(prefix):
         return abs_target[len(prefix):].replace(os.sep, "/")
     return None
+
+
+def is_worklist_draft(rel):
+    return (
+        isinstance(rel, str)
+        and rel.startswith(WORKLIST_DRAFTS_PREFIX)
+        and rel.endswith(".md")
+        and "/" not in rel[len(WORKLIST_DRAFTS_PREFIX):]
+    )
 
 
 def worklist_covered_files(project_root):
@@ -327,6 +337,12 @@ def main():
             _trace_hook("PreToolUse", tool_name, rel, "allow", "worklist-author")
             sys.exit(0)
         deny_mechanical_worklist_change(removed, status_changed)
+
+    # Branch 2: worklist draft prose files are part of proposal authoring.
+    # They are allowed before a corresponding metadata item exists.
+    if is_worklist_draft(rel):
+        _trace_hook("PreToolUse", tool_name, rel, "allow", "worklist-draft")
+        sys.exit(0)
 
     # Branch 2: writes to any other project file — require worklist coverage,
     # fresh bypass, or explicit opt-out language in the last user message.

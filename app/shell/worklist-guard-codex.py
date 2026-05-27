@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 
 
 WORKLIST_REL = "resources/worklist.json"
+WORKLIST_DRAFTS_PREFIX = "resources/worklist-drafts/"
 AUTH_REL = "resources/.worklist-authorization.json"
 BYPASS_TTL_SECONDS = 60 * 60  # an authorization record is fresh for 1h
 
@@ -203,6 +204,15 @@ def normalize_target(cwd, target):
     return None
 
 
+def is_worklist_draft(rel):
+    return (
+        isinstance(rel, str)
+        and rel.startswith(WORKLIST_DRAFTS_PREFIX)
+        and rel.endswith(".md")
+        and "/" not in rel[len(WORKLIST_DRAFTS_PREFIX):]
+    )
+
+
 # codex apply_patch format:
 #   *** Begin Patch
 #   *** Update File: path/to/file
@@ -347,12 +357,23 @@ def _item_has_file(it):
     return False
 
 
-def _worklist_items_with_empty_body(content):
+def _draft_exists(cwd, item_id):
+    if not isinstance(item_id, str) or not item_id.strip():
+        return False
+    if "/" in item_id or "\\" in item_id:
+        return False
+    return os.path.exists(
+        os.path.join(cwd, WORKLIST_DRAFTS_PREFIX, f"{item_id}.md")
+    )
+
+
+def _worklist_items_with_empty_body(content, cwd=None):
     """Parse a full worklist.json content string and return a list of
     (id, missing_fields) tuples for proposed items missing any required
     field. Required: id (non-empty), file or files (non-empty), before
-    (non-empty), after (non-empty). Returns None if the content can't be
-    parsed as JSON (caller decides how to handle)."""
+    (non-empty), after (non-empty), unless a matching draft file exists.
+    Returns None if the content can't be parsed as JSON (caller decides how
+    to handle)."""
     try:
         doc = json.loads(content)
     except Exception:
@@ -373,19 +394,21 @@ def _worklist_items_with_empty_body(content):
             missing.append("id")
         if not _item_has_file(it):
             missing.append("file (or non-empty files array)")
-        before = it.get("before")
-        if not isinstance(before, str) or not before.strip():
-            missing.append("before")
-        after = it.get("after")
-        if not isinstance(after, str) or not after.strip():
-            missing.append("after")
+        has_draft = cwd is not None and _draft_exists(cwd, item_id)
+        if not has_draft:
+            before = it.get("before")
+            if not isinstance(before, str) or not before.strip():
+                missing.append("before")
+            after = it.get("after")
+            if not isinstance(after, str) or not after.strip():
+                missing.append("after")
         if missing:
             label = item_id if (isinstance(item_id, str) and item_id.strip()) else "<no-id>"
             bad.append((label, missing))
     return bad
 
 
-def _patch_adds_have_empty_bodies(patch_text):
+def _patch_adds_have_empty_bodies(patch_text, cwd=None):
     """Heuristic for apply_patch on worklist.json: scan the patch's added
     lines for new proposed items and verify each has all four required
     fields (id, file or files, before, after) with non-empty values.
@@ -412,9 +435,10 @@ def _patch_adds_have_empty_bodies(patch_text):
         missing.append(f"id (saw {len(ids)} of {item_count})")
     if len(files) < item_count:
         missing.append(f"file or files (saw {len(files)} of {item_count})")
-    if len(befores) < item_count:
+    draft_covers = bool(ids) and all(_draft_exists(cwd, item_id) for item_id in ids) if cwd else False
+    if len(befores) < item_count and not draft_covers:
         missing.append(f"before (saw {len(befores)} of {item_count})")
-    if len(afters) < item_count:
+    if len(afters) < item_count and not draft_covers:
         missing.append(f"after (saw {len(afters)} of {item_count})")
     if missing:
         label = ids[0] if ids else "<missing-id>"
@@ -505,9 +529,9 @@ def _worklist_validation_error(bad, tool_name):
         f"fields.\n{detail}\n"
         f"Required for every proposed item: \"id\" (kebab-case identifier), "
         f"\"file\" (or \"files\" array for multi-file items), "
-        f"\"before\" (current state + alternatives considered + why rejected), "
-        f"and \"after\" (the planned change). Title-only or body-only items "
-        f"are not acceptable. Rewrite the worklist with complete items and try "
+        f"and either inline \"before\"/\"after\" prose or a matching "
+        f"resources/worklist-drafts/<id>.md file. Title-only or body-only items "
+        f"are not acceptable. Rewrite the proposal with complete content and try "
         f"again."
     )
 
@@ -571,8 +595,9 @@ def emit_additional_context(text):
 # in repeated boilerplate.
 GATE_REMINDER = (
     "bram worklist gate. First response to a change request must be "
-    "(a) clarify, (b) propose items to resources/worklist.json (each with "
-    "non-empty before/after), or (c) read-only investigation prefaced "
+    "(a) clarify, (b) propose items via resources/worklist-drafts/<id>.md "
+    "plus resources/worklist.json metadata (or inline before/after), or "
+    "(c) read-only investigation prefaced "
     "\"I don't yet have enough context to propose\". Mutations outside approved "
     "items are blocked at runtime. Full convention: "
     ".claude/xmlui-desktop-conventions.md"
@@ -669,7 +694,7 @@ def main():
             removed = _patch_removes_worklist_items(cwd, patch_body)
             if removed or _patch_changes_worklist_status(patch_body):
                 deny(_mechanical_worklist_change_error(removed, [], "apply_patch"))
-            bad_ids = _patch_adds_have_empty_bodies(patch_body)
+            bad_ids = _patch_adds_have_empty_bodies(patch_body, cwd)
             if bad_ids:
                 deny(_worklist_validation_error(bad_ids, "apply_patch"))
         violations = []
@@ -681,6 +706,8 @@ def main():
                 continue
             if rel == WORKLIST_REL:
                 continue  # writing to the worklist itself is how proposing works
+            if is_worklist_draft(rel):
+                continue  # draft prose files are proposal-authoring inputs
             if rel in covered:
                 continue
             if fresh_bypass(cwd, rel):
@@ -700,6 +727,8 @@ def main():
     if tool_name == "Bash":
         cmd = tool_input.get("command") if isinstance(tool_input, dict) else ""
         if not bash_writes(cmd):
+            allow()
+        if "resources/worklist-drafts/" in (cmd or ""):
             allow()
         # Mutating shell command — require any worklist coverage OR a "*"
         # bypass. We don't try to map shell commands to specific paths
@@ -742,7 +771,7 @@ def main():
                     f"use a write/edit shape whose resulting content the guard can inspect."
                 )
             if isinstance(new_content, str) and new_content.strip():
-                bad_ids = _worklist_items_with_empty_body(new_content)
+                bad_ids = _worklist_items_with_empty_body(new_content, cwd)
                 if bad_ids:
                     deny(_worklist_validation_error(bad_ids, tool_name))
                 removed, status_changed = worklist_state_changes(
@@ -757,6 +786,8 @@ def main():
             if rel is None:
                 continue  # outside the project tree
             if rel == WORKLIST_REL:
+                continue
+            if is_worklist_draft(rel):
                 continue
             if rel in covered:
                 continue

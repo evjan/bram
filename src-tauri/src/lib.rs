@@ -5967,8 +5967,9 @@ const ENHANCE_CODEX_TYPO_INSTR_MARKER_END: &str = "# brraminstructions:end";
 // the convention in app/__shell/conventions.md.
 const ENHANCE_CODEX_GATE_PROSE: &str = "bram worklist gate. \
 First response to a change request must be (a) clarify, \
-(b) propose items to resources/worklist.json (each with non-empty \
-id, file or files, before, and after), or (c) read-only investigation \
+(b) propose items via resources/worklist-drafts/<id>.md plus \
+resources/worklist.json metadata (or inline before/after in \
+worklist.json), or (c) read-only investigation \
 prefaced \"I don't yet have enough context to propose\". Mutations \
 outside approved items are blocked at runtime by a PreToolUse hook. \
 On approved:/drop: turns, GET \
@@ -7085,6 +7086,10 @@ fn worklist_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     project_root(Some(app)).map(|p| p.join("resources").join("worklist.json"))
 }
 
+fn worklist_drafts_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| p.join("resources").join("worklist-drafts"))
+}
+
 fn worklist_auth_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     project_root(Some(app)).map(|p| p.join(WORKLIST_AUTH_REL))
 }
@@ -7481,6 +7486,107 @@ fn canonical_item_hash(item: &serde_json::Value) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+fn item_has_nonempty_string(item: &serde_json::Value, key: &str) -> bool {
+    item.get(key)
+        .and_then(|v| v.as_str())
+        .map_or(false, |s| !s.trim().is_empty())
+}
+
+fn parse_worklist_draft(raw: &str) -> Option<(String, String)> {
+    enum Section {
+        Before,
+        After,
+    }
+
+    let mut section: Option<Section> = None;
+    let mut before: Vec<&str> = Vec::new();
+    let mut after: Vec<&str> = Vec::new();
+    let mut saw_before = false;
+    let mut saw_after = false;
+
+    for line in raw.lines() {
+        let marker = line.trim_end_matches('\r');
+        if marker == "# Before" {
+            saw_before = true;
+            section = Some(Section::Before);
+            continue;
+        }
+        if marker == "# After" {
+            saw_after = true;
+            section = Some(Section::After);
+            continue;
+        }
+        match section {
+            Some(Section::Before) => before.push(line),
+            Some(Section::After) => after.push(line),
+            None => {}
+        }
+    }
+
+    if !saw_before || !saw_after {
+        return None;
+    }
+    Some((
+        before.join("\n").trim().to_string(),
+        after.join("\n").trim().to_string(),
+    ))
+}
+
+fn worklist_draft_path(drafts_dir: &Path, item_id: &str) -> Option<PathBuf> {
+    if item_id.is_empty() || item_id.contains('/') || item_id.contains('\\') {
+        return None;
+    }
+    Some(drafts_dir.join(format!("{}.md", item_id)))
+}
+
+fn resolve_worklist_item_draft(
+    drafts_dir: Option<&Path>,
+    item: &serde_json::Value,
+) -> serde_json::Value {
+    if item_has_nonempty_string(item, "before") && item_has_nonempty_string(item, "after") {
+        return item.clone();
+    }
+
+    let mut resolved = item.clone();
+    let Some(obj) = resolved.as_object_mut() else {
+        return resolved;
+    };
+    let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let draft = drafts_dir
+        .and_then(|dir| worklist_draft_path(dir, item_id))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|raw| parse_worklist_draft(&raw));
+
+    if let Some((before, after)) = draft {
+        obj.insert("before".to_string(), serde_json::Value::String(before));
+        obj.insert("after".to_string(), serde_json::Value::String(after));
+        obj.remove("_draftMissing");
+    } else {
+        obj.insert(
+            "before".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+        obj.insert(
+            "after".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+        obj.insert("_draftMissing".to_string(), serde_json::Value::Bool(true));
+    }
+    resolved
+}
+
+fn resolve_worklist_record_items<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    record: &mut serde_json::Value,
+) {
+    let drafts_dir = worklist_drafts_dir(app);
+    if let Some(items) = record.get_mut("items").and_then(|v| v.as_array_mut()) {
+        for item in items {
+            *item = resolve_worklist_item_draft(drafts_dir.as_deref(), item);
+        }
+    }
+}
+
 fn base_worklist_doc_from_parsed(parsed_doc: Option<serde_json::Value>) -> serde_json::Value {
     use serde_json::json;
 
@@ -7534,12 +7640,12 @@ fn worklist_doc<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
         if !obj.contains_key("items") {
             obj.insert("items".to_string(), serde_json::Value::Array(Vec::new()));
         }
-        // Inject per-item hashes computed from the RAW item content (i.e.
-        // before any server-added fields like `hash` or `diff`). The PTY
-        // watcher recomputes against the same on-disk raw content, so the
-        // fingerprint round-trips through the UI without drift.
+        // Resolve draft-file prose before hashing so metadata-only worklist
+        // items retain the same hash semantics as inline before/after items.
         if let Some(items) = obj.get_mut("items").and_then(|v| v.as_array_mut()) {
+            let drafts_dir = worklist_drafts_dir(app);
             for item in items {
+                *item = resolve_worklist_item_draft(drafts_dir.as_deref(), item);
                 let hash = canonical_item_hash(item);
                 if let Some(item_obj) = item.as_object_mut() {
                     item_obj.insert("hash".to_string(), serde_json::Value::String(hash));
@@ -7560,8 +7666,12 @@ fn worklist_doc<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
 
 #[cfg(test)]
 mod worklist_doc_tests {
-    use super::base_worklist_doc_from_parsed;
+    use super::{
+        base_worklist_doc_from_parsed, canonical_item_hash, parse_worklist_draft,
+        resolve_worklist_item_draft,
+    };
     use serde_json::json;
+    use std::fs;
 
     #[test]
     fn bare_array_root_sets_schema_error() {
@@ -7593,6 +7703,89 @@ mod worklist_doc_tests {
                 .and_then(|v| v.as_array())
                 .map(|v| v.len()),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn draft_parser_splits_before_after_sections() {
+        let parsed =
+            parse_worklist_draft("# Before\n\nold **markdown**\n\n# After\n\nnew `markdown`\n")
+                .expect("draft should parse");
+
+        assert_eq!(parsed.0, "old **markdown**");
+        assert_eq!(parsed.1, "new `markdown`");
+    }
+
+    #[test]
+    fn draft_resolver_prefers_inline_when_present() {
+        let item = json!({
+            "id": "inline",
+            "files": ["docs/a.md"],
+            "before": "inline before",
+            "after": "inline after",
+        });
+
+        let resolved = resolve_worklist_item_draft(None, &item);
+
+        assert_eq!(
+            resolved.get("before").and_then(|v| v.as_str()),
+            Some("inline before")
+        );
+        assert_eq!(resolved.get("_draftMissing"), None);
+    }
+
+    #[test]
+    fn draft_resolver_loads_metadata_only_item_and_hashes_resolved_content() {
+        let dir =
+            std::env::temp_dir().join(format!("bram-worklist-draft-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create temp draft dir");
+        fs::write(
+            dir.join("draft-item.md"),
+            "# Before\n\nmetadata only\n\n# After\n\nresolved prose\n",
+        )
+        .expect("write draft");
+
+        let item = json!({
+            "id": "draft-item",
+            "status": "proposed",
+            "files": ["docs/a.md"],
+        });
+        let resolved = resolve_worklist_item_draft(Some(&dir), &item);
+        let inline_equivalent = json!({
+            "id": "draft-item",
+            "status": "proposed",
+            "files": ["docs/a.md"],
+            "before": "metadata only",
+            "after": "resolved prose",
+        });
+
+        assert_eq!(
+            resolved.get("before").and_then(|v| v.as_str()),
+            Some("metadata only")
+        );
+        assert_eq!(
+            canonical_item_hash(&resolved),
+            canonical_item_hash(&inline_equivalent)
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn draft_resolver_marks_missing_draft_explicitly() {
+        let item = json!({
+            "id": "missing-draft",
+            "status": "proposed",
+            "files": ["docs/a.md"],
+        });
+
+        let resolved = resolve_worklist_item_draft(None, &item);
+
+        assert_eq!(resolved.get("before").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(resolved.get("after").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(
+            resolved.get("_draftMissing").and_then(|v| v.as_bool()),
+            Some(true)
         );
     }
 }
@@ -7810,6 +8003,7 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
         .and_then(|doc| doc.get("items").cloned())
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default();
+    let drafts_dir = worklist_drafts_dir(app);
 
     let mut ids: Vec<String> = Vec::with_capacity(parsed.requests.len());
     let mut verified_items: Vec<serde_json::Value> = Vec::new();
@@ -7826,13 +8020,14 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
         match (supplied_hash, found) {
             (Some(supplied), Some(item)) => {
                 any_hash_supplied = true;
-                if &canonical_item_hash(item) == supplied {
+                let resolved_item = resolve_worklist_item_draft(drafts_dir.as_deref(), item);
+                if &canonical_item_hash(&resolved_item) == supplied {
                     // Clone the on-disk item, then attach the per-item
                     // feedback from the incoming payload so the agent
                     // sees it via /__worklist/resolve. Always set the
                     // field (even when empty) so consumers can read it
                     // uniformly.
-                    let mut enriched = item.clone();
+                    let mut enriched = resolved_item;
                     if let Some(obj) = enriched.as_object_mut() {
                         obj.insert(
                             "feedback".to_string(),
@@ -9305,6 +9500,7 @@ fn route_request<R: tauri::Runtime>(
                 });
             }
         }
+        resolve_worklist_record_items(app, &mut record_value);
         let kind = record_value
             .get("kind")
             .and_then(|v| v.as_str())
@@ -10704,8 +10900,8 @@ pub fn run() {
                         let _ = app_handle.emit("sessions-list-changed", ());
                     }
 
-                    // worklist-changed: resources/worklist.json or any
-                    // file under resources/worklist-history/. Workspace
+                    // worklist-changed: resources/worklist.json, any draft
+                    // file, or anything under resources/worklist-history/. Workspace
                     // refetches its DataSources on this.
                     let is_worklist_change = event.paths.iter().any(|p| {
                         let in_resources = p.components().any(|c| c.as_os_str() == "resources");
@@ -10713,7 +10909,10 @@ pub fn run() {
                         let in_history = p
                             .components()
                             .any(|c| c.as_os_str() == "worklist-history");
-                        in_resources && (file == "worklist.json" || in_history)
+                        let in_drafts = p
+                            .components()
+                            .any(|c| c.as_os_str() == "worklist-drafts");
+                        in_resources && (file == "worklist.json" || in_history || in_drafts)
                     });
                     if is_worklist_change {
                         // Defer the emit; pending_worklist_since either

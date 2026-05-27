@@ -499,8 +499,17 @@ window.subscribeLatestJsonl = function (key, fn) {
 var __latestJsonlMaxBytes = 1500000; // ~1.5 MB
 window.appendLatestJsonl = function (chunk) {
   if (!chunk) return;
+  // Profiling for the responsiveness roadmap (#103-era): pin down which
+  // phase costs ~200ms on big appends. Three measurable phases —
+  // `concat` is the buffer string-concatenation, `cap` is the cap-check
+  // plus optional head-trim, `broadcast` is setLatestJsonl's subscriber
+  // dispatch + its own trace log. Sum is `total`.
+  var t0 = performance.now();
   var combined = (__latestJsonlValue || "") + chunk;
+  var t1 = performance.now();
+  var capTrimmed = false;
   if (combined.length > __latestJsonlMaxBytes) {
+    capTrimmed = true;
     var beforeLen = combined.length;
     var dropTo = combined.length - __latestJsonlMaxBytes;
     var nl = combined.indexOf("\n", dropTo);
@@ -518,7 +527,25 @@ window.appendLatestJsonl = function (chunk) {
       }
     } catch (e) {}
   }
+  var t2 = performance.now();
   window.setLatestJsonl(combined);
+  var t3 = performance.now();
+  try {
+    if (window.logToHost) {
+      window.logToHost({
+        kind: "iframe-trace",
+        subkind: "jsonl-pipeline-ms",
+        at: new Date().toISOString(),
+        chunkLen: chunk.length,
+        bufferLen: combined.length,
+        concatMs: Math.round((t1 - t0) * 100) / 100,
+        capMs: Math.round((t2 - t1) * 100) / 100,
+        capTrimmed: capTrimmed,
+        broadcastMs: Math.round((t3 - t2) * 100) / 100,
+        totalMs: Math.round((t3 - t0) * 100) / 100,
+      });
+    }
+  } catch (e) {}
 };
 
 // Continuous variant: register a callback that fires on every resize

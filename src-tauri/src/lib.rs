@@ -5989,7 +5989,11 @@ op:advance (after applying) or op:prune (after a drop or commit). \
 On iterate: turns, POST /__iterate/begin as your first action and \
 /__iterate/end as your last. Don't edit resources/worklist.json \
 directly for state changes — the routes drive the inflight sentinel \
-that keeps the Worklist tab UI in sync. \
+that keeps the Worklist tab UI in sync. After proposing, tell the user \
+to click Approve or Drop in the Worklist tab; do NOT show or instruct on \
+raw approved:/drop:/iterate: payloads. The tab buttons generate the \
+verified {id, hash, feedback} shape; hand-typed payloads are easy to get \
+wrong and may fail hash verification. \
 Use curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 for these \
 loopback calls to 127.0.0.1, not localhost — Bram binds IPv4 and \
 localhost may try IPv6 ::1 first. Bram restarts briefly drop the port \

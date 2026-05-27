@@ -180,6 +180,11 @@ Lifecycle:
    approve them. Inline `before` / `after` fields in
    `worklist.json` are still accepted, but draft files are the
    preferred path because iterate-time prose edits stay small.
+   After proposing, tell the user to click **Approve** or **Drop** in
+   the Worklist tab. Do **not** show or instruct on raw `approved:`,
+   `drop:`, or `iterate:` payloads. The tab's buttons generate the
+   verified `{id, hash, feedback}` shape; hand-typed payloads are easy
+   to get wrong and may fail hash verification.
 2. **User triages** — unchecks anything they don't want, then clicks
    one of these buttons:
    - *Talk to agent* (with a comment typed above it) → you receive

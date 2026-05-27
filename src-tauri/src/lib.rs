@@ -4677,19 +4677,21 @@ const ENHANCE_HOOK_SCRIPT_REL: &str = ".claude/hooks/worklist-guard.py";
 const ENHANCE_SETTINGS_REL: &str = ".claude/settings.json";
 const ENHANCE_HOOK_BUNDLE_REL: &str = "__shell/worklist-guard.py";
 // Codex's worklist guard runs as a PreToolUse hook in codex's user-global
-// config. The bundle ships with xmlui-desktop and is copied to
-// ~/.xmlui-desktop/codex-worklist-guard.py the first time setup runs in any
+// config. The bundle ships with Bram and is copied to
+// ~/.bram/codex-worklist-guard.py the first time setup runs in any
 // project; the hook config registration in ~/.codex/config.toml is identical
 // across projects because the script self-detects whether the active cwd is
-// xmlui-desktop-managed (presence of resources/.worklist-authorization.json).
+// Bram-managed (presence of resources/.worklist-authorization.json).
 const ENHANCE_CODEX_HOOK_BUNDLE_REL: &str = "shell/worklist-guard-codex.py";
-const ENHANCE_CODEX_HOOK_INSTALL_REL: &str = ".xmlui-desktop/codex-worklist-guard.py";
+const ENHANCE_CODEX_HOOK_INSTALL_REL: &str = ".bram/codex-worklist-guard.py";
 const ENHANCE_CODEX_TRUST_ACK_REL: &str = ".bram/codex-trust-ack";
 const ENHANCE_CODEX_CONFIG_REL: &str = ".codex/config.toml";
-// TOML-comment markers delimit the xmlui-desktop block inside codex's
+// TOML-comment markers delimit the Bram block inside codex's
 // config.toml so re-runs can replace it without disturbing surrounding entries.
-const ENHANCE_CODEX_TOML_MARKER_START: &str = "# xmlui-desktop:start";
-const ENHANCE_CODEX_TOML_MARKER_END: &str = "# xmlui-desktop:end";
+const ENHANCE_CODEX_TOML_MARKER_START: &str = "# bram:start";
+const ENHANCE_CODEX_TOML_MARKER_END: &str = "# bram:end";
+const ENHANCE_CODEX_LEGACY_TOML_MARKER_START: &str = "# xmlui-desktop:start";
+const ENHANCE_CODEX_LEGACY_TOML_MARKER_END: &str = "# xmlui-desktop:end";
 // developer_instructions is a top-level scalar in config.toml. TOML requires
 // top-level keys to come BEFORE any [section] table, so this block lives at
 // the head of the file in its own marker. Verified via `codex debug
@@ -4697,12 +4699,15 @@ const ENHANCE_CODEX_TOML_MARKER_END: &str = "# xmlui-desktop:end";
 // permissions_instructions and skills_instructions — a higher-priority slot
 // than the user-role AGENTS.md path. That's why this surface carries the gate
 // prose now instead of a per-turn UserPromptSubmit injection.
-const ENHANCE_CODEX_INSTR_MARKER_START: &str = "# xmlui-desktop-instructions:start";
-const ENHANCE_CODEX_INSTR_MARKER_END: &str = "# xmlui-desktop-instructions:end";
-// Single-source-of-truth gate prose embedded in xmlui-desktop binary. Mirrors
+const ENHANCE_CODEX_INSTR_MARKER_START: &str = "# bram-instructions:start";
+const ENHANCE_CODEX_INSTR_MARKER_END: &str = "# bram-instructions:end";
+const ENHANCE_CODEX_LEGACY_INSTR_MARKER_START: &str = "# xmlui-desktop-instructions:start";
+const ENHANCE_CODEX_LEGACY_INSTR_MARKER_END: &str = "# xmlui-desktop-instructions:end";
+const ENHANCE_CODEX_TYPO_INSTR_MARKER_END: &str = "# brraminstructions:end";
+// Single-source-of-truth gate prose embedded in the Bram binary. Mirrors
 // what the original UserPromptSubmit injection emitted, kept in sync with
 // the convention in app/__shell/conventions.md.
-const ENHANCE_CODEX_GATE_PROSE: &str = "xmlui-desktop worklist gate. \
+const ENHANCE_CODEX_GATE_PROSE: &str = "bram worklist gate. \
 First response to a change request must be (a) clarify, \
 (b) propose items to resources/worklist.json (each with non-empty \
 id, file or files, before, and after), or (c) read-only investigation \
@@ -5651,7 +5656,7 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
          type = \"command\"\n\
          command = {command_quoted}\n\
          timeout = 10\n\
-         statusMessage = \"xmlui-desktop worklist guard\"\n\
+         statusMessage = \"Bram worklist guard\"\n\
          {end}",
         start = ENHANCE_CODEX_TOML_MARKER_START,
         end = ENHANCE_CODEX_TOML_MARKER_END,
@@ -5663,19 +5668,24 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
             .map_err(|e| format!("create {}: {}", parent.display(), e))?;
     }
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let new_content = if let Some(start_idx) = existing.find(ENHANCE_CODEX_TOML_MARKER_START) {
-        let tail = &existing[start_idx..];
+    let cleaned = strip_marker_block(
+        &existing,
+        ENHANCE_CODEX_LEGACY_TOML_MARKER_START,
+        ENHANCE_CODEX_LEGACY_TOML_MARKER_END,
+    );
+    let new_content = if let Some(start_idx) = cleaned.find(ENHANCE_CODEX_TOML_MARKER_START) {
+        let tail = &cleaned[start_idx..];
         let end_offset = tail
             .find(ENHANCE_CODEX_TOML_MARKER_END)
             .map(|i| start_idx + i + ENHANCE_CODEX_TOML_MARKER_END.len())
-            .unwrap_or(existing.len());
-        let mut s = existing.clone();
+            .unwrap_or(cleaned.len());
+        let mut s = cleaned.clone();
         s.replace_range(start_idx..end_offset, &toml_block);
         s
-    } else if existing.trim().is_empty() {
+    } else if cleaned.trim().is_empty() {
         format!("{}\n", toml_block)
     } else {
-        format!("{}\n\n{}\n", existing.trim_end(), toml_block)
+        format!("{}\n\n{}\n", cleaned.trim_end(), toml_block)
     };
     std::fs::write(&config_path, &new_content)
         .map_err(|e| format!("write codex config.toml: {}", e))?;
@@ -5698,14 +5708,27 @@ fn install_codex_developer_instructions() -> Result<(), String> {
     }
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
 
-    // Strip any legacy test-marker block from earlier experiments. Without
-    // this, the file would carry two top-level `developer_instructions = ...`
-    // lines (the legacy one and ours), which TOML rejects as a duplicate key.
+    // Strip managed legacy blocks so setup replaces them with the Bram block
+    // instead of creating duplicate top-level `developer_instructions` keys.
     let cleaned = strip_marker_block(
         &existing,
         "# xmlui-desktop-test-instr:start",
         "# xmlui-desktop-test-instr:end",
     );
+    let cleaned = strip_marker_block(
+        &cleaned,
+        ENHANCE_CODEX_LEGACY_INSTR_MARKER_START,
+        ENHANCE_CODEX_LEGACY_INSTR_MARKER_END,
+    );
+    let cleaned = if cleaned.contains(ENHANCE_CODEX_TYPO_INSTR_MARKER_END) {
+        strip_marker_block(
+            &cleaned,
+            ENHANCE_CODEX_INSTR_MARKER_START,
+            ENHANCE_CODEX_TYPO_INSTR_MARKER_END,
+        )
+    } else {
+        cleaned
+    };
 
     let block = format!(
         "{start}\ndeveloper_instructions = {body}\n{end}",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Codex PreToolUse hook: enforce the xmlui-desktop two-stage worklist flow.
+"""Codex PreToolUse hook: enforce the Bram two-stage worklist flow.
 
 Stdin payload (from codex):
   {session_id, turn_id, cwd, hook_event_name, model, permission_mode,
@@ -20,9 +20,9 @@ Response on block (stdout JSON):
 Default (allow): exit 0 with no output.
 
 Project-awareness: if the cwd does not contain
-resources/.worklist-authorization.json, this is not an xmlui-desktop-managed
-repo and the guard exits 0 (allow everything). xmlui-desktop's setup writes
-that file the first time it's run in a project.
+resources/.worklist-authorization.json, this is not a Bram-managed
+repo and the guard exits 0 (allow everything). Bram's setup writes that file
+the first time it's run in a project.
 """
 
 import json
@@ -567,7 +567,7 @@ def emit_additional_context(text):
 # codex reads on first prompt; this stays short to avoid drowning the model
 # in repeated boilerplate.
 GATE_REMINDER = (
-    "xmlui-desktop worklist gate. First response to a change request must be "
+    "bram worklist gate. First response to a change request must be "
     "(a) clarify, (b) propose items to resources/worklist.json (each with "
     "non-empty before/after), or (c) read-only investigation prefaced "
     "\"I don't yet have enough context to propose\". Mutations outside approved "
@@ -606,7 +606,7 @@ def looks_like_change_request(prompt):
 
 
 def handle_user_prompt_submit(payload, cwd):
-    # Only inject in xmlui-desktop-managed repos (presence of auth file).
+    # Only inject in Bram-managed repos (presence of auth file).
     if not os.path.exists(os.path.join(cwd, AUTH_REL)):
         allow()
     if not looks_like_change_request(payload.get("prompt", "")):

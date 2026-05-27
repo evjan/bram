@@ -158,10 +158,14 @@ saved local state may already depend on them.
   `app/main.js` and `app/__shell/helpers.js` store UI state in
   `localStorage` under `xmlui-desktop.*`.
 - Setup/hook paths and markers:
-  `~/.xmlui-desktop/...`, `.claude/xmlui-desktop-conventions.md`,
-  `# xmlui-desktop:start`, `<!-- xmlui-desktop:start -->`,
-  `xmlui-desktop-auto-rebase`, and embedded worklist-gate prose in
-  `app/shell/worklist-guard-codex.py` and `src-tauri/src/lib.rs`.
+  Codex now prefers `~/.bram/codex-worklist-guard.py` and
+  `# bram:start` / `# bram-instructions:start` blocks in
+  `~/.codex/config.toml`, while accepting legacy
+  `~/.xmlui-desktop/codex-worklist-guard.py` and `# xmlui-desktop:start`
+  blocks during migration. Repo-local Claude convention files still use
+  `.claude/xmlui-desktop-conventions.md` and
+  `<!-- xmlui-desktop:start -->`; `xmlui-desktop-auto-rebase` also remains
+  legacy-named.
 
 Operational impact:
 
@@ -173,8 +177,8 @@ Operational impact:
 - Renaming localStorage keys resets saved UI state. That is survivable,
   but it is still migration-visible.
 - Renaming `~/.xmlui-desktop` paths or marker strings can make existing
-  Setup installs look unconfigured until the new paths are written and
-  the old ones are either migrated or still honored.
+  Setup installs look unconfigured unless Setup writes the new `~/.bram`
+  path and continues to honor the old path during migration.
 
 ### Checklist by decision type
 
@@ -190,7 +194,8 @@ Needs a compatibility plan before renaming:
 - Release artifact filenames.
 - `.xmlui-desktop.json`.
 - `XMLUI_DESKTOP_*` env vars.
-- `~/.xmlui-desktop` hook/install directory.
+- `~/.bram` Codex hook/install directory, with `~/.xmlui-desktop`
+  accepted as the legacy migration source.
 - `localStorage` keys with `xmlui-desktop.*`.
 - Bundle identifier `org.xmlui.xmlui-desktop`.
 
@@ -200,7 +205,7 @@ Should likely remain legacy for one transition period even if branding changes:
   is introduced.
 - `XMLUI_DESKTOP_*` env vars as accepted aliases.
 - Legacy release artifact names or installer lookup fallback.
-- Existing hook markers and setup paths until migration code exists.
+- Existing hook markers and setup paths until migration code has run.
 
 ### Naming guidance
 
@@ -229,9 +234,11 @@ Treat the rename as a sequence, not a sweep.
    If introducing `.bram.json` or `BRAM_*`, keep `.xmlui-desktop.json`
    and `XMLUI_DESKTOP_*` working as aliases first, then migrate docs.
 5. Defer bundle-identity and persistent-state renames until last.
-   `org.xmlui.xmlui-desktop`, `~/.xmlui-desktop`, and
-   `localStorage` keys should change only with explicit migration logic
-   or a deliberate decision to reset local state.
+   `org.xmlui.xmlui-desktop` and `localStorage` keys should change only
+   with explicit migration logic or a deliberate decision to reset local
+   state. The Codex hook path has started that pattern by preferring
+   `~/.bram` while still accepting `~/.xmlui-desktop` as the legacy
+   migration source.
 
 This order keeps the visible product rename moving while isolating the
 breakage-prone compatibility work behind explicit decisions.

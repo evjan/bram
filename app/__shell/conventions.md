@@ -633,9 +633,11 @@ is the agent-side convention only.
 
 - **`approved:` payload** → `GET /__worklist/resolve` (writes the
   sentinel as a side effect; consumes the auth record), do the work,
-  `POST /__worklist/mutate op:"advance"`. The host's silence-detected
-  turn-end clears the sentinel after your last text token settles, so
-  no explicit `/__worklist/end` is required.
+  `POST /__worklist/mutate op:"advance"`. That successful mutate
+  clears the sentinel for the approved ids immediately. The host's
+  silence-detected turn-end remains a fallback if a cycle still needs
+  to drain after the state transition, so no explicit `/__worklist/end`
+  is required.
 - **`drop:` payload** → same shape with `op:"prune"` instead.
 - **`iterate:` payload** → bracket your response with
   `POST /__iterate/begin` (writes the sentinel) as the first action
@@ -648,10 +650,9 @@ A stuck spinner is the convention's enforcement mechanism; there's no
 live-session timeout. Most commonly:
 
 - **Approved/drop stuck:** `/__worklist/mutate` was never called for
-  those ids — agent finished without calling it, or mutate errored and
-  the agent didn't retry. Recovery: call mutate manually, or restart
-  Bram (startup `cleanup_stale_inflight_claim` deletes leftover
-  sentinels).
+  those ids, or it errored before the clear landed. Recovery: call
+  mutate manually, or restart Bram (startup `cleanup_stale_inflight_claim`
+  deletes leftover sentinels).
 - **Iterate stuck:** `/__iterate/end` was never called. Convention
   violation. Bracket every iterate response — `begin` first, `end`
   last — regardless of how trivial the body.

@@ -336,10 +336,13 @@ file / event reference.
   `.tmp` + rename. The host serializes writes (single-process).
 - **Lifecycle by `kind`.**
   - `approved` — written as a side effect of `/__worklist/resolve`
-    serving a `kind:"approved"` record; cleared by `/__worklist/mutate`
-    `advance` or `prune` covering every claimed id.
+    serving a `kind:"approved"` record; cleared by
+    `/__worklist/mutate advance` covering every claimed id, with the
+    host PTY / turn-end fallback able to clear a lingering claim if the
+    cycle still needs to drain.
   - `drop` — written as a side effect of `/__worklist/resolve` serving a
-    `kind:"drop"` record; cleared by `/__worklist/mutate prune`.
+    `kind:"drop"` record; cleared by `/__worklist/mutate prune`
+    covering every claimed id, with the same host fallback.
   - `iterate` — written by `POST /__iterate/begin`; cleared by
     `POST /__iterate/end` covering every claimed id. The agent is
     responsible for calling these around iterate processing (see
@@ -354,8 +357,8 @@ file / event reference.
   sentinel and emits one final `inflight-claim-changed`). This is by
   design: a stuck spinner surfaces the failure case instead of hiding
   it.
-- **`inflight-claim-changed`** is emitted from inside each of the three
-  host helpers after the file write / delete completes. Iframe
+- **`inflight-claim-changed`** is emitted from inside the host helpers
+  after the file write / delete completes. Iframe
   subscribers refetch `/__inflight` on receipt; the `Workspace.xmlui`
   `inflightClaim` DataSource is the primary consumer.
 - **Trace categories.** `[inflight-sentinel] op=write kind=<…> ids=[…]`

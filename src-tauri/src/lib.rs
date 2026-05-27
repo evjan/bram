@@ -8489,13 +8489,14 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
         );
     }
 
-    // Inflight sentinel clear is no longer a side effect of mutate.
-    // The sentinel now clears either when the agent calls
-    // POST /__worklist/end (or /__iterate/end — same alias handler),
-    // OR when the host-side `pty_agent_turn_update` silence-detector
-    // fires a real turn-end (silence >= MIN_SILENCE_FOR_SENTINEL_CLEAR_MS).
-    // Both anchor the spinner-clear to actual end-of-turn rather than
-    // to the mid-turn state transition. Closes #91.
+    // Advance/prune now clear the inflight sentinel as part of the
+    // successful mechanical worklist transition. That keeps the spinner
+    // tied to the state change the user actually approved, while the
+    // host-side `pty_agent_turn_update` silence-detector and
+    // POST /__worklist/end (alias of /__iterate/end) remain fallback
+    // release valves if a cycle still needs to drain at turn-end.
+    // Closes #106.
+    clear_inflight_claim_sentinel(app, &ids);
 
     let result_key = if op == "prune" { "pruned" } else { "advanced" };
     let response = format!(

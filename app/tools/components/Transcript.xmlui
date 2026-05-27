@@ -15,6 +15,13 @@
   <DataSource
     id="currentTurnEditsDS"
     url="/__current-turn-edits?t={currentTurnEditsTick}" />
+  <!-- Host-derived "agent is waiting for assistant" boolean. Replaces
+       the iframe isWaitingForAssistant suffix-walk that fired
+       on every keystroke (TextArea `enabled` binding) AND every JSONL
+       fanout. Reuses currentTurnEditsTick — same refetch cadence. -->
+  <DataSource
+    id="waitingDS"
+    url="/__waiting-for-assistant?t={currentTurnEditsTick}" />
   <ChangeListener
     listenTo="{turns.length}"
     onDidChange="if (window.wasPinnedToBottom()) window.scrollAllToBottom()" />
@@ -238,7 +245,7 @@
     </VStack>
 
     <HStack
-      when="{isWaitingForAssistant(lastJsonl) &amp;&amp; !pendingMenu}"
+      when="{(waitingDS.value &amp;&amp; waitingDS.value.waiting) &amp;&amp; !pendingMenu}"
       paddingVertical="$space-3"
       verticalAlignment="center">
       <Spinner size="sm" delay="{200}" />
@@ -310,7 +317,7 @@
             <property name="buttonRowTemplate"><Fragment/></property>
             <HStack gap="$space-2" verticalAlignment="end">
               <TextArea id="inputBox" enterSubmits="true"
-                enabled="{!isWaitingForAssistant(lastJsonl)}"
+                enabled="{!(waitingDS.value &amp;&amp; waitingDS.value.waiting)}"
                 placeholder="Message agent — Enter sends, Shift+Enter newline"
                 autoSize="true" minRows="1" maxRows="6" width="*" />
               <Button label="Send" type="submit" size="sm" />

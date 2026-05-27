@@ -4703,6 +4703,82 @@ fn read_last_assistant_text<R: tauri::Runtime>(
     serde_json::to_vec(&body).map_err(|e| e.to_string())
 }
 
+// Host-side `is the agent waiting for the assistant to speak` derivation.
+// Mirrors the iframe helper isWaitingForAssistant(jsonlText) in Globals.xs:
+// returns true when the most recent meaningful record is a user message
+// (tool_result-only user records are skipped). Used by the Transcript
+// tab's "agent is thinking" spinner and the TextArea `enabled` binding.
+fn read_waiting_for_assistant<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some(path) = freshest_session_path(app)? else {
+        return Ok(br#"{"waiting":false}"#.to_vec());
+    };
+    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let file_size = file.metadata().map_err(|e| e.to_string())?.len();
+    // Last 50 records typically fit in 32 KB even on heavy turns.
+    let want: u64 = 32 * 1024;
+    let read_from = file_size.saturating_sub(want);
+    file.seek(SeekFrom::Start(read_from))
+        .map_err(|e| e.to_string())?;
+    let mut tail = Vec::with_capacity((file_size - read_from) as usize);
+    file.read_to_end(&mut tail).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&tail);
+    let mut last_role: Option<&str> = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(r) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let typ = r.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if typ == "user" {
+            let Some(content) = r.get("message").and_then(|m| m.get("content")) else {
+                continue;
+            };
+            if let Some(arr) = content.as_array() {
+                let all_tool_result = !arr.is_empty()
+                    && arr.iter().all(|c| {
+                        c.get("type").and_then(|t| t.as_str()) == Some("tool_result")
+                    });
+                if all_tool_result {
+                    continue;
+                }
+            }
+            last_role = Some("user");
+        } else if typ == "assistant" {
+            let Some(content) = r.get("message").and_then(|m| m.get("content")) else {
+                continue;
+            };
+            let has_text = content.as_str().map(|s| !s.is_empty()).unwrap_or(false)
+                || content
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .any(|c| c.get("type").and_then(|t| t.as_str()) == Some("text"))
+                    })
+                    .unwrap_or(false);
+            if has_text {
+                last_role = Some("assistant");
+            }
+        } else if typ == "event_msg" {
+            if let Some(payload) = r.get("payload") {
+                match payload.get("type").and_then(|v| v.as_str()) {
+                    Some("user_message") => last_role = Some("user"),
+                    Some("agent_message") => last_role = Some("assistant"),
+                    _ => {}
+                }
+            }
+        }
+    }
+    let waiting = last_role == Some("user");
+    let body = serde_json::json!({ "waiting": waiting });
+    serde_json::to_vec(&body).map_err(|e| e.to_string())
+}
+
 // Host-side current-turn edits extraction. Mirrors the iframe helper
 // `currentTurnEdits(jsonlText)` in Globals.xs: walks backward to find
 // the most recent user-message boundary, then collects per-file
@@ -7993,6 +8069,20 @@ fn route_request<R: tauri::Runtime>(
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
             Err(e) => {
                 eprintln!("[http /__current-turn-edits] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    // Mirror of isWaitingForAssistant(jsonlText) iframe helper. Returns
+    // {waiting: bool} — true when the most recent meaningful record is
+    // a user message (tool_result-only records skipped). Replaces the
+    // iframe-side suffix walk on every fanout / keystroke.
+    if path == "__waiting-for-assistant" {
+        return match read_waiting_for_assistant(app) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__waiting-for-assistant] {}", e);
                 (500, "text/plain; charset=utf-8", e.into_bytes())
             }
         };

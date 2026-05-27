@@ -99,15 +99,18 @@ def deny(reason):
         _HOOK_CTX["target"] or "",
         "deny",
         # Trim the deny message to a short reason for the trace; the
-        # full message still goes through the permissionDecisionReason
-        # field below for codex to surface to the user/agent.
+        # full message goes to stderr below for codex to surface.
         (reason or "").splitlines()[0][:120] if reason else "blocked",
     )
-    print(json.dumps({
-        "permissionDecision": "deny",
-        "permissionDecisionReason": reason,
-    }))
-    sys.exit(0)
+    # Codex PreToolUse contract: exit code 2 + reason on stderr.
+    # The flat {"permissionDecision":"deny",...} JSON the Claude hook
+    # emits is invalid PreToolUse output for codex — codex rejects
+    # it, logs "PreToolUse hook (failed)", and the tool call proceeds
+    # instead of being blocked. exit(2)+stderr is universally
+    # supported and avoids any JSON nesting ambiguity.
+    sys.stderr.write((reason or "blocked") + "\n")
+    sys.stderr.flush()
+    sys.exit(2)
 
 
 def load_json(path):

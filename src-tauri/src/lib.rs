@@ -4596,15 +4596,37 @@ fn read_latest_session_pending<R: tauri::Runtime>(
 // budget as `read_latest_session_pending`), walks lines in reverse,
 // and returns the most recent assistant text turn. Returns empty
 // string when no assistant text is found in the tail window.
+// Pick whichever provider's latest session file has the most recent
+// mtime. Bypasses `latest_session_path`'s active-agent-hint check —
+// the hint is sticky and lags when activity flips between providers,
+// causing the route to walk the wrong (often empty) session for
+// several refetch cycles. Most-recent-mtime auto-flips the moment
+// the other provider writes a record.
+fn freshest_session_path<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let mut best: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
+    for path_opt in [
+        latest_claude_session_path(app)?,
+        latest_codex_session_path(app)?,
+    ] {
+        let Some(path) = path_opt else { continue };
+        let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+            continue;
+        };
+        if best.as_ref().map(|(_, t)| mtime > *t).unwrap_or(true) {
+            best = Some((path, mtime));
+        }
+    }
+    Ok(best.map(|(p, _)| p))
+}
+
 fn read_last_assistant_text<R: tauri::Runtime>(
     app: &AppHandle<R>,
-    preferred: Option<SessionProvider>,
+    _preferred: Option<SessionProvider>,
 ) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
-    // latest_session_path falls back to hinted_session_provider when
-    // preferred is None, so the same route serves whichever agent
-    // (Claude or Codex) most recently spoke.
-    let Some(path) = latest_session_path(app, preferred)? else {
+    let Some(path) = freshest_session_path(app)? else {
         return Ok(br#"{"text":""}"#.to_vec());
     };
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
@@ -4693,10 +4715,10 @@ fn read_last_assistant_text<R: tauri::Runtime>(
 // current turn or no session.
 fn read_current_turn_edits<R: tauri::Runtime>(
     app: &AppHandle<R>,
-    preferred: Option<SessionProvider>,
+    _preferred: Option<SessionProvider>,
 ) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
-    let Some(path) = latest_session_path(app, preferred)? else {
+    let Some(path) = freshest_session_path(app)? else {
         return Ok(b"[]".to_vec());
     };
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;

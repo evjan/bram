@@ -21,9 +21,6 @@
   var.inflightTick="{0}"
   var.lastAssistantTick="{0}"
   var.lastAssistantTickAt="{0}">
-  <ChangeListener
-    listenTo="{selectedFeedback}"
-    onDidChange="App.mark('selectedFeedback-written')" />
   <DataSource
     id="worklist"
     url="/__worklist"

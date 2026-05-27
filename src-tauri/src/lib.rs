@@ -5983,17 +5983,18 @@ worklist.json), or (c) read-only investigation \
 prefaced \"I don't yet have enough context to propose\". Mutations \
 outside approved items are blocked at runtime by a PreToolUse hook. \
 On approved:/drop: turns, GET \
-http://localhost:$(cat resources/.bram-port)/__worklist/resolve \
+http://127.0.0.1:$(cat resources/.bram-port)/__worklist/resolve \
 to read verified item content, then POST /__worklist/mutate with \
 op:advance (after applying) or op:prune (after a drop or commit). \
 On iterate: turns, POST /__iterate/begin as your first action and \
 /__iterate/end as your last. Don't edit resources/worklist.json \
 directly for state changes — the routes drive the inflight sentinel \
 that keeps the Worklist tab UI in sync. \
-Use curl -sS --retry-connrefused --retry 3 --retry-delay 1 for these \
-loopback calls — Bram restarts briefly drop the port and a fresh \
-connection can land in that window. Use -sS (silence progress, KEEP \
-errors), not bare -s, so connection failures surface as curl: (7) \
+Use curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 for these \
+loopback calls to 127.0.0.1, not localhost — Bram binds IPv4 and \
+localhost may try IPv6 ::1 first. Bram restarts briefly drop the port \
+and a fresh connection can land in that window. Use -sS (silence \
+progress, KEEP errors), not bare -s, so connection failures surface as curl: (7) \
 instead of (no output). \
 Full convention: .claude/bram-conventions.md \
 (legacy: .claude/xmlui-desktop-conventions.md)";

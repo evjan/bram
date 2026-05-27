@@ -206,18 +206,21 @@ Lifecycle:
      your curl calls:
 
      ```
-     curl -sS "http://localhost:61455/__worklist/resolve"
+     curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \
+       "http://127.0.0.1:61455/__worklist/resolve"
      ```
 
      (replace `61455` with whatever `Read resources/.bram-port`
      returned). The literal port matches the
-     `Bash(curl -sS "http://localhost*__worklist*)` allowlist pattern
-     in `.claude/settings.json` and runs without a prompt. Use `-sS`
-     (silence progress, KEEP errors) rather than bare `-s` — `-s`
-     swallows `Failed to connect` and other curl errors, so a
+     127.0.0.1 worklist allowlist in `.claude/settings.json` and runs
+     without a prompt. Use `-4` and `127.0.0.1`, not `localhost`: Bram
+     binds the loopback server on IPv4, while `localhost` may try IPv6
+     `::1` first and fail with `curl: (7)` even when Bram is listening.
+     Use `-sS` (silence progress, KEEP errors) rather than bare `-s` —
+     `-s` swallows `Failed to connect` and other curl errors, so a
      restart-race against a stale port shows up as `(no output)`
-     instead of `curl: (7)` and makes the next failure
-     mode hard to diagnose.
+     instead of `curl: (7)` and makes the next failure mode hard to
+     diagnose.
 
      Use the literal port number — `$BRAM_PORT` won't work because
      Claude Code's permission matcher doesn't expand variables before

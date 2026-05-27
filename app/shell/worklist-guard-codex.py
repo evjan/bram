@@ -673,8 +673,8 @@ def _mechanical_worklist_change_error(removed, status_changed, tool_name):
         lines.append(f"Status changes: {detail}")
     lines.append(
         "Example: "
-        "curl -X POST -d '{\"op\":\"advance\",\"ids\":[\"item-id\"],\"status\":\"applied\"}' "
-        "http://localhost:${BRAM_PORT:-$XMLUI_DESKTOP_PORT}/__worklist/mutate"
+        "curl -4 -sS -X POST -d '{\"op\":\"advance\",\"ids\":[\"item-id\"],\"status\":\"applied\"}' "
+        "http://127.0.0.1:$(cat resources/.bram-port)/__worklist/mutate"
     )
     return "\n".join(lines)
 

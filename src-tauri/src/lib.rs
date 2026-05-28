@@ -1386,11 +1386,23 @@ fn pty_menu_guess_tool(context: &[u8]) -> String {
     "Tool".to_string()
 }
 
+fn pty_menu_input_clears_inflight(input: &str) -> bool {
+    input == "\x1b" || input == "3\r" || input == "3\n"
+}
+
+fn pty_output_clears_inflight(output: &[u8]) -> bool {
+    let stripped = strip_ansi(output);
+    let text = String::from_utf8_lossy(&stripped);
+    text.contains("You canceled the request")
+        || text.contains("You cancelled the request")
+        || text.contains("Conversation interrupted")
+}
+
 // Called from pty_write on user input. Records the dismissed menu's
 // tool name into PTY_MENU_SUPPRESSED so the detector won't immediately
 // re-fire when the next PTY chunk arrives (the dismissed text is still
 // in the rolling buffer).
-fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>) {
+fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
     let dismissed_tool: Option<String> = match pty_menu_cell().lock() {
         Ok(mut menu) => {
             let tool = menu.as_ref().map(|m| m.tool.clone());
@@ -1410,6 +1422,7 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>) {
         *grace = None;
     }
     if let Some(tool) = dismissed_tool {
+        let clears_inflight = pty_menu_input_clears_inflight(input);
         // Pending menus never emitted `state=shown` to subscribers
         // (their tool name hadn't resolved yet). Don't emit the matching
         // `state=dismissed` trace and don't add a re-detection
@@ -1418,6 +1431,9 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>) {
         // has nothing to clear. Refs #77 tighten-pty-menu-emit-cadence.
         if tool == PENDING_TOOL {
             eprintln!("[pty-menu] cleared by user input (pending menu — shown emit was deferred)");
+            if clears_inflight {
+                clear_active_sentinel_with_reason(app, "pty-menu-pending-user-reject");
+            }
             return;
         }
         eprintln!(
@@ -1434,11 +1450,16 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>) {
         if let Ok(mut s) = pty_menu_suppressed_cell().lock() {
             *s = Some((tool, std::time::Instant::now()));
         }
+        if clears_inflight {
+            clear_active_sentinel_with_reason(app, "pty-menu-user-reject");
+        }
         // Tell subscribers the menu went away. Emit AFTER releasing all
         // pty_menu_* locks for the same anti-deadlock reason as in
         // pty_menu_update.
         trace_emit_signal(app, "pty-menu-changed");
         let _ = app.emit::<Option<PtyMenu>>("pty-menu-changed", None);
+    } else if input == "\x1b" {
+        clear_active_sentinel_with_reason(app, "pty-escape");
     }
 }
 
@@ -2673,6 +2694,12 @@ fn pty_spawn(
                     }
                     pty_menu_update(&app_for_thread, &buf[..n]);
                     pty_agent_turn_update(&app_for_thread, &buf[..n]);
+                    if pty_output_clears_inflight(&buf[..n]) {
+                        clear_active_sentinel_with_reason(
+                            &app_for_thread,
+                            "pty-output-user-cancel",
+                        );
+                    }
                     if on_data.send(buf[..n].to_vec()).is_err() {
                         break;
                     }
@@ -2760,7 +2787,7 @@ fn pty_write_internal<R: tauri::Runtime>(
         // the focus signal). Closes #94.
         let is_focus_track = data == "\x1b[O" || data == "\x1b[I";
         if !is_focus_track {
-            pty_menu_clear(app);
+            pty_menu_clear(app, data);
         } else if bram_trace_enabled() {
             let tool = pty_menu_cell()
                 .lock()
@@ -7560,6 +7587,17 @@ fn clear_active_sentinel<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
+fn clear_active_sentinel_with_reason<R: tauri::Runtime>(app: &AppHandle<R>, reason: &str) {
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "inflight-sentinel",
+            &format!("op=clear-request reason={}", reason),
+        );
+    }
+    clear_active_sentinel(app);
+}
+
 // JSONL-driven turn-end detection (#91 follow-up). The PTY-silence
 // path (`pty_agent_turn_update`) fires `agent-turn-end` events on
 // silence_ms exceeding a threshold, then clears the sentinel — but
@@ -8800,6 +8838,56 @@ impl IfEmpty for String {
         } else {
             self
         }
+    }
+}
+
+#[cfg(test)]
+mod pty_menu_tests {
+    use super::{pty_menu_input_clears_inflight, pty_output_clears_inflight};
+
+    #[test]
+    fn esc_clears_inflight() {
+        assert!(pty_menu_input_clears_inflight("\x1b"));
+    }
+
+    #[test]
+    fn option_three_clears_inflight() {
+        assert!(pty_menu_input_clears_inflight("3\r"));
+        assert!(pty_menu_input_clears_inflight("3\n"));
+    }
+
+    #[test]
+    fn approving_menu_options_do_not_clear_inflight() {
+        assert!(!pty_menu_input_clears_inflight("1\r"));
+        assert!(!pty_menu_input_clears_inflight("2\r"));
+        assert!(!pty_menu_input_clears_inflight("1\n"));
+        assert!(!pty_menu_input_clears_inflight("2\n"));
+    }
+
+    #[test]
+    fn ordinary_typing_does_not_clear_inflight() {
+        assert!(!pty_menu_input_clears_inflight(
+            "create the file ~/Desktop/foo.bar"
+        ));
+        assert!(!pty_menu_input_clears_inflight("3"));
+        assert!(!pty_menu_input_clears_inflight(""));
+    }
+
+    #[test]
+    fn codex_cancel_output_clears_inflight() {
+        assert!(pty_output_clears_inflight(
+            b"\x1b[38;5;1m\xE2\x9C\x97 \x1b[39mYou \x1b[1mcanceled\x1b[22m the request to run \x1b[2mtouch ~/Desktop/foo.bar\x1b[22m"
+        ));
+        assert!(pty_output_clears_inflight(
+            b"Conversation interrupted - tell the model what to do differently."
+        ));
+    }
+
+    #[test]
+    fn ordinary_output_does_not_clear_inflight() {
+        assert!(!pty_output_clears_inflight(
+            b"Ran touch ~/Desktop/foo.bar\n(no output)"
+        ));
     }
 }
 

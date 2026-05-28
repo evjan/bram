@@ -148,6 +148,18 @@ without re-shipping content.
   `resources/worklist.json` are for proposal authoring and iterate-time
   prose refinement. The chat doesn't render a diff and the server-side
   auth check is uniform.
+- **Authorization state-machine enforcement.** `record_worklist_authorization_from_input`
+  parses the structured turn and calls `build_worklist_authorization_record`
+  to verify each supplied item hash against the resolved on-disk worklist
+  item. Hash drift produces `kind: "rejected_stale"` with no verified
+  item bodies. `handle_worklist_mutate` delegates auth-kind, id-coverage,
+  and post-commit prune checks to pure helpers before it edits
+  `worklist.json`: `advance` requires an `approved` record; `prune`
+  requires `drop`, except the post-commit prune path accepts `approved`
+  only when every requested item is already `status: "applied"`.
+  Provider hooks (`worklist-guard.py`) reject direct `worklist.json`
+  status changes or item removals so mechanical state changes stay on
+  the host route.
 - A same-turn `resolve → edit files → mutate` flow is supported. An
   `approved` record becomes `no_active_authorization` for subsequent
   `/__worklist/resolve` reads after the first GET, but `/__worklist/mutate`

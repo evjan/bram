@@ -685,6 +685,16 @@ channel — may be blocked by the provider hook. Item content edits
 (proposal authoring, iterate prose revisions) still go through
 `Write` / `Edit`; only the mechanical mutations route through `mutate`.
 
+Security contract: the structured approval line is not the authority by
+itself. The host records it only after recomputing each item's hash, and
+stale hashes become `rejected_stale`. `/__worklist/resolve` is the only
+way an agent receives verified item bodies; `/__worklist/mutate` is the
+only way an agent performs mechanical `advance` / `prune`. `advance`
+requires an `approved` auth record covering every id. `prune` requires
+`drop`, except the post-commit prune path accepts `approved` only when
+the requested ids are already `status: "applied"`. Provider hooks block
+direct `worklist.json` status changes and removals as defense in depth.
+
 ## Host-managed inflight sentinel
 
 The Worklist tab's spinner derives from `resources/.inflight-claim.json`,

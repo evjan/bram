@@ -8933,24 +8933,13 @@ fn parse_worklist_authorization_message(text: &str) -> Option<ParsedWorklistAuth
     None
 }
 
-fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R>, data: &str) {
-    let normalized = normalize_turn_submission(data);
-    let Some(parsed) = parse_worklist_authorization_message(&normalized) else {
-        return;
-    };
-
-    // Look up each requested id in the on-disk worklist, recompute its
-    // canonical hash, and compare against the supplied hash. Mismatches
-    // (or supplied-but-missing items) flip the record to "rejected_stale"
-    // so the agent surfaces the staleness rather than acting blind.
-    let on_disk_items: Vec<serde_json::Value> = worklist_file(app)
-        .and_then(|p| std::fs::read_to_string(&p).ok())
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|doc| doc.get("items").cloned())
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default();
-    let drafts_dir = worklist_drafts_dir(app);
-
+fn build_worklist_authorization_record(
+    parsed: ParsedWorklistAuthorization,
+    on_disk_items: &[serde_json::Value],
+    drafts_dir: Option<&Path>,
+    issued_at_ms: i64,
+    source: &str,
+) -> WorklistAuthorizationRecord {
     let mut ids: Vec<String> = Vec::with_capacity(parsed.requests.len());
     let mut verified_items: Vec<serde_json::Value> = Vec::new();
     let mut mismatched_ids: Vec<String> = Vec::new();
@@ -8966,13 +8955,8 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
         match (supplied_hash, found) {
             (Some(supplied), Some(item)) => {
                 any_hash_supplied = true;
-                let resolved_item = resolve_worklist_item_draft(drafts_dir.as_deref(), item);
+                let resolved_item = resolve_worklist_item_draft(drafts_dir, item);
                 if &canonical_item_hash(&resolved_item) == supplied {
-                    // Clone the on-disk item, then attach the per-item
-                    // feedback from the incoming payload so the agent
-                    // sees it via /__worklist/resolve. Always set the
-                    // field (even when empty) so consumers can read it
-                    // uniformly.
                     let mut enriched = resolved_item;
                     if let Some(obj) = enriched.as_object_mut() {
                         obj.insert(
@@ -8992,7 +8976,7 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
                 mismatched_ids.push(id.clone());
             }
             (None, _) => {
-                // Legacy payload — no hash to verify, no items array stored.
+                // Legacy payload: no hash to verify, so no verified item body.
             }
         }
     }
@@ -9008,15 +8992,42 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
         Vec::new()
     };
 
-    let record = WorklistAuthorizationRecord {
+    WorklistAuthorizationRecord {
         kind,
         ids,
         items,
         mismatched_ids,
-        issued_at_ms: unix_now_ms(),
-        source: "pty-write".to_string(),
+        issued_at_ms,
+        source: source.to_string(),
         consumed_at_ms: None,
+    }
+}
+
+fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R>, data: &str) {
+    let normalized = normalize_turn_submission(data);
+    let Some(parsed) = parse_worklist_authorization_message(&normalized) else {
+        return;
     };
+
+    // Look up each requested id in the on-disk worklist, recompute its
+    // canonical hash, and compare against the supplied hash. Mismatches
+    // (or supplied-but-missing items) flip the record to "rejected_stale"
+    // so the agent surfaces the staleness rather than acting blind.
+    let on_disk_items: Vec<serde_json::Value> = worklist_file(app)
+        .and_then(|p| std::fs::read_to_string(&p).ok())
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|doc| doc.get("items").cloned())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    let drafts_dir = worklist_drafts_dir(app);
+
+    let record = build_worklist_authorization_record(
+        parsed,
+        &on_disk_items,
+        drafts_dir.as_deref(),
+        unix_now_ms(),
+        "pty-write",
+    );
 
     let Some(path) = worklist_auth_file(app) else {
         return;
@@ -10710,6 +10721,121 @@ fn handle_iterate_end<R: tauri::Runtime>(
     )
 }
 
+fn worklist_mutate_required_kind(op: &str) -> Result<&'static str, String> {
+    match op {
+        "prune" => Ok("drop"),
+        "advance" => Ok("approved"),
+        _ => Err(format!("unknown op: {}", op)),
+    }
+}
+
+fn worklist_json_ids(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn validate_worklist_mutate_authorization(
+    op: &str,
+    ids: &[String],
+    auth: &serde_json::Value,
+) -> Result<String, String> {
+    let required_kind = worklist_mutate_required_kind(op)?;
+    let auth_kind = auth.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    let kind_ok = auth_kind == required_kind || (op == "prune" && auth_kind == "approved");
+    if !kind_ok {
+        return Err(format!(
+            "auth kind mismatch: expected {}{}, got {}",
+            required_kind,
+            if op == "prune" { " or approved" } else { "" },
+            auth_kind
+        ));
+    }
+
+    let auth_ids = worklist_json_ids(auth, "ids");
+    for id in ids {
+        if !auth_ids.iter().any(|aid| aid == id) {
+            return Err(format!("id not in auth: {}", id));
+        }
+    }
+
+    Ok(auth_kind.to_string())
+}
+
+fn worklist_item_status_for_id(items: &[serde_json::Value], id: &str) -> String {
+    items
+        .iter()
+        .find(|it| it.get("id").and_then(|v| v.as_str()) == Some(id))
+        .and_then(|it| it.get("status").and_then(|v| v.as_str()))
+        .unwrap_or("proposed")
+        .to_string()
+}
+
+fn validate_post_commit_prune_status(
+    op: &str,
+    auth_kind: &str,
+    ids: &[String],
+    items: &[serde_json::Value],
+) -> Result<(), String> {
+    if op != "prune" || auth_kind != "approved" {
+        return Ok(());
+    }
+    for id in ids {
+        let status = worklist_item_status_for_id(items, id);
+        if status != "applied" {
+            return Err(format!(
+                "post-commit prune requires applied status: {} is {}",
+                id, status
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn apply_worklist_mutation(
+    items: &mut Vec<serde_json::Value>,
+    op: &str,
+    ids: &[String],
+    new_status: &str,
+) -> Vec<String> {
+    let mut affected: Vec<String> = Vec::new();
+    if op == "prune" {
+        items.retain(|item| {
+            let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            if ids.iter().any(|id| id == item_id) {
+                affected.push(item_id.to_string());
+                false
+            } else {
+                true
+            }
+        });
+    } else {
+        for item in items.iter_mut() {
+            let item_id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if ids.iter().any(|id| id == &item_id) {
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert(
+                        "status".to_string(),
+                        serde_json::Value::String(new_status.to_string()),
+                    );
+                    affected.push(item_id);
+                }
+            }
+        }
+    }
+    affected
+}
+
 fn handle_worklist_mutate<R: tauri::Runtime>(
     app: &AppHandle<R>,
     body: &[u8],
@@ -10725,15 +10851,7 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
         }
     };
     let op = req_json.get("op").and_then(|v| v.as_str()).unwrap_or("");
-    let ids: Vec<String> = req_json
-        .get("ids")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let ids = worklist_json_ids(&req_json, "ids");
     if ids.is_empty() {
         return (
             400,
@@ -10741,17 +10859,13 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
             br#"{"error":"ids[] required"}"#.to_vec(),
         );
     }
-    let required_kind = match op {
-        "prune" => "drop",
-        "advance" => "approved",
-        _ => {
-            return (
-                400,
-                "application/json; charset=utf-8",
-                format!("{{\"error\":\"unknown op: {}\"}}", op).into_bytes(),
-            );
-        }
-    };
+    if let Err(e) = worklist_mutate_required_kind(op) {
+        return (
+            400,
+            "application/json; charset=utf-8",
+            serde_json::json!({ "error": e }).to_string().into_bytes(),
+        );
+    }
 
     // Auth check. Deliberately ignores consumedAtMs: same-turn
     // resolve -> edit files -> mutate is valid, and resolve's
@@ -10771,41 +10885,16 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(|| serde_json::json!({}));
-    let auth_kind = auth.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-    // For prune, also accept kind=approved (post-commit prune case);
-    // applied-status check happens after the worklist read below.
-    let kind_ok = auth_kind == required_kind || (op == "prune" && auth_kind == "approved");
-    if !kind_ok {
-        return (
-            400,
-            "application/json; charset=utf-8",
-            format!(
-                "{{\"error\":\"auth kind mismatch: expected {}{}, got {}\"}}",
-                required_kind,
-                if op == "prune" { " or approved" } else { "" },
-                auth_kind
-            )
-            .into_bytes(),
-        );
-    }
-    let auth_ids: Vec<String> = auth
-        .get("ids")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    for id in &ids {
-        if !auth_ids.iter().any(|aid| aid == id) {
+    let auth_kind = match validate_worklist_mutate_authorization(op, &ids, &auth) {
+        Ok(kind) => kind,
+        Err(e) => {
             return (
                 400,
                 "application/json; charset=utf-8",
-                format!("{{\"error\":\"id not in auth: {}\"}}", id).into_bytes(),
+                serde_json::json!({ "error": e }).to_string().into_bytes(),
             );
         }
-    }
+    };
 
     // Apply the op to worklist.json.
     let wl_path = match worklist_file(app) {
@@ -10837,63 +10926,19 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
     // allowed when every requested id is already status=applied —
     // blocks an agent from pruning an as-yet-unapplied approved item,
     // which would lose the work.
-    if op == "prune" && auth_kind == "approved" {
-        for id in &ids {
-            let item = items
-                .iter()
-                .find(|it| it.get("id").and_then(|v| v.as_str()) == Some(id.as_str()));
-            let status = item
-                .and_then(|it| it.get("status").and_then(|v| v.as_str()))
-                .unwrap_or("proposed");
-            if status != "applied" {
-                return (
-                    400,
-                    "application/json; charset=utf-8",
-                    format!(
-                        "{{\"error\":\"post-commit prune requires applied status: {} is {}\"}}",
-                        id, status
-                    )
-                    .into_bytes(),
-                );
-            }
-        }
+    if let Err(e) = validate_post_commit_prune_status(op, &auth_kind, &ids, items) {
+        return (
+            400,
+            "application/json; charset=utf-8",
+            serde_json::json!({ "error": e }).to_string().into_bytes(),
+        );
     }
 
-    let mut affected: Vec<String> = Vec::new();
-    if op == "prune" {
-        items.retain(|item| {
-            let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            if ids.iter().any(|id| id == item_id) {
-                affected.push(item_id.to_string());
-                false
-            } else {
-                true
-            }
-        });
-    } else {
-        // advance
-        let new_status = req_json
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("applied")
-            .to_string();
-        for item in items.iter_mut() {
-            let item_id = item
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if ids.iter().any(|id| id == &item_id) {
-                if let Some(obj) = item.as_object_mut() {
-                    obj.insert(
-                        "status".to_string(),
-                        serde_json::Value::String(new_status.clone()),
-                    );
-                    affected.push(item_id);
-                }
-            }
-        }
-    }
+    let new_status = req_json
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("applied");
+    let affected = apply_worklist_mutation(items, op, &ids, new_status);
 
     let new_text = serde_json::to_string_pretty(&wl).unwrap_or_default();
     if let Err(e) = std::fs::write(&wl_path, format!("{}\n", new_text)) {
@@ -10922,6 +10967,146 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
         "application/json; charset=utf-8",
         response.into_bytes(),
     )
+}
+
+#[cfg(test)]
+mod worklist_authorization_tests {
+    use super::{
+        apply_worklist_mutation, build_worklist_authorization_record, canonical_item_hash,
+        parse_worklist_authorization_message, validate_post_commit_prune_status,
+        validate_worklist_mutate_authorization,
+    };
+    use serde_json::json;
+
+    fn ids(values: &[&str]) -> Vec<String> {
+        values.iter().map(|v| v.to_string()).collect()
+    }
+
+    #[test]
+    fn approval_record_verifies_hash_and_embeds_feedback() {
+        let item = json!({
+            "id": "doc-update",
+            "status": "proposed",
+            "file": "docs/a.md",
+            "before": "old",
+            "after": "new"
+        });
+        let hash = canonical_item_hash(&item);
+        let msg = format!(
+            r#"approved: {{"items":[{{"id":"doc-update","hash":"{}","feedback":"tighten scope"}}]}}"#,
+            hash
+        );
+
+        let parsed = parse_worklist_authorization_message(&msg).expect("approval parses");
+        let record = build_worklist_authorization_record(parsed, &[item], None, 123, "test-source");
+
+        assert_eq!(record.kind, "approved");
+        assert_eq!(record.ids, ids(&["doc-update"]));
+        assert!(record.mismatched_ids.is_empty());
+        assert_eq!(record.items.len(), 1);
+        assert_eq!(
+            record.items[0].get("feedback").and_then(|v| v.as_str()),
+            Some("tighten scope")
+        );
+        assert_eq!(record.issued_at_ms, 123);
+        assert_eq!(record.source, "test-source");
+    }
+
+    #[test]
+    fn approval_record_rejects_stale_hashes() {
+        let item = json!({
+            "id": "doc-update",
+            "status": "proposed",
+            "file": "docs/a.md",
+            "before": "current",
+            "after": "new"
+        });
+        let parsed = parse_worklist_authorization_message(
+            r#"approved: {"items":[{"id":"doc-update","hash":"0000000000000000"}]}"#,
+        )
+        .expect("approval parses");
+
+        let record = build_worklist_authorization_record(parsed, &[item], None, 123, "test");
+
+        assert_eq!(record.kind, "rejected_stale");
+        assert_eq!(record.ids, ids(&["doc-update"]));
+        assert_eq!(record.mismatched_ids, ids(&["doc-update"]));
+        assert!(record.items.is_empty());
+    }
+
+    #[test]
+    fn legacy_drop_payload_has_ids_but_no_verified_items() {
+        let item = json!({
+            "id": "old-drop",
+            "status": "proposed",
+            "file": "docs/a.md",
+            "before": "old",
+            "after": "new"
+        });
+        let parsed = parse_worklist_authorization_message(r#"drop: {"ids":["old-drop"]}"#)
+            .expect("drop parses");
+
+        let record = build_worklist_authorization_record(parsed, &[item], None, 123, "test");
+
+        assert_eq!(record.kind, "drop");
+        assert_eq!(record.ids, ids(&["old-drop"]));
+        assert!(record.mismatched_ids.is_empty());
+        assert!(record.items.is_empty());
+    }
+
+    #[test]
+    fn mutate_authorization_rejects_wrong_kind_and_missing_ids() {
+        let auth = json!({"kind": "drop", "ids": ["a"]});
+
+        let wrong_kind = validate_worklist_mutate_authorization("advance", &ids(&["a"]), &auth)
+            .expect_err("advance requires approved auth");
+        assert!(wrong_kind.contains("auth kind mismatch"));
+
+        let missing_id = validate_worklist_mutate_authorization("prune", &ids(&["b"]), &auth)
+            .expect_err("id must be covered by auth");
+        assert_eq!(missing_id, "id not in auth: b");
+    }
+
+    #[test]
+    fn approved_prune_requires_applied_status() {
+        let proposed_items = vec![json!({"id": "a", "status": "proposed"})];
+        let applied_items = vec![json!({"id": "a", "status": "applied"})];
+
+        let err =
+            validate_post_commit_prune_status("prune", "approved", &ids(&["a"]), &proposed_items)
+                .expect_err("approved prune is post-commit only");
+        assert_eq!(
+            err,
+            "post-commit prune requires applied status: a is proposed"
+        );
+
+        validate_post_commit_prune_status("prune", "approved", &ids(&["a"]), &applied_items)
+            .expect("applied item can be pruned after commit");
+    }
+
+    #[test]
+    fn apply_worklist_mutation_advances_and_prunes_only_requested_items() {
+        let mut items = vec![
+            json!({"id": "a", "status": "proposed"}),
+            json!({"id": "b", "status": "proposed"}),
+        ];
+
+        let advanced = apply_worklist_mutation(&mut items, "advance", &ids(&["a"]), "applied");
+        assert_eq!(advanced, ids(&["a"]));
+        assert_eq!(
+            items[0].get("status").and_then(|v| v.as_str()),
+            Some("applied")
+        );
+        assert_eq!(
+            items[1].get("status").and_then(|v| v.as_str()),
+            Some("proposed")
+        );
+
+        let pruned = apply_worklist_mutation(&mut items, "prune", &ids(&["a"]), "applied");
+        assert_eq!(pruned, ids(&["a"]));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].get("id").and_then(|v| v.as_str()), Some("b"));
+    }
 }
 
 fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Request) {

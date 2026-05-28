@@ -61,19 +61,20 @@
           enabled="{!pullRebase.inProgress &amp;&amp; gitStatus.value &amp;&amp; gitStatus.value.behind > 0}"
           onClick="pullError = null; pullRebase.execute()" />
         <SpaceFiller />
-        <Button
-          label="✕"
-          variant="ghost"
-          size="xs"
-          tooltip="Clear search"
-          onClick="searchBox.setValue(''); queryDraft = ''; query = ''; selectedSha = null; selectedLine = null" />
-        <TextBox
-          id="searchBox"
-          placeholder="Search…"
-          width="*"
-          maxWidth="20rem"
-          initialValue="{queryDraft}"
-          onDidChange="(v) => queryDraft = v" />
+        <HStack gap="$space-1" verticalAlignment="center" width="*" maxWidth="20rem">
+          <TextBox
+            id="searchBox"
+            placeholder="Search…"
+            width="*"
+            initialValue="{queryDraft}"
+            onDidChange="(v) => queryDraft = v" />
+          <Button
+            label="✕"
+            variant="ghost"
+            size="xs"
+            tooltip="Clear search"
+            onClick="searchBox.setValue(''); queryDraft = ''; query = ''; selectedSha = null; selectedLine = null" />
+        </HStack>
       </HStack>
 
       <HStack

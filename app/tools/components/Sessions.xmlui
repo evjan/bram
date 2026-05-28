@@ -115,19 +115,20 @@
       <HStack gap="$space-3" verticalAlignment="center">
         <Heading level="h2">Sessions</Heading>
         <SpaceFiller />
-        <Button
-          label="✕"
-          variant="ghost"
-          size="xs"
-          tooltip="Clear search"
-          onClick="searchBox.setValue(''); queryDraft = ''; query = ''; expandedId = null; expandedProvider = null; selectedSnippet = false" />
-        <TextBox
-          id="searchBox"
-          placeholder="Search user/assistant text…"
-          width="*"
-          maxWidth="20rem"
-          initialValue="{queryDraft}"
-          onDidChange="(v) => queryDraft = v" />
+        <HStack gap="$space-1" verticalAlignment="center" width="*" maxWidth="20rem">
+          <TextBox
+            id="searchBox"
+            placeholder="Search user/assistant text…"
+            width="*"
+            initialValue="{queryDraft}"
+            onDidChange="(v) => queryDraft = v" />
+          <Button
+            label="✕"
+            variant="ghost"
+            size="xs"
+            tooltip="Clear search"
+            onClick="searchBox.setValue(''); queryDraft = ''; query = ''; expandedId = null; expandedProvider = null; selectedSnippet = false" />
+        </HStack>
       </HStack>
       <Text
         when="{sessionsMeta.value}"

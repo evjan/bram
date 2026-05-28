@@ -4615,9 +4615,9 @@ fn freshest_session_path<R: tauri::Runtime>(
 
 fn read_last_assistant_text<R: tauri::Runtime>(
     app: &AppHandle<R>,
-    _preferred: Option<SessionProvider>,
+    preferred: Option<SessionProvider>,
 ) -> Result<Vec<u8>, String> {
-    let Some(path) = freshest_session_path(app)? else {
+    let Some(path) = latest_session_path(app, preferred)? else {
         return Ok(br#"{"text":"","source":"session-turns"}"#.to_vec());
     };
     let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;

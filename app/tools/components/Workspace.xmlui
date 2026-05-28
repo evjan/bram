@@ -117,66 +117,20 @@
     onInit="lastJsonl = window.getLatestJsonl();
     subscribeLatestJsonl('__bramWorkspaceJsonlUnsub', (v) => { lastJsonl = v; const now = Date.now(); if (now - lastAssistantTickAt >= 2000) { lastAssistantTickAt = now; lastAssistantTick = lastAssistantTick + 1; } });
     subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; lastAssistantTextDS.refetch(); currentTurnEditsDS.refetch(); });
-    (() => {
-      // Iframe-side trace records for the [iframe] category of the
-      // comms-path trace (issue #49). Calls route through iframeTrace()
-      // in Globals.xs, which checks logToHost availability and forwards
-      // to the host.
-      const tauri = (window.parent &amp;&amp; window.parent.__TAURI__) || window.__TAURI__;
-      if (tauri &amp;&amp; tauri.event &amp;&amp; tauri.event.listen) {
-        // Hot-reload of Workspace.xmlui re-runs onInit. Without revoking
-        // the prior listener, every reload stacked a fresh listener and
-        // each Tauri event fired all of them. Slot lives on window so it
-        // survives the reload. See fix-iframe-worklist-listener-leak.
-        if (typeof window.__bramWorklistUnlisten === 'function') {
-          try { window.__bramWorklistUnlisten(); } catch (err) {}
-          window.__bramWorklistUnlisten = null;
-        }
-        tauri.event.listen('worklist-changed', (e) => {
-          const payload = (e &amp;&amp; e.payload) || {};
-          iframeTrace('listener-fired', {
-            paths: payload.paths || [],
-            correlation_id: payload.id || '',
-          });
-          // Direct refetch — the host-side watcher debounce (#85)
-          // coalesces notify-rs's ~6× cascade per worklist.json write
-          // into one emit per logical change, so this fires once per
-          // logical change. The History tab owns its own DataSource
-          // now (moved out of Workspace), so no history refetch here.
-          iframeTrace('refetch-called', {context: 'worklist-changed'});
-          worklist.refetch();
-        }).then((unlisten) => { window.__bramWorklistUnlisten = unlisten; }).catch(() => {});
-
-        // #84 item 3: subscribe to `inflight-claim-changed` from the
-        // host. Each event bumps inflightTick, which forces the
-        // inflightClaim DataSource to refetch /__inflight. The
-        // DataSource's onLoaded handler observes the sentinel and
-        // clears localStorage when the targeted item is no longer
-        // claimed. Replaces the prior agent-turn-end listener and
-        // its heuristic chain.
-        if (typeof window.__bramInflightClaimUnlisten === 'function') {
-          try { window.__bramInflightClaimUnlisten(); } catch (err) {}
-          window.__bramInflightClaimUnlisten = null;
-        }
-        tauri.event.listen('inflight-claim-changed', () => {
-          iframeTrace('listener-fired', {context: 'inflight-claim-changed'});
-          inflightTick = inflightTick + 1;
-        }).then((unlisten) => { window.__bramInflightClaimUnlisten = unlisten; }).catch(() => {});
-
-        // Issue #75 step 1: mirror the Transcript tab's pty-menu-changed
-        // listener so the menu render below this onInit responds to the
-        // same host signal both tabs already subscribe to. Same hot
-        // -reload unlisten dance as the two listeners above.
-        if (typeof window.__bramPtyMenuUnlisten === 'function') {
-          try { window.__bramPtyMenuUnlisten(); } catch (err) {}
-          window.__bramPtyMenuUnlisten = null;
-        }
-        tauri.event.listen('pty-menu-changed', (e) => {
-          pendingMenu = e &amp;&amp; e.payload ? e.payload : null;
-          iframeTrace('listener-fired', {context: 'pty-menu-changed', tool: (pendingMenu &amp;&amp; pendingMenu.tool) || ''});
-        }).then((unlisten) => { window.__bramPtyMenuUnlisten = unlisten; }).catch(() => {});
-      }
-    })()">
+    subscribeTauriEvent('__bramWorklistUnsub', 'worklist-changed', (e) => {
+      const payload = (e &amp;&amp; e.payload) || {};
+      iframeTrace('listener-fired', {paths: payload.paths || [], correlation_id: payload.id || ''});
+      iframeTrace('refetch-called', {context: 'worklist-changed'});
+      worklist.refetch();
+    });
+    subscribeTauriEvent('__bramInflightClaimUnsub', 'inflight-claim-changed', () => {
+      iframeTrace('listener-fired', {context: 'inflight-claim-changed'});
+      inflightTick = inflightTick + 1;
+    });
+    subscribeTauriEvent('__bramPtyMenuUnsub', 'pty-menu-changed', (e) => {
+      pendingMenu = e &amp;&amp; e.payload ? e.payload : null;
+      iframeTrace('listener-fired', {context: 'pty-menu-changed', tool: (pendingMenu &amp;&amp; pendingMenu.tool) || ''});
+    });">
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">
         <HStack gap="$space-3" verticalAlignment="center">

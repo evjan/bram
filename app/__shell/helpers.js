@@ -456,6 +456,55 @@ try {
   }
 } catch (e) {}
 
+// Generic keyed-slot subscription to a parent-shell Tauri event (#81).
+// Mirrors subscribeTalkSessionChange so the same leak fix applies to
+// any event name: ONE parent listener per eventName, registered lazily
+// on first subscribe and guarded so it attaches exactly once per
+// helpers.js load, fanning out to a synchronous subscriber array. The
+// per-mount subscribe call is fully synchronous (revoke window[key],
+// push, store unsub) — no tauri.event.listen Promise window — so a
+// component's onInit re-running on hot-reload keeps the live-subscriber
+// count at exactly one. The prior direct tauri.event.listen(...).then()
+// blocks stacked one live listener per onInit re-run.
+var __tauriEventSubscribers = {};
+var __tauriEventListening = {};
+function __ensureTauriEventListener(eventName) {
+  if (__tauriEventListening[eventName]) return;
+  var ev = (window.parent && window.parent.__TAURI__ && window.parent.__TAURI__.event)
+    || (window.__TAURI__ && window.__TAURI__.event);
+  if (!ev || typeof ev.listen !== "function") return;
+  __tauriEventListening[eventName] = true;
+  try {
+    ev.listen(eventName, function (e) {
+      var subs = __tauriEventSubscribers[eventName] || [];
+      for (var i = 0; i < subs.length; i++) {
+        try { subs[i](e); } catch (err) {}
+      }
+    });
+  } catch (err) {
+    __tauriEventListening[eventName] = false;
+  }
+}
+window.subscribeTauriEvent = function (key, eventName, fn) {
+  if (typeof window[key] === "function") {
+    try { window[key](); } catch (e) {}
+  }
+  if (typeof fn !== "function") {
+    window[key] = null;
+    return function () {};
+  }
+  if (!__tauriEventSubscribers[eventName]) __tauriEventSubscribers[eventName] = [];
+  __ensureTauriEventListener(eventName);
+  __tauriEventSubscribers[eventName].push(fn);
+  window[key] = function () {
+    var subs = __tauriEventSubscribers[eventName] || [];
+    var idx = subs.indexOf(fn);
+    if (idx >= 0) subs.splice(idx, 1);
+    window[key] = null;
+  };
+  return window[key];
+};
+
 // Shared cache for the latest session-tail JSONL. A single App-level
 // DataSource in Main.xmlui fetches /__sessions/latest-tail and calls
 // setLatestJsonl() on each new value; both the Worklist tab

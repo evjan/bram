@@ -403,6 +403,16 @@ carries a non-empty `closesIssues`, the Worklist tab opens a confirm
 dialog — one row per issue with a checkbox (default checked) and an
 optional close-comment textbox.
 
+For issue-derived items — for example "Propose a worklist item to
+address #N (...)" from chat or the Issues tab — default to pairing the
+`issue-<N>-...` id with `closesIssues` for that same issue. Omit it
+only when the proposed change is explicitly investigative, partial, or
+otherwise not intended to resolve the issue. If you later discover an
+approved/applied issue-derived item is missing `closesIssues`, iterate
+the item metadata before asking for commit approval; do not rely on the
+ignored runtime `resources/worklist.json` change being commit-worthy on
+its own.
+
 The user's choices arrive back in the per-item `feedback` of the
 `approved:` payload as one or more `close-issue:` lines, appended
 after any free-text feedback the user typed. Two shapes:

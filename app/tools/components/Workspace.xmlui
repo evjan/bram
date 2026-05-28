@@ -16,7 +16,6 @@
   var.actionHelpFor="{null}"
   var.newItemHelp="{false}"
   var.newItemIssue="{null}"
-  var.newItemText="{''}"
   var.pendingMenu="{null}"
   var.inflightTick="{0}"
   var.lastAssistantTick="{0}"
@@ -334,13 +333,13 @@
                   gap="$space-2"
                   verticalAlignment="start">
                   <TextArea
+                    id="feedbackBox"
                     initialValue="{selectedFeedback}"
                     placeholder="Message to agent"
                     rows="2"
                     width="*"
                     fontSize="$fontSize-sm"
-                    enabled="{!submitting}"
-                    onDidChange="(v) => { debounce(200, (text) => { selectedFeedback = text; }, v); }" />
+                    enabled="{!submitting}" />
                   <Button
                     label="×"
                     variant="ghost"
@@ -357,7 +356,7 @@
                       label="Approve"
                       size="xs"
                       enabled="{traceApproveDropEnabled(submitting, selected)}"
-                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, selectedFeedback)); })()" />
+                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || '')); })()" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -371,8 +370,8 @@
                     <Button
                       label="Iterate"
                       size="xs"
-                      enabled="{traceIterateEnabled(submitting, selected, selectedFeedback)}"
-                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); toTurn('iterate: ' + buildIteratePayload(worklist.value.items, selected, selectedFeedback))" />
+                      enabled="{traceIterateEnabled(submitting, selected, (feedbackBox &amp;&amp; feedbackBox.value) || '')}"
+                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); toTurn('iterate: ' + buildIteratePayload(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || ''))" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -387,7 +386,7 @@
                       label="Drop"
                       size="xs"
                       enabled="{traceApproveDropEnabled(submitting, selected)}"
-                      onClick="iframeTrace('click', {target: 'drop', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, selectedFeedback))" />
+                      onClick="iframeTrace('click', {target: 'drop', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || ''))" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -531,11 +530,11 @@
         <HStack gap="$space-2" paddingTop="$space-2">
           <Button
             label="Confirm"
-            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines(selectedFeedback, buildCloseIssueLines(closeIssuesState)))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines((feedbackBox &amp;&amp; feedbackBox.value) || '', buildCloseIssueLines(closeIssuesState)))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Approve without closing"
             variant="outlined"
-            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, selectedFeedback)); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, (feedbackBox &amp;&amp; feedbackBox.value) || '')); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Cancel"
             variant="ghost"
@@ -607,7 +606,7 @@ Iterate is the right move when the agent's first cut is *almost* what you want."
     <ModalDialog
       when="{newItemHelp}"
       title="Add a worklist item"
-      onClose="newItemHelp = false; newItemIssue = null; newItemText = ''">
+      onClose="newItemHelp = false; newItemIssue = null; newItemBox.setValue('')">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           The worklist is how you and the agent coordinate multi-step work.
@@ -631,30 +630,29 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
             initialValue="{newItemIssue}"
             onDidChange="(v) => newItemIssue = v" />
           <TextArea
-            initialValue="{newItemText}"
+            id="newItemBox"
             placeholder="Describe what the item should change"
             rows="4"
-            width="*"
-            onDidChange="(v) => { debounce(200, (text) => { newItemText = text; }, v); }" />
+            width="*" />
           <HStack gap="$space-2">
             <Button
               label="Send"
-              enabled="{!!newItemIssue || (newItemText &amp;&amp; newItemText.trim().length > 0)}"
+              enabled="{!!newItemIssue || (newItemBox.value &amp;&amp; newItemBox.value.trim().length > 0)}"
               onClick="(() => {
                 const issuesArr = (openIssues.value) || [];
                 const issueObj = newItemIssue ? issuesArr.find(i => String(i.number) === String(newItemIssue)) : null;
-                const text = (newItemText || '').trim();
+                const text = (newItemBox.value || '').trim();
                 let msg;
                 if (issueObj &amp;&amp; text) { msg = 'Propose a worklist item to address #' + issueObj.number + ' (' + issueObj.title + '): ' + text; }
                 else if (issueObj) { msg = 'Propose a worklist item to address #' + issueObj.number + ' (' + issueObj.title + ').'; }
                 else { msg = 'Propose a worklist item: ' + text; }
                 toTurn(msg);
-                newItemHelp = false; newItemIssue = null; newItemText = '';
+                newItemHelp = false; newItemIssue = null; newItemBox.setValue('');
               })()" />
             <Button
               label="Cancel"
               variant="ghost"
-              onClick="newItemHelp = false; newItemIssue = null; newItemText = ''" />
+              onClick="newItemHelp = false; newItemIssue = null; newItemBox.setValue('')" />
           </HStack>
         </VStack>
       </VStack>

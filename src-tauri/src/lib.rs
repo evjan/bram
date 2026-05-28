@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -123,13 +123,13 @@ fn expand_tilde(p: &str) -> String {
 }
 
 // Active project root — resolved once at startup from a CLI arg
-// (xmlui-desktop /path/to/project) or std::env::current_dir(). Read by
+// (bram /path/to/project) or std::env::current_dir(). Read by
 // the HTTP server, watcher, git/sessions/PTY commands.
 struct ActiveProjectState(Mutex<PathBuf>);
 
 // URLs for the two iframes.
 //
-// `tools` is always the internal loopback (xmlui-desktop's own server,
+// `tools` is always the internal loopback (Bram's own server,
 // serving /__tools/index.html, /__shell/*, embedded assets, git/issues
 // endpoints, etc.).
 //
@@ -137,7 +137,7 @@ struct ActiveProjectState(Mutex<PathBuf>);
 // regardless of project configuration. The tauri:// scheme handler in
 // `handle_tauri_scheme` intercepts paths under `/__project/*` and
 // proxies them to `right_pane_upstream` (loopback default, or external
-// dev server when `.xmlui-desktop.json` declares one). Net effect: the
+// dev server when `.bram.json` (or legacy `.xmlui-desktop.json`) declares one). Net effect: the
 // right-pane iframe is same-origin with the shell, while the actual
 // bytes still come from the upstream.
 //
@@ -159,24 +159,25 @@ struct PaneUrls {
     // the agent-tools drawer's right-pane-info display (so the user sees
     // the actual upstream URL, not the tauri:// proxy URL) and as the
     // fallback upstream after the server block is removed from
-    // .xmlui-desktop.json at runtime.
+    // project config at runtime.
     default_right_pane: String,
     // Base URL the tauri:// scheme handler proxies right-pane requests to.
     // Always ends with `/`. Switches between the loopback default and an
-    // external server based on .xmlui-desktop.json at startup and on
+    // external server based on project config at startup and on
     // config reload.
     right_pane_upstream: String,
     // Always the internal-loopback base URL (ends with `/`), regardless of
-    // any external dev-server declared in .xmlui-desktop.json. Used by the
+    // any external dev-server declared in project config. Used by the
     // scheme handler to route xd-internal `/__*` requests (sessions,
     // worklist, app-info, etc.) — these never live on the project's dev
     // server even when one is declared.
     loopback_origin: String,
 }
 
-// Project-level config read from .xmlui-desktop.json at the project
-// root. Distinct from XMLUI's own config.json (the app-under-test
-// isn't necessarily an XMLUI app). All fields optional.
+// Project-level config read from .bram.json at the project root, with
+// legacy .xmlui-desktop.json accepted as a migration alias. Distinct
+// from XMLUI's own config.json (the app-under-test isn't necessarily
+// an XMLUI app). All fields optional.
 #[derive(Default, Clone, serde::Deserialize)]
 struct ProjectConfig {
     #[serde(default)]
@@ -209,7 +210,7 @@ fn default_server_path() -> String {
 }
 
 // Lifecycle owner for an optional project-server child spawned per
-// .xmlui-desktop.json. Killed on ExitRequested, or on hot-reload when the
+// project config. Killed on ExitRequested, or on hot-reload when the
 // declared command/cwd/port changes. Carries the spawn-time config so the
 // reload path can diff against the new file and decide whether to respawn.
 struct SpawnedServer {
@@ -386,7 +387,11 @@ fn bram_trace_date_stamp_local() -> String {
     #[cfg(windows)]
     {
         if let Ok(out) = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", "(Get-Date).ToString('yyyy-MM-dd')"])
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-Date).ToString('yyyy-MM-dd')",
+            ])
             .output()
         {
             if out.status.success() {
@@ -628,8 +633,7 @@ fn trace_emit_payload<R: tauri::Runtime, S: serde::Serialize>(
 // Process-local sequence number for [route] correlation ids. Combined
 // with the entry timestamp it disambiguates two concurrent requests
 // that arrive in the same millisecond.
-static ROUTE_TRACE_COUNTER: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static ROUTE_TRACE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn next_route_correlation_id() -> String {
     let n = ROUTE_TRACE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -923,8 +927,7 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                     state.active_since = None;
                     state.is_active = false;
                     let in_cooldown = state.last_emit_at.map_or(false, |t| {
-                        now.saturating_duration_since(t).as_millis()
-                            < AGENT_TURN_EMIT_COOLDOWN_MS
+                        now.saturating_duration_since(t).as_millis() < AGENT_TURN_EMIT_COOLDOWN_MS
                     });
                     if !in_cooldown {
                         state.last_emit_at = Some(now);
@@ -1061,9 +1064,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                         );
                         return;
                     }
-                    Some(started)
-                        if started.elapsed().as_millis() < MENU_EVICTION_GRACE_MS =>
-                    {
+                    Some(started) if started.elapsed().as_millis() < MENU_EVICTION_GRACE_MS => {
                         return;
                     }
                     Some(started) => {
@@ -1100,8 +1101,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // First-cycle pending: store the state so the next detect cycle
         // can see we've already waited one, but suppress the `shown`
         // emit and trace until the tool name resolves. Refs #77.
-        let detected_is_pending =
-            matches!(detected.as_ref(), Some(d) if d.tool == PENDING_TOOL);
+        let detected_is_pending = matches!(detected.as_ref(), Some(d) if d.tool == PENDING_TOOL);
         let should_emit_change = state_changed && !detected_is_pending;
 
         match (&prev_menu, &detected) {
@@ -2011,7 +2011,8 @@ fn gh_issue_view<R: tauri::Runtime>(app: &AppHandle<R>, number: u64) -> Result<V
             let cross_refs = gh_issue_cross_references(app, number);
             let is_closed = issue.get("state").and_then(|v| v.as_str()) == Some("CLOSED");
             let closed_event = if is_closed {
-                repo_owner_name(app).and_then(|slug| gh_issue_closed_event_actor(app, &slug, number))
+                repo_owner_name(app)
+                    .and_then(|slug| gh_issue_closed_event_actor(app, &slug, number))
             } else {
                 None
             };
@@ -2214,7 +2215,7 @@ fn gh_issue_closed_event_actor<R: tauri::Runtime>(
 }
 
 fn enrich_issue_activity<R: tauri::Runtime>(
-    app: &AppHandle<R>,
+    _app: &AppHandle<R>,
     issue: &mut serde_json::Value,
     repo_slug: Option<&str>,
 ) {
@@ -2224,7 +2225,8 @@ fn enrich_issue_activity<R: tauri::Runtime>(
 
     let mut latest_comment_at: Option<String> = None;
     let mut latest_comment_author: Option<String> = None;
-    let mut comment_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut comment_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     if let Some(comments) = obj.get("comments").and_then(|v| v.as_array()) {
         for comment in comments {
             let Some(created_at) = comment.get("createdAt").and_then(|v| v.as_str()) else {
@@ -2262,11 +2264,22 @@ fn enrich_issue_activity<R: tauri::Runtime>(
 
     let activity_at = latest_comment_at
         .clone()
-        .or_else(|| obj.get("updatedAt").and_then(|v| v.as_str()).map(str::to_string))
-        .or_else(|| obj.get("createdAt").and_then(|v| v.as_str()).map(str::to_string));
+        .or_else(|| {
+            obj.get("updatedAt")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            obj.get("createdAt")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
 
     if let Some(activity_at) = activity_at {
-        obj.insert("activityAt".to_string(), serde_json::Value::String(activity_at));
+        obj.insert(
+            "activityAt".to_string(),
+            serde_json::Value::String(activity_at),
+        );
     }
     if let Some(latest_comment_at) = latest_comment_at {
         obj.insert(
@@ -2587,8 +2600,7 @@ fn pty_spawn(
                                 small_first_preview.clear();
                                 small_last = None;
                             }
-                            let preview =
-                                bram_trace_preview(&String::from_utf8_lossy(data), 80);
+                            let preview = bram_trace_preview(&String::from_utf8_lossy(data), 80);
                             let gap_ms = last_pty_in_emit_at
                                 .map(|t| t.elapsed().as_millis())
                                 .unwrap_or(0);
@@ -2803,12 +2815,7 @@ fn queue_pty_intent(
         append_bram_trace_line(
             &app,
             "pty-intent",
-            &format!(
-                "op=enqueue id={} kind={} bytes={}",
-                id,
-                kind,
-                data.len()
-            ),
+            &format!("op=enqueue id={} kind={} bytes={}", id, kind, data.len()),
         );
     }
     drain_pty_intents(&app, &state)
@@ -2976,9 +2983,9 @@ fn is_port_listening(port: u16) -> bool {
 
 // Distinguishes a healthy reuse candidate from a wedged orphan. A bare TCP
 // connect is not enough — a python -m http.server that was reparented to
-// launchd after its xmlui-desktop parent died accepts connects but never
-// returns a response. Setup uses this to decide whether to reuse, log a
-// loud warning, or spawn fresh.
+// launchd after its Bram parent died accepts connects but never returns a
+// response. Setup uses this to decide whether to reuse, log a loud warning,
+// or spawn fresh.
 enum PortStatus {
     Live,
     Unresponsive(String),
@@ -3026,7 +3033,7 @@ fn probe_port_http(port: u16, path: &str) -> PortStatus {
 }
 
 // Spawn the project's server per ServerConfig. Returns the Child on
-// success. stdout/stderr are piped and forwarded to xmlui-desktop's
+// success. stdout/stderr are piped and forwarded to Bram's
 // stderr with a `[server]` prefix. Caller is responsible for waiting
 // on the port and storing the Child in state.
 fn spawn_project_server(
@@ -3105,13 +3112,14 @@ fn wait_for_port(port: u16, total_ms: u64) -> bool {
     false
 }
 
-// Reconcile xmlui-desktop's runtime state with .xmlui-desktop.json after the
-// file changes on disk. Kills the prior project-server child only when its
-// command/cwd/port no longer match the file; otherwise we keep the running
-// process and just refresh path/query. Always updates PaneUrlsState and emits
-// right-pane-reload so main.js re-fetches the URL. Port changes do respawn,
-// but the iframe origin shifts — service workers (XMLUI's apiInterceptor,
-// MSW) won't rebind cleanly, so we log a warning telling the user to restart.
+// Reconcile Bram's runtime state with .bram.json, or the legacy
+// .xmlui-desktop.json alias, after the file changes on disk. Kills the prior
+// project-server child only when its command/cwd/port no longer match the
+// file; otherwise we keep the running process and just refresh path/query.
+// Always updates PaneUrlsState and emits right-pane-reload so main.js
+// re-fetches the URL. Port changes do respawn, but the iframe origin shifts —
+// service workers (XMLUI's apiInterceptor, MSW) won't rebind cleanly, so we
+// log a warning telling the user to restart.
 fn handle_project_config_reload<R: tauri::Runtime>(app_handle: &AppHandle<R>, proj_root: &Path) {
     use tauri::Emitter;
 
@@ -3349,11 +3357,7 @@ fn log_from_right_pane(app: AppHandle, payload: serde_json::Value) {
             }
             let rest_str = serde_json::to_string(&serde_json::Value::Object(rest))
                 .unwrap_or_else(|_| "{}".to_string());
-            append_bram_trace_line(
-                &app,
-                "iframe",
-                &format!("subkind={} {}", subkind, rest_str),
-            );
+            append_bram_trace_line(&app, "iframe", &format!("subkind={} {}", subkind, rest_str));
         }
         return;
     }
@@ -4113,7 +4117,7 @@ fn delete_session<R: tauri::Runtime>(
 
 // Format `SystemTime::now()` as an RFC3339 string in UTC (seconds precision,
 // no subseconds). Used for the `updated_at` field codex writes into
-// session_index.jsonl entries. xmlui-desktop has no date-formatting crate
+// session_index.jsonl entries. Bram has no date-formatting crate
 // dependency; this inline implementation uses Howard Hinnant's gregorian
 // algorithm to avoid adding one. Codex does not parse `updated_at` back
 // (only `id` + `thread_name` are read), but writing a real RFC3339 keeps the
@@ -4148,7 +4152,7 @@ fn rfc3339_now() -> String {
 // to the session JSONL so claude_session_title at lib.rs:1893 picks it up on
 // next read. For codex: append `{id, thread_name, updated_at}` to
 // ~/.codex/session_index.jsonl (append-only, last entry wins) so both
-// codex_session_index in xmlui-desktop and codex's own session listing see the
+// codex_session_index in Bram and codex's own session listing see the
 // new title. Codex contract verified against codex-rs/rollout/src/session_index.rs.
 fn rename_session<R: tauri::Runtime>(
     app: &AppHandle<R>,
@@ -4398,6 +4402,50 @@ fn latest_session_path<R: tauri::Runtime>(
     Ok(Some(path))
 }
 
+fn system_time_ms(t: std::time::SystemTime) -> Option<i64> {
+    t.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as i64)
+}
+
+fn start_codex_session_poll_fallback<R: tauri::Runtime>(app_handle: AppHandle<R>) {
+    std::thread::spawn(move || {
+        let mut last_seen: Option<(PathBuf, std::time::SystemTime)> = None;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let path = match latest_session_path(&app_handle, Some(SessionProvider::Codex)) {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    last_seen = None;
+                    continue;
+                }
+                Err(_) => continue,
+            };
+            let mtime = match std::fs::metadata(&path).and_then(|md| md.modified()) {
+                Ok(mtime) => mtime,
+                Err(_) => continue,
+            };
+            let advanced = match last_seen.as_ref() {
+                Some((prev_path, prev_mtime)) if prev_path == &path => mtime > *prev_mtime,
+                Some(_) | None => false,
+            };
+            last_seen = Some((path.clone(), mtime));
+            if !advanced {
+                continue;
+            }
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let mtime_ms = system_time_ms(mtime).unwrap_or(0);
+            append_bram_trace_line(
+                &app_handle,
+                "jsonl-poll",
+                &format!("provider=codex file={} mtime={}", name, mtime_ms),
+            );
+            trace_emit_signal(&app_handle, "talk-session-changed");
+            let _ = app_handle.emit("talk-session-changed", ());
+        }
+    });
+}
+
 // Tail variant: return only the last N records of the JSONL. Lets Transcript
 // poll aggressively without round-tripping the entire (multi-MB) file.
 // Uses a seek-from-EOF, read-backward-in-chunks loop so server cost is
@@ -4585,6 +4633,1227 @@ fn read_latest_session_pending<R: tauri::Runtime>(
     result
 }
 
+// Pick whichever provider's latest session file has the most recent
+// mtime. Bypasses `latest_session_path`'s active-agent-hint check —
+// the hint is sticky and lags when activity flips between providers,
+// causing routes that need live terminal-adjacent state to walk the
+// wrong (often empty) session for several refetch cycles.
+fn freshest_session_path<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let mut best: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
+    for path_opt in [
+        latest_claude_session_path(app)?,
+        latest_codex_session_path(app)?,
+    ] {
+        let Some(path) = path_opt else { continue };
+        let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+            continue;
+        };
+        if best.as_ref().map(|(_, t)| mtime > *t).unwrap_or(true) {
+            best = Some((path, mtime));
+        }
+    }
+    Ok(best.map(|(p, _)| p))
+}
+
+fn read_last_assistant_text<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> Result<Vec<u8>, String> {
+    let Some(path) = latest_session_path(app, preferred)? else {
+        return Ok(br#"{"text":"","source":"session-turns"}"#.to_vec());
+    };
+    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    let modified_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let turns = st_parse_lines_to_turns(&text);
+    let mut found = String::new();
+    for turn in turns.iter().rev() {
+        if turn.get("role").and_then(|v| v.as_str()) == Some("assistant") {
+            if let Some(text) = turn.get("text").and_then(|v| v.as_str()) {
+                if !text.trim().is_empty() {
+                    found = text.to_string();
+                    break;
+                }
+            }
+        }
+    }
+    let body = serde_json::json!({
+        "text": found,
+        "source": "session-turns",
+        "path": path.to_string_lossy().to_string(),
+        "mtime": modified_ms,
+    });
+    serde_json::to_vec(&body).map_err(|e| e.to_string())
+}
+
+// Host-side `is the agent waiting for the assistant to speak` derivation.
+// Mirrors the iframe helper isWaitingForAssistant(jsonlText) in Globals.xs:
+// returns true when the most recent meaningful record is a user message
+// (tool_result-only user records are skipped). Used by the Transcript
+// tab's "agent is thinking" spinner and the TextArea `enabled` binding.
+fn read_waiting_for_assistant<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some(path) = freshest_session_path(app)? else {
+        return Ok(br#"{"waiting":false}"#.to_vec());
+    };
+    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let file_size = file.metadata().map_err(|e| e.to_string())?.len();
+    // Last 50 records typically fit in 32 KB even on heavy turns.
+    let want: u64 = 32 * 1024;
+    let read_from = file_size.saturating_sub(want);
+    file.seek(SeekFrom::Start(read_from))
+        .map_err(|e| e.to_string())?;
+    let mut tail = Vec::with_capacity((file_size - read_from) as usize);
+    file.read_to_end(&mut tail).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&tail);
+    let mut last_role: Option<&str> = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(r) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let typ = r.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if typ == "user" {
+            let Some(content) = r.get("message").and_then(|m| m.get("content")) else {
+                continue;
+            };
+            if let Some(arr) = content.as_array() {
+                let all_tool_result = !arr.is_empty()
+                    && arr
+                        .iter()
+                        .all(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_result"));
+                if all_tool_result {
+                    continue;
+                }
+            }
+            last_role = Some("user");
+        } else if typ == "assistant" {
+            let Some(content) = r.get("message").and_then(|m| m.get("content")) else {
+                continue;
+            };
+            let has_text = content.as_str().map(|s| !s.is_empty()).unwrap_or(false)
+                || content
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .any(|c| c.get("type").and_then(|t| t.as_str()) == Some("text"))
+                    })
+                    .unwrap_or(false);
+            if has_text {
+                last_role = Some("assistant");
+            }
+        } else if typ == "event_msg" {
+            if let Some(payload) = r.get("payload") {
+                match payload.get("type").and_then(|v| v.as_str()) {
+                    Some("user_message") => last_role = Some("user"),
+                    Some("agent_message") => last_role = Some("assistant"),
+                    _ => {}
+                }
+            }
+        } else if typ == "response_item" {
+            if let Some(payload) = r.get("payload") {
+                if payload.get("type").and_then(|v| v.as_str()) == Some("message") {
+                    let has_text = payload
+                        .get("content")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter().any(|c| {
+                                let c_typ = c.get("type").and_then(|v| v.as_str());
+                                let has_text = c
+                                    .get("text")
+                                    .and_then(|v| v.as_str())
+                                    .map(|t| !t.is_empty())
+                                    .unwrap_or(false);
+                                matches!(
+                                    c_typ,
+                                    Some("input_text") | Some("output_text") | Some("text")
+                                ) && has_text
+                            })
+                        })
+                        .unwrap_or(false);
+                    if has_text {
+                        match payload.get("role").and_then(|v| v.as_str()) {
+                            Some("user") => last_role = Some("user"),
+                            Some("assistant") => last_role = Some("assistant"),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let waiting = last_role == Some("user");
+    let body = serde_json::json!({ "waiting": waiting });
+    serde_json::to_vec(&body).map_err(|e| e.to_string())
+}
+
+// Host-side current-turn edits extraction. Mirrors the iframe helper
+// `currentTurnEdits(jsonlText)` in Globals.xs: walks backward to find
+// the most recent user-message boundary, then collects per-file
+// aggregates (kind, added/removed line counts, lastToolId) from
+// Claude tool_use blocks and Codex apply_patch payloads after that
+// boundary.
+//
+// Returns a JSON array of {filePath, kind, added, removed, lastToolId}
+// in first-touch order. Empty array when there are no edits in the
+// current turn or no session.
+fn read_current_turn_edits<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    _preferred: Option<SessionProvider>,
+) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some(path) = freshest_session_path(app)? else {
+        return Ok(b"[]".to_vec());
+    };
+    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+    let file_size = file.metadata().map_err(|e| e.to_string())?.len();
+    // 64 KB tail covers ~100 records comfortably even with Codex's
+    // verbose apply_patch payloads. Bigger than read_last_assistant_text's
+    // 32 KB because patch records can be heavy.
+    let want: u64 = 64 * 1024;
+    let read_from = file_size.saturating_sub(want);
+    file.seek(SeekFrom::Start(read_from))
+        .map_err(|e| e.to_string())?;
+    let mut tail = Vec::with_capacity((file_size - read_from) as usize);
+    file.read_to_end(&mut tail).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&tail);
+    let lines: Vec<&str> = text.lines().collect();
+
+    // Walk backward to the most recent user-message boundary.
+    // tool_result-only Claude user records don't count as the boundary
+    // (they're tool outputs, not actual user messages).
+    let mut last_user_idx: Option<usize> = None;
+    for i in (0..lines.len()).rev() {
+        let line = lines[i].trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(r) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let typ = r.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if typ == "user" {
+            if let Some(arr) = r
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array())
+            {
+                let all_tool_result = !arr.is_empty()
+                    && arr
+                        .iter()
+                        .all(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_result"));
+                if all_tool_result {
+                    continue;
+                }
+            }
+            last_user_idx = Some(i);
+            break;
+        }
+        if typ == "event_msg" {
+            if let Some(p) = r.get("payload") {
+                if p.get("type").and_then(|v| v.as_str()) == Some("user_message") {
+                    last_user_idx = Some(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    struct Bucket {
+        kind: Option<&'static str>,
+        added: u64,
+        removed: u64,
+        last_tool_id: Option<String>,
+    }
+    let mut by_file: std::collections::HashMap<String, Bucket> = std::collections::HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+
+    fn merge_kind(prev: Option<&'static str>, new_kind: &'static str) -> &'static str {
+        match prev {
+            None => new_kind,
+            Some(p) if p == new_kind => p,
+            _ => "mixed",
+        }
+    }
+
+    fn ensure<'a>(
+        by_file: &'a mut std::collections::HashMap<String, Bucket>,
+        order: &mut Vec<String>,
+        path: &str,
+    ) -> &'a mut Bucket {
+        if !by_file.contains_key(path) {
+            by_file.insert(
+                path.to_string(),
+                Bucket {
+                    kind: None,
+                    added: 0,
+                    removed: 0,
+                    last_tool_id: None,
+                },
+            );
+            order.push(path.to_string());
+        }
+        by_file.get_mut(path).unwrap()
+    }
+
+    let start = last_user_idx.map(|i| i + 1).unwrap_or(0);
+    for i in start..lines.len() {
+        let line = lines[i].trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(r) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let typ = r.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Codex: response_item with function_call/custom_tool_call,
+        // name == apply_patch, arguments carrying a patch text.
+        if typ == "response_item" {
+            let Some(p) = r.get("payload") else { continue };
+            let ptype = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if ptype != "function_call" && ptype != "custom_tool_call" {
+                continue;
+            }
+            if p.get("name").and_then(|v| v.as_str()) != Some("apply_patch") {
+                continue;
+            }
+            // arguments is typically a JSON string {"input": "<patch text>"}.
+            // Fall back to direct field access if the shape differs.
+            let patch_text: String = match p.get("arguments") {
+                Some(serde_json::Value::String(s)) => serde_json::from_str::<serde_json::Value>(s)
+                    .ok()
+                    .and_then(|v| v.get("input").and_then(|i| i.as_str()).map(String::from))
+                    .unwrap_or_default(),
+                Some(v) => v
+                    .get("input")
+                    .and_then(|i| i.as_str())
+                    .map(String::from)
+                    .unwrap_or_default(),
+                None => String::new(),
+            };
+            if patch_text.is_empty() {
+                continue;
+            }
+            let call_id = p.get("call_id").and_then(|v| v.as_str()).map(String::from);
+            let mut current_path: Option<String> = None;
+            for pl in patch_text.lines() {
+                if let Some(rest) = pl.strip_prefix("*** ") {
+                    let mut new_kind: Option<&'static str> = None;
+                    let mut new_path: Option<String> = None;
+                    if let Some(p) = rest.strip_prefix("Add File: ") {
+                        new_kind = Some("added");
+                        new_path = Some(p.trim().to_string());
+                    } else if let Some(p) = rest.strip_prefix("Update File: ") {
+                        new_kind = Some("updated");
+                        new_path = Some(p.trim().to_string());
+                    } else if let Some(p) = rest.strip_prefix("Delete File: ") {
+                        new_kind = Some("deleted");
+                        new_path = Some(p.trim().to_string());
+                    }
+                    if let (Some(kind), Some(path)) = (new_kind, new_path) {
+                        let bucket = ensure(&mut by_file, &mut order, &path);
+                        bucket.kind = Some(merge_kind(bucket.kind, kind));
+                        if let Some(id) = &call_id {
+                            bucket.last_tool_id = Some(id.clone());
+                        }
+                        current_path = Some(path);
+                    } else {
+                        current_path = None;
+                    }
+                    continue;
+                }
+                let Some(path) = current_path.as_ref() else {
+                    continue;
+                };
+                if pl.starts_with("+++") || pl.starts_with("---") {
+                    continue;
+                }
+                if let Some(bucket) = by_file.get_mut(path) {
+                    if pl.starts_with('+') {
+                        bucket.added += 1;
+                    } else if pl.starts_with('-') {
+                        bucket.removed += 1;
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Claude: assistant.message.content[*] with type=tool_use,
+        // name in {Edit, MultiEdit, Write}.
+        if typ != "assistant" {
+            continue;
+        }
+        let Some(content_arr) = r
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+        else {
+            continue;
+        };
+        for c in content_arr {
+            if c.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                continue;
+            }
+            let name = c.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if name != "Edit" && name != "MultiEdit" && name != "Write" {
+                continue;
+            }
+            let Some(input) = c.get("input") else {
+                continue;
+            };
+            let file_path = match input.get("file_path").and_then(|p| p.as_str()) {
+                Some(p) if !p.is_empty() => p.to_string(),
+                _ => continue,
+            };
+            let call_id = c.get("id").and_then(|v| v.as_str()).map(String::from);
+            let bucket = ensure(&mut by_file, &mut order, &file_path);
+            if let Some(id) = &call_id {
+                bucket.last_tool_id = Some(id.clone());
+            }
+            match name {
+                "Edit" => {
+                    let before = input
+                        .get("old_string")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let after = input
+                        .get("new_string")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if !before.is_empty() {
+                        bucket.removed += before.lines().count() as u64;
+                    }
+                    if !after.is_empty() {
+                        bucket.added += after.lines().count() as u64;
+                    }
+                    bucket.kind = Some(merge_kind(bucket.kind, "edited"));
+                }
+                "MultiEdit" => {
+                    if let Some(edits) = input.get("edits").and_then(|v| v.as_array()) {
+                        for e in edits {
+                            let before = e.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+                            let after = e.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+                            if !before.is_empty() {
+                                bucket.removed += before.lines().count() as u64;
+                            }
+                            if !after.is_empty() {
+                                bucket.added += after.lines().count() as u64;
+                            }
+                        }
+                    }
+                    bucket.kind = Some(merge_kind(bucket.kind, "multi-edited"));
+                }
+                "Write" => {
+                    let after = input.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    if !after.is_empty() {
+                        bucket.added += after.lines().count() as u64;
+                    }
+                    bucket.kind = Some(merge_kind(bucket.kind, "written"));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let result: Vec<serde_json::Value> = order
+        .iter()
+        .filter_map(|fp| {
+            by_file.remove(fp).map(|b| {
+                serde_json::json!({
+                    "filePath": fp,
+                    "kind": b.kind,
+                    "added": b.added,
+                    "removed": b.removed,
+                    "lastToolId": b.last_tool_id,
+                })
+            })
+        })
+        .collect();
+    serde_json::to_vec(&result).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------
+// Session-turns port: replaces the iframe sessionTurns / getToolDetail
+// helper chain (~400 LOC of JSONL walking and shape-massaging) with a
+// host-side derivation that emits the same structured array Transcript
+// renders against today. Pure functions first, then the route entry
+// points read_session_turns / read_tool_detail.
+//
+// Output shape (must match the iframe so Transcript.xmlui doesn't
+// need to change other than its DataSource binding):
+//   [{
+//     role: "user" | "assistant",
+//     text: <joined string of text entries>,
+//     entries: [
+//       { kind: "text", text },
+//       { kind: "tool", id, name, summary, errored?, errorText? }
+//     ],
+//     images: [<inline base64 data: URLs OR extracted image paths>]
+//   }, ...]
+// ---------------------------------------------------------------------
+
+fn st_strip_image_paths(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    loop {
+        let Some(start) = rest.find("[Image: source: /") else {
+            out.push_str(rest);
+            break;
+        };
+        // Find the end of the bracketed marker (next ']').
+        let after_start = &rest[start..];
+        let Some(close) = after_start.find(']') else {
+            out.push_str(rest);
+            break;
+        };
+        // The iframe's regex matches `[Image: source: /<path>.(png|jpg|jpeg|gif|webp)]`
+        // plus the leading `\n*`. We try the bracket-only match and
+        // verify it's an image extension; if not, treat as literal text.
+        let marker = &after_start[..=close];
+        let dot = marker.rfind('.');
+        let ext_ok = dot
+            .map(|d| {
+                let ext = &marker[d + 1..marker.len() - 1].to_ascii_lowercase();
+                matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp")
+            })
+            .unwrap_or(false);
+        if !ext_ok {
+            // Not an image marker — emit through start+1 to skip past
+            // the `[` and continue scanning.
+            out.push_str(&rest[..start + 1]);
+            rest = &rest[start + 1..];
+            continue;
+        }
+        // Strip preceding newlines (any number).
+        let mut prefix_end = start;
+        while prefix_end > 0 && rest.as_bytes()[prefix_end - 1] == b'\n' {
+            prefix_end -= 1;
+        }
+        out.push_str(&rest[..prefix_end]);
+        rest = &rest[start + close + 1..];
+    }
+    out
+}
+
+fn st_extract_image_paths(text: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("[Image: source: /") {
+        let after = &rest[start..];
+        let Some(close) = after.find(']') else { break };
+        let marker = &after[..=close];
+        // Strip prefix "[Image: source: " and suffix "]" to get the path.
+        let path = &marker["[Image: source: ".len()..marker.len() - 1];
+        let lower_path = path.to_ascii_lowercase();
+        if lower_path.ends_with(".png")
+            || lower_path.ends_with(".jpg")
+            || lower_path.ends_with(".jpeg")
+            || lower_path.ends_with(".gif")
+            || lower_path.ends_with(".webp")
+        {
+            paths.push(path.to_string());
+        }
+        rest = &rest[start + close + 1..];
+    }
+    paths
+}
+
+fn st_rewrite_xmlui_doc_urls(text: &str) -> String {
+    text.replace(
+        "https://docs.xmlui.org/components/",
+        "https://www.xmlui.org/docs/reference/components/",
+    )
+    .replace("https://docs.xmlui.org/", "https://www.xmlui.org/docs/")
+}
+
+fn st_tool_result_text(content: &serde_json::Value) -> String {
+    if let Some(s) = content.as_str() {
+        return s.to_string();
+    }
+    if let Some(arr) = content.as_array() {
+        let mut parts: Vec<String> = Vec::new();
+        for c in arr {
+            if c.get("type").and_then(|t| t.as_str()) == Some("text") {
+                if let Some(t) = c.get("text").and_then(|t| t.as_str()) {
+                    parts.push(t.to_string());
+                }
+            }
+        }
+        return parts.join("\n");
+    }
+    String::new()
+}
+
+fn st_is_error_result(block: &serde_json::Value) -> bool {
+    if block
+        .get("is_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let content = block
+        .get("content")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let text = st_tool_result_text(&content);
+    text.starts_with("Error:") || text.starts_with("<tool_use_error>")
+}
+
+fn st_extract_lines(text: &str, cap: usize) -> Option<serde_json::Value> {
+    if text.is_empty() {
+        return None;
+    }
+    let all: Vec<&str> = text.split('\n').collect();
+    let lines: Vec<&str> = all.iter().take(cap).copied().collect();
+    let remaining = all.len().saturating_sub(cap);
+    Some(serde_json::json!({
+        "lines": lines,
+        "remaining": remaining,
+    }))
+}
+
+fn st_extract_tool_result(block: &serde_json::Value, cap: usize) -> serde_json::Value {
+    let content = block
+        .get("content")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let text = st_tool_result_text(&content);
+    st_extract_lines(&text, cap).unwrap_or(serde_json::Value::Null)
+}
+
+fn st_tool_summary(name: &str, input: &serde_json::Value) -> String {
+    let obj = match input.as_object() {
+        Some(o) => o,
+        None => return name.to_string(),
+    };
+    let get_str = |k: &str| -> &str { obj.get(k).and_then(|v| v.as_str()).unwrap_or("") };
+    match name {
+        "Edit" | "MultiEdit" => format!("{} edited", get_str("file_path")),
+        "Write" => {
+            let content = get_str("content");
+            let lines = if content.is_empty() {
+                1
+            } else {
+                content.split('\n').count()
+            };
+            format!(
+                "{} — wrote {} line{}",
+                get_str("file_path"),
+                lines,
+                if lines == 1 { "" } else { "s" }
+            )
+        }
+        "Bash" => {
+            let cmd = get_str("command");
+            if cmd.chars().count() > 80 {
+                let truncated: String = cmd.chars().take(80).collect();
+                format!("{}…", truncated)
+            } else {
+                cmd.to_string()
+            }
+        }
+        "Read" => {
+            let mut s = get_str("file_path").to_string();
+            let offset = obj.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+            let limit = obj.get("limit").and_then(|v| v.as_u64()).unwrap_or(0);
+            if offset > 0 || limit > 0 {
+                let start = if offset > 0 { offset } else { 1 };
+                s.push(':');
+                s.push_str(&start.to_string());
+                if limit > 0 {
+                    s.push('-');
+                    s.push_str(&(start + limit - 1).to_string());
+                }
+            }
+            s
+        }
+        "Grep" | "Glob" => {
+            let pattern = get_str("pattern");
+            let path = get_str("path");
+            if path.is_empty() {
+                pattern.to_string()
+            } else {
+                format!("{} in {}", pattern, path)
+            }
+        }
+        "Task" | "Agent" => {
+            let typ = get_str("subagent_type");
+            let desc = get_str("description");
+            if desc.is_empty() {
+                typ.to_string()
+            } else {
+                format!("{} — {}", typ, desc)
+            }
+        }
+        _ => name.to_string(),
+    }
+}
+
+fn st_codex_tool_name(payload: &serde_json::Value) -> String {
+    let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    if let Some(ns) = payload.get("namespace").and_then(|v| v.as_str()) {
+        let stripped = ns.strip_prefix("mcp__").unwrap_or(ns);
+        format!("{}.{}", stripped, name)
+    } else {
+        name.to_string()
+    }
+}
+
+fn st_parse_json_string(s: &str) -> Option<serde_json::Value> {
+    serde_json::from_str(s).ok()
+}
+
+fn st_codex_tool_input(payload: &serde_json::Value) -> serde_json::Value {
+    let typ = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if typ == "function_call" {
+        if let Some(args) = payload.get("arguments") {
+            if let Some(s) = args.as_str() {
+                return st_parse_json_string(s)
+                    .unwrap_or_else(|| serde_json::Value::String(s.to_string()));
+            }
+            return args.clone();
+        }
+        return serde_json::json!({});
+    }
+    if typ == "custom_tool_call" {
+        if let Some(inp) = payload.get("input") {
+            if let Some(s) = inp.as_str() {
+                return st_parse_json_string(s)
+                    .unwrap_or_else(|| serde_json::Value::String(s.to_string()));
+            }
+            return inp.clone();
+        }
+        return serde_json::Value::String(String::new());
+    }
+    serde_json::json!({})
+}
+
+fn st_codex_tool_summary(payload: &serde_json::Value) -> String {
+    let raw_name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let full_name = st_codex_tool_name(payload);
+    let input = st_codex_tool_input(payload);
+    if raw_name == "exec_command" {
+        if let Some(cmd) = input.get("cmd").and_then(|v| v.as_str()) {
+            if cmd.chars().count() > 80 {
+                let truncated: String = cmd.chars().take(80).collect();
+                return format!("{}…", truncated);
+            }
+            return cmd.to_string();
+        }
+    }
+    if raw_name == "write_stdin" {
+        let session = input
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .map(|s| format!("session {}", s))
+            .unwrap_or_else(|| "stdin".to_string());
+        let chars = input.get("chars").and_then(|v| v.as_str()).unwrap_or("");
+        if chars.is_empty() {
+            return session;
+        }
+        let label = if chars == "\u{001b}" {
+            "Esc".to_string()
+        } else {
+            chars.replace('\r', "\\r").replace('\n', "\\n")
+        };
+        let label_clipped = if label.chars().count() > 40 {
+            let t: String = label.chars().take(40).collect();
+            format!("{}…", t)
+        } else {
+            label
+        };
+        return format!("{} ← {}", session, label_clipped);
+    }
+    if raw_name == "apply_patch" {
+        if let Some(s) = input.as_str() {
+            for line in s.lines() {
+                if let Some(rest) = line.strip_prefix("*** Add File: ") {
+                    return format!("{} patch", rest);
+                }
+                if let Some(rest) = line.strip_prefix("*** Update File: ") {
+                    return format!("{} patch", rest);
+                }
+                if let Some(rest) = line.strip_prefix("*** Delete File: ") {
+                    return format!("{} patch", rest);
+                }
+            }
+            return "patch".to_string();
+        }
+    }
+    if full_name.starts_with("filesystem.") {
+        if let Some(p) = input.get("path").and_then(|v| v.as_str()) {
+            return p.to_string();
+        }
+    }
+    if full_name.starts_with("xmlui.") {
+        for k in &["path", "component", "query"] {
+            if let Some(v) = input.get(*k).and_then(|v| v.as_str()) {
+                return v.to_string();
+            }
+        }
+        return full_name;
+    }
+    if input.is_object() {
+        return st_tool_summary(raw_name, &input);
+    }
+    full_name
+}
+
+fn st_codex_tool_output(payload: &serde_json::Value) -> Option<(String, bool)> {
+    let typ = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if typ != "function_call_output" && typ != "custom_tool_call_output" {
+        return None;
+    }
+    let raw = match payload.get("output").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return Some((String::new(), false)),
+    };
+    if let Some(parsed) = st_parse_json_string(raw) {
+        if parsed.is_object() {
+            let text = parsed
+                .get("output")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .or_else(|| {
+                    parsed
+                        .get("stderr")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                })
+                .unwrap_or_else(|| raw.to_string());
+            let exit_code = parsed
+                .get("metadata")
+                .and_then(|m| m.get("exit_code"))
+                .and_then(|v| v.as_i64());
+            let errored = matches!(exit_code, Some(n) if n != 0);
+            return Some((text, errored));
+        }
+    }
+    // Fallback: look for the "Process exited with code N" pattern.
+    let errored = raw
+        .lines()
+        .find_map(|l| l.strip_prefix("Process exited with code "))
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse::<i64>().ok())
+        .map(|n| n != 0)
+        .unwrap_or(false);
+    Some((raw.to_string(), errored))
+}
+
+// Walk JSONL lines and build the structured turn array. Mirrors
+// `_parseLinesToTurns` in Globals.xs.
+fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
+    let mut turns: Vec<serde_json::Value> = Vec::new();
+    // tool_entry_locations maps tool_use_id → (turn_idx, entry_idx) so
+    // tool_result records can backfill errored/errorText on the
+    // originating entry.
+    let mut tool_entry_locations: std::collections::HashMap<String, (usize, usize)> =
+        std::collections::HashMap::new();
+    for line in jsonl_text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(r) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let typ = r.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let mut role: Option<&str> = None;
+        let mut entries: Vec<serde_json::Value> = Vec::new();
+        let mut inline_images: Vec<String> = Vec::new();
+
+        if typ == "user" || typ == "assistant" {
+            let Some(content) = r.get("message").and_then(|m| m.get("content")) else {
+                continue;
+            };
+            role = Some(typ);
+            if let Some(s) = content.as_str() {
+                if !s.is_empty() {
+                    entries.push(serde_json::json!({ "kind": "text", "text": s }));
+                }
+            } else if let Some(arr) = content.as_array() {
+                for c in arr {
+                    let Some(c_obj) = c.as_object() else { continue };
+                    let c_typ = c_obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if c_typ == "text" {
+                        if let Some(t) = c_obj.get("text").and_then(|v| v.as_str()) {
+                            if !t.is_empty() {
+                                entries.push(serde_json::json!({ "kind": "text", "text": t }));
+                            }
+                        }
+                    } else if c_typ == "tool_use" {
+                        let id = c_obj.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let name = c_obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let empty = serde_json::json!({});
+                        let input = c_obj.get("input").unwrap_or(&empty);
+                        let summary = st_tool_summary(name, input);
+                        let entry = serde_json::json!({
+                            "kind": "tool",
+                            "id": id,
+                            "name": name,
+                            "summary": summary,
+                        });
+                        let entry_idx = entries.len();
+                        entries.push(entry);
+                        if !id.is_empty() {
+                            // Will fix the turn index after we push the turn.
+                            tool_entry_locations.insert(id.to_string(), (turns.len(), entry_idx));
+                        }
+                    } else if c_typ == "tool_result" {
+                        let tool_use_id = c_obj
+                            .get("tool_use_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if let Some((turn_idx, entry_idx)) =
+                            tool_entry_locations.get(tool_use_id).copied()
+                        {
+                            if st_is_error_result(c) {
+                                let txt = st_tool_result_text(
+                                    c.get("content").unwrap_or(&serde_json::Value::Null),
+                                );
+                                let first_line = txt
+                                    .split('\n')
+                                    .next()
+                                    .unwrap_or("")
+                                    .chars()
+                                    .take(200)
+                                    .collect::<String>();
+                                if let Some(turn_obj) =
+                                    turns.get_mut(turn_idx).and_then(|t| t.as_object_mut())
+                                {
+                                    if let Some(entries_arr) =
+                                        turn_obj.get_mut("entries").and_then(|e| e.as_array_mut())
+                                    {
+                                        if let Some(entry_obj) = entries_arr
+                                            .get_mut(entry_idx)
+                                            .and_then(|e| e.as_object_mut())
+                                        {
+                                            entry_obj.insert(
+                                                "errored".to_string(),
+                                                serde_json::Value::Bool(true),
+                                            );
+                                            entry_obj.insert(
+                                                "errorText".to_string(),
+                                                serde_json::Value::String(first_line),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if c_typ == "image" {
+                        if let Some(source) = c_obj.get("source").and_then(|v| v.as_object()) {
+                            if source.get("type").and_then(|v| v.as_str()) == Some("base64") {
+                                if let Some(data) = source.get("data").and_then(|v| v.as_str()) {
+                                    let mt = source
+                                        .get("media_type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("image/png");
+                                    inline_images.push(format!("data:{};base64,{}", mt, data));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if typ == "event_msg" {
+            if let Some(p) = r.get("payload") {
+                let p_typ = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if p_typ == "user_message" {
+                    role = Some("user");
+                } else if p_typ == "agent_message" {
+                    role = Some("assistant");
+                }
+                if let Some(msg) = p.get("message").and_then(|v| v.as_str()) {
+                    if !msg.is_empty() {
+                        entries.push(serde_json::json!({ "kind": "text", "text": msg }));
+                    }
+                }
+            }
+        } else if typ == "response_item" {
+            if let Some(p) = r.get("payload") {
+                let p_typ = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if p_typ == "message" {
+                    match p.get("role").and_then(|v| v.as_str()) {
+                        Some("user") => role = Some("user"),
+                        Some("assistant") => role = Some("assistant"),
+                        _ => {}
+                    }
+                    if let Some(arr) = p.get("content").and_then(|v| v.as_array()) {
+                        for c in arr {
+                            let c_typ = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            if c_typ == "input_text" || c_typ == "output_text" || c_typ == "text" {
+                                if let Some(t) = c.get("text").and_then(|v| v.as_str()) {
+                                    if !t.is_empty() {
+                                        entries
+                                            .push(serde_json::json!({ "kind": "text", "text": t }));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if p_typ == "function_call" || p_typ == "custom_tool_call" {
+                    role = Some("assistant");
+                    let id = p.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let name = st_codex_tool_name(p);
+                    let summary = st_codex_tool_summary(p);
+                    let entry = serde_json::json!({
+                        "kind": "tool",
+                        "id": id,
+                        "name": name,
+                        "summary": summary,
+                    });
+                    let entry_idx = entries.len();
+                    entries.push(entry);
+                    if !id.is_empty() {
+                        tool_entry_locations.insert(id.to_string(), (turns.len(), entry_idx));
+                    }
+                } else if p_typ == "function_call_output" || p_typ == "custom_tool_call_output" {
+                    let id = p.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                    if let Some((turn_idx, entry_idx)) = tool_entry_locations.get(id).copied() {
+                        if let Some((text, errored)) = st_codex_tool_output(p) {
+                            if errored {
+                                let first_line = text
+                                    .split('\n')
+                                    .next()
+                                    .unwrap_or("")
+                                    .chars()
+                                    .take(200)
+                                    .collect::<String>();
+                                if let Some(turn_obj) =
+                                    turns.get_mut(turn_idx).and_then(|t| t.as_object_mut())
+                                {
+                                    if let Some(entries_arr) =
+                                        turn_obj.get_mut("entries").and_then(|e| e.as_array_mut())
+                                    {
+                                        if let Some(entry_obj) = entries_arr
+                                            .get_mut(entry_idx)
+                                            .and_then(|e| e.as_object_mut())
+                                        {
+                                            entry_obj.insert(
+                                                "errored".to_string(),
+                                                serde_json::Value::Bool(true),
+                                            );
+                                            entry_obj.insert(
+                                                "errorText".to_string(),
+                                                serde_json::Value::String(first_line),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let Some(role) = role else { continue };
+        if entries.is_empty() && inline_images.is_empty() {
+            continue;
+        }
+
+        // Capture image paths from the ORIGINAL text BEFORE stripping.
+        let original_joined = entries
+            .iter()
+            .filter_map(|e| {
+                if e.get("kind").and_then(|k| k.as_str()) == Some("text") {
+                    e.get("text").and_then(|v| v.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let paths_from_text = st_extract_image_paths(&original_joined);
+
+        // Apply text rewrites + strip image-path footers.
+        for e in entries.iter_mut() {
+            if e.get("kind").and_then(|k| k.as_str()) == Some("text") {
+                if let Some(t) = e.get("text").and_then(|v| v.as_str()) {
+                    let rewritten = st_rewrite_xmlui_doc_urls(t);
+                    let stripped = st_strip_image_paths(&rewritten);
+                    if let Some(obj) = e.as_object_mut() {
+                        obj.insert("text".to_string(), serde_json::Value::String(stripped));
+                    }
+                }
+            }
+        }
+
+        // Skip user turns that are pure image-path bookkeeping.
+        if role == "user" && inline_images.is_empty() {
+            let all_text = entries
+                .iter()
+                .all(|e| e.get("kind").and_then(|k| k.as_str()) == Some("text"));
+            let original_trimmed = original_joined.trim();
+            let mut is_image_only = !original_trimmed.is_empty();
+            for chunk in original_trimmed.split_whitespace() {
+                if !(chunk.starts_with("[Image:") && chunk.ends_with("]")) {
+                    is_image_only = false;
+                    break;
+                }
+            }
+            // The iframe's regex is more permissive about whitespace; replicate by
+            // checking that what remains after stripping image markers is empty.
+            let stripped_check = st_strip_image_paths(original_trimmed);
+            if all_text
+                && (is_image_only || stripped_check.trim().is_empty())
+                && !paths_from_text.is_empty()
+            {
+                continue;
+            }
+        }
+
+        // After tool_result filtering, may be empty.
+        if entries.is_empty() && inline_images.is_empty() {
+            continue;
+        }
+
+        let text_joined = entries
+            .iter()
+            .filter_map(|e| {
+                if e.get("kind").and_then(|k| k.as_str()) == Some("text") {
+                    e.get("text").and_then(|v| v.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let images: Vec<String> = if !inline_images.is_empty() {
+            inline_images
+        } else {
+            paths_from_text
+        };
+
+        turns.push(serde_json::json!({
+            "role": role,
+            "text": text_joined,
+            "entries": entries,
+            "images": images,
+        }));
+    }
+    turns
+}
+
+// Single-entry mtime cache for read_session_turns. The parse runs
+// ~300 ms on a 600+ turn session; in steady-state polling (every ~2 s
+// from `currentTurnEditsTick`) the JSONL mtime is unchanged across
+// most fetches, so the cache hit drops the route to a stat() call.
+// When the agent appends, mtime advances and we re-parse once.
+// Path is part of the key so a provider flip (Claude ↔ Codex) misses
+// the cache cleanly and reparses against the new file.
+static SESSION_TURNS_CACHE: std::sync::Mutex<
+    Option<(std::path::PathBuf, std::time::SystemTime, Vec<u8>)>,
+> = std::sync::Mutex::new(None);
+
+// Read the freshest session JSONL and produce the structured turn array.
+fn read_session_turns<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+    let Some(path) = freshest_session_path(app)? else {
+        return Ok(b"[]".to_vec());
+    };
+    let mtime = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+    // Cache hit: same path + same mtime as last serve.
+    if let Ok(guard) = SESSION_TURNS_CACHE.lock() {
+        if let Some((cached_path, cached_mtime, cached_bytes)) = guard.as_ref() {
+            if cached_path == &path && cached_mtime == &mtime {
+                return Ok(cached_bytes.clone());
+            }
+        }
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let turns = st_parse_lines_to_turns(&text);
+    let bytes = serde_json::to_vec(&turns).map_err(|e| e.to_string())?;
+    if let Ok(mut guard) = SESSION_TURNS_CACHE.lock() {
+        *guard = Some((path, mtime, bytes.clone()));
+    }
+    Ok(bytes)
+}
+
+// Single-tool lookup: scan all JSONL records for the tool_use (or codex
+// function_call) by id, plus its matching tool_result, return
+// { input, result }. result is { lines, remaining } or null.
+fn read_tool_detail<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    tool_id: &str,
+) -> Result<Vec<u8>, String> {
+    if tool_id.is_empty() {
+        return Ok(b"null".to_vec());
+    }
+    let Some(path) = freshest_session_path(app)? else {
+        return Ok(b"null".to_vec());
+    };
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut input: Option<serde_json::Value> = None;
+    let mut result: Option<serde_json::Value> = None;
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(r) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(arr) = r
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+        {
+            for c in arr {
+                let c_typ = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if c_typ == "tool_use" && c.get("id").and_then(|v| v.as_str()) == Some(tool_id) {
+                    input = Some(
+                        c.get("input")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({})),
+                    );
+                } else if c_typ == "tool_result"
+                    && c.get("tool_use_id").and_then(|v| v.as_str()) == Some(tool_id)
+                {
+                    result = Some(st_extract_tool_result(c, 20));
+                }
+            }
+        } else if r.get("type").and_then(|v| v.as_str()) == Some("response_item") {
+            if let Some(p) = r.get("payload") {
+                let p_typ = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let call_id = p.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                if (p_typ == "function_call" || p_typ == "custom_tool_call") && call_id == tool_id {
+                    input = Some(st_codex_tool_input(p));
+                } else if (p_typ == "function_call_output" || p_typ == "custom_tool_call_output")
+                    && call_id == tool_id
+                {
+                    if let Some((text, _errored)) = st_codex_tool_output(p) {
+                        result =
+                            Some(st_extract_lines(&text, 20).unwrap_or(serde_json::Value::Null));
+                    }
+                }
+            }
+        }
+        if input.is_some() && result.is_some() {
+            break;
+        }
+    }
+    let body = serde_json::json!({
+        "input": input.unwrap_or_else(|| serde_json::json!({})),
+        "result": result.unwrap_or(serde_json::Value::Null),
+    });
+    serde_json::to_vec(&body).map_err(|e| e.to_string())
+}
+
 // Cheap variant for polling: just the file size + mtime. Lets Transcript
 // detect changes without re-fetching the full (multi-MB) JSONL each
 // tick. The frontend then bumps a cache-busting param to trigger a
@@ -4671,13 +5940,21 @@ fn mime_for(path: &std::path::Path) -> &'static str {
     }
 }
 
-// Markers used to identify the xmlui-desktop block inside a project's
-// CLAUDE.md. The block contains a Claude Code @-import that pulls in
-// the full conventions sidecar; future runs of run_enhance replace
-// what's between the markers without disturbing surrounding content.
-const ENHANCE_MARKER_START: &str = "<!-- xmlui-desktop:start -->";
-const ENHANCE_MARKER_END: &str = "<!-- xmlui-desktop:end -->";
-const ENHANCE_SIDECAR_REL: &str = ".claude/xmlui-desktop-conventions.md";
+// Markers used to identify the Bram block inside a project's CLAUDE.md and
+// AGENTS.md. The block contains the imported/embedded worklist guidance;
+// future runs of run_enhance replace what's between the markers without
+// disturbing surrounding content. Legacy xmlui-desktop markers are still
+// recognized and migrated to the Bram marker pair on the next Setup run.
+const ENHANCE_MARKER_START: &str = "<!-- bram:start -->";
+const ENHANCE_MARKER_END: &str = "<!-- bram:end -->";
+const ENHANCE_LEGACY_MARKER_START: &str = "<!-- xmlui-desktop:start -->";
+const ENHANCE_LEGACY_MARKER_END: &str = "<!-- xmlui-desktop:end -->";
+const ENHANCE_SIDECAR_REL: &str = ".claude/bram-conventions.md";
+// Pre-bram rename. Setup migrates legacy path to ENHANCE_SIDECAR_REL on
+// next run; status / shellrc / profile / codex guard all accept either
+// filename so projects that haven't re-run Setup still register as
+// Bram-managed during the transition.
+const ENHANCE_SIDECAR_LEGACY_REL: &str = ".claude/xmlui-desktop-conventions.md";
 const ENHANCE_CODEX_AGENTS_REL: &str = "AGENTS.md";
 const ENHANCE_CODEX_BUNDLE_REL: &str = "shell/codex-startup-instructions.md";
 const ENHANCE_HOOK_SCRIPT_REL: &str = ".claude/hooks/worklist-guard.py";
@@ -4711,24 +5988,53 @@ const ENHANCE_CODEX_INSTR_MARKER_END: &str = "# bram-instructions:end";
 const ENHANCE_CODEX_LEGACY_INSTR_MARKER_START: &str = "# xmlui-desktop-instructions:start";
 const ENHANCE_CODEX_LEGACY_INSTR_MARKER_END: &str = "# xmlui-desktop-instructions:end";
 const ENHANCE_CODEX_TYPO_INSTR_MARKER_END: &str = "# brraminstructions:end";
+const CLAUDE_CURL_ALLOW_PATTERNS: &[&str] = &[
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__worklist*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST \"http://127.0.0.1*__worklist*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST * \"http://127.0.0.1*__worklist*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__iterate*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST \"http://127.0.0.1*__iterate*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST * \"http://127.0.0.1*__iterate*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__enhance*)",
+];
 // Single-source-of-truth gate prose embedded in the Bram binary. Mirrors
 // what the original UserPromptSubmit injection emitted, kept in sync with
 // the convention in app/__shell/conventions.md.
 const ENHANCE_CODEX_GATE_PROSE: &str = "bram worklist gate. \
 First response to a change request must be (a) clarify, \
-(b) propose items to resources/worklist.json (each with non-empty \
-id, file or files, before, and after), or (c) read-only investigation \
+(b) propose items via resources/worklist-drafts/<id>.md plus \
+resources/worklist.json metadata (or inline before/after in \
+worklist.json), or (c) read-only investigation \
 prefaced \"I don't yet have enough context to propose\". Mutations \
 outside approved items are blocked at runtime by a PreToolUse hook. \
-Full convention: .claude/xmlui-desktop-conventions.md";
+On approved:/drop: turns, GET \
+http://127.0.0.1:$(cat resources/.bram-port)/__worklist/resolve \
+to read verified item content, then POST /__worklist/mutate with \
+op:advance (after applying) or op:prune (after a drop or commit). \
+On iterate: turns, POST /__iterate/begin as your first action and \
+/__iterate/end as your last. Don't edit resources/worklist.json \
+directly for state changes — the routes drive the inflight sentinel \
+that keeps the Worklist tab UI in sync. After proposing, tell the user \
+to click Approve or Drop in the Worklist tab; do NOT show or instruct on \
+raw approved:/drop:/iterate: payloads. The tab buttons generate the \
+verified {id, hash, feedback} shape; hand-typed payloads are easy to get \
+wrong and may fail hash verification. \
+Use curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 for these \
+loopback calls to 127.0.0.1, not localhost — Bram binds IPv4 and \
+localhost may try IPv6 ::1 first. Bram restarts briefly drop the port \
+and a fresh connection can land in that window. Use -sS (silence \
+progress, KEEP errors), not bare -s, so connection failures surface as curl: (7) \
+instead of (no output). \
+Full convention: .claude/bram-conventions.md \
+(legacy: .claude/xmlui-desktop-conventions.md)";
 const WORKLIST_AUTH_REL: &str = "resources/.worklist-authorization.json";
 // Host-managed inflight sentinel (#84). Written when /__worklist/resolve
 // serves an approved or drop record, OR when /__iterate/begin is
-// called. Cleared by /__worklist/mutate (advance/prune covering the
-// claimed ids) or /__iterate/end. The iframe will derive its spinner
-// state from this file once item 3 of the #84 sequence lands; for now
-// the sentinel is informational and verifiable via the
-// [inflight-sentinel] trace.
+// called. Approved/drop sentinels clear at host silence-detected
+// turn-end, with /__worklist/end available as an explicit endpoint.
+// Iterate sentinels clear via /__iterate/end. The iframe derives its
+// spinner state from this file and the [inflight-sentinel] trace makes
+// the lifecycle verifiable.
 const INFLIGHT_CLAIM_REL: &str = "resources/.inflight-claim.json";
 // Right-pane pty-intent relay (#86). Append-only JSONL queue persisted
 // to disk so right-pane clicks (toShell / toTurn / sendKeys) survive an
@@ -4744,10 +6050,10 @@ const PTY_INTENT_REL: &str = "resources/.pty-intent.jsonl";
 const ENHANCE_HOOK_COMMAND: &str = "py -3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/worklist-guard.py\"";
 #[cfg(not(windows))]
 const ENHANCE_HOOK_COMMAND: &str = "$CLAUDE_PROJECT_DIR/.claude/hooks/worklist-guard.py";
-// Presence of this file in the project root means the project IS the
-// xmlui-desktop source repo (it bundles the conventions). enhance_status
-// treats it as a valid sidecar location; run_enhance skips the parts
-// that would otherwise self-overwrite the source.
+// Presence of this file in the project root means the project IS the Bram
+// source repo (it bundles the conventions). enhance_status treats it as a
+// valid sidecar location; run_enhance skips the parts that would otherwise
+// self-overwrite the source.
 const ENHANCE_SOURCE_BUNDLE_REL: &str = "app/__shell/conventions.md";
 
 fn settings_has_worklist_guard_hook(settings_path: &Path) -> bool {
@@ -4823,6 +6129,73 @@ fn prune_proposal_guard_from_settings(settings_path: &Path) -> Result<bool, Stri
     });
     if !changed {
         return Ok(false);
+    }
+    let serialized = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("serialize settings.json: {}", e))?;
+    std::fs::write(settings_path, format!("{}\n", serialized))
+        .map_err(|e| format!("write {}: {}", settings_path.display(), e))?;
+    Ok(true)
+}
+
+fn merge_claude_curl_allowlist_into_settings(settings_path: &Path) -> Result<bool, String> {
+    let existing = std::fs::read_to_string(settings_path).unwrap_or_default();
+    let mut value: serde_json::Value = if existing.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&existing)
+            .map_err(|e| format!("parse {}: {}", settings_path.display(), e))?
+    };
+    if !value.is_object() {
+        return Err(format!(
+            "{} root is not a JSON object",
+            settings_path.display()
+        ));
+    }
+    let root = value.as_object_mut().unwrap();
+    let permissions = root
+        .entry("permissions".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !permissions.is_object() {
+        return Err(format!(
+            "{}: permissions is not a JSON object",
+            settings_path.display()
+        ));
+    }
+    let permissions_obj = permissions.as_object_mut().unwrap();
+    let allow = permissions_obj
+        .entry("allow".to_string())
+        .or_insert_with(|| serde_json::json!([]));
+    if !allow.is_array() {
+        return Err(format!(
+            "{}: permissions.allow is not a JSON array",
+            settings_path.display()
+        ));
+    }
+    let allow_arr = allow.as_array_mut().unwrap();
+    let before = allow_arr.len();
+    allow_arr.retain(|entry| {
+        let Some(s) = entry.as_str() else {
+            return true;
+        };
+        !(s.starts_with("Bash(curl -sS")
+            && (s.contains("__worklist") || s.contains("__iterate") || s.contains("__enhance")))
+    });
+    let mut changed = allow_arr.len() != before;
+    for pattern in CLAUDE_CURL_ALLOW_PATTERNS {
+        if !allow_arr
+            .iter()
+            .any(|entry| entry.as_str() == Some(*pattern))
+        {
+            allow_arr.push(serde_json::Value::String((*pattern).to_string()));
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(false);
+    }
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {}", parent.display(), e))?;
     }
     let serialized = serde_json::to_string_pretty(&value)
         .map_err(|e| format!("serialize settings.json: {}", e))?;
@@ -5329,17 +6702,31 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let worklist_auth = proj.join(WORKLIST_AUTH_REL);
     let codex_hook_script = home_dir().map(|h| h.join(ENHANCE_CODEX_HOOK_INSTALL_REL));
     let active_provider = hinted_session_provider(app);
+    let is_source_repo = proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
     let claude_md_has_marker = std::fs::read_to_string(&claude_md)
-        .map(|s| s.contains(ENHANCE_MARKER_START))
+        .map(|s| {
+            s.contains(ENHANCE_MARKER_START)
+                || s.contains(ENHANCE_LEGACY_MARKER_START)
+                || (is_source_repo && s.contains("@app/__shell/conventions.md"))
+        })
         .unwrap_or(false);
     // Source repo treats the bundle itself as the canonical sidecar.
-    let sidecar_exists = sidecar.exists() || proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
+    // Legacy .claude/xmlui-desktop-conventions.md also counts as installed
+    // until Setup migrates it to the new path.
+    let sidecar_exists =
+        sidecar.exists() || proj.join(ENHANCE_SIDECAR_LEGACY_REL).exists() || is_source_repo;
     let hook_script_exists = hook_script.exists();
     let hook_script_current =
         hook_script_exists && hook_matches_bundle(app, &hook_script, ENHANCE_HOOK_BUNDLE_REL);
     let hook_registered = settings_has_worklist_guard_hook(&settings);
     let codex_agents_has_marker = std::fs::read_to_string(&codex_agents)
-        .map(|s| s.contains(ENHANCE_MARKER_START))
+        .map(|s| {
+            s.contains(ENHANCE_MARKER_START)
+                || s.contains(ENHANCE_LEGACY_MARKER_START)
+                || (is_source_repo
+                    && s.contains("This repo is driven through Bram")
+                    && s.contains("resources/worklist.json"))
+        })
         .unwrap_or(false);
     let codex_hook_current = codex_hook_script
         .as_ref()
@@ -5356,6 +6743,7 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let claude_installed =
         claude_md_has_marker && sidecar_exists && hook_script_current && hook_registered;
     let codex_installed = core_installed && codex_agents_has_marker && codex_hook_current;
+    let codex_hook_stale_only = core_installed && codex_agents_has_marker && !codex_hook_current;
     let claude_needs_setup = !core_installed || !claude_installed;
     let codex_needs_setup = !core_installed || !codex_installed;
     let provider_needs_setup = match active_provider {
@@ -5377,6 +6765,12 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         "claudeNeedsSetup": claude_needs_setup,
         "codexNeedsSetup": codex_needs_setup,
         "providerNeedsSetup": provider_needs_setup,
+        "codexHookStaleOnly": codex_hook_stale_only,
+        "providerSetupKind": if matches!(active_provider, Some(SessionProvider::Codex)) && codex_hook_stale_only {
+            "codex-hook-refresh"
+        } else {
+            "repo-setup"
+        },
         "claudeMd": claude_md_has_marker,
         "codexAgents": codex_agents_has_marker,
         "sidecar": sidecar_exists,
@@ -5406,7 +6800,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
 
     let mut wrote: Vec<String> = Vec::new();
 
-    // Provider-neutral worklist authorization cache. xmlui-desktop records the
+    // Provider-neutral worklist authorization cache. Bram records the
     // latest structured `approved:` / `drop:` payload here so the desktop-side
     // watcher can enforce the two-stage worklist policy even when the active
     // provider has no native pre-tool hook support.
@@ -5459,6 +6853,11 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
         }
         std::fs::write(&sidecar_path, &conventions).map_err(|e| format!("write sidecar: {}", e))?;
         wrote.push(sidecar_path.display().to_string());
+        // Migration: remove the legacy sidecar so the project doesn't end
+        // up with two convention files. NotFound is fine (legacy install
+        // wasn't there, or already migrated).
+        let legacy_sidecar = proj.join(ENHANCE_SIDECAR_LEGACY_REL);
+        let _ = std::fs::remove_file(&legacy_sidecar);
     }
 
     let codex_agents_path = proj.join(ENHANCE_CODEX_AGENTS_REL);
@@ -5473,20 +6872,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
         ENHANCE_MARKER_END
     );
     let existing_agents = std::fs::read_to_string(&codex_agents_path).unwrap_or_default();
-    let new_agents = if let Some(start_idx) = existing_agents.find(ENHANCE_MARKER_START) {
-        let tail = &existing_agents[start_idx..];
-        let end_offset = tail
-            .find(ENHANCE_MARKER_END)
-            .map(|i| start_idx + i + ENHANCE_MARKER_END.len())
-            .unwrap_or(existing_agents.len());
-        let mut s = existing_agents.clone();
-        s.replace_range(start_idx..end_offset, &codex_block);
-        s
-    } else if existing_agents.is_empty() {
-        format!("{}\n", codex_block)
-    } else {
-        format!("{}\n\n{}\n", existing_agents.trim_end(), codex_block)
-    };
+    let new_agents = replace_or_append_managed_block(&existing_agents, &codex_block);
     std::fs::write(&codex_agents_path, &new_agents)
         .map_err(|e| format!("write AGENTS.md: {}", e))?;
     wrote.push(codex_agents_path.display().to_string());
@@ -5520,6 +6906,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
     // projects don't end up running both hooks on every Write/Edit.
     let settings_path = proj.join(ENHANCE_SETTINGS_REL);
     prune_proposal_guard_from_settings(&settings_path)?;
+    merge_claude_curl_allowlist_into_settings(&settings_path)?;
     merge_worklist_guard_into_settings(&settings_path)?;
     wrote.push(settings_path.display().to_string());
 
@@ -5531,21 +6918,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
             "{}\n@{}\n{}",
             ENHANCE_MARKER_START, ENHANCE_SIDECAR_REL, ENHANCE_MARKER_END
         );
-        let new_content = if let Some(start_idx) = existing.find(ENHANCE_MARKER_START) {
-            // Replace existing block in-place.
-            let tail = &existing[start_idx..];
-            let end_offset = tail
-                .find(ENHANCE_MARKER_END)
-                .map(|i| start_idx + i + ENHANCE_MARKER_END.len())
-                .unwrap_or(existing.len());
-            let mut s = existing.clone();
-            s.replace_range(start_idx..end_offset, &block);
-            s
-        } else if existing.is_empty() {
-            format!("{}\n", block)
-        } else {
-            format!("{}\n\n{}\n", existing.trim_end(), block)
-        };
+        let new_content = replace_or_append_managed_block(&existing, &block);
         std::fs::write(&claude_md_path, &new_content)
             .map_err(|e| format!("write CLAUDE.md: {}", e))?;
         wrote.push(claude_md_path.display().to_string());
@@ -5590,7 +6963,8 @@ fn write_codex_trust_ack() -> Result<(), String> {
         .ok_or_else(|| format!("read {}: hook not installed", hook.display()))?;
     let marker = home.join(ENHANCE_CODEX_TRUST_ACK_REL);
     if let Some(parent) = marker.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
     }
     std::fs::write(&marker, fp.as_bytes())
         .map_err(|e| format!("write {}: {}", marker.display(), e))?;
@@ -5783,6 +7157,29 @@ fn strip_marker_block(content: &str, start: &str, end: &str) -> String {
     result
 }
 
+fn replace_or_append_managed_block(existing: &str, block: &str) -> String {
+    for (start, end) in [
+        (ENHANCE_MARKER_START, ENHANCE_MARKER_END),
+        (ENHANCE_LEGACY_MARKER_START, ENHANCE_LEGACY_MARKER_END),
+    ] {
+        if let Some(start_idx) = existing.find(start) {
+            let tail = &existing[start_idx..];
+            let end_offset = tail
+                .find(end)
+                .map(|i| start_idx + i + end.len())
+                .unwrap_or(existing.len());
+            let mut s = existing.to_string();
+            s.replace_range(start_idx..end_offset, block);
+            return s;
+        }
+    }
+    if existing.is_empty() {
+        format!("{}\n", block)
+    } else {
+        format!("{}\n\n{}\n", existing.trim_end(), block)
+    }
+}
+
 // Quote a string as a TOML basic string literal — wraps in double quotes and
 // escapes backslashes / double quotes / control chars per TOML spec.
 fn toml_basic_string(s: &str) -> String {
@@ -5821,6 +7218,10 @@ fn last_worklist_cell() -> &'static Mutex<Option<String>> {
 
 fn worklist_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     project_root(Some(app)).map(|p| p.join("resources").join("worklist.json"))
+}
+
+fn worklist_drafts_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| p.join("resources").join("worklist-drafts"))
 }
 
 fn worklist_auth_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
@@ -5883,10 +7284,7 @@ fn write_inflight_claim_sentinel<R: tauri::Runtime>(
 // leaves the sentinel alone — partial completion is a diagnostic
 // signal worth surfacing (stuck spinner = stuck claim once item 3
 // lands).
-fn clear_inflight_claim_sentinel<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    mutated_ids: &[String],
-) {
+fn clear_inflight_claim_sentinel<R: tauri::Runtime>(app: &AppHandle<R>, mutated_ids: &[String]) {
     let Some(path) = inflight_claim_file(app) else {
         return;
     };
@@ -5971,7 +7369,11 @@ fn emit_or_defer_tools_pane_reload<R: tauri::Runtime>(app: &AppHandle<R>) {
     if inflight_sentinel_is_active(app) {
         PENDING_TOOLS_RELOAD.store(true, std::sync::atomic::Ordering::SeqCst);
         if bram_trace_enabled() {
-            append_bram_trace_line(app, "tools-pane-reload", "op=deferred reason=sentinel-active");
+            append_bram_trace_line(
+                app,
+                "tools-pane-reload",
+                "op=deferred reason=sentinel-active",
+            );
         }
         return;
     }
@@ -6114,10 +7516,7 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
         return;
     }
 
-    let claimed_at = claim
-        .get("claimedAt")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+    let claimed_at = claim.get("claimedAt").and_then(|v| v.as_i64()).unwrap_or(0);
     if file_mtime_ms < claimed_at {
         if bram_trace_enabled() {
             append_bram_trace_line(
@@ -6177,8 +7576,7 @@ fn pty_intent_lock() -> &'static Mutex<()> {
 
 // Monotonic counter for `[pty-intent]` trace ids. Doesn't need to be
 // globally unique — only readable within one session's trace log.
-static PTY_INTENT_COUNTER: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static PTY_INTENT_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 // Startup cleanup. Removes any stale pty-intent queue from a prior
 // session so its intents don't replay into a fresh PTY (#86).
@@ -6217,6 +7615,107 @@ fn canonical_item_hash(item: &serde_json::Value) -> String {
     let mut hasher = DefaultHasher::new();
     canonical.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+fn item_has_nonempty_string(item: &serde_json::Value, key: &str) -> bool {
+    item.get(key)
+        .and_then(|v| v.as_str())
+        .map_or(false, |s| !s.trim().is_empty())
+}
+
+fn parse_worklist_draft(raw: &str) -> Option<(String, String)> {
+    enum Section {
+        Before,
+        After,
+    }
+
+    let mut section: Option<Section> = None;
+    let mut before: Vec<&str> = Vec::new();
+    let mut after: Vec<&str> = Vec::new();
+    let mut saw_before = false;
+    let mut saw_after = false;
+
+    for line in raw.lines() {
+        let marker = line.trim_end_matches('\r');
+        if marker == "# Before" {
+            saw_before = true;
+            section = Some(Section::Before);
+            continue;
+        }
+        if marker == "# After" {
+            saw_after = true;
+            section = Some(Section::After);
+            continue;
+        }
+        match section {
+            Some(Section::Before) => before.push(line),
+            Some(Section::After) => after.push(line),
+            None => {}
+        }
+    }
+
+    if !saw_before || !saw_after {
+        return None;
+    }
+    Some((
+        before.join("\n").trim().to_string(),
+        after.join("\n").trim().to_string(),
+    ))
+}
+
+fn worklist_draft_path(drafts_dir: &Path, item_id: &str) -> Option<PathBuf> {
+    if item_id.is_empty() || item_id.contains('/') || item_id.contains('\\') {
+        return None;
+    }
+    Some(drafts_dir.join(format!("{}.md", item_id)))
+}
+
+fn resolve_worklist_item_draft(
+    drafts_dir: Option<&Path>,
+    item: &serde_json::Value,
+) -> serde_json::Value {
+    if item_has_nonempty_string(item, "before") && item_has_nonempty_string(item, "after") {
+        return item.clone();
+    }
+
+    let mut resolved = item.clone();
+    let Some(obj) = resolved.as_object_mut() else {
+        return resolved;
+    };
+    let item_id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let draft = drafts_dir
+        .and_then(|dir| worklist_draft_path(dir, item_id))
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|raw| parse_worklist_draft(&raw));
+
+    if let Some((before, after)) = draft {
+        obj.insert("before".to_string(), serde_json::Value::String(before));
+        obj.insert("after".to_string(), serde_json::Value::String(after));
+        obj.remove("_draftMissing");
+    } else {
+        obj.insert(
+            "before".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+        obj.insert(
+            "after".to_string(),
+            serde_json::Value::String(String::new()),
+        );
+        obj.insert("_draftMissing".to_string(), serde_json::Value::Bool(true));
+    }
+    resolved
+}
+
+fn resolve_worklist_record_items<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    record: &mut serde_json::Value,
+) {
+    let drafts_dir = worklist_drafts_dir(app);
+    if let Some(items) = record.get_mut("items").and_then(|v| v.as_array_mut()) {
+        for item in items {
+            *item = resolve_worklist_item_draft(drafts_dir.as_deref(), item);
+        }
+    }
 }
 
 fn base_worklist_doc_from_parsed(parsed_doc: Option<serde_json::Value>) -> serde_json::Value {
@@ -6272,12 +7771,12 @@ fn worklist_doc<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
         if !obj.contains_key("items") {
             obj.insert("items".to_string(), serde_json::Value::Array(Vec::new()));
         }
-        // Inject per-item hashes computed from the RAW item content (i.e.
-        // before any server-added fields like `hash` or `diff`). The PTY
-        // watcher recomputes against the same on-disk raw content, so the
-        // fingerprint round-trips through the UI without drift.
+        // Resolve draft-file prose before hashing so metadata-only worklist
+        // items retain the same hash semantics as inline before/after items.
         if let Some(items) = obj.get_mut("items").and_then(|v| v.as_array_mut()) {
+            let drafts_dir = worklist_drafts_dir(app);
             for item in items {
+                *item = resolve_worklist_item_draft(drafts_dir.as_deref(), item);
                 let hash = canonical_item_hash(item);
                 if let Some(item_obj) = item.as_object_mut() {
                     item_obj.insert("hash".to_string(), serde_json::Value::String(hash));
@@ -6296,10 +7795,799 @@ fn worklist_doc<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
     }
 }
 
+fn coordination_ago(ms: i64, now: i64) -> String {
+    if ms <= 0 {
+        return "unknown".to_string();
+    }
+    let diff = (now - ms).max(0);
+    if diff < 1000 {
+        return "now".to_string();
+    }
+    let sec = (diff + 500) / 1000;
+    if sec < 60 {
+        return format!("{}s ago", sec);
+    }
+    let min = (sec + 30) / 60;
+    if min < 60 {
+        return format!("{}m ago", min);
+    }
+    let hr = (min + 30) / 60;
+    if hr < 48 {
+        return format!("{}h ago", hr);
+    }
+    format!("{}d ago", (hr + 12) / 24)
+}
+
+fn coordination_duration(ms: i64) -> String {
+    let sec = (ms.max(0) + 500) / 1000;
+    if sec < 60 {
+        return format!("{}s", sec);
+    }
+    let min = sec / 60;
+    let rem_sec = sec % 60;
+    if min < 60 {
+        if rem_sec == 0 {
+            return format!("{}m", min);
+        }
+        return format!("{}m {}s", min, rem_sec);
+    }
+    let hr = min / 60;
+    let rem_min = min % 60;
+    if rem_min == 0 {
+        format!("{}h", hr)
+    } else {
+        format!("{}h {}m", hr, rem_min)
+    }
+}
+
+fn coordination_trace_line_iso(line: &str) -> String {
+    line.strip_prefix('[')
+        .and_then(|rest| rest.split_once(']').map(|(ts, _)| ts.to_string()))
+        .unwrap_or_default()
+}
+
+fn trace_field_i64(line: &str, name: &str) -> Option<i64> {
+    let token = format!("{}=", name);
+    let start = line.find(&token)? + token.len();
+    let rest = &line[start..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse::<i64>().ok()
+}
+
+fn trace_json_field_i64(line: &str, name: &str) -> Option<i64> {
+    let token = format!("\"{}\":", name);
+    let start = line.find(&token)? + token.len();
+    let rest = &line[start..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse::<i64>().ok()
+}
+
+fn coordination_trace_summary(trace_text: &str) -> serde_json::Value {
+    let lines: Vec<&str> = trace_text.lines().rev().take(5000).collect();
+    let mut latest_tail_fresh = 0;
+    let mut latest_tail_diff = 0;
+    let mut latest_tail_bytes = 0;
+    let mut fanout_events = 0;
+    let mut fanout_resets = 0;
+    let mut fanout_subscribers: Option<i64> = None;
+    let mut cap_trims = 0;
+    let mut inflight_writes = 0;
+    let mut inflight_clears = 0;
+    let mut stale_rejects = 0;
+    let mut guard_blocks = 0;
+    let mut interrupts = 0;
+    let mut last_latest_tail = String::new();
+    let mut last_fanout = String::new();
+    let mut last_inflight = String::new();
+    let mut last_guard = String::new();
+    let mut last_interrupt = String::new();
+
+    for line in lines.into_iter().rev() {
+        if line.contains("[latest-tail]") {
+            if line.contains("mode=fresh") {
+                latest_tail_fresh += 1;
+            }
+            if line.contains("mode=diff") {
+                latest_tail_diff += 1;
+            }
+            if let Some(bytes) = trace_field_i64(line, "bytes") {
+                latest_tail_bytes += bytes;
+            }
+            last_latest_tail = coordination_trace_line_iso(line);
+        }
+        if line.contains("jsonl-fanout") {
+            fanout_events += 1;
+            if line.contains("\"reset\":true") || line.contains("reset=true") {
+                fanout_resets += 1;
+            }
+            last_fanout = coordination_trace_line_iso(line);
+        }
+        if line.contains("jsonl-broadcast") {
+            fanout_subscribers = trace_json_field_i64(line, "subscribers")
+                .or_else(|| trace_field_i64(line, "subscribers"));
+            last_fanout = coordination_trace_line_iso(line);
+        }
+        if line.contains("jsonl-cap-trim") {
+            cap_trims += 1;
+        }
+        if line.contains("[inflight-sentinel]") {
+            if line.contains("op=write") {
+                inflight_writes += 1;
+            }
+            if line.contains("op=clear") || line.contains("op=stale-startup-clear") {
+                inflight_clears += 1;
+            }
+            last_inflight = coordination_trace_line_iso(line);
+        }
+        if line.contains("rejected_stale") {
+            stale_rejects += 1;
+        }
+        if line.contains("worklist-guard") || line.contains("[guard]") {
+            let lower = line.to_ascii_lowercase();
+            if lower.contains("block") || lower.contains("deny") {
+                guard_blocks += 1;
+            }
+            last_guard = coordination_trace_line_iso(line);
+        }
+        if line.contains("interrupt")
+            || line.contains("silence-clear")
+            || line.contains("agent-turn-end")
+            || line.contains("Esc")
+        {
+            interrupts += 1;
+            last_interrupt = coordination_trace_line_iso(line);
+        }
+    }
+
+    serde_json::json!({
+        "latestTailFresh": latest_tail_fresh,
+        "latestTailDiff": latest_tail_diff,
+        "latestTailBytes": latest_tail_bytes,
+        "fanoutEvents": fanout_events,
+        "fanoutResets": fanout_resets,
+        "fanoutSubscribers": fanout_subscribers,
+        "capTrims": cap_trims,
+        "inflightWrites": inflight_writes,
+        "inflightClears": inflight_clears,
+        "staleRejects": stale_rejects,
+        "guardBlocks": guard_blocks,
+        "interrupts": interrupts,
+        "lastLatestTail": last_latest_tail,
+        "lastFanout": last_fanout,
+        "lastInflight": last_inflight,
+        "lastGuard": last_guard,
+        "lastInterrupt": last_interrupt,
+    })
+}
+
+fn recent_worklist_history<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<serde_json::Value> {
+    let Some(dir) = worklist_history_dir(app) else {
+        return Vec::new();
+    };
+    let mut json_files: Vec<(i64, PathBuf)> = Vec::new();
+    if let Ok(read_dir) = std::fs::read_dir(&dir) {
+        for entry in read_dir.flatten() {
+            let p = entry.path();
+            if p.extension().map_or(false, |e| e == "json") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    if let Ok(ts) = stem.parse::<i64>() {
+                        json_files.push((ts, p));
+                    }
+                }
+            }
+        }
+    }
+    json_files.sort_by(|a, b| b.0.cmp(&a.0));
+    json_files
+        .into_iter()
+        .take(5)
+        .map(|(ts, json_path)| {
+            let md_path = json_path.with_extension("md");
+            let changelog = std::fs::read_to_string(&md_path).unwrap_or_default();
+            let summary = changelog
+                .lines()
+                .find(|l| l.starts_with("**Summary:**"))
+                .map(|l| l.trim_start_matches("**Summary:**").trim().to_string())
+                .unwrap_or_else(|| {
+                    if changelog.contains("## Description changed") {
+                        "description changed".to_string()
+                    } else {
+                        "change".to_string()
+                    }
+                });
+            serde_json::json!({
+                "ts": ts,
+                "iso": format_iso_utc_ms(ts),
+                "summary": summary,
+            })
+        })
+        .collect()
+}
+
+fn latest_xs_trace_export() -> Option<serde_json::Value> {
+    let downloads = home_dir()?.join("Downloads");
+    let mut newest: Option<(i64, PathBuf)> = None;
+    let read_dir = std::fs::read_dir(downloads).ok()?;
+    for entry in read_dir.flatten() {
+        let p = entry.path();
+        let Some(name) = p.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("xs-trace-") || !name.ends_with(".json") {
+            continue;
+        }
+        let modified_ms = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        if newest.as_ref().map_or(true, |(ts, _)| modified_ms > *ts) {
+            newest = Some((modified_ms, p));
+        }
+    }
+    newest.map(|(modified_ms, p)| {
+        serde_json::json!({
+            "path": p.to_string_lossy().to_string(),
+            "modifiedAt": modified_ms,
+            "modifiedIso": format_iso_utc_ms(modified_ms),
+        })
+    })
+}
+
+fn file_modified_iso(path: &Path) -> String {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| format_iso_utc_ms(d.as_millis() as i64))
+        .unwrap_or_default()
+}
+
+fn command_found(cmd: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(cmd).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if !stdout.is_empty() {
+        Some(stdout)
+    } else if !stderr.is_empty() {
+        Some(stderr)
+    } else {
+        Some(cmd.to_string())
+    }
+}
+
+fn worklist_item_files(item: &serde_json::Value) -> Vec<String> {
+    if let Some(files) = item.get("files").and_then(|v| v.as_array()) {
+        let collected: Vec<String> = files
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !collected.is_empty() {
+            return collected;
+        }
+    }
+    item.get("file")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| vec![s.to_string()])
+        .unwrap_or_default()
+}
+
+fn git_changed_files(root: &Path) -> HashSet<String> {
+    let out = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1"])
+        .current_dir(root)
+        .output();
+    let Ok(out) = out else {
+        return HashSet::new();
+    };
+    if !out.status.success() {
+        return HashSet::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            if line.len() < 4 {
+                return None;
+            }
+            let path = line[3..].trim();
+            let path = path.rsplit_once(" -> ").map(|(_, to)| to).unwrap_or(path);
+            Some(path.trim_matches('"').to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn authorization_rows<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    now: i64,
+) -> (Vec<serde_json::Value>, bool, Option<String>) {
+    let Some(path) = worklist_auth_file(app) else {
+        return (
+            vec![
+                serde_json::json!({
+                    "signal": "Latest record",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": "No authorization record path",
+                    "seen": "",
+                }),
+                serde_json::json!({
+                    "signal": "Record age",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": "No authorization record path",
+                    "seen": "",
+                }),
+            ],
+            false,
+            None,
+        );
+    };
+    let modified = file_modified_iso(&path);
+    let record: Option<WorklistAuthorizationRecord> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    let Some(record) = record else {
+        return (
+            vec![
+                serde_json::json!({
+                    "signal": "Latest record",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": "No readable authorization record",
+                    "seen": modified,
+                }),
+                serde_json::json!({
+                    "signal": "Record age",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": modified,
+                    "seen": modified,
+                }),
+            ],
+            false,
+            None,
+        );
+    };
+    if record.kind == "none" || record.issued_at_ms <= 0 {
+        return (
+            vec![
+                serde_json::json!({
+                    "signal": "Latest record",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": "No active authorization",
+                    "seen": modified,
+                }),
+                serde_json::json!({
+                    "signal": "Record age",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": modified,
+                    "seen": modified,
+                }),
+            ],
+            false,
+            None,
+        );
+    }
+    let age_ms = (now - record.issued_at_ms).max(0);
+    let pending = record.consumed_at_ms.unwrap_or(0) <= 0;
+    let pending_warn = pending && age_ms > 30000;
+    let state = if pending {
+        format!("pending {}", coordination_duration(age_ms))
+    } else {
+        format!(
+            "consumed {} ago",
+            coordination_duration(now - record.consumed_at_ms.unwrap_or(now))
+        )
+    };
+    let detail = format!(
+        "{} covering {} items: {}",
+        record.kind,
+        record.ids.len(),
+        record.ids.join(", ").if_empty("none")
+    );
+    let issue = if pending_warn {
+        Some(format!(
+            "{} record pending {} without consumer",
+            record.kind,
+            coordination_duration(age_ms)
+        ))
+    } else {
+        None
+    };
+    (
+        vec![
+            serde_json::json!({
+                "signal": "Latest record",
+                "level": if pending_warn { "warn" } else { "ok" },
+                "state": state,
+                "detail": detail,
+                "seen": format_iso_utc_ms(record.issued_at_ms),
+            }),
+            serde_json::json!({
+                "signal": "Record age",
+                "level": if pending_warn { "warn" } else { "ok" },
+                "state": coordination_duration(age_ms),
+                "detail": modified,
+                "seen": modified,
+            }),
+        ],
+        pending_warn,
+        issue,
+    )
+}
+
+fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+    let now = unix_now_ms();
+    let worklist = worklist_doc(app);
+    let items: Vec<serde_json::Value> = worklist
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for item in &items {
+        let status = item
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("proposed")
+            .to_string();
+        *counts.entry(status).or_insert(0) += 1;
+    }
+    let applied_count = *counts.get("applied").unwrap_or(&0);
+    let proposed_count = *counts.get("proposed").unwrap_or(&0);
+    let committed_count = *counts.get("committed").unwrap_or(&0);
+    let pruned_count = *counts.get("pruned").unwrap_or(&0);
+
+    let inflight: serde_json::Value = inflight_claim_file(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let claim_ids: Vec<String> = inflight
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let claimed_at = inflight
+        .get("claimedAt")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let claim_age_ms = if claimed_at > 0 { now - claimed_at } else { 0 };
+    let claim_level = if claim_ids.is_empty() {
+        "ok"
+    } else if claim_age_ms > 120000 {
+        "warn"
+    } else {
+        "info"
+    };
+
+    let trace_text = project_root(Some(app))
+        .map(|p| p.join("resources/bram-trace.log"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    let trace = coordination_trace_summary(&trace_text);
+    let history = recent_worklist_history(app);
+    let last_history = history
+        .first()
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let latest_total = trace["latestTailFresh"].as_i64().unwrap_or(0)
+        + trace["latestTailDiff"].as_i64().unwrap_or(0);
+    let fresh_heavy = latest_total >= 5
+        && trace["latestTailFresh"].as_i64().unwrap_or(0)
+            > trace["latestTailDiff"].as_i64().unwrap_or(0);
+    let fanout_level = if trace["fanoutEvents"].as_i64().unwrap_or(0) == 0 {
+        "neutral"
+    } else if trace["fanoutResets"].as_i64().unwrap_or(0) > 3
+        || trace["capTrims"].as_i64().unwrap_or(0) > 2
+    {
+        "warn"
+    } else {
+        "ok"
+    };
+    let trace_export = latest_xs_trace_export();
+    let trace_export_state = if trace_export.is_some() {
+        "found"
+    } else {
+        "none"
+    };
+    let trace_export_detail = trace_export
+        .as_ref()
+        .and_then(|v| v.get("path").and_then(|p| p.as_str()))
+        .unwrap_or("No xs-trace export found in ~/Downloads");
+    let trace_export_seen = trace_export
+        .as_ref()
+        .and_then(|v| v.get("modifiedIso").and_then(|p| p.as_str()))
+        .unwrap_or("");
+    let project_root_path = project_root(Some(app));
+    let python_found = if cfg!(windows) {
+        command_found("py", &["-3", "--version"])
+    } else {
+        command_found("which", &["python3"])
+    };
+    let claude_hook = project_root_path
+        .as_ref()
+        .map(|p| p.join(ENHANCE_HOOK_SCRIPT_REL));
+    let claude_settings = project_root_path
+        .as_ref()
+        .map(|p| p.join(".claude/settings.json"));
+    let claude_hook_exists = claude_hook.as_ref().map_or(false, |p| p.exists());
+    let claude_registered = claude_settings
+        .as_ref()
+        .map_or(false, |p| settings_has_worklist_guard_hook(p));
+    let codex_hook = home_dir().map(|p| p.join(ENHANCE_CODEX_HOOK_INSTALL_REL));
+    let codex_config = home_dir().map(|p| p.join(".codex/config.toml"));
+    let codex_hook_exists = codex_hook.as_ref().map_or(false, |p| p.exists());
+    let codex_registered = codex_config
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map_or(false, |s| s.contains("codex-worklist-guard.py"));
+    let hooks_rows = vec![
+        serde_json::json!({
+            "signal": "Python 3",
+            "level": if python_found.is_some() { "ok" } else { "warn" },
+            "state": if python_found.is_some() { "found" } else { "missing" },
+            "detail": python_found.clone().unwrap_or_else(|| "Hooks silently inert - install Python 3".to_string()),
+            "seen": "",
+        }),
+        serde_json::json!({
+            "signal": "Claude hook",
+            "level": if claude_hook_exists && claude_registered { "ok" } else { "warn" },
+            "state": if claude_hook_exists && claude_registered { "registered" } else if claude_hook_exists { "unregistered" } else { "missing" },
+            "detail": if !claude_hook_exists { "Hook file missing" } else if !claude_registered { "Hook file present but not registered in settings.json" } else { "Hook file installed and registered" },
+            "seen": claude_hook.as_ref().map(|p| file_modified_iso(p)).unwrap_or_default(),
+        }),
+        serde_json::json!({
+            "signal": "Codex hook",
+            "level": if codex_hook_exists && codex_registered { "ok" } else { "warn" },
+            "state": if codex_hook_exists && codex_registered { "registered" } else if codex_hook_exists { "unregistered" } else { "missing" },
+            "detail": if !codex_hook_exists { "Hook file missing" } else if !codex_registered { "Hook file present but not registered in config.toml" } else { "Hook file installed and registered" },
+            "seen": codex_hook.as_ref().map(|p| file_modified_iso(p)).unwrap_or_default(),
+        }),
+    ];
+    let applied_items: Vec<&serde_json::Value> = items
+        .iter()
+        .filter(|item| {
+            item.get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("proposed")
+                == "applied"
+        })
+        .collect();
+    let changed_files = project_root_path
+        .as_ref()
+        .map(|p| git_changed_files(p))
+        .unwrap_or_default();
+    let mut stale_applied = Vec::new();
+    let mut matched_applied = 0usize;
+    for item in &applied_items {
+        let files = worklist_item_files(item);
+        let matched = files.iter().any(|f| changed_files.contains(f));
+        if matched {
+            matched_applied += 1;
+        } else if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+            stale_applied.push(id.to_string());
+        }
+    }
+    let applied_integrity_row = if applied_items.is_empty() {
+        serde_json::json!({
+            "signal": "Applied integrity",
+            "level": "neutral",
+            "state": "n/a",
+            "detail": "No applied items",
+            "seen": "",
+        })
+    } else {
+        serde_json::json!({
+            "signal": "Applied integrity",
+            "level": if stale_applied.is_empty() { "ok" } else { "warn" },
+            "state": format!("{}/{} items match working tree", matched_applied, applied_items.len()),
+            "detail": if stale_applied.is_empty() { "All applied items have uncommitted changes".to_string() } else { format!("Stale: {}", stale_applied.join(", ")) },
+            "seen": "",
+        })
+    };
+    let port_file = project_root_path
+        .as_ref()
+        .map(|p| p.join("resources/.bram-port"));
+    let bound_port = LOOPBACK_PORT.get().copied();
+    let file_port = port_file
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| s.trim().parse::<u16>().ok());
+    let port_file_exists = port_file.as_ref().map_or(false, |p| p.exists());
+    let port_stale = bound_port.is_some() && file_port.is_some() && bound_port != file_port;
+    let port_row = serde_json::json!({
+        "signal": "Port file",
+        "level": if port_stale { "warn" } else if bound_port.is_some() && file_port.is_some() { "ok" } else { "neutral" },
+        "state": if port_stale { "stale" } else if bound_port.is_some() && file_port.is_some() { "fresh" } else if port_file_exists { "unreadable" } else { "missing" },
+        "detail": match (bound_port, file_port) {
+            (Some(bound), Some(file)) => format!("Bound on {}; file reads {}", bound, file),
+            (Some(bound), None) => format!("Bound on {}; no readable port file", bound),
+            _ => "No bound port available".to_string(),
+        },
+        "seen": port_file.as_ref().map(|p| file_modified_iso(p)).unwrap_or_default(),
+    });
+    let (authorization_rows, orphan_auth, orphan_auth_detail) = authorization_rows(app, now);
+    let current_claim_state = if claim_ids.is_empty() {
+        "idle".to_string()
+    } else {
+        format!(
+            "{} {}",
+            inflight
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("claim"),
+            coordination_ago(claimed_at, now)
+        )
+    };
+    let current_claim_detail = if claim_ids.is_empty() {
+        "No active spinner sentinel".to_string()
+    } else {
+        claim_ids.join(", ")
+    };
+    let trace_pairs_warn = trace["inflightWrites"].as_i64().unwrap_or(0)
+        > trace["inflightClears"].as_i64().unwrap_or(0) + 1;
+    let stale_reject_warn = trace["staleRejects"].as_i64().unwrap_or(0) > 0;
+    let guard_warn = trace["guardBlocks"].as_i64().unwrap_or(0) > 0;
+    let interrupt_warn = trace["interrupts"].as_i64().unwrap_or(0) > 0;
+    let _ = (orphan_auth, orphan_auth_detail);
+
+    let rows = serde_json::json!({
+        "generatedAt": format_iso_utc_ms(now),
+        "raw": {
+            "worklist": worklist,
+            "inflight": inflight,
+            "history": history.clone(),
+            "trace": trace.clone(),
+            "traceExport": trace_export.clone(),
+        },
+        "sections": [
+            {
+                "title": "Worklist",
+                "rows": [
+                    {
+                        "signal": "Current items",
+                        "level": if applied_count > 0 { "warn" } else { "ok" },
+                        "state": format!("{} active", items.len()),
+                        "detail": format!("proposed {}, applied {}, committed {}, pruned {}", proposed_count, applied_count, committed_count, pruned_count),
+                        "seen": last_history.get("iso").and_then(|v| v.as_str()).unwrap_or(""),
+                    },
+                    {
+                        "signal": "Recent transitions",
+                        "level": if history.is_empty() { "neutral" } else { "ok" },
+                        "state": format!("{} snapshots", history.len()),
+                        "detail": history.iter().filter_map(|h| h.get("summary").and_then(|v| v.as_str())).collect::<Vec<&str>>().join(" | ").if_empty("No worklist history yet"),
+                        "seen": last_history.get("iso").and_then(|v| v.as_str()).unwrap_or(""),
+                    },
+                    applied_integrity_row
+                ]
+            },
+            {
+                "title": "Inflight Sentinel",
+                "rows": [
+                    {
+                        "signal": "Current claim",
+                        "level": claim_level,
+                        "state": current_claim_state,
+                        "detail": current_claim_detail,
+                        "seen": if claimed_at > 0 { format_iso_utc_ms(claimed_at) } else { String::new() },
+                    },
+                    {
+                        "signal": "Trace pairs",
+                        "level": if trace_pairs_warn { "warn" } else { "ok" },
+                        "state": format!("{} writes / {} clears", trace["inflightWrites"].as_i64().unwrap_or(0), trace["inflightClears"].as_i64().unwrap_or(0)),
+                        "detail": "Recent [inflight-sentinel] records from bram-trace.log",
+                        "seen": trace["lastInflight"].as_str().unwrap_or(""),
+                    },
+                    port_row
+                ]
+            },
+            {
+                "title": "Hooks",
+                "rows": hooks_rows
+            },
+            {
+                "title": "Authorization",
+                "rows": authorization_rows
+            },
+            {
+                "title": "Latest Tail And Fanout",
+                "rows": [
+                    {
+                        "signal": "latest-tail",
+                        "level": if fresh_heavy { "warn" } else if latest_total > 0 { "ok" } else { "neutral" },
+                        "state": format!("{} diff / {} fresh", trace["latestTailDiff"].as_i64().unwrap_or(0), trace["latestTailFresh"].as_i64().unwrap_or(0)),
+                        "detail": if trace["latestTailBytes"].as_i64().unwrap_or(0) > 0 { format!("{} KB observed in recent trace window", (trace["latestTailBytes"].as_i64().unwrap_or(0) + 1023) / 1024) } else { "No latest-tail trace records in recent window".to_string() },
+                        "seen": trace["lastLatestTail"].as_str().unwrap_or(""),
+                    },
+                    {
+                        "signal": "JSONL fanout",
+                        "level": fanout_level,
+                        "state": format!("{} fanout events", trace["fanoutEvents"].as_i64().unwrap_or(0)),
+                        "detail": format!(
+                            "resets {}, cap trims {}{}",
+                            trace["fanoutResets"].as_i64().unwrap_or(0),
+                            trace["capTrims"].as_i64().unwrap_or(0),
+                            trace["fanoutSubscribers"].as_i64().map(|n| format!(", subscribers {}", n)).unwrap_or_default()
+                        ),
+                        "seen": trace["lastFanout"].as_str().unwrap_or(""),
+                    }
+                ]
+            },
+            {
+                "title": "Guards, Staleness, Interrupts, Traces",
+                "rows": [
+                    {
+                        "signal": "Guard decisions",
+                        "level": if guard_warn { "warn" } else { "ok" },
+                        "state": format!("{} recent blocks", trace["guardBlocks"].as_i64().unwrap_or(0)),
+                        "detail": if trace["guardBlocks"].as_i64().unwrap_or(0) > 0 { "Recent hook block records found in trace" } else { "No recent hook blocks found in trace" },
+                        "seen": trace["lastGuard"].as_str().unwrap_or(""),
+                    },
+                    {
+                        "signal": "Stale approvals",
+                        "level": if stale_reject_warn { "warn" } else { "ok" },
+                        "state": format!("{} rejected stale", trace["staleRejects"].as_i64().unwrap_or(0)),
+                        "detail": if trace["staleRejects"].as_i64().unwrap_or(0) > 0 { "Resolve staleness appeared in recent trace" } else { "No rejected_stale resolve records in recent trace" },
+                        "seen": "",
+                    },
+                    {
+                        "signal": "Interrupts",
+                        "level": if interrupt_warn { "warn" } else { "ok" },
+                        "state": format!("{} related records", trace["interrupts"].as_i64().unwrap_or(0)),
+                        "detail": if trace["interrupts"].as_i64().unwrap_or(0) > 0 { "Interrupt/silence-clear records appeared recently" } else { "No interrupt-related records in recent trace" },
+                        "seen": trace["lastInterrupt"].as_str().unwrap_or(""),
+                    },
+                    {
+                        "signal": "Inspector exports",
+                        "level": if trace_export.is_some() { "ok" } else { "neutral" },
+                        "state": trace_export_state,
+                        "detail": trace_export_detail,
+                        "seen": trace_export_seen,
+                    }
+                ]
+            }
+        ]
+    });
+
+    serde_json::to_vec(&rows).map_err(|e| e.to_string())
+}
+
+trait IfEmpty {
+    fn if_empty(self, fallback: &str) -> String;
+}
+
+impl IfEmpty for String {
+    fn if_empty(self, fallback: &str) -> String {
+        if self.is_empty() {
+            fallback.to_string()
+        } else {
+            self
+        }
+    }
+}
+
 #[cfg(test)]
 mod worklist_doc_tests {
-    use super::base_worklist_doc_from_parsed;
+    use super::{
+        base_worklist_doc_from_parsed, canonical_item_hash, parse_worklist_draft,
+        resolve_worklist_item_draft,
+    };
     use serde_json::json;
+    use std::fs;
 
     #[test]
     fn bare_array_root_sets_schema_error() {
@@ -6307,12 +8595,13 @@ mod worklist_doc_tests {
             { "id": "x", "file": "foo.txt", "before": "", "after": "" }
         ])));
 
-        assert_eq!(doc.get("schemaError").and_then(|v| v.as_str()), Some("root-array"));
+        assert_eq!(
+            doc.get("schemaError").and_then(|v| v.as_str()),
+            Some("root-array")
+        );
         assert_eq!(doc.get("description").and_then(|v| v.as_str()), Some(""));
         assert_eq!(
-            doc.get("items")
-                .and_then(|v| v.as_array())
-                .map(|v| v.len()),
+            doc.get("items").and_then(|v| v.as_array()).map(|v| v.len()),
             Some(0)
         );
     }
@@ -6327,10 +8616,91 @@ mod worklist_doc_tests {
         );
         assert_eq!(doc.get("description").and_then(|v| v.as_str()), Some(""));
         assert_eq!(
-            doc.get("items")
-                .and_then(|v| v.as_array())
-                .map(|v| v.len()),
+            doc.get("items").and_then(|v| v.as_array()).map(|v| v.len()),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn draft_parser_splits_before_after_sections() {
+        let parsed =
+            parse_worklist_draft("# Before\n\nold **markdown**\n\n# After\n\nnew `markdown`\n")
+                .expect("draft should parse");
+
+        assert_eq!(parsed.0, "old **markdown**");
+        assert_eq!(parsed.1, "new `markdown`");
+    }
+
+    #[test]
+    fn draft_resolver_prefers_inline_when_present() {
+        let item = json!({
+            "id": "inline",
+            "files": ["docs/a.md"],
+            "before": "inline before",
+            "after": "inline after",
+        });
+
+        let resolved = resolve_worklist_item_draft(None, &item);
+
+        assert_eq!(
+            resolved.get("before").and_then(|v| v.as_str()),
+            Some("inline before")
+        );
+        assert_eq!(resolved.get("_draftMissing"), None);
+    }
+
+    #[test]
+    fn draft_resolver_loads_metadata_only_item_and_hashes_resolved_content() {
+        let dir =
+            std::env::temp_dir().join(format!("bram-worklist-draft-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create temp draft dir");
+        fs::write(
+            dir.join("draft-item.md"),
+            "# Before\n\nmetadata only\n\n# After\n\nresolved prose\n",
+        )
+        .expect("write draft");
+
+        let item = json!({
+            "id": "draft-item",
+            "status": "proposed",
+            "files": ["docs/a.md"],
+        });
+        let resolved = resolve_worklist_item_draft(Some(&dir), &item);
+        let inline_equivalent = json!({
+            "id": "draft-item",
+            "status": "proposed",
+            "files": ["docs/a.md"],
+            "before": "metadata only",
+            "after": "resolved prose",
+        });
+
+        assert_eq!(
+            resolved.get("before").and_then(|v| v.as_str()),
+            Some("metadata only")
+        );
+        assert_eq!(
+            canonical_item_hash(&resolved),
+            canonical_item_hash(&inline_equivalent)
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn draft_resolver_marks_missing_draft_explicitly() {
+        let item = json!({
+            "id": "missing-draft",
+            "status": "proposed",
+            "files": ["docs/a.md"],
+        });
+
+        let resolved = resolve_worklist_item_draft(None, &item);
+
+        assert_eq!(resolved.get("before").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(resolved.get("after").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(
+            resolved.get("_draftMissing").and_then(|v| v.as_bool()),
+            Some(true)
         );
     }
 }
@@ -6357,11 +8727,9 @@ mod app_root_resolution_tests {
                 PathBuf::from("/bundle/bin/../Resources/app"),
             ]
         );
-        assert!(
-            candidates
-                .iter()
-                .all(|p| !p.to_string_lossy().contains("/project/app"))
-        );
+        assert!(candidates
+            .iter()
+            .all(|p| !p.to_string_lossy().contains("/project/app")));
     }
 }
 
@@ -6431,7 +8799,10 @@ fn format_iso_utc_ms(ms: i64) -> String {
     let m = secs_of_day % 3600 / 60;
     let s = secs_of_day % 60;
     let (y, mo, d) = civil_from_days(days);
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, mo, d, h, m, s, sub)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        y, mo, d, h, m, s, sub
+    )
 }
 
 fn worklist_item_id(item: &serde_json::Value) -> Option<String> {
@@ -6548,6 +8919,7 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
         .and_then(|doc| doc.get("items").cloned())
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default();
+    let drafts_dir = worklist_drafts_dir(app);
 
     let mut ids: Vec<String> = Vec::with_capacity(parsed.requests.len());
     let mut verified_items: Vec<serde_json::Value> = Vec::new();
@@ -6564,13 +8936,14 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
         match (supplied_hash, found) {
             (Some(supplied), Some(item)) => {
                 any_hash_supplied = true;
-                if &canonical_item_hash(item) == supplied {
+                let resolved_item = resolve_worklist_item_draft(drafts_dir.as_deref(), item);
+                if &canonical_item_hash(&resolved_item) == supplied {
                     // Clone the on-disk item, then attach the per-item
                     // feedback from the incoming payload so the agent
                     // sees it via /__worklist/resolve. Always set the
                     // field (even when empty) so consumers can read it
                     // uniformly.
-                    let mut enriched = item.clone();
+                    let mut enriched = resolved_item;
                     if let Some(obj) = enriched.as_object_mut() {
                         obj.insert(
                             "feedback".to_string(),
@@ -6641,7 +9014,11 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
                     Some(prior.kind)
                 }
             });
-        let op = if prior_kind.is_some() { "clobber" } else { "write" };
+        let op = if prior_kind.is_some() {
+            "clobber"
+        } else {
+            "write"
+        };
         let prior_field = prior_kind
             .as_deref()
             .map(|k| format!(" prior_kind={}", k))
@@ -6720,102 +9097,6 @@ fn consume_worklist_authorization<R: tauri::Runtime>(app: &AppHandle<R>) {
     let _ = std::fs::write(&path, format!("{}\n", body));
 }
 
-// Auto-advance any still-`proposed` item whose `file` / `files` are touched
-// by an authorized write. Closes the convention-vs-enforcement gap in the
-// state-machine gate that lets agents apply edits without flipping the
-// worklist status (issue #60). Provider-neutral — same trigger fires
-// regardless of which agent landed the writes.
-fn try_auto_advance_proposed_items<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    project_rel_paths: &[String],
-) -> Vec<String> {
-    if project_rel_paths.is_empty() {
-        return Vec::new();
-    }
-    let Some(wl_path) = worklist_file(app) else {
-        return Vec::new();
-    };
-    let Some(auth_path) = worklist_auth_file(app) else {
-        return Vec::new();
-    };
-    let Ok(auth_text) = std::fs::read_to_string(&auth_path) else {
-        return Vec::new();
-    };
-    let auth: serde_json::Value = match serde_json::from_str(&auth_text) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    if auth.get("kind").and_then(|v| v.as_str()) != Some("approved") {
-        return Vec::new();
-    }
-    let auth_ids: std::collections::HashSet<String> = auth
-        .get("ids")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    if auth_ids.is_empty() {
-        return Vec::new();
-    }
-    let Ok(wl_text) = std::fs::read_to_string(&wl_path) else {
-        return Vec::new();
-    };
-    let mut wl: serde_json::Value = match serde_json::from_str(&wl_text) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    let touched: std::collections::HashSet<&str> =
-        project_rel_paths.iter().map(|s| s.as_str()).collect();
-    let mut advanced: Vec<String> = Vec::new();
-    let Some(items) = wl.get_mut("items").and_then(|v| v.as_array_mut()) else {
-        return Vec::new();
-    };
-    for item in items.iter_mut() {
-        let Some(id) = item.get("id").and_then(|v| v.as_str()).map(String::from) else {
-            continue;
-        };
-        if !auth_ids.contains(&id) {
-            continue;
-        }
-        if worklist_item_status(item) != "proposed" {
-            continue;
-        }
-        let item_files: Vec<String> =
-            if let Some(arr) = item.get("files").and_then(|v| v.as_array()) {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            } else if let Some(s) = item.get("file").and_then(|v| v.as_str()) {
-                vec![s.to_string()]
-            } else {
-                Vec::new()
-            };
-        if item_files.iter().any(|f| touched.contains(f.as_str())) {
-            if let Some(obj) = item.as_object_mut() {
-                obj.insert(
-                    "status".to_string(),
-                    serde_json::Value::String("applied".to_string()),
-                );
-                advanced.push(id);
-            }
-        }
-    }
-    if advanced.is_empty() {
-        return Vec::new();
-    }
-    let new_text = serde_json::to_string_pretty(&wl).unwrap_or_default();
-    let payload = format!("{}\n", new_text);
-    if let Err(e) = std::fs::write(&wl_path, &payload) {
-        eprintln!("[auto-advance] write failed: {}", e);
-        return Vec::new();
-    }
-    eprintln!("[auto-advance] flipped proposed→applied: {:?}", advanced);
-    advanced
-}
-
 fn maybe_enforce_worklist_policy<R: tauri::Runtime>(
     app: &AppHandle<R>,
     prior_str: &str,
@@ -6834,7 +9115,7 @@ fn maybe_enforce_worklist_policy<R: tauri::Runtime>(
         .as_ref()
         .map(|record| record.ids.iter().cloned().collect())
         .unwrap_or_default();
-    let mut used_drop_auth = false;
+    let mut dropped_via_auth: Vec<String> = Vec::new();
     let mut violations: Vec<(String, String)> = Vec::new();
 
     for item in &prior_items {
@@ -6849,14 +9130,34 @@ fn maybe_enforce_worklist_policy<R: tauri::Runtime>(
             continue;
         }
         if auth.as_ref().map(|a| a.kind.as_str()) == Some("drop") && auth_ids.contains(&id) {
-            used_drop_auth = true;
+            dropped_via_auth.push(id);
             continue;
         }
         violations.push((id, status));
     }
 
     if violations.is_empty() {
-        if used_drop_auth {
+        if !dropped_via_auth.is_empty() {
+            // Agent-path-symmetry fix: when an agent (Codex) edits
+            // worklist.json directly to prune a drop-authorized item
+            // instead of going through /__worklist/resolve +
+            // /__worklist/mutate, no inflight sentinel write/clear
+            // fires and the iframe's `submitting=true` (set on click)
+            // never gets cleared — the Worklist tab becomes
+            // unselectable. Mirror what /resolve + /mutate would have
+            // emitted: write the sentinel, then immediately clear it.
+            // The two inflight-claim-changed events drive the iframe's
+            // DataSource to refetch /__inflight, find no claim, and
+            // clear local submitting state. Same outcome as the
+            // Claude path; symmetric across agents.
+            //
+            // Harmless when invoked via the Claude path too — by the
+            // time the policy validator runs after /mutate, the
+            // sentinel has already been cleared, so write+clear here
+            // is a small redundant pair of events. No state
+            // divergence.
+            write_inflight_claim_sentinel(app, &dropped_via_auth, "drop");
+            clear_inflight_claim_sentinel(app, &dropped_via_auth);
             consume_worklist_authorization(app);
         }
         return true;
@@ -7525,6 +9826,83 @@ fn route_request<R: tauri::Runtime>(
         };
     }
 
+    // Architectural experiment: derive-at-the-boundary for the
+    // "last assistant text" panel. Iframe binds to this route's
+    // {text} field instead of calling lastAssistantText(lastJsonl) and
+    // walking the buffer per fanout. Refetch is event-driven via
+    // talk-session-changed.
+    if path == "__last-assistant-text" {
+        return match read_last_assistant_text(app, None) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__last-assistant-text] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    // Companion to /__last-assistant-text: per-file edit aggregates for
+    // the current turn. Same architecture (host parses 64 KB tail once
+    // per request, iframe binds via DataSource), replaces the iframe's
+    // currentTurnEdits(lastJsonl) helper which had started exceeding
+    // XMLUI's 1000 ms sync-evaluation limit on busy turns.
+    if path == "__current-turn-edits" {
+        return match read_current_turn_edits(app, None) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__current-turn-edits] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    // Mirror of isWaitingForAssistant(jsonlText) iframe helper. Returns
+    // {waiting: bool} — true when the most recent meaningful record is
+    // a user message (tool_result-only records skipped). Replaces the
+    // iframe-side suffix walk on every fanout / keystroke.
+    if path == "__waiting-for-assistant" {
+        return match read_waiting_for_assistant(app) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__waiting-for-assistant] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    // Host-derived turn timeline. Mirrors the iframe sessionTurns(jsonlText)
+    // helper that walked the full JSONL on every fanout. Returns the same
+    // [{role, text, entries[], images[]}] shape Transcript renders against.
+    if path == "__session-turns" {
+        return match read_session_turns(app) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__session-turns] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    // Companion to /__session-turns: full input + result for a single
+    // tool by id. Mirrors getToolDetail(jsonlText, toolId). Returns
+    // {input, result} or null.
+    if path == "__tool-detail" {
+        let mut tool_id = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("id=") {
+                tool_id = percent_decode(v);
+                break;
+            }
+        }
+        return match read_tool_detail(app, &tool_id) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__tool-detail] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
     if let Some(rest) = path.strip_prefix("__sessions/") {
         let mut provider: Option<SessionProvider> = None;
         let mut session_id = String::new();
@@ -7622,8 +10000,7 @@ fn route_request<R: tauri::Runtime>(
                             .map_err(|e| e.to_string())
                             .and_then(|mut f| {
                                 f.seek(SeekFrom::Start(since)).map_err(|e| e.to_string())?;
-                                let mut out =
-                                    Vec::with_capacity((file_size - since) as usize);
+                                let mut out = Vec::with_capacity((file_size - since) as usize);
                                 f.read_to_end(&mut out).map_err(|e| e.to_string())?;
                                 Ok(out)
                             })
@@ -7919,9 +10296,7 @@ fn route_request<R: tauri::Runtime>(
                 );
             }
         };
-        let consumed_at = record_value
-            .get("consumedAtMs")
-            .and_then(|v| v.as_i64());
+        let consumed_at = record_value.get("consumedAtMs").and_then(|v| v.as_i64());
         if let Some(ts) = consumed_at {
             let body = serde_json::json!({
                 "kind": "no_active_authorization",
@@ -7946,6 +10321,7 @@ fn route_request<R: tauri::Runtime>(
                 });
             }
         }
+        resolve_worklist_record_items(app, &mut record_value);
         let kind = record_value
             .get("kind")
             .and_then(|v| v.as_str())
@@ -7962,11 +10338,7 @@ fn route_request<R: tauri::Runtime>(
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|it| {
-                            it.get("id")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                        })
+                        .filter_map(|it| it.get("id").and_then(|v| v.as_str()).map(String::from))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -7992,6 +10364,19 @@ fn route_request<R: tauri::Runtime>(
             None => "{}".to_string(),
         };
         return (200, "application/json; charset=utf-8", body.into_bytes());
+    }
+
+    // /__coordination-status — compact host-side summary for the Status tab.
+    // Keeps filesystem and trace mining in Rust so the XMLUI surface renders
+    // one structured payload instead of fetching and parsing several files.
+    if path == "__coordination-status" {
+        return match coordination_status(app) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__coordination-status] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
     }
 
     // /__pty-intent — diagnostic readout of the right-pane intent queue
@@ -8489,14 +10874,12 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
         );
     }
 
-    // Advance/prune now clear the inflight sentinel as part of the
-    // successful mechanical worklist transition. That keeps the spinner
-    // tied to the state change the user actually approved, while the
-    // host-side `pty_agent_turn_update` silence-detector and
-    // POST /__worklist/end (alias of /__iterate/end) remain fallback
-    // release valves if a cycle still needs to drain at turn-end.
-    // Closes #106.
-    clear_inflight_claim_sentinel(app, &ids);
+    // Successful mutate is the mechanical completion point for approved/drop
+    // worklist cycles. Clear any matching inflight sentinel immediately so the
+    // Workspace spinner does not wait for the later silence-detected fallback.
+    if !affected.is_empty() {
+        clear_inflight_claim_sentinel(app, &affected);
+    }
 
     let result_key = if op == "prune" { "pruned" } else { "advanced" };
     let response = format!(
@@ -8616,7 +10999,7 @@ const SHELL_ORIGIN: &str = "tauri://localhost";
 //
 //   - `tauri://localhost/__project/*` is proxied to the upstream URL in
 //     PaneUrlsState.right_pane_upstream (the loopback HTTP server by
-//     default, or an external project dev server when .xmlui-desktop.json
+//     default, or an external project dev server when project config
 //     declares one). The iframe's origin stays `tauri://localhost`, same
 //     as the shell — same-origin policy then permits direct cross-frame
 //     JS access. This is the whole point: shell and target can share
@@ -9122,6 +11505,7 @@ pub fn run() {
                 }
             }
             let app_handle = app.handle().clone();
+            start_codex_session_poll_fallback(app_handle.clone());
             std::thread::spawn(move || {
                 use notify::{recommended_watcher, Event, EventKind, RecursiveMode, Watcher};
                 use std::sync::mpsc::channel;
@@ -9346,8 +11730,8 @@ pub fn run() {
                         let _ = app_handle.emit("sessions-list-changed", ());
                     }
 
-                    // worklist-changed: resources/worklist.json or any
-                    // file under resources/worklist-history/. Workspace
+                    // worklist-changed: resources/worklist.json, any draft
+                    // file, or anything under resources/worklist-history/. Workspace
                     // refetches its DataSources on this.
                     let is_worklist_change = event.paths.iter().any(|p| {
                         let in_resources = p.components().any(|c| c.as_os_str() == "resources");
@@ -9355,7 +11739,10 @@ pub fn run() {
                         let in_history = p
                             .components()
                             .any(|c| c.as_os_str() == "worklist-history");
-                        in_resources && (file == "worklist.json" || in_history)
+                        let in_drafts = p
+                            .components()
+                            .any(|c| c.as_os_str() == "worklist-drafts");
+                        in_resources && (file == "worklist.json" || in_history || in_drafts)
                     });
                     if is_worklist_change {
                         // Defer the emit; pending_worklist_since either
@@ -9364,23 +11751,6 @@ pub fn run() {
                         // above drains it when the window elapses. Refs
                         // #85 worklist-watcher-debounce.
                         pending_worklist_since = Some(Instant::now());
-                    }
-
-                    // Auto-advance proposed→applied when an authorized write
-                    // covers a still-proposed item. Closes the state-machine
-                    // gate that the convention alone can't enforce (#60). The
-                    // resulting worklist.json write surfaces via the
-                    // is_worklist_change branch on the next event cycle, which
-                    // emits worklist-changed and snapshots the transition.
-                    let project_rel_paths: Vec<String> = event
-                        .paths
-                        .iter()
-                        .filter_map(|p| p.strip_prefix(&proj_root_path).ok())
-                        .map(|p| p.to_string_lossy().replace('\\', "/"))
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    if !project_rel_paths.is_empty() {
-                        let _ = try_auto_advance_proposed_items(&app_handle, &project_rel_paths);
                     }
 
                     // git-status-changed: any project file change that's

@@ -16,12 +16,11 @@
   var.actionHelpFor="{null}"
   var.newItemHelp="{false}"
   var.newItemIssue="{null}"
-  var.newItemText="{''}"
   var.pendingMenu="{null}"
-  var.inflightTick="{0}">
-  <ChangeListener
-    listenTo="{selectedFeedback}"
-    onDidChange="App.mark('selectedFeedback-written')" />
+  var.inflightTick="{0}"
+  var.lastAssistantTick="{0}"
+  var.lastAssistantTickAt="{0}"
+  var.lastAssistantStableText="{''}">
   <DataSource
     id="worklist"
     url="/__worklist"
@@ -53,9 +52,10 @@
     when="{newItemHelp}" />
   <!-- Sentinel-derived inflight consumer (#84 item 3). The host writes
        resources/.inflight-claim.json on /__worklist/resolve (approved
-       / drop) and /__iterate/begin; it clears the file on
-       /__worklist/mutate and /__iterate/end. Each write/clear emits
-       the `inflight-claim-changed` Tauri event, which bumps
+       / drop) and /__iterate/begin. Approved/drop sentinels clear at
+       host silence-detected turn-end, with /__worklist/end available
+       as an explicit endpoint; iterate sentinels clear via
+       /__iterate/end. Each write/clear emits
        inflightTick below and forces this DataSource to refetch. When
        the sentinel no longer claims the targeted item, the onLoaded
        handler clears localStorage and resets per-cycle state.
@@ -88,12 +88,35 @@
         feedbackExpanded = false; expandedItemId = null;
       }
     }" />
+  <!-- Transcript-aligned last response. Host derives this from the same
+       parsed turn stream Transcript uses. Refetch is driven by JSONL
+       fanout plus the shell's talk-session bridge so Workspace does not
+       lag behind the terminal between throttled fanout ticks. -->
+  <DataSource
+    id="lastAssistantTextDS"
+    url="/__last-assistant-text?t={lastAssistantTick}"
+    onLoaded="(data) => {
+      const text = data && data.text;
+      if (text && text !== lastAssistantStableText) {
+        lastAssistantStableText = text;
+      }
+    }" />
+  <!-- Same derive-at-the-boundary shape as lastAssistantTextDS: replaces
+       the iframe's currentTurnEdits(lastJsonl) walk which had started
+       exceeding XMLUI's 1000 ms sync-evaluation timeout on busy turns
+       (the in-flight feedback panel under each item triggers it during
+       a submitting cycle). Reuses lastAssistantTick so the Workspace
+       response and edit panels refetch together. -->
+  <DataSource
+    id="currentTurnEditsDS"
+    url="/__current-turn-edits?t={lastAssistantTick}" />
 
   <VStack
     padding="$space-6"
     gap="$space-6"
     onInit="lastJsonl = window.getLatestJsonl();
-    subscribeLatestJsonl('__bramWorkspaceJsonlUnsub', (v) => { lastJsonl = v; });
+    subscribeLatestJsonl('__bramWorkspaceJsonlUnsub', (v) => { lastJsonl = v; const now = Date.now(); if (now - lastAssistantTickAt >= 2000) { lastAssistantTickAt = now; lastAssistantTick = lastAssistantTick + 1; } });
+    subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; lastAssistantTextDS.refetch(); currentTurnEditsDS.refetch(); });
     (() => {
       // Iframe-side trace records for the [iframe] category of the
       // comms-path trace (issue #49). Calls route through iframeTrace()
@@ -260,14 +283,14 @@
                 </HStack>
                 <!-- In-flight feedback panel: shows files touched in the
                      agent's current turn while a cycle targets this
-                     item. Driven by currentTurnEdits(lastJsonl) — the
-                     same helper Transcript uses, so both surfaces stay
-                     in lockstep. Closes #92. -->
+                     item. Driven by /__current-turn-edits (host-side
+                     derivation); replaces the iframe currentTurnEdits
+                     walk that had started timing out on busy turns. -->
                 <VStack
                   when="{submitting && submittedItemId === $item.id}"
                   gap="$space-0_5"
                   paddingLeft="$space-3"
-                  var.turnEdits="{currentTurnEdits(lastJsonl)}">
+                  var.turnEdits="{currentTurnEditsDS.value || []}">
                   <Text
                     when="{turnEdits.length > 0}"
                     fontSize="$fontSize-xs"
@@ -310,13 +333,13 @@
                   gap="$space-2"
                   verticalAlignment="start">
                   <TextArea
+                    id="feedbackBox"
                     initialValue="{selectedFeedback}"
                     placeholder="Message to agent"
                     rows="2"
                     width="*"
                     fontSize="$fontSize-sm"
-                    enabled="{!submitting}"
-                    onDidChange="(v) => { debounce(200, (text) => { selectedFeedback = text; }, v); }" />
+                    enabled="{!submitting}" />
                   <Button
                     label="×"
                     variant="ghost"
@@ -333,7 +356,7 @@
                       label="Approve"
                       size="xs"
                       enabled="{traceApproveDropEnabled(submitting, selected)}"
-                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, selectedFeedback)); })()" />
+                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || '')); })()" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -347,8 +370,8 @@
                     <Button
                       label="Iterate"
                       size="xs"
-                      enabled="{traceIterateEnabled(submitting, selected, selectedFeedback)}"
-                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); toTurn('iterate: ' + buildIteratePayload(worklist.value.items, selected, selectedFeedback))" />
+                      enabled="{traceIterateEnabled(submitting, selected, (feedbackBox &amp;&amp; feedbackBox.value) || '')}"
+                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); toTurn('iterate: ' + buildIteratePayload(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || ''))" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -363,7 +386,7 @@
                       label="Drop"
                       size="xs"
                       enabled="{traceApproveDropEnabled(submitting, selected)}"
-                      onClick="iframeTrace('click', {target: 'drop', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, selectedFeedback))" />
+                      onClick="iframeTrace('click', {target: 'drop', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || ''))" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -423,9 +446,9 @@
 
     </VStack>
 
-      <VStack gap="$space-1" when="{worklist.value && worklist.value.items && worklist.value.items.length > 0 && lastAssistantText(lastJsonl)}">
+      <VStack gap="$space-1" when="{worklist.value && worklist.value.items && worklist.value.items.length > 0 && lastAssistantStableText}">
         <Heading level="h4">Last agent response</Heading>
-        <Markdown content="{lastAssistantText(lastJsonl)}" />
+        <Markdown content="{lastAssistantStableText}" />
       </VStack>
 
     <ModalDialog
@@ -507,11 +530,11 @@
         <HStack gap="$space-2" paddingTop="$space-2">
           <Button
             label="Confirm"
-            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines(selectedFeedback, buildCloseIssueLines(closeIssuesState)))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines((feedbackBox &amp;&amp; feedbackBox.value) || '', buildCloseIssueLines(closeIssuesState)))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Approve without closing"
             variant="outlined"
-            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, selectedFeedback)); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, (feedbackBox &amp;&amp; feedbackBox.value) || '')); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Cancel"
             variant="ghost"
@@ -583,7 +606,7 @@ Iterate is the right move when the agent's first cut is *almost* what you want."
     <ModalDialog
       when="{newItemHelp}"
       title="Add a worklist item"
-      onClose="newItemHelp = false; newItemIssue = null; newItemText = ''">
+      onClose="newItemHelp = false; newItemIssue = null; newItemBox.setValue('')">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           The worklist is how you and the agent coordinate multi-step work.
@@ -607,30 +630,29 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
             initialValue="{newItemIssue}"
             onDidChange="(v) => newItemIssue = v" />
           <TextArea
-            initialValue="{newItemText}"
+            id="newItemBox"
             placeholder="Describe what the item should change"
             rows="4"
-            width="*"
-            onDidChange="(v) => { debounce(200, (text) => { newItemText = text; }, v); }" />
+            width="*" />
           <HStack gap="$space-2">
             <Button
               label="Send"
-              enabled="{!!newItemIssue || (newItemText &amp;&amp; newItemText.trim().length > 0)}"
+              enabled="{!!newItemIssue || (newItemBox.value &amp;&amp; newItemBox.value.trim().length > 0)}"
               onClick="(() => {
                 const issuesArr = (openIssues.value) || [];
                 const issueObj = newItemIssue ? issuesArr.find(i => String(i.number) === String(newItemIssue)) : null;
-                const text = (newItemText || '').trim();
+                const text = (newItemBox.value || '').trim();
                 let msg;
                 if (issueObj &amp;&amp; text) { msg = 'Propose a worklist item to address #' + issueObj.number + ' (' + issueObj.title + '): ' + text; }
                 else if (issueObj) { msg = 'Propose a worklist item to address #' + issueObj.number + ' (' + issueObj.title + ').'; }
                 else { msg = 'Propose a worklist item: ' + text; }
                 toTurn(msg);
-                newItemHelp = false; newItemIssue = null; newItemText = '';
+                newItemHelp = false; newItemIssue = null; newItemBox.setValue('');
               })()" />
             <Button
               label="Cancel"
               variant="ghost"
-              onClick="newItemHelp = false; newItemIssue = null; newItemText = ''" />
+              onClick="newItemHelp = false; newItemIssue = null; newItemBox.setValue('')" />
           </HStack>
         </VStack>
       </VStack>

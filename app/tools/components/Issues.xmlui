@@ -6,7 +6,6 @@
   var.newIssueText="{''}"
   var.queryDraft=""
   var.query=""
-  var.closeComment="{''}"
   var.selectedHitLine="{null}"
   var.sortField="updatedAt"
   var.sortDir="desc"
@@ -46,7 +45,7 @@
     method="get"
     queryParams="{{ number: $param.number, comment: $param.comment }}"
     completedNotificationMessage="Issue closed."
-    onSuccess="closeComment = ''; issueDetail.refetch(); issues.refetch()" />
+    onSuccess="closeCommentBox.setValue(''); issueDetail.refetch(); issues.refetch()" />
 
   <APICall
     id="commentIssueCall"
@@ -54,7 +53,7 @@
     method="get"
     queryParams="{{ number: $param.number, body: $param.body }}"
     completedNotificationMessage="Comment posted."
-    onSuccess="closeComment = ''; issueDetail.refetch(); issues.refetch()" />
+    onSuccess="closeCommentBox.setValue(''); issueDetail.refetch(); issues.refetch()" />
 
   <ChangeListener
     listenTo="{queryDraft}"
@@ -418,22 +417,20 @@
           id="closeCommentBox"
           placeholder="Optional comment"
           rows="2"
-          width="*"
-          initialValue="{closeComment}"
-          onDidChange="(v) => { debounce(200, (text) => { closeComment = text; }, v); }" />
+          width="*" />
         <HStack gap="$space-2">
           <Button
             label="Comment"
             variant="outlined"
             size="sm"
-            enabled="{closeComment &amp;&amp; closeComment.trim().length > 0}"
-            onClick="commentIssueCall.execute({ number: selectedIssue.number, body: closeComment })" />
+            enabled="{closeCommentBox.value &amp;&amp; closeCommentBox.value.trim().length > 0}"
+            onClick="commentIssueCall.execute({ number: selectedIssue.number, body: closeCommentBox.value })" />
           <Button
             when="{selectedIssue.state === 'OPEN'}"
             label="Close issue"
             variant="outlined"
             size="sm"
-            onClick="closeIssueCall.execute({ number: selectedIssue.number, comment: closeComment })" />
+            onClick="closeIssueCall.execute({ number: selectedIssue.number, comment: closeCommentBox.value || '' })" />
         </HStack>
       </VStack>
     </VStack>

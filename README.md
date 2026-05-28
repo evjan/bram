@@ -30,11 +30,11 @@ As files in the project change, the right pane reloads automatically
 
 Bram encourages an issue-first workflow as the foundation for a worklist item. It is optional, not required. If you want to use it, ask an agent to file an issue first, then use that issue as the basis for a proposed worklist item.
 
-You can do that from the modal in two ways: `+ New issue` lets you send Bram a message asking to file the issue, and `+ New item` lets you ask Bram to create a worklist item. That modal includes a picklist of open issues so you can choose one for Bram to respond to with a proposal. You can also skip the issue linkage and ask Bram directly in the modal to propose an item.
+On the **Issues** tab, `+ New issue` lets you ask Bram to file a GitHub issue. On the **Workspace** tab, `+ New item` lets you ask Bram to propose a worklist item, with an optional picklist of open issues so a proposal can be anchored to an existing issue.
 
 There are three phases for an item on the worklist: **proposed** → **applied** → **committed**. The arrows between the phases are approval gates where you can dwell and iterate with your agent to: research and write code, create, refine, and close issues; organize commits as an orderly audit trail.
 
-For small changes you can skip the ceremony by saying *Just do it* or *Skip the workflow*.
+By default every change request flows through the worklist regardless of size. To opt out of the worklist for a specific request, include a phrase like *"just do it"*, *"no worklist for this"*, or *"commit directly"* in the same turn — see [`app/__shell/conventions.md`](./app/__shell/conventions.md) for the full opt-out list and worked examples.
 
 ### Agent conventions
 
@@ -51,7 +51,7 @@ rules.
 
 ## Prerequisites
 
-1. A local git repo in which your develop your app
+1. A local git repo in which you develop your app
 
 2. **`git`** — usually preinstalled on macOS and Linux; install via
    your package manager if missing.
@@ -146,8 +146,8 @@ That means first-run setup is provider-aware in when it prompts but provider-sym
 `app/__shell/conventions.md` is the canonical project convention file.
 It governs Claude and Codex in different ways:
 
-- **Claude: direct prompt binding plus enforcement.** Setup copies that file to `.claude/xmlui-desktop-conventions.md`, adds an `@`-import block to `CLAUDE.md`, and installs the `worklist-guard.py` PreToolUse hook. A new Claude session therefore reads the conventions file directly and is also mechanically blocked from unsafe worklist edits.
-- **Codex: repo-local AGENTS.md plus native hook enforcement.** Setup writes a marked xmlui-desktop block into repo-root `AGENTS.md`, installs top-level `developer_instructions` in `~/.codex/config.toml`, and registers the codex worklist guard as a native `PreToolUse` hook. Wrapped `codex` launches also receive the same concise worklist guidance as a startup seed. The app reinforces that with the shared local authorization record in `resources/.worklist-authorization.json` and the watcher-revert fallback as defense in depth.
+- **Claude: direct prompt binding plus enforcement.** Setup copies that file to `.claude/bram-conventions.md`, adds an `@`-import block to `CLAUDE.md`, and installs the `worklist-guard.py` PreToolUse hook. A new Claude session therefore reads the conventions file directly and is also mechanically blocked from unsafe worklist edits. Existing projects with the legacy `.claude/xmlui-desktop-conventions.md` path are migrated to the new name on the next Setup run.
+- **Codex: repo-local AGENTS.md plus native hook enforcement.** Setup writes a marked Bram block into repo-root `AGENTS.md`, installs top-level `developer_instructions` in `~/.codex/config.toml`, and registers the codex worklist guard as a native `PreToolUse` hook. Wrapped `codex` launches also receive the same concise worklist guidance as a startup seed. The app reinforces that with the shared local authorization record in `resources/.worklist-authorization.json` and the watcher-revert fallback as defense in depth.
 
 So the practical rule is: both agents are governed by the same worklist
 conventions, with Claude reading the imported conventions file directly
@@ -217,7 +217,7 @@ or a PowerShell snippet on Windows), please open an issue.
 
 ## Configuration
 
-`.bram.json` at project root is the primary config file. Legacy `.xmlui-desktop.json` is still accepted.
+`.bram.json` at project root is the primary config file. Legacy `.xmlui-desktop.json` is still accepted as a compatibility alias from Bram's prior name.
 
 ### Startup
 
@@ -434,4 +434,4 @@ your project in a regular browser tab pointed at its `localhost:8080`
 origin — but remember that the tab's `localStorage` is a separate
 store from the right pane's (the right pane is at `tauri://localhost`,
 a different origin), so a session created there won't carry into
-xmlui-desktop.
+Bram.

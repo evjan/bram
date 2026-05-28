@@ -17,7 +17,7 @@ Two responsibilities:
    hook (app/shell/worklist-guard-codex.py) does for apply_patch.
 
 If the project lacks resources/.worklist-authorization.json (the managed-repo
-marker xmlui-desktop's Setup writes), the hook exits 0 (allow) — Claude
+marker Bram Setup writes), the hook exits 0 (allow) — Claude
 sessions in unmanaged repos run as if no hook were installed.
 """
 
@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 
 
 WORKLIST_REL = "resources/worklist.json"
+WORKLIST_DRAFTS_PREFIX = "resources/worklist-drafts/"
 AUTH_REL = "resources/.worklist-authorization.json"
 BYPASS_TTL_SECONDS = 60 * 60  # direct-edit auth records are fresh for 1h
 
@@ -164,6 +165,15 @@ def normalize_target(project_root, target):
     return None
 
 
+def is_worklist_draft(rel):
+    return (
+        isinstance(rel, str)
+        and rel.startswith(WORKLIST_DRAFTS_PREFIX)
+        and rel.endswith(".md")
+        and "/" not in rel[len(WORKLIST_DRAFTS_PREFIX):]
+    )
+
+
 def worklist_covered_files(project_root):
     """Set of project-relative paths covered by proposed/applied items."""
     try:
@@ -266,8 +276,8 @@ def deny_mechanical_worklist_change(removed, status_changed):
         lines.append(f"  - Status changes: {detail}")
     lines.append(
         "  - Example: "
-        "curl -X POST -d '{\"op\":\"prune\",\"ids\":[\"item-id\"]}' "
-        "http://localhost:${BRAM_PORT:-$XMLUI_DESKTOP_PORT}/__worklist/mutate"
+        "curl -4 -sS -X POST -d '{\"op\":\"prune\",\"ids\":[\"item-id\"]}' "
+        "http://127.0.0.1:$(cat resources/.bram-port)/__worklist/mutate"
     )
     _trace_hook(
         "PreToolUse",
@@ -295,7 +305,7 @@ def main():
         sys.exit(0)
 
     # Locate the project root via the managed-repo marker. If the file isn't
-    # inside an xmlui-desktop-managed project at all, exit cleanly — this
+    # inside a Bram-managed project at all, exit cleanly — this
     # hook is a no-op for Claude sessions in unmanaged repos.
     project_root = find_project_root(os.path.dirname(fp) or ".")
     if project_root is None:
@@ -327,6 +337,12 @@ def main():
             _trace_hook("PreToolUse", tool_name, rel, "allow", "worklist-author")
             sys.exit(0)
         deny_mechanical_worklist_change(removed, status_changed)
+
+    # Branch 2: worklist draft prose files are part of proposal authoring.
+    # They are allowed before a corresponding metadata item exists.
+    if is_worklist_draft(rel):
+        _trace_hook("PreToolUse", tool_name, rel, "allow", "worklist-draft")
+        sys.exit(0)
 
     # Branch 2: writes to any other project file — require worklist coverage,
     # fresh bypass, or explicit opt-out language in the last user message.

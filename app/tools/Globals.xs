@@ -33,6 +33,7 @@ function currentSourceFile(pathname) {
   if (pathname === '/sessions') return 'components/Sessions.xmlui';
   if (pathname === '/') return 'components/Transcript.xmlui';
   if (pathname === '/worklist') return 'components/Workspace.xmlui';
+  if (pathname === '/status') return 'components/Status.xmlui';
   return 'Main.xmlui';
 }
 
@@ -162,52 +163,6 @@ function isWaitingForAssistant(jsonlText) {
   isWaitingForAssistant._cacheValue = value;
   _traceHelperTiming('isWaitingForAssistant', _t0, { len: jsonlText.length, suffixLen: suffix.length, lines: lines.length });
   return value;
-}
-
-// True when the most recent meaningful record signals the agent has FINISHED
-// its turn (not just emitted a first text response). isWaitingForAssistant
-// flips false the moment the assistant says anything, which is too early for
-// UX surfaces that want to dim through the whole turn — mid-turn narration
-// would clear the dim while the agent is still working. This is the JSONL
-// fallback for the faster PTY-side `agent-turn-end` signal, so it walks for
-// the real turn-boundary markers each provider emits:
-//   Claude: assistant record with `message.stop_reason: "end_turn"`. Records
-//     with stop_reason: "tool_use" (mid-turn narration that ends in a tool
-//     call) keep the state as `assistant_busy`, not idle.
-//   Codex:  event_msg with `payload.type: "task_complete"`. Codex emits this
-//     as a separate event at the end of every turn (verified against a live
-//     session JSONL alongside task_started / user_message / agent_message).
-// The state machine: 'user' → busy (turn just started or mid-tool), 'assistant_busy'
-// → busy (mid-turn narration), 'idle' → turn-end marker seen. Returns true
-// only when we end on 'idle'.
-function isAgentIdle(jsonlText) {
-  if (!jsonlText) return false;
-  const _t0 = App.now();
-  const lines = jsonlText.split('\n');
-  let lastState = null;
-  for (const line of lines) {
-    if (!line) continue;
-    let r;
-    try { r = JSON.parse(line); } catch (e) { continue; }
-    if (r.type === 'user' && r.message && r.message.content) {
-      const content = r.message.content;
-      if (Array.isArray(content) && content.length > 0 &&
-          content.every(c => c && c.type === 'tool_result')) continue;
-      lastState = 'user';
-    } else if (r.type === 'assistant' && r.message && r.message.content) {
-      const content = r.message.content;
-      const hasText = (typeof content === 'string') ||
-        (Array.isArray(content) && content.some(c => c && c.type === 'text'));
-      if (!hasText) continue;
-      lastState = r.message.stop_reason === 'end_turn' ? 'idle' : 'assistant_busy';
-    } else if (r.type === 'event_msg' && r.payload) {
-      if (r.payload.type === 'user_message') lastState = 'user';
-      else if (r.payload.type === 'agent_message') lastState = 'assistant_busy';
-      else if (r.payload.type === 'task_complete') lastState = 'idle';
-    }
-  }
-  _traceHelperTiming('isAgentIdle', _t0, { len: jsonlText.length, lines: lines.length });
-  return lastState === 'idle';
 }
 
 // Iframe-side trace helper for the [iframe] category of the comms-path
@@ -372,209 +327,6 @@ function editDiffLines(input) {
   return out;
 }
 
-// Aggregate the file-modifying tool calls in the most recent turn. A
-// "turn" boundary is the most recent user message; all assistant
-// tool_use entries after it that touch files (Edit / MultiEdit / Write)
-// belong to the current turn. Group by file_path; multiple edits to the
-// same file accumulate in chronological order.
-//
-// Returns: [{
-//   filePath: string,
-//   kind: 'edited' | 'multi-edited' | 'written' | 'mixed',
-//   edits: [{ kind: 'edit' | 'write', before, after }],
-//   added: int,
-//   removed: int,
-// }]
-//
-// Empty array when no current-turn file mutations exist. Skips Read,
-// Bash, Grep, Glob, and all other read-only tools.
-function currentTurnEdits(jsonlText) {
-  if (!jsonlText) return currentTurnEdits._cache || [];
-  // Identity fast-path: same rationale as isWaitingForAssistant —
-  // re-renders (typing in Transcript input, ChangeListener refire,
-  // etc.) call this with the same jsonlText. O(1) identity check
-  // beats walking ~250 KB backward to compute the suffix.
-  if (currentTurnEdits._fullKey === jsonlText && currentTurnEdits._cache) {
-    return currentTurnEdits._cache;
-  }
-  // Suffix-keyed (issue #100): the current turn lives in the trailing
-  // records. 100 records covers virtually all tool cycles; an extreme
-  // run-on turn would simply degrade to under-counting at the boundary.
-  const suffix = _lastNRecords(jsonlText, 100);
-  if (currentTurnEdits._cacheKey === suffix && currentTurnEdits._cache) {
-    currentTurnEdits._fullKey = jsonlText;
-    return currentTurnEdits._cache;
-  }
-  const _t0 = App.now();
-  // Fast path: skip parsing entirely if the SUFFIX has no tool-call
-  // signal of either provider. Older tool calls in earlier turns don't
-  // matter — we only care about the current turn's edits. O(suffix.length)
-  // byte scan instead of O(file).
-  // - "tool_use" -> Claude assistant content[*].type
-  // - "function_call" / "custom_tool_call" -> Codex response_item payload types
-  if (suffix.indexOf('"tool_use"') === -1 &&
-      suffix.indexOf('"function_call"') === -1 &&
-      suffix.indexOf('"custom_tool_call"') === -1) {
-    currentTurnEdits._fullKey = jsonlText;
-    currentTurnEdits._cacheKey = suffix;
-    currentTurnEdits._cache = [];
-    _traceHelperTiming('currentTurnEdits', _t0, { len: jsonlText.length, suffixLen: suffix.length, path: 'fast-bytes-scan' });
-    return currentTurnEdits._cache;
-  }
-
-  // Walk suffix lines in chronological order to find the index of the
-  // most recent user-message line (i.e., the boundary between previous
-  // turn and current turn). All assistant tool-use entries AFTER that
-  // index belong to the in-flight turn. Handles both Claude (`type:"user"`
-  // with non-tool_result content) and Codex (`type:"event_msg"`,
-  // `payload.type:"user_message"`).
-  const lines = suffix.split('\n');
-  let lastUserIdx = -1;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (!lines[i]) continue;
-    let r;
-    try { r = JSON.parse(lines[i]); } catch (e) { continue; }
-
-    // Claude
-    if (r.type === 'user' && r.message && r.message.content) {
-      const content = r.message.content;
-      // Skip user-role turns that are tool_result wrappers — those are
-      // tool outputs, not actual user messages.
-      if (Array.isArray(content) && content.length > 0 &&
-          content.every(c => c && c.type === 'tool_result')) {
-        continue;
-      }
-      lastUserIdx = i;
-      break;
-    }
-
-    // Codex
-    if (r.type === 'event_msg' && r.payload && r.payload.type === 'user_message') {
-      lastUserIdx = i;
-      break;
-    }
-  }
-
-  // Pass over lines AFTER the user boundary, collecting both Claude
-  // tool_use blocks and Codex function_call / custom_tool_call records.
-  // Group by file_path.
-  const byFile = {};
-  const order = [];
-  const start = lastUserIdx + 1;
-
-  function ensureBucket(filePath) {
-    if (!byFile[filePath]) {
-      byFile[filePath] = {
-        filePath: filePath,
-        kind: null,
-        edits: [],
-        added: 0,
-        removed: 0,
-        lastToolId: null,
-      };
-      order.push(filePath);
-    }
-    return byFile[filePath];
-  }
-
-  for (let i = start; i < lines.length; i++) {
-    if (!lines[i]) continue;
-    let r;
-    try { r = JSON.parse(lines[i]); } catch (e) { continue; }
-
-    // ---------- Codex branch ----------
-    if (r.type === 'response_item' && r.payload) {
-      const p = r.payload;
-      if (p.type !== 'function_call' && p.type !== 'custom_tool_call') continue;
-      // Only apply_patch is a file mutator in standard Codex; MCP
-      // filesystem.* tools (if used) could be added here later.
-      if (p.name !== 'apply_patch') continue;
-      const input = codexToolInput(p);
-      const patchText = typeof input === 'string' ? input : '';
-      if (!patchText) continue;
-
-      // Parse the patch text into per-file sections. Format:
-      //   *** Add|Update|Delete File: <path>
-      //   <hunk lines: ' ' context, '+' add, '-' remove, '@@ hunk header'>
-      //   *** End Patch
-      // Counts: each '+' line is +1 added, each '-' line is +1 removed.
-      // We skip diff context (' '), hunk headers ('@@'), and the
-      // patch-format header lines ('*** ...').
-      let current = null;
-      const patchLines = patchText.split('\n');
-      for (const pl of patchLines) {
-        const m = pl.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/);
-        if (m) {
-          current = ensureBucket(m[2].trim());
-          const action = m[1].toLowerCase();
-          current.kind = current.kind
-            ? (current.kind === action + 'ed' ? current.kind : 'mixed')
-            : (action === 'add' ? 'added' : action === 'delete' ? 'deleted' : 'updated');
-          if (p.call_id) current.lastToolId = p.call_id;
-          continue;
-        }
-        if (pl === '*** End Patch' || pl.startsWith('*** ')) { current = null; continue; }
-        if (!current) continue;
-        if (pl.startsWith('+') && !pl.startsWith('+++')) current.added += 1;
-        else if (pl.startsWith('-') && !pl.startsWith('---')) current.removed += 1;
-      }
-      continue;
-    }
-
-    // ---------- Claude branch ----------
-    if (r.type !== 'assistant' || !r.message || !r.message.content) continue;
-    const content = r.message.content;
-    if (!Array.isArray(content)) continue;
-    for (const c of content) {
-      if (!c || c.type !== 'tool_use') continue;
-      const name = c.name;
-      const input = c.input || {};
-      const filePath = input.file_path;
-      if (!filePath) continue;
-      if (name !== 'Edit' && name !== 'MultiEdit' && name !== 'Write') continue;
-
-      const bucket = ensureBucket(filePath);
-      // Track the most recent tool_use_id that touched this file so the
-      // footer row can deep-link into the existing tool-detail modal.
-      if (c.id) bucket.lastToolId = c.id;
-
-      if (name === 'Edit') {
-        const before = input.old_string || '';
-        const after = input.new_string || '';
-        bucket.edits.push({ kind: 'edit', before: before, after: after });
-        bucket.removed += (before ? before.split('\n').length : 0);
-        bucket.added += (after ? after.split('\n').length : 0);
-        bucket.kind = bucket.kind ? (bucket.kind === 'edited' ? 'edited' : 'mixed') : 'edited';
-      } else if (name === 'MultiEdit') {
-        const subEdits = Array.isArray(input.edits) ? input.edits : [];
-        for (const e of subEdits) {
-          if (!e) continue;
-          const before = e.old_string || '';
-          const after = e.new_string || '';
-          bucket.edits.push({ kind: 'edit', before: before, after: after });
-          bucket.removed += (before ? before.split('\n').length : 0);
-          bucket.added += (after ? after.split('\n').length : 0);
-        }
-        bucket.kind = bucket.kind ? (bucket.kind === 'multi-edited' ? 'multi-edited' : 'mixed') : 'multi-edited';
-      } else if (name === 'Write') {
-        const after = input.content || '';
-        bucket.edits.push({ kind: 'write', before: null, after: after });
-        bucket.added += (after ? after.split('\n').length : 0);
-        // No removed count — we don't have prior content. If this file
-        // also got Edited earlier in the turn, kind becomes 'mixed'.
-        bucket.kind = bucket.kind ? (bucket.kind === 'written' ? 'written' : 'mixed') : 'written';
-      }
-    }
-  }
-
-  const result = order.map(fp => byFile[fp]);
-  currentTurnEdits._fullKey = jsonlText;
-  currentTurnEdits._cacheKey = suffix;
-  currentTurnEdits._cache = result;
-  _traceHelperTiming('currentTurnEdits', _t0, { len: jsonlText.length, suffixLen: suffix.length, edits: result.length, path: 'full-parse' });
-  return result;
-}
-
 // First N lines of a Write tool's content, plus the leftover count for
 // the truncation footer.
 function writeBodyLines(input, maxLines) {
@@ -626,23 +378,6 @@ function isErrorResult(block) {
   return text.startsWith('Error:') || text.startsWith('<tool_use_error>');
 }
 
-// First N lines of a tool_result, plus the leftover count. Returns null
-// if the result has no text content.
-function extractToolResult(block, maxLines) {
-  const cap = maxLines || 20;
-  const text = toolResultText(block && block.content);
-  if (!text) return null;
-  const all = text.split('\n');
-  return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
-}
-
-function extractTextResult(text, maxLines) {
-  const cap = maxLines || 20;
-  if (!text) return null;
-  const all = text.split('\n');
-  return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
-}
-
 function codexToolOutput(payload) {
   if (!payload || (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output')) {
     return null;
@@ -678,41 +413,6 @@ function findToolInTurns(turns, toolId) {
     }
   }
   return null;
-}
-
-// Scan the JSONL once to recover the full input + result for a single
-// tool by id. sessionTurns no longer carries this data — fetching it on
-// expand keeps polling cheap and avoids ballooning the in-memory turn
-// list with full Write/Read contents.
-function getToolDetail(jsonlText, toolId) {
-  if (!jsonlText || !toolId) return null;
-  let input = null;
-  let result = null;
-  for (const line of jsonlText.split('\n')) {
-    if (!line) continue;
-    let r;
-    try { r = JSON.parse(line); } catch (e) { continue; }
-    if (r.message && r.message.content && Array.isArray(r.message.content)) {
-      for (const c of r.message.content) {
-        if (!c) continue;
-        if (c.type === 'tool_use' && c.id === toolId) {
-          input = c.input || {};
-        } else if (c.type === 'tool_result' && c.tool_use_id === toolId) {
-          result = extractToolResult(c, 20);
-        }
-      }
-    } else if (r.type === 'response_item' && r.payload) {
-      const p = r.payload;
-      if ((p.type === 'function_call' || p.type === 'custom_tool_call') && p.call_id === toolId) {
-        input = codexToolInput(p);
-      } else if ((p.type === 'function_call_output' || p.type === 'custom_tool_call_output') && p.call_id === toolId) {
-        const output = codexToolOutput(p);
-        result = extractTextResult(output && output.text, 20);
-      }
-    }
-    if (input !== null && result !== null) break;
-  }
-  return { input: input || {}, result };
 }
 
 // Shallow turn equality: enough to tell "unchanged turn" from
@@ -761,64 +461,6 @@ function visibleTurns(turns, n) {
   const out = turns.slice(start);
   visibleTurns._cacheValue = out;
   return out;
-}
-
-// Extract just the text of the most recent assistant turn from a session
-// JSONL tail. Used by Workspace's inline Agent-response panel — a slim
-// "final response" readout next to the worklist, without reproducing
-// Transcript's full timeline / tool-call rendering. Returns '' if no
-// assistant text turn is present in the tail.
-function lastAssistantText(jsonlText) {
-  if (!jsonlText) return '';
-  // Identity fast-path: this binding fires on every re-render of the
-  // Worklist tab's inline agent-response panel. lastJsonl is unchanged
-  // between fanouts; O(1) identity check beats walking ~100 KB
-  // backward to compute the suffix.
-  if (lastAssistantText._fullKey === jsonlText) {
-    return lastAssistantText._cacheValue;
-  }
-  const _t0 = App.now();
-  // Suffix-keyed (issue #100): the answer lives in one of the trailing
-  // records. Previously delegated to sessionTurns(jsonlText), which
-  // re-parsed the full file on every change; this scans the trailing
-  // suffix directly and caches on it.
-  const suffix = _lastNRecords(jsonlText, 50);
-  if (lastAssistantText._cacheKey === suffix) {
-    lastAssistantText._fullKey = jsonlText;
-    return lastAssistantText._cacheValue;
-  }
-  const lines = suffix.split('\n');
-  let text = '';
-  // Walk records backward; first assistant record with text wins.
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (!line) continue;
-    let r;
-    try { r = JSON.parse(line); } catch (e) { continue; }
-    if (r.type === 'assistant' && r.message && r.message.content) {
-      const c = r.message.content;
-      if (typeof c === 'string' && c) { text = c; break; }
-      if (Array.isArray(c)) {
-        const texts = [];
-        for (const e of c) {
-          if (e && e.type === 'text' && e.text) texts.push(e.text);
-        }
-        if (texts.length) { text = texts.join('\n\n'); break; }
-      }
-    } else if (r.type === 'event_msg' && r.payload &&
-               r.payload.type === 'agent_message' && r.payload.message) {
-      text = r.payload.message;
-      break;
-    }
-  }
-  // Match the transformations sessionTurns applies to assistant text
-  // (so the Markdown render in Workspace.xmlui sees the same content).
-  if (text) text = stripImagePaths(rewriteXmluiDocUrls(text));
-  lastAssistantText._fullKey = jsonlText;
-  lastAssistantText._cacheKey = suffix;
-  lastAssistantText._cacheValue = text;
-  _traceHelperTiming('lastAssistantText', _t0, { len: jsonlText.length, suffixLen: suffix.length, textLen: text.length });
-  return text;
 }
 
 // Parse a slice of JSONL lines into the turn-list shape sessionTurns

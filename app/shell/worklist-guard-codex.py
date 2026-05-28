@@ -29,11 +29,14 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 WORKLIST_REL = "resources/worklist.json"
+WORKLIST_DRAFTS_PREFIX = "resources/worklist-drafts/"
 AUTH_REL = "resources/.worklist-authorization.json"
 BYPASS_TTL_SECONDS = 60 * 60  # an authorization record is fresh for 1h
 
@@ -99,15 +102,18 @@ def deny(reason):
         _HOOK_CTX["target"] or "",
         "deny",
         # Trim the deny message to a short reason for the trace; the
-        # full message still goes through the permissionDecisionReason
-        # field below for codex to surface to the user/agent.
+        # full message goes to stderr below for codex to surface.
         (reason or "").splitlines()[0][:120] if reason else "blocked",
     )
-    print(json.dumps({
-        "permissionDecision": "deny",
-        "permissionDecisionReason": reason,
-    }))
-    sys.exit(0)
+    # Codex PreToolUse contract: exit code 2 + reason on stderr.
+    # The flat {"permissionDecision":"deny",...} JSON the Claude hook
+    # emits is invalid PreToolUse output for codex — codex rejects
+    # it, logs "PreToolUse hook (failed)", and the tool call proceeds
+    # instead of being blocked. exit(2)+stderr is universally
+    # supported and avoids any JSON nesting ambiguity.
+    sys.stderr.write((reason or "blocked") + "\n")
+    sys.stderr.flush()
+    sys.exit(2)
 
 
 def load_json(path):
@@ -198,6 +204,15 @@ def normalize_target(cwd, target):
     if abs_target.startswith(prefix):
         return abs_target[len(prefix):].replace(os.sep, "/")
     return None
+
+
+def is_worklist_draft(rel):
+    return (
+        isinstance(rel, str)
+        and rel.startswith(WORKLIST_DRAFTS_PREFIX)
+        and rel.endswith(".md")
+        and "/" not in rel[len(WORKLIST_DRAFTS_PREFIX):]
+    )
 
 
 # codex apply_patch format:
@@ -344,12 +359,23 @@ def _item_has_file(it):
     return False
 
 
-def _worklist_items_with_empty_body(content):
+def _draft_exists(cwd, item_id):
+    if not isinstance(item_id, str) or not item_id.strip():
+        return False
+    if "/" in item_id or "\\" in item_id:
+        return False
+    return os.path.exists(
+        os.path.join(cwd, WORKLIST_DRAFTS_PREFIX, f"{item_id}.md")
+    )
+
+
+def _worklist_items_with_empty_body(content, cwd=None):
     """Parse a full worklist.json content string and return a list of
     (id, missing_fields) tuples for proposed items missing any required
     field. Required: id (non-empty), file or files (non-empty), before
-    (non-empty), after (non-empty). Returns None if the content can't be
-    parsed as JSON (caller decides how to handle)."""
+    (non-empty), after (non-empty), unless a matching draft file exists.
+    Returns None if the content can't be parsed as JSON (caller decides how
+    to handle)."""
     try:
         doc = json.loads(content)
     except Exception:
@@ -370,19 +396,21 @@ def _worklist_items_with_empty_body(content):
             missing.append("id")
         if not _item_has_file(it):
             missing.append("file (or non-empty files array)")
-        before = it.get("before")
-        if not isinstance(before, str) or not before.strip():
-            missing.append("before")
-        after = it.get("after")
-        if not isinstance(after, str) or not after.strip():
-            missing.append("after")
+        has_draft = cwd is not None and _draft_exists(cwd, item_id)
+        if not has_draft:
+            before = it.get("before")
+            if not isinstance(before, str) or not before.strip():
+                missing.append("before")
+            after = it.get("after")
+            if not isinstance(after, str) or not after.strip():
+                missing.append("after")
         if missing:
             label = item_id if (isinstance(item_id, str) and item_id.strip()) else "<no-id>"
             bad.append((label, missing))
     return bad
 
 
-def _patch_adds_have_empty_bodies(patch_text):
+def _patch_adds_have_empty_bodies(patch_text, cwd=None):
     """Heuristic for apply_patch on worklist.json: scan the patch's added
     lines for new proposed items and verify each has all four required
     fields (id, file or files, before, after) with non-empty values.
@@ -409,9 +437,10 @@ def _patch_adds_have_empty_bodies(patch_text):
         missing.append(f"id (saw {len(ids)} of {item_count})")
     if len(files) < item_count:
         missing.append(f"file or files (saw {len(files)} of {item_count})")
-    if len(befores) < item_count:
+    draft_covers = bool(ids) and all(_draft_exists(cwd, item_id) for item_id in ids) if cwd else False
+    if len(befores) < item_count and not draft_covers:
         missing.append(f"before (saw {len(befores)} of {item_count})")
-    if len(afters) < item_count:
+    if len(afters) < item_count and not draft_covers:
         missing.append(f"after (saw {len(afters)} of {item_count})")
     if missing:
         label = ids[0] if ids else "<missing-id>"
@@ -455,12 +484,129 @@ def _patch_removes_worklist_items(cwd, patch_text):
 _STATUS_RE = re.compile(r'"status"\s*:\s*"([^"]+)"')
 
 
-def _patch_changes_worklist_status(patch_text):
-    removed = set(_STATUS_RE.findall(_removed_block_text(patch_text)))
-    added = set(_STATUS_RE.findall(_added_block_text(patch_text)))
-    if not removed and not added:
-        return False
-    return removed != added
+def _worklist_content_after_apply_patch(cwd, patch_text):
+    """Best-effort apply_patch interpreter for resources/worklist.json.
+
+    Codex patches carry enough context to reconstruct the post-edit file for
+    ordinary Update File hunks. Do that so worklist state validation can use
+    item-id-aware old/new JSON comparison instead of textual status heuristics.
+    Return None when the patch shape is too unusual to apply confidently.
+    """
+    old_content = current_worklist_text(cwd)
+    if not old_content:
+        return None
+
+    lines = patch_text.splitlines()
+    i = 0
+    content = old_content
+    saw_worklist_update = False
+    while i < len(lines):
+        line = lines[i]
+        if line != f"*** Update File: {WORKLIST_REL}":
+            i += 1
+            continue
+        saw_worklist_update = True
+        i += 1
+        while i < len(lines):
+            line = lines[i]
+            if line.startswith("*** ") and line != "*** End of File":
+                break
+            if not line.startswith("@@"):
+                i += 1
+                continue
+            i += 1
+            old_parts = []
+            new_parts = []
+            while i < len(lines):
+                hline = lines[i]
+                if hline.startswith("@@") or hline.startswith("*** "):
+                    break
+                if hline.startswith(" "):
+                    old_parts.append(hline[1:])
+                    new_parts.append(hline[1:])
+                elif hline.startswith("-"):
+                    old_parts.append(hline[1:])
+                elif hline.startswith("+"):
+                    new_parts.append(hline[1:])
+                else:
+                    return None
+                i += 1
+            old_text = "\n".join(old_parts)
+            new_text = "\n".join(new_parts)
+            if old_text:
+                if old_text not in content:
+                    return None
+                content = content.replace(old_text, new_text, 1)
+            elif new_text:
+                return None
+        continue
+
+    return content if saw_worklist_update else None
+
+
+def _self_test_replacement_patch(old_content, new_content):
+    return (
+        "*** Begin Patch\n"
+        f"*** Update File: {WORKLIST_REL}\n"
+        "@@\n"
+        + "".join("-" + line for line in old_content.splitlines(True))
+        + "".join("+" + line for line in new_content.splitlines(True))
+        + "*** End Patch\n"
+    )
+
+
+def self_test():
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "resources").mkdir()
+        old_doc = {
+            "description": "",
+            "items": [
+                {
+                    "id": "existing",
+                    "status": "proposed",
+                    "file": "a.txt",
+                    "before": "old",
+                    "after": "new",
+                }
+            ],
+        }
+        old_content = json.dumps(old_doc, indent=2) + "\n"
+        (root / WORKLIST_REL).write_text(old_content)
+
+        new_item_doc = {
+            "description": "",
+            "items": old_doc["items"]
+            + [
+                {
+                    "id": "new-item",
+                    "status": "proposed",
+                    "file": "b.txt",
+                    "before": "old",
+                    "after": "new",
+                }
+            ],
+        }
+        new_item_content = json.dumps(new_item_doc, indent=2) + "\n"
+        applied = _worklist_content_after_apply_patch(
+            str(root),
+            _self_test_replacement_patch(old_content, new_item_content),
+        )
+        assert applied == new_item_content
+        assert _worklist_items_with_empty_body(applied, str(root)) == []
+        assert worklist_state_changes(old_content, applied) == ([], [])
+
+        transitioned = old_content.replace('"status": "proposed"', '"status": "applied"')
+        assert worklist_state_changes(old_content, transitioned) == (
+            [],
+            [("existing", "proposed", "applied")],
+        )
+
+        removed = json.dumps({"description": "", "items": []}, indent=2) + "\n"
+        assert worklist_state_changes(old_content, removed) == (
+            [("existing", "proposed")],
+            [],
+        )
 
 
 def _worklist_new_content_from_tool_input(cwd, tool_input):
@@ -502,9 +648,9 @@ def _worklist_validation_error(bad, tool_name):
         f"fields.\n{detail}\n"
         f"Required for every proposed item: \"id\" (kebab-case identifier), "
         f"\"file\" (or \"files\" array for multi-file items), "
-        f"\"before\" (current state + alternatives considered + why rejected), "
-        f"and \"after\" (the planned change). Title-only or body-only items "
-        f"are not acceptable. Rewrite the worklist with complete items and try "
+        f"and either inline \"before\"/\"after\" prose or a matching "
+        f"resources/worklist-drafts/<id>.md file. Title-only or body-only items "
+        f"are not acceptable. Rewrite the proposal with complete content and try "
         f"again."
     )
 
@@ -527,8 +673,8 @@ def _mechanical_worklist_change_error(removed, status_changed, tool_name):
         lines.append(f"Status changes: {detail}")
     lines.append(
         "Example: "
-        "curl -X POST -d '{\"op\":\"advance\",\"ids\":[\"item-id\"],\"status\":\"applied\"}' "
-        "http://localhost:${BRAM_PORT:-$XMLUI_DESKTOP_PORT}/__worklist/mutate"
+        "curl -4 -sS -X POST -d '{\"op\":\"advance\",\"ids\":[\"item-id\"],\"status\":\"applied\"}' "
+        "http://127.0.0.1:$(cat resources/.bram-port)/__worklist/mutate"
     )
     return "\n".join(lines)
 
@@ -563,16 +709,18 @@ def emit_additional_context(text):
 # Compact reminder injected only on prompts that look like change requests in
 # managed repos. The PreToolUse hook is the runtime backstop; this is the
 # pre-emptive nudge that aims to head off codex's inspect-narrate-edit reflex.
-# The full conventions live in .claude/xmlui-desktop-conventions.md, which
-# codex reads on first prompt; this stays short to avoid drowning the model
-# in repeated boilerplate.
+# The full conventions live in .claude/bram-conventions.md (or the
+# legacy .claude/xmlui-desktop-conventions.md if Setup has not yet
+# migrated this project), which codex reads on first prompt; this stays
+# short to avoid drowning the model in repeated boilerplate.
 GATE_REMINDER = (
     "bram worklist gate. First response to a change request must be "
-    "(a) clarify, (b) propose items to resources/worklist.json (each with "
-    "non-empty before/after), or (c) read-only investigation prefaced "
+    "(a) clarify, (b) propose items via resources/worklist-drafts/<id>.md "
+    "plus resources/worklist.json metadata (or inline before/after), or "
+    "(c) read-only investigation prefaced "
     "\"I don't yet have enough context to propose\". Mutations outside approved "
     "items are blocked at runtime. Full convention: "
-    ".claude/xmlui-desktop-conventions.md"
+    ".claude/bram-conventions.md (legacy: .claude/xmlui-desktop-conventions.md)"
 )
 
 # Heuristic for "this prompt is asking for a change." Keep permissive (better
@@ -663,12 +811,24 @@ def main():
         )
         if touches_worklist:
             patch_body = patch_text(tool_input)
-            removed = _patch_removes_worklist_items(cwd, patch_body)
-            if removed or _patch_changes_worklist_status(patch_body):
-                deny(_mechanical_worklist_change_error(removed, [], "apply_patch"))
-            bad_ids = _patch_adds_have_empty_bodies(patch_body)
-            if bad_ids:
-                deny(_worklist_validation_error(bad_ids, "apply_patch"))
+            new_content = _worklist_content_after_apply_patch(cwd, patch_body)
+            if new_content is not None:
+                bad_ids = _worklist_items_with_empty_body(new_content, cwd)
+                if bad_ids:
+                    deny(_worklist_validation_error(bad_ids, "apply_patch"))
+                removed, status_changed = worklist_state_changes(
+                    current_worklist_text(cwd),
+                    new_content,
+                )
+                if removed or status_changed:
+                    deny(_mechanical_worklist_change_error(removed, status_changed, "apply_patch"))
+            else:
+                removed = _patch_removes_worklist_items(cwd, patch_body)
+                if removed:
+                    deny(_mechanical_worklist_change_error(removed, [], "apply_patch"))
+                bad_ids = _patch_adds_have_empty_bodies(patch_body, cwd)
+                if bad_ids:
+                    deny(_worklist_validation_error(bad_ids, "apply_patch"))
         violations = []
         for t in raw_targets:
             rel = normalize_target(cwd, t)
@@ -678,6 +838,8 @@ def main():
                 continue
             if rel == WORKLIST_REL:
                 continue  # writing to the worklist itself is how proposing works
+            if is_worklist_draft(rel):
+                continue  # draft prose files are proposal-authoring inputs
             if rel in covered:
                 continue
             if fresh_bypass(cwd, rel):
@@ -697,6 +859,8 @@ def main():
     if tool_name == "Bash":
         cmd = tool_input.get("command") if isinstance(tool_input, dict) else ""
         if not bash_writes(cmd):
+            allow()
+        if "resources/worklist-drafts/" in (cmd or ""):
             allow()
         # Mutating shell command — require any worklist coverage OR a "*"
         # bypass. We don't try to map shell commands to specific paths
@@ -739,7 +903,7 @@ def main():
                     f"use a write/edit shape whose resulting content the guard can inspect."
                 )
             if isinstance(new_content, str) and new_content.strip():
-                bad_ids = _worklist_items_with_empty_body(new_content)
+                bad_ids = _worklist_items_with_empty_body(new_content, cwd)
                 if bad_ids:
                     deny(_worklist_validation_error(bad_ids, tool_name))
                 removed, status_changed = worklist_state_changes(
@@ -754,6 +918,8 @@ def main():
             if rel is None:
                 continue  # outside the project tree
             if rel == WORKLIST_REL:
+                continue
+            if is_worklist_draft(rel):
                 continue
             if rel in covered:
                 continue
@@ -775,4 +941,8 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        self_test()
+        print("worklist-guard-codex self-test passed")
+        sys.exit(0)
     main()

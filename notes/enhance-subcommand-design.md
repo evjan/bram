@@ -18,15 +18,15 @@ When we get to it, after the outside-the-surface layout work lands:
 CLAUDE.md handling — pattern (3) of three discussed: sidecar file plus a
 marker-block in CLAUDE.md.
 
-- Write `.claude/xmlui-desktop-conventions.md` containing the portable
-  subset of xmlui-desktop's `app/__shell/conventions.md` (right-pane
+- Write `.claude/bram-conventions.md` containing the portable
+  subset of Bram's `app/__shell/conventions.md` (right-pane
   purpose, `toShell`/`toTurn` helper table, `worklist.json` schema +
   lifecycle, charting via `<EChart>`, drawer hosts Worklist / Sessions).
   Skip repo-internal bits (files-to-edit lists, architecture pointer to
   `~/.agents/scout/`).
 - Add a single line to project `CLAUDE.md` inside markers:
-  `<!-- xmlui-desktop:start -->` ... `<!-- xmlui-desktop:end -->`
-  containing `<!-- @.claude/xmlui-desktop-conventions.md -->`
+  `<!-- bram:start -->` ... `<!-- bram:end -->`
+  containing `<!-- @.claude/bram-conventions.md -->`
   (Claude Code's `@`-import directive).
 - Re-runs replace what's between the markers; everything else in
   `CLAUDE.md` is preserved.

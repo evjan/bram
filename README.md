@@ -30,11 +30,11 @@ As files in the project change, the right pane reloads automatically
 
 Bram encourages an issue-first workflow as the foundation for a worklist item. It is optional, not required. If you want to use it, ask an agent to file an issue first, then use that issue as the basis for a proposed worklist item.
 
-You can do that from the modal in two ways: `+ New issue` lets you send Bram a message asking to file the issue, and `+ New item` lets you ask Bram to create a worklist item. That modal includes a picklist of open issues so you can choose one for Bram to respond to with a proposal. You can also skip the issue linkage and ask Bram directly in the modal to propose an item.
+On the **Issues** tab, `+ New issue` lets you ask Bram to file a GitHub issue. On the **Workspace** tab, `+ New item` lets you ask Bram to propose a worklist item, with an optional picklist of open issues so a proposal can be anchored to an existing issue.
 
 There are three phases for an item on the worklist: **proposed** → **applied** → **committed**. The arrows between the phases are approval gates where you can dwell and iterate with your agent to: research and write code, create, refine, and close issues; organize commits as an orderly audit trail.
 
-For small changes you can skip the ceremony by saying *Just do it* or *Skip the workflow*.
+By default every change request flows through the worklist regardless of size. To opt out of the worklist for a specific request, include a phrase like *"just do it"*, *"no worklist for this"*, or *"commit directly"* in the same turn — see [`app/__shell/conventions.md`](./app/__shell/conventions.md) for the full opt-out list and worked examples.
 
 ### Agent conventions
 
@@ -51,7 +51,7 @@ rules.
 
 ## Prerequisites
 
-1. A local git repo in which your develop your app
+1. A local git repo in which you develop your app
 
 2. **`git`** — usually preinstalled on macOS and Linux; install via
    your package manager if missing.
@@ -217,7 +217,7 @@ or a PowerShell snippet on Windows), please open an issue.
 
 ## Configuration
 
-`.bram.json` at project root is the primary config file. Legacy `.xmlui-desktop.json` is still accepted.
+`.bram.json` at project root is the primary config file. Legacy `.xmlui-desktop.json` is still accepted as a compatibility alias from Bram's prior name.
 
 ### Startup
 

@@ -45,7 +45,6 @@
           <Column header="state" width="150px">
             <Text
               fontWeight="$fontWeight-bold"
-              color="{$item.level === 'warn' ? '$color-warn-700' : ($item.level === 'ok' ? '$color-success-700' : '$textColor-secondary')}"
               value="{$item.state}" />
           </Column>
           <Column header="detail">

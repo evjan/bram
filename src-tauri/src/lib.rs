@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -387,7 +387,11 @@ fn bram_trace_date_stamp_local() -> String {
     #[cfg(windows)]
     {
         if let Ok(out) = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", "(Get-Date).ToString('yyyy-MM-dd')"])
+            .args([
+                "-NoProfile",
+                "-Command",
+                "(Get-Date).ToString('yyyy-MM-dd')",
+            ])
             .output()
         {
             if out.status.success() {
@@ -629,8 +633,7 @@ fn trace_emit_payload<R: tauri::Runtime, S: serde::Serialize>(
 // Process-local sequence number for [route] correlation ids. Combined
 // with the entry timestamp it disambiguates two concurrent requests
 // that arrive in the same millisecond.
-static ROUTE_TRACE_COUNTER: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static ROUTE_TRACE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn next_route_correlation_id() -> String {
     let n = ROUTE_TRACE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -924,8 +927,7 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                     state.active_since = None;
                     state.is_active = false;
                     let in_cooldown = state.last_emit_at.map_or(false, |t| {
-                        now.saturating_duration_since(t).as_millis()
-                            < AGENT_TURN_EMIT_COOLDOWN_MS
+                        now.saturating_duration_since(t).as_millis() < AGENT_TURN_EMIT_COOLDOWN_MS
                     });
                     if !in_cooldown {
                         state.last_emit_at = Some(now);
@@ -1062,9 +1064,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                         );
                         return;
                     }
-                    Some(started)
-                        if started.elapsed().as_millis() < MENU_EVICTION_GRACE_MS =>
-                    {
+                    Some(started) if started.elapsed().as_millis() < MENU_EVICTION_GRACE_MS => {
                         return;
                     }
                     Some(started) => {
@@ -1101,8 +1101,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // First-cycle pending: store the state so the next detect cycle
         // can see we've already waited one, but suppress the `shown`
         // emit and trace until the tool name resolves. Refs #77.
-        let detected_is_pending =
-            matches!(detected.as_ref(), Some(d) if d.tool == PENDING_TOOL);
+        let detected_is_pending = matches!(detected.as_ref(), Some(d) if d.tool == PENDING_TOOL);
         let should_emit_change = state_changed && !detected_is_pending;
 
         match (&prev_menu, &detected) {
@@ -2012,7 +2011,8 @@ fn gh_issue_view<R: tauri::Runtime>(app: &AppHandle<R>, number: u64) -> Result<V
             let cross_refs = gh_issue_cross_references(app, number);
             let is_closed = issue.get("state").and_then(|v| v.as_str()) == Some("CLOSED");
             let closed_event = if is_closed {
-                repo_owner_name(app).and_then(|slug| gh_issue_closed_event_actor(app, &slug, number))
+                repo_owner_name(app)
+                    .and_then(|slug| gh_issue_closed_event_actor(app, &slug, number))
             } else {
                 None
             };
@@ -2225,7 +2225,8 @@ fn enrich_issue_activity<R: tauri::Runtime>(
 
     let mut latest_comment_at: Option<String> = None;
     let mut latest_comment_author: Option<String> = None;
-    let mut comment_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut comment_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     if let Some(comments) = obj.get("comments").and_then(|v| v.as_array()) {
         for comment in comments {
             let Some(created_at) = comment.get("createdAt").and_then(|v| v.as_str()) else {
@@ -2263,11 +2264,22 @@ fn enrich_issue_activity<R: tauri::Runtime>(
 
     let activity_at = latest_comment_at
         .clone()
-        .or_else(|| obj.get("updatedAt").and_then(|v| v.as_str()).map(str::to_string))
-        .or_else(|| obj.get("createdAt").and_then(|v| v.as_str()).map(str::to_string));
+        .or_else(|| {
+            obj.get("updatedAt")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            obj.get("createdAt")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
 
     if let Some(activity_at) = activity_at {
-        obj.insert("activityAt".to_string(), serde_json::Value::String(activity_at));
+        obj.insert(
+            "activityAt".to_string(),
+            serde_json::Value::String(activity_at),
+        );
     }
     if let Some(latest_comment_at) = latest_comment_at {
         obj.insert(
@@ -2588,8 +2600,7 @@ fn pty_spawn(
                                 small_first_preview.clear();
                                 small_last = None;
                             }
-                            let preview =
-                                bram_trace_preview(&String::from_utf8_lossy(data), 80);
+                            let preview = bram_trace_preview(&String::from_utf8_lossy(data), 80);
                             let gap_ms = last_pty_in_emit_at
                                 .map(|t| t.elapsed().as_millis())
                                 .unwrap_or(0);
@@ -2804,12 +2815,7 @@ fn queue_pty_intent(
         append_bram_trace_line(
             &app,
             "pty-intent",
-            &format!(
-                "op=enqueue id={} kind={} bytes={}",
-                id,
-                kind,
-                data.len()
-            ),
+            &format!("op=enqueue id={} kind={} bytes={}", id, kind, data.len()),
         );
     }
     drain_pty_intents(&app, &state)
@@ -3351,11 +3357,7 @@ fn log_from_right_pane(app: AppHandle, payload: serde_json::Value) {
             }
             let rest_str = serde_json::to_string(&serde_json::Value::Object(rest))
                 .unwrap_or_else(|_| "{}".to_string());
-            append_bram_trace_line(
-                &app,
-                "iframe",
-                &format!("subkind={} {}", subkind, rest_str),
-            );
+            append_bram_trace_line(&app, "iframe", &format!("subkind={} {}", subkind, rest_str));
         }
         return;
     }
@@ -4710,9 +4712,7 @@ fn read_last_assistant_text<R: tauri::Runtime>(
 // returns true when the most recent meaningful record is a user message
 // (tool_result-only user records are skipped). Used by the Transcript
 // tab's "agent is thinking" spinner and the TextArea `enabled` binding.
-fn read_waiting_for_assistant<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-) -> Result<Vec<u8>, String> {
+fn read_waiting_for_assistant<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
     let Some(path) = freshest_session_path(app)? else {
         return Ok(br#"{"waiting":false}"#.to_vec());
@@ -4743,9 +4743,9 @@ fn read_waiting_for_assistant<R: tauri::Runtime>(
             };
             if let Some(arr) = content.as_array() {
                 let all_tool_result = !arr.is_empty()
-                    && arr.iter().all(|c| {
-                        c.get("type").and_then(|t| t.as_str()) == Some("tool_result")
-                    });
+                    && arr
+                        .iter()
+                        .all(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_result"));
                 if all_tool_result {
                     continue;
                 }
@@ -4833,9 +4833,9 @@ fn read_current_turn_edits<R: tauri::Runtime>(
                 .and_then(|c| c.as_array())
             {
                 let all_tool_result = !arr.is_empty()
-                    && arr.iter().all(|c| {
-                        c.get("type").and_then(|t| t.as_str()) == Some("tool_result")
-                    });
+                    && arr
+                        .iter()
+                        .all(|c| c.get("type").and_then(|t| t.as_str()) == Some("tool_result"));
                 if all_tool_result {
                     continue;
                 }
@@ -4859,8 +4859,7 @@ fn read_current_turn_edits<R: tauri::Runtime>(
         removed: u64,
         last_tool_id: Option<String>,
     }
-    let mut by_file: std::collections::HashMap<String, Bucket> =
-        std::collections::HashMap::new();
+    let mut by_file: std::collections::HashMap<String, Bucket> = std::collections::HashMap::new();
     let mut order: Vec<String> = Vec::new();
 
     fn merge_kind(prev: Option<&'static str>, new_kind: &'static str) -> &'static str {
@@ -5028,14 +5027,8 @@ fn read_current_turn_edits<R: tauri::Runtime>(
                 "MultiEdit" => {
                     if let Some(edits) = input.get("edits").and_then(|v| v.as_array()) {
                         for e in edits {
-                            let before = e
-                                .get("old_string")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            let after = e
-                                .get("new_string")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
+                            let before = e.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+                            let after = e.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
                             if !before.is_empty() {
                                 bucket.removed += before.lines().count() as u64;
                             }
@@ -5188,7 +5181,11 @@ fn st_tool_result_text(content: &serde_json::Value) -> String {
 }
 
 fn st_is_error_result(block: &serde_json::Value) -> bool {
-    if block.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if block
+        .get("is_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return true;
     }
     let content = block
@@ -5226,9 +5223,7 @@ fn st_tool_summary(name: &str, input: &serde_json::Value) -> String {
         Some(o) => o,
         None => return name.to_string(),
     };
-    let get_str = |k: &str| -> &str {
-        obj.get(k).and_then(|v| v.as_str()).unwrap_or("")
-    };
+    let get_str = |k: &str| -> &str { obj.get(k).and_then(|v| v.as_str()).unwrap_or("") };
     match name {
         "Edit" | "MultiEdit" => format!("{} edited", get_str("file_path")),
         "Write" => {
@@ -5292,10 +5287,7 @@ fn st_tool_summary(name: &str, input: &serde_json::Value) -> String {
 }
 
 fn st_codex_tool_name(payload: &serde_json::Value) -> String {
-    let name = payload
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
     if let Some(ns) = payload.get("namespace").and_then(|v| v.as_str()) {
         let stripped = ns.strip_prefix("mcp__").unwrap_or(ns);
         format!("{}.{}", stripped, name)
@@ -5313,7 +5305,8 @@ fn st_codex_tool_input(payload: &serde_json::Value) -> serde_json::Value {
     if typ == "function_call" {
         if let Some(args) = payload.get("arguments") {
             if let Some(s) = args.as_str() {
-                return st_parse_json_string(s).unwrap_or_else(|| serde_json::Value::String(s.to_string()));
+                return st_parse_json_string(s)
+                    .unwrap_or_else(|| serde_json::Value::String(s.to_string()));
             }
             return args.clone();
         }
@@ -5322,7 +5315,8 @@ fn st_codex_tool_input(payload: &serde_json::Value) -> serde_json::Value {
     if typ == "custom_tool_call" {
         if let Some(inp) = payload.get("input") {
             if let Some(s) = inp.as_str() {
-                return st_parse_json_string(s).unwrap_or_else(|| serde_json::Value::String(s.to_string()));
+                return st_parse_json_string(s)
+                    .unwrap_or_else(|| serde_json::Value::String(s.to_string()));
             }
             return inp.clone();
         }
@@ -5417,7 +5411,12 @@ fn st_codex_tool_output(payload: &serde_json::Value) -> Option<(String, bool)> {
                 .get("output")
                 .and_then(|v| v.as_str())
                 .map(String::from)
-                .or_else(|| parsed.get("stderr").and_then(|v| v.as_str()).map(String::from))
+                .or_else(|| {
+                    parsed
+                        .get("stderr")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                })
                 .unwrap_or_else(|| raw.to_string());
             let exit_code = parsed
                 .get("metadata")
@@ -5501,9 +5500,8 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                             .get("tool_use_id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        if let Some((turn_idx, entry_idx)) = tool_entry_locations
-                            .get(tool_use_id)
-                            .copied()
+                        if let Some((turn_idx, entry_idx)) =
+                            tool_entry_locations.get(tool_use_id).copied()
                         {
                             if st_is_error_result(c) {
                                 let txt = st_tool_result_text(
@@ -5542,9 +5540,7 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                     } else if c_typ == "image" {
                         if let Some(source) = c_obj.get("source").and_then(|v| v.as_object()) {
                             if source.get("type").and_then(|v| v.as_str()) == Some("base64") {
-                                if let Some(data) =
-                                    source.get("data").and_then(|v| v.as_str())
-                                {
+                                if let Some(data) = source.get("data").and_then(|v| v.as_str()) {
                                     let mt = source
                                         .get("media_type")
                                         .and_then(|v| v.as_str())
@@ -5587,16 +5583,11 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                     let entry_idx = entries.len();
                     entries.push(entry);
                     if !id.is_empty() {
-                        tool_entry_locations
-                            .insert(id.to_string(), (turns.len(), entry_idx));
+                        tool_entry_locations.insert(id.to_string(), (turns.len(), entry_idx));
                     }
-                } else if p_typ == "function_call_output"
-                    || p_typ == "custom_tool_call_output"
-                {
+                } else if p_typ == "function_call_output" || p_typ == "custom_tool_call_output" {
                     let id = p.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
-                    if let Some((turn_idx, entry_idx)) =
-                        tool_entry_locations.get(id).copied()
-                    {
+                    if let Some((turn_idx, entry_idx)) = tool_entry_locations.get(id).copied() {
                         if let Some((text, errored)) = st_codex_tool_output(p) {
                             if errored {
                                 let first_line = text
@@ -5660,10 +5651,7 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                     let rewritten = st_rewrite_xmlui_doc_urls(t);
                     let stripped = st_strip_image_paths(&rewritten);
                     if let Some(obj) = e.as_object_mut() {
-                        obj.insert(
-                            "text".to_string(),
-                            serde_json::Value::String(stripped),
-                        );
+                        obj.insert("text".to_string(), serde_json::Value::String(stripped));
                     }
                 }
             }
@@ -5671,9 +5659,9 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
 
         // Skip user turns that are pure image-path bookkeeping.
         if role == "user" && inline_images.is_empty() {
-            let all_text = entries.iter().all(|e| {
-                e.get("kind").and_then(|k| k.as_str()) == Some("text")
-            });
+            let all_text = entries
+                .iter()
+                .all(|e| e.get("kind").and_then(|k| k.as_str()) == Some("text"));
             let original_trimmed = original_joined.trim();
             let mut is_image_only = !original_trimmed.is_empty();
             for chunk in original_trimmed.split_whitespace() {
@@ -5685,7 +5673,8 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
             // The iframe's regex is more permissive about whitespace; replicate by
             // checking that what remains after stripping image markers is empty.
             let stripped_check = st_strip_image_paths(original_trimmed);
-            if all_text && (is_image_only || stripped_check.trim().is_empty())
+            if all_text
+                && (is_image_only || stripped_check.trim().is_empty())
                 && !paths_from_text.is_empty()
             {
                 continue;
@@ -5737,9 +5726,7 @@ static SESSION_TURNS_CACHE: std::sync::Mutex<
 > = std::sync::Mutex::new(None);
 
 // Read the freshest session JSONL and produce the structured turn array.
-fn read_session_turns<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-) -> Result<Vec<u8>, String> {
+fn read_session_turns<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     let Some(path) = freshest_session_path(app)? else {
         return Ok(b"[]".to_vec());
     };
@@ -5793,9 +5780,7 @@ fn read_tool_detail<R: tauri::Runtime>(
         {
             for c in arr {
                 let c_typ = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if c_typ == "tool_use"
-                    && c.get("id").and_then(|v| v.as_str()) == Some(tool_id)
-                {
+                if c_typ == "tool_use" && c.get("id").and_then(|v| v.as_str()) == Some(tool_id) {
                     input = Some(
                         c.get("input")
                             .cloned()
@@ -5811,18 +5796,14 @@ fn read_tool_detail<R: tauri::Runtime>(
             if let Some(p) = r.get("payload") {
                 let p_typ = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 let call_id = p.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
-                if (p_typ == "function_call" || p_typ == "custom_tool_call")
-                    && call_id == tool_id
-                {
+                if (p_typ == "function_call" || p_typ == "custom_tool_call") && call_id == tool_id {
                     input = Some(st_codex_tool_input(p));
-                } else if (p_typ == "function_call_output"
-                    || p_typ == "custom_tool_call_output")
+                } else if (p_typ == "function_call_output" || p_typ == "custom_tool_call_output")
                     && call_id == tool_id
                 {
                     if let Some((text, _errored)) = st_codex_tool_output(p) {
-                        result = Some(
-                            st_extract_lines(&text, 20).unwrap_or(serde_json::Value::Null),
-                        );
+                        result =
+                            Some(st_extract_lines(&text, 20).unwrap_or(serde_json::Value::Null));
                     }
                 }
             }
@@ -6621,9 +6602,8 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     // Source repo treats the bundle itself as the canonical sidecar.
     // Legacy .claude/xmlui-desktop-conventions.md also counts as installed
     // until Setup migrates it to the new path.
-    let sidecar_exists = sidecar.exists()
-        || proj.join(ENHANCE_SIDECAR_LEGACY_REL).exists()
-        || is_source_repo;
+    let sidecar_exists =
+        sidecar.exists() || proj.join(ENHANCE_SIDECAR_LEGACY_REL).exists() || is_source_repo;
     let hook_script_exists = hook_script.exists();
     let hook_script_current =
         hook_script_exists && hook_matches_bundle(app, &hook_script, ENHANCE_HOOK_BUNDLE_REL);
@@ -6652,8 +6632,7 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let claude_installed =
         claude_md_has_marker && sidecar_exists && hook_script_current && hook_registered;
     let codex_installed = core_installed && codex_agents_has_marker && codex_hook_current;
-    let codex_hook_stale_only =
-        core_installed && codex_agents_has_marker && !codex_hook_current;
+    let codex_hook_stale_only = core_installed && codex_agents_has_marker && !codex_hook_current;
     let claude_needs_setup = !core_installed || !claude_installed;
     let codex_needs_setup = !core_installed || !codex_installed;
     let provider_needs_setup = match active_provider {
@@ -6872,7 +6851,8 @@ fn write_codex_trust_ack() -> Result<(), String> {
         .ok_or_else(|| format!("read {}: hook not installed", hook.display()))?;
     let marker = home.join(ENHANCE_CODEX_TRUST_ACK_REL);
     if let Some(parent) = marker.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
     }
     std::fs::write(&marker, fp.as_bytes())
         .map_err(|e| format!("write {}: {}", marker.display(), e))?;
@@ -7192,10 +7172,7 @@ fn write_inflight_claim_sentinel<R: tauri::Runtime>(
 // leaves the sentinel alone — partial completion is a diagnostic
 // signal worth surfacing (stuck spinner = stuck claim once item 3
 // lands).
-fn clear_inflight_claim_sentinel<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    mutated_ids: &[String],
-) {
+fn clear_inflight_claim_sentinel<R: tauri::Runtime>(app: &AppHandle<R>, mutated_ids: &[String]) {
     let Some(path) = inflight_claim_file(app) else {
         return;
     };
@@ -7280,7 +7257,11 @@ fn emit_or_defer_tools_pane_reload<R: tauri::Runtime>(app: &AppHandle<R>) {
     if inflight_sentinel_is_active(app) {
         PENDING_TOOLS_RELOAD.store(true, std::sync::atomic::Ordering::SeqCst);
         if bram_trace_enabled() {
-            append_bram_trace_line(app, "tools-pane-reload", "op=deferred reason=sentinel-active");
+            append_bram_trace_line(
+                app,
+                "tools-pane-reload",
+                "op=deferred reason=sentinel-active",
+            );
         }
         return;
     }
@@ -7423,10 +7404,7 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
         return;
     }
 
-    let claimed_at = claim
-        .get("claimedAt")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+    let claimed_at = claim.get("claimedAt").and_then(|v| v.as_i64()).unwrap_or(0);
     if file_mtime_ms < claimed_at {
         if bram_trace_enabled() {
             append_bram_trace_line(
@@ -7486,8 +7464,7 @@ fn pty_intent_lock() -> &'static Mutex<()> {
 
 // Monotonic counter for `[pty-intent]` trace ids. Doesn't need to be
 // globally unique — only readable within one session's trace log.
-static PTY_INTENT_COUNTER: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static PTY_INTENT_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 // Startup cleanup. Removes any stale pty-intent queue from a prior
 // session so its intents don't replay into a fresh PTY (#86).
@@ -7729,6 +7706,28 @@ fn coordination_ago(ms: i64, now: i64) -> String {
     format!("{}d ago", (hr + 12) / 24)
 }
 
+fn coordination_duration(ms: i64) -> String {
+    let sec = (ms.max(0) + 500) / 1000;
+    if sec < 60 {
+        return format!("{}s", sec);
+    }
+    let min = sec / 60;
+    let rem_sec = sec % 60;
+    if min < 60 {
+        if rem_sec == 0 {
+            return format!("{}m", min);
+        }
+        return format!("{}m {}s", min, rem_sec);
+    }
+    let hr = min / 60;
+    let rem_min = min % 60;
+    if rem_min == 0 {
+        format!("{}h", hr)
+    } else {
+        format!("{}h {}m", hr, rem_min)
+    }
+}
+
 fn coordination_trace_line_iso(line: &str) -> String {
     line.strip_prefix('[')
         .and_then(|rest| rest.split_once(']').map(|(ts, _)| ts.to_string()))
@@ -7925,6 +7924,196 @@ fn latest_xs_trace_export() -> Option<serde_json::Value> {
     })
 }
 
+fn file_modified_iso(path: &Path) -> String {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| format_iso_utc_ms(d.as_millis() as i64))
+        .unwrap_or_default()
+}
+
+fn command_found(cmd: &str, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new(cmd).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if !stdout.is_empty() {
+        Some(stdout)
+    } else if !stderr.is_empty() {
+        Some(stderr)
+    } else {
+        Some(cmd.to_string())
+    }
+}
+
+fn worklist_item_files(item: &serde_json::Value) -> Vec<String> {
+    if let Some(files) = item.get("files").and_then(|v| v.as_array()) {
+        let collected: Vec<String> = files
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !collected.is_empty() {
+            return collected;
+        }
+    }
+    item.get("file")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| vec![s.to_string()])
+        .unwrap_or_default()
+}
+
+fn git_changed_files(root: &Path) -> HashSet<String> {
+    let out = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1"])
+        .current_dir(root)
+        .output();
+    let Ok(out) = out else {
+        return HashSet::new();
+    };
+    if !out.status.success() {
+        return HashSet::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            if line.len() < 4 {
+                return None;
+            }
+            let path = line[3..].trim();
+            let path = path.rsplit_once(" -> ").map(|(_, to)| to).unwrap_or(path);
+            Some(path.trim_matches('"').to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn authorization_rows<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    now: i64,
+) -> (Vec<serde_json::Value>, bool, Option<String>) {
+    let Some(path) = worklist_auth_file(app) else {
+        return (
+            vec![
+                serde_json::json!({
+                    "signal": "Latest record",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": "No authorization record path",
+                    "seen": "",
+                }),
+                serde_json::json!({
+                    "signal": "Record age",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": "No authorization record path",
+                    "seen": "",
+                }),
+            ],
+            false,
+            None,
+        );
+    };
+    let modified = file_modified_iso(&path);
+    let record: Option<WorklistAuthorizationRecord> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    let Some(record) = record else {
+        return (
+            vec![
+                serde_json::json!({
+                    "signal": "Latest record",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": "No readable authorization record",
+                    "seen": modified,
+                }),
+                serde_json::json!({
+                    "signal": "Record age",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": modified,
+                    "seen": modified,
+                }),
+            ],
+            false,
+            None,
+        );
+    };
+    if record.kind == "none" || record.issued_at_ms <= 0 {
+        return (
+            vec![
+                serde_json::json!({
+                    "signal": "Latest record",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": "No active authorization",
+                    "seen": modified,
+                }),
+                serde_json::json!({
+                    "signal": "Record age",
+                    "level": "neutral",
+                    "state": "none",
+                    "detail": modified,
+                    "seen": modified,
+                }),
+            ],
+            false,
+            None,
+        );
+    }
+    let age_ms = (now - record.issued_at_ms).max(0);
+    let pending = record.consumed_at_ms.unwrap_or(0) <= 0;
+    let pending_warn = pending && age_ms > 30000;
+    let state = if pending {
+        format!("pending {}", coordination_duration(age_ms))
+    } else {
+        format!(
+            "consumed {} ago",
+            coordination_duration(now - record.consumed_at_ms.unwrap_or(now))
+        )
+    };
+    let detail = format!(
+        "{} covering {} items: {}",
+        record.kind,
+        record.ids.len(),
+        record.ids.join(", ").if_empty("none")
+    );
+    let issue = if pending_warn {
+        Some(format!(
+            "{} record pending {} without consumer",
+            record.kind,
+            coordination_duration(age_ms)
+        ))
+    } else {
+        None
+    };
+    (
+        vec![
+            serde_json::json!({
+                "signal": "Latest record",
+                "level": if pending_warn { "warn" } else { "ok" },
+                "state": state,
+                "detail": detail,
+                "seen": format_iso_utc_ms(record.issued_at_ms),
+            }),
+            serde_json::json!({
+                "signal": "Record age",
+                "level": if pending_warn { "warn" } else { "ok" },
+                "state": coordination_duration(age_ms),
+                "detail": modified,
+                "seen": modified,
+            }),
+        ],
+        pending_warn,
+        issue,
+    )
+}
+
 fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     let now = unix_now_ms();
     let worklist = worklist_doc(app);
@@ -8011,6 +8200,138 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
         .as_ref()
         .and_then(|v| v.get("modifiedIso").and_then(|p| p.as_str()))
         .unwrap_or("");
+    let project_root_path = project_root(Some(app));
+    let python_found = if cfg!(windows) {
+        command_found("py", &["-3", "--version"])
+    } else {
+        command_found("which", &["python3"])
+    };
+    let claude_hook = project_root_path
+        .as_ref()
+        .map(|p| p.join(ENHANCE_HOOK_SCRIPT_REL));
+    let claude_settings = project_root_path
+        .as_ref()
+        .map(|p| p.join(".claude/settings.json"));
+    let claude_hook_exists = claude_hook.as_ref().map_or(false, |p| p.exists());
+    let claude_registered = claude_settings
+        .as_ref()
+        .map_or(false, |p| settings_has_worklist_guard_hook(p));
+    let codex_hook = home_dir().map(|p| p.join(ENHANCE_CODEX_HOOK_INSTALL_REL));
+    let codex_config = home_dir().map(|p| p.join(".codex/config.toml"));
+    let codex_hook_exists = codex_hook.as_ref().map_or(false, |p| p.exists());
+    let codex_registered = codex_config
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map_or(false, |s| s.contains("codex-worklist-guard.py"));
+    let hooks_rows = vec![
+        serde_json::json!({
+            "signal": "Python 3",
+            "level": if python_found.is_some() { "ok" } else { "warn" },
+            "state": if python_found.is_some() { "found" } else { "missing" },
+            "detail": python_found.clone().unwrap_or_else(|| "Hooks silently inert - install Python 3".to_string()),
+            "seen": "",
+        }),
+        serde_json::json!({
+            "signal": "Claude hook",
+            "level": if claude_hook_exists && claude_registered { "ok" } else { "warn" },
+            "state": if claude_hook_exists && claude_registered { "registered" } else if claude_hook_exists { "unregistered" } else { "missing" },
+            "detail": if !claude_hook_exists { "Hook file missing" } else if !claude_registered { "Hook file present but not registered in settings.json" } else { "Hook file installed and registered" },
+            "seen": claude_hook.as_ref().map(|p| file_modified_iso(p)).unwrap_or_default(),
+        }),
+        serde_json::json!({
+            "signal": "Codex hook",
+            "level": if codex_hook_exists && codex_registered { "ok" } else { "warn" },
+            "state": if codex_hook_exists && codex_registered { "registered" } else if codex_hook_exists { "unregistered" } else { "missing" },
+            "detail": if !codex_hook_exists { "Hook file missing" } else if !codex_registered { "Hook file present but not registered in config.toml" } else { "Hook file installed and registered" },
+            "seen": codex_hook.as_ref().map(|p| file_modified_iso(p)).unwrap_or_default(),
+        }),
+    ];
+    let applied_items: Vec<&serde_json::Value> = items
+        .iter()
+        .filter(|item| {
+            item.get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("proposed")
+                == "applied"
+        })
+        .collect();
+    let changed_files = project_root_path
+        .as_ref()
+        .map(|p| git_changed_files(p))
+        .unwrap_or_default();
+    let mut stale_applied = Vec::new();
+    let mut matched_applied = 0usize;
+    for item in &applied_items {
+        let files = worklist_item_files(item);
+        let matched = files.iter().any(|f| changed_files.contains(f));
+        if matched {
+            matched_applied += 1;
+        } else if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+            stale_applied.push(id.to_string());
+        }
+    }
+    let applied_integrity_row = if applied_items.is_empty() {
+        serde_json::json!({
+            "signal": "Applied integrity",
+            "level": "neutral",
+            "state": "n/a",
+            "detail": "No applied items",
+            "seen": "",
+        })
+    } else {
+        serde_json::json!({
+            "signal": "Applied integrity",
+            "level": if stale_applied.is_empty() { "ok" } else { "warn" },
+            "state": format!("{}/{} items match working tree", matched_applied, applied_items.len()),
+            "detail": if stale_applied.is_empty() { "All applied items have uncommitted changes".to_string() } else { format!("Stale: {}", stale_applied.join(", ")) },
+            "seen": "",
+        })
+    };
+    let port_file = project_root_path
+        .as_ref()
+        .map(|p| p.join("resources/.bram-port"));
+    let bound_port = LOOPBACK_PORT.get().copied();
+    let file_port = port_file
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| s.trim().parse::<u16>().ok());
+    let port_file_exists = port_file.as_ref().map_or(false, |p| p.exists());
+    let port_stale = bound_port.is_some() && file_port.is_some() && bound_port != file_port;
+    let port_row = serde_json::json!({
+        "signal": "Port file",
+        "level": if port_stale { "warn" } else if bound_port.is_some() && file_port.is_some() { "ok" } else { "neutral" },
+        "state": if port_stale { "stale" } else if bound_port.is_some() && file_port.is_some() { "fresh" } else if port_file_exists { "unreadable" } else { "missing" },
+        "detail": match (bound_port, file_port) {
+            (Some(bound), Some(file)) => format!("Bound on {}; file reads {}", bound, file),
+            (Some(bound), None) => format!("Bound on {}; no readable port file", bound),
+            _ => "No bound port available".to_string(),
+        },
+        "seen": port_file.as_ref().map(|p| file_modified_iso(p)).unwrap_or_default(),
+    });
+    let (authorization_rows, orphan_auth, orphan_auth_detail) = authorization_rows(app, now);
+    let current_claim_state = if claim_ids.is_empty() {
+        "idle".to_string()
+    } else {
+        format!(
+            "{} {}",
+            inflight
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("claim"),
+            coordination_ago(claimed_at, now)
+        )
+    };
+    let current_claim_detail = if claim_ids.is_empty() {
+        "No active spinner sentinel".to_string()
+    } else {
+        claim_ids.join(", ")
+    };
+    let trace_pairs_warn = trace["inflightWrites"].as_i64().unwrap_or(0)
+        > trace["inflightClears"].as_i64().unwrap_or(0) + 1;
+    let stale_reject_warn = trace["staleRejects"].as_i64().unwrap_or(0) > 0;
+    let guard_warn = trace["guardBlocks"].as_i64().unwrap_or(0) > 0;
+    let interrupt_warn = trace["interrupts"].as_i64().unwrap_or(0) > 0;
+    let _ = (orphan_auth, orphan_auth_detail);
 
     let rows = serde_json::json!({
         "generatedAt": format_iso_utc_ms(now),
@@ -8038,7 +8359,8 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
                         "state": format!("{} snapshots", history.len()),
                         "detail": history.iter().filter_map(|h| h.get("summary").and_then(|v| v.as_str())).collect::<Vec<&str>>().join(" | ").if_empty("No worklist history yet"),
                         "seen": last_history.get("iso").and_then(|v| v.as_str()).unwrap_or(""),
-                    }
+                    },
+                    applied_integrity_row
                 ]
             },
             {
@@ -8047,18 +8369,27 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
                     {
                         "signal": "Current claim",
                         "level": claim_level,
-                        "state": if claim_ids.is_empty() { "idle".to_string() } else { format!("{} {}", inflight.get("kind").and_then(|v| v.as_str()).unwrap_or("claim"), coordination_ago(claimed_at, now)) },
-                        "detail": if claim_ids.is_empty() { "No active spinner sentinel".to_string() } else { claim_ids.join(", ") },
+                        "state": current_claim_state,
+                        "detail": current_claim_detail,
                         "seen": if claimed_at > 0 { format_iso_utc_ms(claimed_at) } else { String::new() },
                     },
                     {
                         "signal": "Trace pairs",
-                        "level": if trace["inflightWrites"].as_i64().unwrap_or(0) > trace["inflightClears"].as_i64().unwrap_or(0) + 1 { "warn" } else { "ok" },
+                        "level": if trace_pairs_warn { "warn" } else { "ok" },
                         "state": format!("{} writes / {} clears", trace["inflightWrites"].as_i64().unwrap_or(0), trace["inflightClears"].as_i64().unwrap_or(0)),
                         "detail": "Recent [inflight-sentinel] records from bram-trace.log",
                         "seen": trace["lastInflight"].as_str().unwrap_or(""),
-                    }
+                    },
+                    port_row
                 ]
+            },
+            {
+                "title": "Hooks",
+                "rows": hooks_rows
+            },
+            {
+                "title": "Authorization",
+                "rows": authorization_rows
             },
             {
                 "title": "Latest Tail And Fanout",
@@ -8089,21 +8420,21 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
                 "rows": [
                     {
                         "signal": "Guard decisions",
-                        "level": if trace["guardBlocks"].as_i64().unwrap_or(0) > 0 { "warn" } else { "ok" },
+                        "level": if guard_warn { "warn" } else { "ok" },
                         "state": format!("{} recent blocks", trace["guardBlocks"].as_i64().unwrap_or(0)),
                         "detail": if trace["guardBlocks"].as_i64().unwrap_or(0) > 0 { "Recent hook block records found in trace" } else { "No recent hook blocks found in trace" },
                         "seen": trace["lastGuard"].as_str().unwrap_or(""),
                     },
                     {
                         "signal": "Stale approvals",
-                        "level": if trace["staleRejects"].as_i64().unwrap_or(0) > 0 { "warn" } else { "ok" },
+                        "level": if stale_reject_warn { "warn" } else { "ok" },
                         "state": format!("{} rejected stale", trace["staleRejects"].as_i64().unwrap_or(0)),
                         "detail": if trace["staleRejects"].as_i64().unwrap_or(0) > 0 { "Resolve staleness appeared in recent trace" } else { "No rejected_stale resolve records in recent trace" },
                         "seen": "",
                     },
                     {
                         "signal": "Interrupts",
-                        "level": if trace["interrupts"].as_i64().unwrap_or(0) > 0 { "warn" } else { "ok" },
+                        "level": if interrupt_warn { "warn" } else { "ok" },
                         "state": format!("{} related records", trace["interrupts"].as_i64().unwrap_or(0)),
                         "detail": if trace["interrupts"].as_i64().unwrap_or(0) > 0 { "Interrupt/silence-clear records appeared recently" } else { "No interrupt-related records in recent trace" },
                         "seen": trace["lastInterrupt"].as_str().unwrap_or(""),
@@ -8152,12 +8483,13 @@ mod worklist_doc_tests {
             { "id": "x", "file": "foo.txt", "before": "", "after": "" }
         ])));
 
-        assert_eq!(doc.get("schemaError").and_then(|v| v.as_str()), Some("root-array"));
+        assert_eq!(
+            doc.get("schemaError").and_then(|v| v.as_str()),
+            Some("root-array")
+        );
         assert_eq!(doc.get("description").and_then(|v| v.as_str()), Some(""));
         assert_eq!(
-            doc.get("items")
-                .and_then(|v| v.as_array())
-                .map(|v| v.len()),
+            doc.get("items").and_then(|v| v.as_array()).map(|v| v.len()),
             Some(0)
         );
     }
@@ -8172,9 +8504,7 @@ mod worklist_doc_tests {
         );
         assert_eq!(doc.get("description").and_then(|v| v.as_str()), Some(""));
         assert_eq!(
-            doc.get("items")
-                .and_then(|v| v.as_array())
-                .map(|v| v.len()),
+            doc.get("items").and_then(|v| v.as_array()).map(|v| v.len()),
             Some(0)
         );
     }
@@ -8285,11 +8615,9 @@ mod app_root_resolution_tests {
                 PathBuf::from("/bundle/bin/../Resources/app"),
             ]
         );
-        assert!(
-            candidates
-                .iter()
-                .all(|p| !p.to_string_lossy().contains("/project/app"))
-        );
+        assert!(candidates
+            .iter()
+            .all(|p| !p.to_string_lossy().contains("/project/app")));
     }
 }
 
@@ -8359,7 +8687,10 @@ fn format_iso_utc_ms(ms: i64) -> String {
     let m = secs_of_day % 3600 / 60;
     let s = secs_of_day % 60;
     let (y, mo, d) = civil_from_days(days);
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z", y, mo, d, h, m, s, sub)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        y, mo, d, h, m, s, sub
+    )
 }
 
 fn worklist_item_id(item: &serde_json::Value) -> Option<String> {
@@ -8571,7 +8902,11 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
                     Some(prior.kind)
                 }
             });
-        let op = if prior_kind.is_some() { "clobber" } else { "write" };
+        let op = if prior_kind.is_some() {
+            "clobber"
+        } else {
+            "write"
+        };
         let prior_field = prior_kind
             .as_deref()
             .map(|k| format!(" prior_kind={}", k))
@@ -9649,8 +9984,7 @@ fn route_request<R: tauri::Runtime>(
                             .map_err(|e| e.to_string())
                             .and_then(|mut f| {
                                 f.seek(SeekFrom::Start(since)).map_err(|e| e.to_string())?;
-                                let mut out =
-                                    Vec::with_capacity((file_size - since) as usize);
+                                let mut out = Vec::with_capacity((file_size - since) as usize);
                                 f.read_to_end(&mut out).map_err(|e| e.to_string())?;
                                 Ok(out)
                             })
@@ -9946,9 +10280,7 @@ fn route_request<R: tauri::Runtime>(
                 );
             }
         };
-        let consumed_at = record_value
-            .get("consumedAtMs")
-            .and_then(|v| v.as_i64());
+        let consumed_at = record_value.get("consumedAtMs").and_then(|v| v.as_i64());
         if let Some(ts) = consumed_at {
             let body = serde_json::json!({
                 "kind": "no_active_authorization",
@@ -9990,11 +10322,7 @@ fn route_request<R: tauri::Runtime>(
                 .and_then(|v| v.as_array())
                 .map(|arr| {
                     arr.iter()
-                        .filter_map(|it| {
-                            it.get("id")
-                                .and_then(|v| v.as_str())
-                                .map(String::from)
-                        })
+                        .filter_map(|it| it.get("id").and_then(|v| v.as_str()).map(String::from))
                         .collect()
                 })
                 .unwrap_or_default();

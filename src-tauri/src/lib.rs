@@ -5988,6 +5988,15 @@ const ENHANCE_CODEX_INSTR_MARKER_END: &str = "# bram-instructions:end";
 const ENHANCE_CODEX_LEGACY_INSTR_MARKER_START: &str = "# xmlui-desktop-instructions:start";
 const ENHANCE_CODEX_LEGACY_INSTR_MARKER_END: &str = "# xmlui-desktop-instructions:end";
 const ENHANCE_CODEX_TYPO_INSTR_MARKER_END: &str = "# brraminstructions:end";
+const CLAUDE_CURL_ALLOW_PATTERNS: &[&str] = &[
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__worklist*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST \"http://127.0.0.1*__worklist*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST * \"http://127.0.0.1*__worklist*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__iterate*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST \"http://127.0.0.1*__iterate*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST * \"http://127.0.0.1*__iterate*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__enhance*)",
+];
 // Single-source-of-truth gate prose embedded in the Bram binary. Mirrors
 // what the original UserPromptSubmit injection emitted, kept in sync with
 // the convention in app/__shell/conventions.md.
@@ -6120,6 +6129,73 @@ fn prune_proposal_guard_from_settings(settings_path: &Path) -> Result<bool, Stri
     });
     if !changed {
         return Ok(false);
+    }
+    let serialized = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("serialize settings.json: {}", e))?;
+    std::fs::write(settings_path, format!("{}\n", serialized))
+        .map_err(|e| format!("write {}: {}", settings_path.display(), e))?;
+    Ok(true)
+}
+
+fn merge_claude_curl_allowlist_into_settings(settings_path: &Path) -> Result<bool, String> {
+    let existing = std::fs::read_to_string(settings_path).unwrap_or_default();
+    let mut value: serde_json::Value = if existing.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&existing)
+            .map_err(|e| format!("parse {}: {}", settings_path.display(), e))?
+    };
+    if !value.is_object() {
+        return Err(format!(
+            "{} root is not a JSON object",
+            settings_path.display()
+        ));
+    }
+    let root = value.as_object_mut().unwrap();
+    let permissions = root
+        .entry("permissions".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !permissions.is_object() {
+        return Err(format!(
+            "{}: permissions is not a JSON object",
+            settings_path.display()
+        ));
+    }
+    let permissions_obj = permissions.as_object_mut().unwrap();
+    let allow = permissions_obj
+        .entry("allow".to_string())
+        .or_insert_with(|| serde_json::json!([]));
+    if !allow.is_array() {
+        return Err(format!(
+            "{}: permissions.allow is not a JSON array",
+            settings_path.display()
+        ));
+    }
+    let allow_arr = allow.as_array_mut().unwrap();
+    let before = allow_arr.len();
+    allow_arr.retain(|entry| {
+        let Some(s) = entry.as_str() else {
+            return true;
+        };
+        !(s.starts_with("Bash(curl -sS")
+            && (s.contains("__worklist") || s.contains("__iterate") || s.contains("__enhance")))
+    });
+    let mut changed = allow_arr.len() != before;
+    for pattern in CLAUDE_CURL_ALLOW_PATTERNS {
+        if !allow_arr
+            .iter()
+            .any(|entry| entry.as_str() == Some(*pattern))
+        {
+            allow_arr.push(serde_json::Value::String((*pattern).to_string()));
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(false);
+    }
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {}", parent.display(), e))?;
     }
     let serialized = serde_json::to_string_pretty(&value)
         .map_err(|e| format!("serialize settings.json: {}", e))?;
@@ -6830,6 +6906,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
     // projects don't end up running both hooks on every Write/Edit.
     let settings_path = proj.join(ENHANCE_SETTINGS_REL);
     prune_proposal_guard_from_settings(&settings_path)?;
+    merge_claude_curl_allowlist_into_settings(&settings_path)?;
     merge_worklist_guard_into_settings(&settings_path)?;
     wrote.push(settings_path.display().to_string());
 

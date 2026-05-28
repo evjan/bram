@@ -42,9 +42,31 @@ const fitAddon = new FitAddon.FitAddon();
 term.loadAddon(fitAddon);
 const PTY_RESIZE_MIN_INTERVAL_MS = 40;
 const VIEWPORT_RESTORE_WINDOW_MS = 750;
+const isWindows = navigator.userAgent.toLowerCase().includes("windows");
 
 const container = document.getElementById("terminal");
 term.open(container);
+window.submitTerminalEnter = function () {
+  try {
+    term.focus();
+    invoke("pty_write", { data: "\r" }).catch((e) =>
+      console.error("submitTerminalEnter pty_write", e),
+    );
+  } catch (e) {
+    console.error("submitTerminalEnter", e);
+  }
+};
+
+window.submitTerminalTurn = function (text) {
+  try {
+    term.focus();
+    invoke("pty_write", { data: String(text) })
+      .then(() => invoke("pty_write", { data: "\r" }))
+      .catch((e) => console.error("submitTerminalTurn pty_write", e));
+  } catch (e) {
+    console.error("submitTerminalTurn", e);
+  }
+};
 
 try {
   const webgl = new WebglAddon.WebglAddon();
@@ -128,6 +150,27 @@ const runTerminalFit = ({ preserveViewport = true } = {}) => {
   }
 };
 
+const scheduleStartupTerminalFit = () => {
+  const run = () => {
+    scheduleTerminalFit({ preserveViewport: false });
+    if (isWindows) {
+      setTimeout(() => scheduleTerminalFit({ preserveViewport: false }), 150);
+      setTimeout(() => scheduleTerminalFit({ preserveViewport: false }), 500);
+    }
+  };
+  const afterReady = () => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(run);
+    });
+  };
+  const fontsReady = document.fonts?.ready;
+  if (fontsReady && typeof fontsReady.then === "function") {
+    fontsReady.then(afterReady, afterReady);
+  } else {
+    afterReady();
+  }
+};
+
 let fitScheduled = false;
 let fitNeedsViewportPreserve = false;
 const scheduleTerminalFit = ({ preserveViewport = true } = {}) => {
@@ -142,7 +185,28 @@ const scheduleTerminalFit = ({ preserveViewport = true } = {}) => {
   });
 };
 
-scheduleTerminalFit({ preserveViewport: false });
+let terminalResizeObserver = null;
+let terminalResizeObserverTimer = null;
+let lastObservedTerminalSize = null;
+const observeTerminalSize = () => {
+  if (!window.ResizeObserver || !container) return;
+  terminalResizeObserver = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    if (!entry) return;
+    const { width, height } = entry.contentRect;
+    if (width <= 0 || height <= 0) return;
+    const size = `${Math.round(width)}x${Math.round(height)}`;
+    if (size === lastObservedTerminalSize) return;
+    lastObservedTerminalSize = size;
+    clearTimeout(terminalResizeObserverTimer);
+    terminalResizeObserverTimer = setTimeout(() => {
+      scheduleTerminalFit({ preserveViewport: false });
+    }, 0);
+  });
+  terminalResizeObserver.observe(container);
+};
+
+observeTerminalSize();
 
 let resizing = false;
 let resizingRestoreTimer = null;
@@ -257,6 +321,9 @@ document
         localStorage.getItem(LEGACY_TERMINAL_HIDDEN_KEY)) === "1";
   } catch {}
   apply(initial);
+  if (!initial) {
+    scheduleStartupTerminalFit();
+  }
 
   btn.addEventListener("click", () => {
     const hidden = !document.body.classList.contains("terminal-hidden");
@@ -364,8 +431,15 @@ document
 // https://v2.tauri.app/develop/calling-frontend/#channels
 const ptyChannel = new Channel();
 
+let startupFitDone = false;
 ptyChannel.onmessage = (chunk) => {
   term.write(new Uint8Array(chunk));
+  if (!startupFitDone) {
+    startupFitDone = true;
+    // First PTY output means the shell has started and the WebView2 window
+    // has finished its initial layout pass — safe to do a definitive fit.
+    requestAnimationFrame(() => scheduleTerminalFit({ preserveViewport: false }));
+  }
   if (pendingViewportRestore) {
     requestAnimationFrame(() => {
       restorePendingViewport();
@@ -375,6 +449,7 @@ ptyChannel.onmessage = (chunk) => {
 };
 
 term.onData((data) => {
+  console.log("terminal onData", { data });
   invoke("pty_write", { data }).catch((e) => console.error("pty_write", e));
 });
 
@@ -412,8 +487,6 @@ term.onResize(({ cols, rows }) => {
   pendingPtySize = next;
   flushPtyResize();
 });
-
-const isWindows = navigator.userAgent.toLowerCase().includes("windows");
 const ptyShell = isWindows
   ? {
       cmd: "powershell.exe",
@@ -431,7 +504,15 @@ const ptyShell = isWindows
       args: ["--noprofile", "--rcfile", "./app/shell/claude-code-shellrc", "-i"],
     };
 
-(async () => {
+// Delay pty_spawn until fonts and layout have settled so the PTY gets
+// the correct initial dimensions. If we spawn immediately, term.cols/rows
+// are xterm.js defaults (80×24); the subsequent fitAddon.fit() then sends
+// pty_resize, but shells don't redraw existing output after SIGWINCH so
+// the prompt stays confined to the upper portion of the terminal.
+const _spawnPty = async () => {
+  // Fit right before reading cols/rows so the PTY inherits the actual
+  // container dimensions, not the xterm.js defaults.
+  fitAddon.fit();
   try {
     await invoke("pty_spawn", {
       ...ptyShell,
@@ -443,7 +524,17 @@ const ptyShell = isWindows
   } catch (e) {
     term.writeln(`\r\n\x1b[31mfailed to start pty: ${e}\x1b[0m`);
   }
-})();
+};
+{
+  const _ready = document.fonts?.ready;
+  const _afterFonts = () =>
+    requestAnimationFrame(() => requestAnimationFrame(_spawnPty));
+  if (_ready && typeof _ready.then === "function") {
+    _ready.then(_afterFonts, _afterFonts);
+  } else {
+    _afterFonts();
+  }
+}
 
 // Right-pane base URL is provisioned by the Rust backend on startup —
 // it returns the tauri:// scheme URL whose path the scheme handler

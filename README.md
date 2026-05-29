@@ -95,13 +95,17 @@ On some Windows 11 setups, Smart App Control may block the unsigned binary — m
 
 - **Worklist** — the `proposed → applied → committed` approval surface that coordinates multi-step agent work. Each item is a small, independently approvable diff with a `before → after` summary. Select one item at a time (radio); three ghost actions act on it — **Approve** (TO APPLY → on-disk edits, transitions to TO COMMIT; TO COMMIT → git commit), **Iterate** (refine in place — agent revises the proposed text or edits the on-disk files per your feedback, item keeps its state), **Drop** (remove the item; for TO COMMIT, disk edits stay until you ask the agent to revert). Each row's `+ feedback` link expands a per-item message-to-agent textarea that travels with whichever action you click. The agent never advances state unilaterally. Bram always writes local `resources/worklist-history/` snapshots for auditability, while committing that directory is an opt-in repo policy.
 
-- **Commits** — HSplitter list of recent commits on the left, selected commit on the right. Full-history search via `git log --grep` across subject, body, and author; matched commits expand to clickable hit-row snippets, and the right pane stacks `snippetAroundLine` previews for every hit. The right-pane header is an `ExpandableItem` revealing the full commit message body. Unpushed commits surface a "Push" button that runs `git push origin`.
+- **Commits** — HSplitter list of recent commits on the left, selected commit on the right. Full-history search via `git log --grep` across subject, body, and author; matched commits expand to clickable hit-row snippets, and the right pane stacks `snippetAroundLine` previews for every hit. The right-pane header is an `ExpandableItem` revealing the full commit message body. Unpushed commits surface a "Push" button; it runs `git push origin`, and on a non-fast-forward rejection it fetches `origin` and rebases the branch on `origin/<branch>` before retrying (linear history, no merge commits).
 
 - **Issues** — HSplitter list of GitHub issues on the left (via `gh issue list`), selected issue on the right. Search runs `gh issue list --search` and tags hits per title/body line; clicking a hit filters the right-pane body to paragraphs containing the query. The expanded issue refetches every 30s so edits made via `gh` or github.com surface without collapse-and-reopen.
 
 - **Sessions** — HSplitter list of local claude/codex JSONL sessions on the left, selected session's turns on the right. Search runs server-side across user and assistant text; hits filter the right pane to matching paragraphs. Each row has a ✕ delete (with confirm) and a ✎ rename: on Claude the rename appends a `custom-title` record to the session JSONL, on codex it appends a `{id,thread_name,updated_at}` entry to `~/.codex/session_index.jsonl`. After the action, the row dims and the buttons disable until the next agent restart picks up the change. Codex's `/resume` creates a forked session with a new id, so the `[current]` marker won't follow a renamed codex session — the rename modal documents that caveat inline.
 
+- **History** — browse the `resources/worklist-history/` snapshots Bram writes on every worklist change: the `proposed → applied → committed` audit trail, grouped by item phase, with summarized item prose so the reasoning behind past items survives after they're committed or dropped. Backed by `/__worklist-history/list`.
+
 - **Context** — provider-aware HSplitter view of the active agent's durable local context sources. For Claude, that means `CLAUDE.md`, its `@`-imports, the per-project memory tree, hooks, and settings. For Codex, that means repo-local `AGENTS.md` when present plus Codex-side sources such as `~/.codex/config.toml`, project-local `.codex/` files, memories, and rules. Substring search shows grep-style hit snippets in the list and `snippetAroundLine` context on the right.
+
+- **Status** — a coordination-health view of the host↔agent plumbing: port-file consistency, loopback HTTP responsiveness, the inflight spinner sentinel, and the latest worklist authorization records. Use it to diagnose a stuck spinner or a refused loopback connection.
 
 The toolbar's `ⓘ` (top-right of the drawer's AppHeader) opens a right-pane info modal with the current URL, version, project-server config, and a `README on GitHub` link to this document.
 
@@ -154,6 +158,14 @@ So the practical rule is: both agents are governed by the same worklist
 conventions, with Claude reading the imported conventions file directly
 and Codex receiving the equivalent guidance through AGENTS, top-level
 `developer_instructions`, and its native hook adapter.
+
+Claude and Codex also differ in how they *call* Bram's worklist
+lifecycle routes. Claude uses the loopback HTTP endpoints directly.
+Codex's sandbox refuses loopback connections (`curl: (7)` even when
+Bram is listening, #130), so it drives the identical lifecycle over a
+filesystem channel instead — writing `resources/.worklist-intent.json`
+and reading `resources/.worklist-result.json`, which the host
+dispatches through the same handlers as the HTTP routes.
 
 The provider hooks validate direct edits to `resources/worklist.json`. Proposal authoring and iterate-time prose refinement are allowed there; mechanical prune / status-advance operations are expected to go through `POST /__worklist/mutate` instead. Both providers now reject direct worklist edits that remove items or change their `status`, which keeps the shared backend endpoint as the canonical state machine for `advance` / `prune`. The watcher-based fallback (compare old/new worklist snapshots, consult `resources/.worklist-authorization.json`, restore prior contents if the prune wasn't authorized) remains as defense-in-depth — it fires later than a native hook, but it covers the case where a hook fails to launch (e.g., Python missing) or where a future provider integration lacks a comparable extension point.
 

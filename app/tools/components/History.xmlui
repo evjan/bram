@@ -52,25 +52,21 @@
                   fullWidthSummary="true">
                   <VStack gap="$space-2">
                     <VStack
-                      gap="0"
+                      gap="$space-1"
                       padding="$space-2"
                       backgroundColor="$color-surface-50"
                       borderRadius="$borderRadius"
                       overflowX="auto">
-                      <Items data="{($item.diff || '').split('\n')}">
-                        <Text
-                          fontFamily="$fontFamily-monospace"
-                          fontSize="$fontSize-sm"
-                          paddingHorizontal="$space-2"
-                          whiteSpace="pre"
-                          backgroundColor="{
-                            $item.startsWith('@@') ? '#e0f2fe' :
-                            ($item.startsWith('+') && !$item.startsWith('+++')) ? '#dcfce7' :
-                            ($item.startsWith('-') && !$item.startsWith('---')) ? '#fee2e2' :
-                            'transparent'
-                          }"
-                          value="{$item || ' '}" />
-                      </Items>
+                      <Text
+                        fontFamily="$fontFamily-monospace"
+                        fontSize="$fontSize-sm"
+                        whiteSpace="pre-wrap"
+                        value="{($item.diff || '').slice(0, 20000)}" />
+                      <Text
+                        when="{($item.diff || '').length > 20000}"
+                        fontSize="$fontSize-xs"
+                        color="$textColor-secondary"
+                        value="{'Diff preview truncated at 20 KB for responsiveness. Use open phase diff for the full content.'}" />
                     </VStack>
                     <Link
                       onClick="activeSnapshot = $item; historySnapshotDialog.open()"

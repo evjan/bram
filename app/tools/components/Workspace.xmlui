@@ -4,7 +4,6 @@
   var.submittedItemId="{null}"
   var.submitting="{false}"
   var.expandedItemId="{null}"
-  var.lastJsonl="{null}"
   var.statusHelpFor="{null}"
   var.feedbackHelpFor="{null}"
   var.feedbackExpanded="{false}"
@@ -114,9 +113,7 @@
   <VStack
     padding="$space-6"
     gap="$space-6"
-    onInit="lastJsonl = window.getLatestJsonl();
-    subscribeLatestJsonl('__bramWorkspaceJsonlUnsub', (v) => { lastJsonl = v; const now = Date.now(); if (now - lastAssistantTickAt >= 2000) { lastAssistantTickAt = now; lastAssistantTick = lastAssistantTick + 1; } });
-    subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; lastAssistantTextDS.refetch(); currentTurnEditsDS.refetch(); });
+    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; lastAssistantTextDS.refetch(); currentTurnEditsDS.refetch(); });
     subscribeTauriEvent('__bramWorklistUnsub', 'worklist-changed', (e) => {
       const payload = (e &amp;&amp; e.payload) || {};
       iframeTrace('listener-fired', {paths: payload.paths || [], correlation_id: payload.id || ''});
@@ -412,25 +409,21 @@
                     initiallyExpanded="false"
                     fullWidthSummary="true">
                     <VStack
-                      gap="0"
+                      gap="$space-1"
                       padding="$space-2"
                       backgroundColor="$color-surface-50"
                       borderRadius="$borderRadius"
                       overflowX="auto">
-                      <Items data="{$item.diff.split('\n')}">
-                        <Text
-                          fontFamily="$fontFamily-monospace"
-                          fontSize="$fontSize-sm"
-                          paddingHorizontal="$space-2"
-                          whiteSpace="pre"
-                          backgroundColor="{
-                            $item.startsWith('@@') ? '#e0f2fe' :
-                            ($item.startsWith('+') && !$item.startsWith('+++')) ? '#dcfce7' :
-                            ($item.startsWith('-') && !$item.startsWith('---')) ? '#fee2e2' :
-                            'transparent'
-                          }"
-                          value="{$item || ' '}" />
-                      </Items>
+                      <Text
+                        fontFamily="$fontFamily-monospace"
+                        fontSize="$fontSize-sm"
+                        whiteSpace="pre-wrap"
+                        value="{($item.diff || '').slice(0, 20000)}" />
+                      <Text
+                        when="{($item.diff || '').length > 20000}"
+                        fontSize="$fontSize-xs"
+                        color="$textColor-secondary"
+                        value="{'Diff preview truncated at 20 KB for responsiveness.'}" />
                     </VStack>
                   </ExpandableItem>
                 </VStack>

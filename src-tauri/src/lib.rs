@@ -4773,6 +4773,19 @@ fn read_latest_session_tail<R: tauri::Runtime>(
     Ok(out)
 }
 
+const LATEST_TAIL_MAX_BYTES: usize = 256 * 1024;
+
+fn cap_latest_tail_payload(content: Vec<u8>) -> (Vec<u8>, bool) {
+    if content.len() <= LATEST_TAIL_MAX_BYTES {
+        return (content, false);
+    }
+    let start = content.len().saturating_sub(LATEST_TAIL_MAX_BYTES);
+    let Some(first_newline) = content[start..].iter().position(|b| *b == b'\n') else {
+        return (Vec::new(), true);
+    };
+    (content[start + first_newline + 1..].to_vec(), true)
+}
+
 // Detect whether the latest session has a pending tool_use awaiting
 // permission. Returns JSON describing the tool, or `{"pending":null}`
 // when not pending. Reads ~32KB of the file's tail so the walk-back
@@ -10975,14 +10988,16 @@ fn route_request<R: tauri::Runtime>(
                 }
             };
             let result = content_result.and_then(|content| {
+                let (content, truncated) = cap_latest_tail_payload(content);
                 let appended = content.len();
                 eprintln!(
-                    "[latest-tail] mode={} sid={} since={} eof={} bytes={}",
+                    "[latest-tail] mode={} sid={} since={} eof={} bytes={} truncated={}",
                     if incremental { "diff" } else { "fresh" },
                     current_sid,
                     since,
                     file_size,
                     appended,
+                    truncated,
                 );
                 let envelope = serde_json::json!({
                     "sid": current_sid,
@@ -10992,7 +11007,8 @@ fn route_request<R: tauri::Runtime>(
                     // reset=false ⇒ client APPENDS content. Authoritative
                     // signal so the client doesn't have to infer from
                     // sid equality (handles file-shrink case too).
-                    "reset": !incremental,
+                    "reset": !incremental || truncated,
+                    "truncated": truncated,
                 });
                 serde_json::to_vec(&envelope).map_err(|e| e.to_string())
             });

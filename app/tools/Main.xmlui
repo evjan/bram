@@ -12,7 +12,7 @@
     onDidChange="(c) => {
       const env = c.newValue;
       if (!env) return;
-      iframeTrace('jsonl-fanout', { source: 'shared', len: (env.content || '').length, reset: !!env.reset });
+      iframeTrace('jsonl-fanout', { source: 'shared', len: (env.content || '').length, reset: !!env.reset, truncated: !!env.truncated });
       if (env.reset) {
         window.setLatestJsonl(env.content || '');
       } else if (env.content) {

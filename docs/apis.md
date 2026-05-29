@@ -288,8 +288,11 @@ The HTTP routes shell out to `git`; the IPC command shells out to
 
 GitHub issue passthrough via the local `gh` CLI. Read endpoints fetch
 JSON; write endpoints (`/__issue/comment`, `/__issue/close`) shell out
-to `gh issue comment` / `gh issue close` on the host. Issue *creation*
-is still user-driven via the agent's own shell — there's no
+to `gh issue comment` / `gh issue close` on the host. `/__issue/close`
+also has a close-on-commit mode (`commit=`/`push=`) that verifies a
+commit is visible on GitHub — pushing first when asked — before closing
+with a generated commit-URL comment; see the table note below. Issue
+*creation* is still user-driven via the agent's own shell — there's no
 `/__issue/create` endpoint.
 
 | Surface | Kind | Query / params | Response | Consumer |
@@ -298,7 +301,7 @@ is still user-driven via the agent's own shell — there's no
 | `/__issues/search` | HTTP GET | `q=` | filtered issue list | agent-tools iframe |
 | `/__issue` | HTTP GET | `n=<number>` | `{ number, title, body, state, comments: [...] }` | agent-tools iframe |
 | `/__issue/comment` | HTTP GET | `number=<n>&body=<urlencoded>` | `gh issue comment` JSON on success, 400 if `number` missing | agent-tools iframe |
-| `/__issue/close` | HTTP GET | `number=<n>&comment=<urlencoded>` | `gh issue close` JSON on success, 400 if `number` missing | agent-tools iframe |
+| `/__issue/close` | HTTP GET | plain: `number=<n>&comment=<urlencoded>`; close-on-commit: `number=<n>&commit=<sha>[&push=true]` | plain: `gh issue close` JSON. Close-on-commit: verifies the commit is visible on GitHub (pushing first when `push=true`), then closes with a generated `Closed by https://github.com/<owner>/<repo>/commit/<full-sha>` comment; on refusal returns `{ok:false,code,...}` where `code` ∈ `commit-not-visible` \| `push-failed` \| `no-github-remote` \| `invalid-commit` \| `commit-visibility-check-failed`. 400 if `number` missing | agent-tools iframe |
 
 ## 8. Context
 

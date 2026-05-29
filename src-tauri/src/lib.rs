@@ -11606,8 +11606,20 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
     // Successful mutate is the mechanical completion point for approved/drop
     // worklist cycles. Clear any matching inflight sentinel immediately so the
     // Workspace spinner does not wait for the later silence-detected fallback.
-    if !affected.is_empty() {
-        clear_inflight_claim_sentinel(app, &affected);
+    //
+    // A drop prune can be a valid no-op if the item was already removed before
+    // the agent retries /__worklist/mutate. Treat the requested ids as complete
+    // in that case so the authorization and spinner do not linger forever.
+    let completion_ids = if affected.is_empty() && op == "prune" {
+        &ids
+    } else {
+        &affected
+    };
+    if !completion_ids.is_empty() {
+        clear_inflight_claim_sentinel(app, completion_ids);
+    }
+    if op == "prune" && auth_kind == "drop" {
+        consume_worklist_authorization(app);
     }
 
     let result_key = if op == "prune" { "pruned" } else { "advanced" };

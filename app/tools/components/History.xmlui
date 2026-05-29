@@ -1,5 +1,4 @@
-<Component name="History"
-  var.activeSnapshot="{null}">
+<Component name="History">
 
   <DataSource
     id="history"
@@ -15,10 +14,6 @@
       No worklist history yet.
     </Text>
 
-    <ModalDialog id="historySnapshotDialog" title="{activeSnapshot &amp;&amp; activeSnapshot.summaryLabel}">
-      <Markdown content="{activeSnapshot &amp;&amp; (activeSnapshot.fullChangelog || activeSnapshot.changelog || activeSnapshot.diff)}" />
-    </ModalDialog>
-
     <VStack
       when="{history.value && history.value.length > 0}"
       gap="$space-3">
@@ -28,11 +23,12 @@
           padding="$space-3"
           border="1px solid $color-surface-200"
           borderRadius="$borderRadius"
-          backgroundColor="$color-surface-50">
+          backgroundColor="$color-surface-50"
+          var.historyGroup="{$item}">
           <HStack gap="$space-3" verticalAlignment="center">
             <VStack gap="$space-0_5" width="*">
               <Text value="{$item.title}" fontWeight="bold" overflowMode="flow" breakMode="word" />
-              <Text value="{$item.subtitle}" color="$textColor-secondary" fontSize="$fontSize-sm" />
+              <Text value="{$item.subtitle}" color="$textColor-secondary" fontSize="$fontSize-xs" />
             </VStack>
             <Text
               value="{$item.phaseCount + ($item.phaseCount === 1 ? ' phase' : ' phases')}"
@@ -40,42 +36,44 @@
               fontSize="$fontSize-xs" />
           </HStack>
 
+          <VStack gap="$space-2">
+            <Text
+              when="{historyCurrentProsePreview(historyGroup)}"
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-sm"
+              whiteSpace="pre-wrap"
+              value="{historyCurrentProsePreview(historyGroup)}" />
+            <Text
+              when="{!historyCurrentProsePreview(historyGroup)}"
+              color="$textColor-secondary"
+              fontSize="$fontSize-sm"
+              value="No prose preview available." />
+            <Text
+              color="$textColor-secondary"
+              fontSize="$fontSize-xs"
+              value="{historyProseProvenance(historyGroup) + ' ' + historyItemFate(historyGroup)}" />
+          </VStack>
+
           <ExpandableItem
-            summary="Phase diffs"
+            summary="show item"
             initiallyExpanded="false"
             fullWidthSummary="true">
-            <VStack gap="$space-2">
-              <Items data="{$item.phases}">
-                <ExpandableItem
-                  summary="{$item.summaryLabel}"
-                  initiallyExpanded="false"
-                  fullWidthSummary="true">
-                  <VStack gap="$space-2">
-                    <VStack
-                      gap="$space-1"
-                      padding="$space-2"
-                      backgroundColor="$color-surface-50"
-                      borderRadius="$borderRadius"
-                      overflowX="auto">
-                      <Text
-                        fontFamily="$fontFamily-monospace"
-                        fontSize="$fontSize-sm"
-                        whiteSpace="pre-wrap"
-                        value="{($item.diff || '').slice(0, 20000)}" />
-                      <Text
-                        when="{($item.diff || '').length > 20000}"
-                        fontSize="$fontSize-xs"
-                        color="$textColor-secondary"
-                        value="{'Diff preview truncated at 20 KB for responsiveness. Use open phase diff for the full content.'}" />
-                    </VStack>
-                    <Link
-                      onClick="activeSnapshot = $item; historySnapshotDialog.open()"
-                      noIndicator>
-                      <Text value="open phase diff" fontSize="$fontSize-xs" />
-                    </Link>
-                  </VStack>
-                </ExpandableItem>
-              </Items>
+            <VStack
+              gap="$space-1"
+              padding="$space-2"
+              backgroundColor="$color-surface-50"
+              borderRadius="$borderRadius"
+              overflowX="auto">
+              <Text
+                fontFamily="$fontFamily-monospace"
+                fontSize="$fontSize-sm"
+                whiteSpace="pre-wrap"
+                value="{historyItemJson(historyGroup).slice(0, 30000)}" />
+              <Text
+                when="{historyItemJson(historyGroup).length > 30000}"
+                fontSize="$fontSize-xs"
+                color="$textColor-secondary"
+                value="Item preview truncated at 30 KB for responsiveness." />
             </VStack>
           </ExpandableItem>
         </VStack>

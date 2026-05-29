@@ -63,6 +63,89 @@ function statusSectionDescription(title) {
   return descriptions[title] || '';
 }
 
+function historyPhaseKind(phase) {
+  const summary = ((phase && phase.summary) || '').toLowerCase();
+  if (summary.indexOf('applied') >= 0) return 'applied';
+  if (summary.indexOf('proposed') >= 0) return 'proposed';
+  return '';
+}
+
+function historyDecodeJsonStringValue(raw) {
+  if (!raw) return '';
+  try {
+    return JSON.parse('"' + raw + '"');
+  } catch (err) {
+    return raw.replace(/\\n/g, '\n').replace(/\\"/g, '"');
+  }
+}
+
+function historyExtractProseFromDiff(diff) {
+  const lines = (diff || '').split('\n');
+  let before = '';
+  let after = '';
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const afterMatch = line.match(/^\+\s+"after":\s+"(.*)"[,]?$/);
+    if (afterMatch) {
+      after = historyDecodeJsonStringValue(afterMatch[1].replace(/",?$/, ''));
+      continue;
+    }
+    const beforeMatch = line.match(/^\+\s+"before":\s+"(.*)"[,]?$/);
+    if (beforeMatch) {
+      before = historyDecodeJsonStringValue(beforeMatch[1].replace(/",?$/, ''));
+    }
+  }
+  return after || before;
+}
+
+function historyCurrentProsePhase(group) {
+  const phases = (group && group.phases) || [];
+  for (let i = phases.length - 1; i >= 0; i--) {
+    const prose = historyExtractProseFromDiff(phases[i].diff || '');
+    if (prose) {
+      return { phase: phases[i], prose };
+    }
+  }
+  return { phase: null, prose: '' };
+}
+
+function historyCurrentProsePreview(group) {
+  const current = historyCurrentProsePhase(group).prose || '';
+  const lines = current.split('\n');
+  const preview = lines.slice(0, 8).join('\n');
+  if (preview.length <= 700) {
+    return preview;
+  }
+  return preview.slice(0, 700).trimEnd() + '\n...';
+}
+
+function historyProseProvenance(group) {
+  const current = historyCurrentProsePhase(group);
+  const kind = historyPhaseKind(current.phase);
+  const fate = historyItemFate(group);
+  if (kind === 'applied') {
+    return fate === 'Fate: committed.' ? 'As committed:' : 'As applied:';
+  }
+  if (kind === 'proposed') {
+    return fate === 'Fate: committed.' ? 'As committed:' : 'As proposed:';
+  }
+  return 'No prose:';
+}
+
+function historyItemFate(group) {
+  const phases = (group && group.phases) || [];
+  for (let i = phases.length - 1; i >= 0; i--) {
+    const summary = ((phases[i] && phases[i].summary) || '').toLowerCase();
+    if (summary.indexOf('committed') >= 0) return 'Fate: committed.';
+    if (summary.indexOf('dropped') >= 0 || summary.indexOf('pruned') >= 0) return 'Fate: dropped.';
+  }
+  return 'Fate: still active.';
+}
+
+function historyItemJson(group) {
+  return JSON.stringify(group || {}, null, 2);
+}
+
 // Past transcripts often contain broken docs.xmlui.org/... URLs (the form the
 // xmlui-mcp server reports as Source). The live docs are hosted at
 // www.xmlui.org/docs/... with a `reference/` segment for component pages.

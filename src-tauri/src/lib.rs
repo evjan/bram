@@ -330,6 +330,8 @@ static BRAM_TRACE_ENABLED: std::sync::atomic::AtomicBool =
 // reload — intended behavior.
 static PENDING_TOOLS_RELOAD: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+static STARTUP_RUN_TRACE_EMITTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 // Cached open handle for the live trace file. Lazy-init on first
 // write: truncate-open, emit the session-start line, store the handle.
@@ -8295,11 +8297,119 @@ fn latest_xs_trace_export() -> Option<serde_json::Value> {
         }
     }
     newest.map(|(modified_ms, p)| {
+        let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
         serde_json::json!({
             "path": p.to_string_lossy().to_string(),
+            "size": size,
             "modifiedAt": modified_ms,
             "modifiedIso": format_iso_utc_ms(modified_ms),
         })
+    })
+}
+
+fn startup_run_summary(
+    trace_text: &str,
+    started_at_ms: i64,
+    now: i64,
+    trace_export: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let window_ms = 60_000;
+    let end_ms = started_at_ms.saturating_add(window_ms);
+    let start_iso = format_iso_utc_ms(started_at_ms);
+    let end_iso = format_iso_utc_ms(end_ms);
+    let mut latest_tail_requests = 0;
+    let mut latest_tail_resets = 0;
+    let mut latest_tail_truncations = 0;
+    let mut latest_tail_max_body = 0;
+    let mut latest_tail_max_content = 0;
+    let mut fanout_events = 0;
+    let mut fanout_max_len = 0;
+    let mut heartbeat_max_drift = 0;
+    let mut pty_chunks = 0;
+    let mut pty_bytes = 0;
+    let mut last_seen = String::new();
+
+    for line in trace_text.lines() {
+        let iso = coordination_trace_line_iso(line);
+        if iso.is_empty() || iso < start_iso || iso > end_iso {
+            continue;
+        }
+        last_seen = iso;
+        if line.contains("path=__sessions/latest-tail") && line.contains("phase=exit") {
+            latest_tail_requests += 1;
+            if let Some(body_size) = trace_field_i64(line, "body_size") {
+                latest_tail_max_body = latest_tail_max_body.max(body_size);
+            }
+        }
+        if line.contains("[latest-tail]") {
+            if let Some(bytes) = trace_field_i64(line, "bytes") {
+                latest_tail_max_content = latest_tail_max_content.max(bytes);
+            }
+            if line.contains("truncated=true") {
+                latest_tail_truncations += 1;
+            }
+        }
+        if line.contains("jsonl-fanout") {
+            fanout_events += 1;
+            if line.contains("\"reset\":true") || line.contains("reset=true") {
+                latest_tail_resets += 1;
+            }
+            if let Some(len) =
+                trace_json_field_i64(line, "len").or_else(|| trace_field_i64(line, "len"))
+            {
+                fanout_max_len = fanout_max_len.max(len);
+            }
+        }
+        if line.contains("heartbeat-batch") {
+            if let Some(max_drift) = trace_json_field_i64(line, "maxDriftMs") {
+                heartbeat_max_drift = heartbeat_max_drift.max(max_drift);
+            }
+        }
+        if line.contains("[pty-in]") {
+            pty_chunks += 1;
+            if let Some(bytes) = trace_field_i64(line, "bytes") {
+                pty_bytes += bytes;
+            }
+        }
+    }
+
+    let trace_export_size = trace_export
+        .and_then(|v| v.get("size").and_then(|s| s.as_u64()))
+        .unwrap_or(0);
+    let trace_export_path = trace_export
+        .and_then(|v| v.get("path").and_then(|s| s.as_str()))
+        .unwrap_or("");
+    let complete = now >= end_ms;
+    let level = if latest_tail_max_body > 1_000_000
+        || fanout_max_len > 1_000_000
+        || heartbeat_max_drift > 1_000
+        || trace_export_size > 5_000_000
+    {
+        "warn"
+    } else if latest_tail_requests > 0 || pty_chunks > 0 {
+        "ok"
+    } else {
+        "neutral"
+    };
+
+    serde_json::json!({
+        "startedAt": format_iso_utc_ms(started_at_ms),
+        "windowMs": window_ms,
+        "complete": complete,
+        "level": level,
+        "latestTailRequests": latest_tail_requests,
+        "latestTailMaxBody": latest_tail_max_body,
+        "latestTailMaxContent": latest_tail_max_content,
+        "latestTailResets": latest_tail_resets,
+        "latestTailTruncations": latest_tail_truncations,
+        "fanoutEvents": fanout_events,
+        "fanoutMaxLen": fanout_max_len,
+        "heartbeatMaxDrift": heartbeat_max_drift,
+        "ptyChunks": pty_chunks,
+        "ptyBytes": pty_bytes,
+        "traceExportSize": trace_export_size,
+        "traceExportPath": trace_export_path,
+        "lastSeen": last_seen,
     })
 }
 
@@ -8566,6 +8676,33 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
         "ok"
     };
     let trace_export = latest_xs_trace_export();
+    let startup_run = startup_run_summary(
+        &trace_text,
+        LOOPBACK_STARTED_MS.get().copied().unwrap_or(now),
+        now,
+        trace_export.as_ref(),
+    );
+    if startup_run
+        .get("complete")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        && !STARTUP_RUN_TRACE_EMITTED.swap(true, std::sync::atomic::Ordering::Relaxed)
+    {
+        append_bram_trace_line(
+            app,
+            "startup-run",
+            &format!(
+                "latest_tail_max_body={} fanout_max_len={} heartbeat_max_drift={} pty_chunks={} pty_bytes={} trace_export_size={} level={}",
+                startup_run["latestTailMaxBody"].as_i64().unwrap_or(0),
+                startup_run["fanoutMaxLen"].as_i64().unwrap_or(0),
+                startup_run["heartbeatMaxDrift"].as_i64().unwrap_or(0),
+                startup_run["ptyChunks"].as_i64().unwrap_or(0),
+                startup_run["ptyBytes"].as_i64().unwrap_or(0),
+                startup_run["traceExportSize"].as_u64().unwrap_or(0),
+                startup_run["level"].as_str().unwrap_or("neutral"),
+            ),
+        );
+    }
     let trace_export_state = if trace_export.is_some() {
         "found"
     } else {
@@ -8793,8 +8930,47 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
             "history": history.clone(),
             "trace": trace.clone(),
             "traceExport": trace_export.clone(),
+            "startupRun": startup_run.clone(),
         },
         "sections": [
+            {
+                "title": "Startup Run",
+                "rows": [
+                    {
+                        "signal": "Payload maxima",
+                        "level": startup_run["level"].as_str().unwrap_or("neutral"),
+                        "state": if startup_run["complete"].as_bool().unwrap_or(false) { "complete" } else { "collecting" },
+                        "detail": format!(
+                            "latest-tail body {} KB; content {} KB; fanout {} KB; resets {}; truncations {}",
+                            (startup_run["latestTailMaxBody"].as_i64().unwrap_or(0) + 1023) / 1024,
+                            (startup_run["latestTailMaxContent"].as_i64().unwrap_or(0) + 1023) / 1024,
+                            (startup_run["fanoutMaxLen"].as_i64().unwrap_or(0) + 1023) / 1024,
+                            startup_run["latestTailResets"].as_i64().unwrap_or(0),
+                            startup_run["latestTailTruncations"].as_i64().unwrap_or(0)
+                        ),
+                        "seen": startup_run["lastSeen"].as_str().unwrap_or(""),
+                    },
+                    {
+                        "signal": "Renderer drift",
+                        "level": if startup_run["heartbeatMaxDrift"].as_i64().unwrap_or(0) > 1000 { "warn" } else if startup_run["heartbeatMaxDrift"].as_i64().unwrap_or(0) > 0 { "ok" } else { "neutral" },
+                        "state": format!("{} ms max", startup_run["heartbeatMaxDrift"].as_i64().unwrap_or(0)),
+                        "detail": format!(
+                            "PTY {} chunks / {} KB over first {}s",
+                            startup_run["ptyChunks"].as_i64().unwrap_or(0),
+                            (startup_run["ptyBytes"].as_i64().unwrap_or(0) + 1023) / 1024,
+                            startup_run["windowMs"].as_i64().unwrap_or(60000) / 1000
+                        ),
+                        "seen": startup_run["lastSeen"].as_str().unwrap_or(""),
+                    },
+                    {
+                        "signal": "Inspector export",
+                        "level": if startup_run["traceExportSize"].as_u64().unwrap_or(0) > 5_000_000 { "warn" } else if startup_run["traceExportSize"].as_u64().unwrap_or(0) > 0 { "ok" } else { "neutral" },
+                        "state": format!("{} KB", (startup_run["traceExportSize"].as_u64().unwrap_or(0) + 1023) / 1024),
+                        "detail": startup_run["traceExportPath"].as_str().unwrap_or("No xs-trace export found in ~/Downloads"),
+                        "seen": trace_export_seen,
+                    }
+                ]
+            },
             {
                 "title": "Worklist",
                 "rows": [

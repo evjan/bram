@@ -4,15 +4,12 @@
   var.submittedItemId="{null}"
   var.submitting="{false}"
   var.expandedItemId="{null}"
-  var.statusHelpFor="{null}"
-  var.feedbackHelpFor="{null}"
   var.feedbackExpanded="{false}"
   var.selectedFeedback="{''}"
   var.lastWorklistSig="{''}"
   var.closeIssuesDialog="{null}"
   var.closeIssuesItemRef="{null}"
   var.closeIssuesState="{null}"
-  var.actionHelpFor="{null}"
   var.newItemHelp="{false}"
   var.newItemIssue="{null}"
   var.pendingMenu="{null}"
@@ -218,7 +215,7 @@
             variant="ghost"
             size="xs"
             tooltip="What do these batch actions do?"
-            onClick="actionHelpFor = 'batch'" />
+            onClick="batchHelpDialog.open()" />
         </HStack>
         <Items data="{worklist.value.items}">
           <VStack gap="$space-1">
@@ -246,7 +243,7 @@
                         variant="ghost"
                         size="xs"
                         tooltip="What does this badge mean?"
-                        onClick="statusHelpFor = ($item.status || 'proposed')" />
+                        onClick="($item.status || 'proposed') === 'applied' ? statusAppliedHelpDialog.open() : statusProposedHelpDialog.open()" />
                     </HStack>
                   </Theme>
                   <Text value="{$item.id}" fontWeight="$fontWeight-bold" />
@@ -306,7 +303,7 @@
                     variant="ghost"
                     size="xs"
                     tooltip="What does the feedback do?"
-                    onClick="feedbackHelpFor = ($item.status || 'proposed')" />
+                    onClick="($item.status || 'proposed') === 'applied' ? feedbackAppliedHelpDialog.open() : feedbackProposedHelpDialog.open()" />
                 </HStack>
                 <HStack
                   when="{selected === $item.id && feedbackExpanded}"
@@ -346,7 +343,7 @@
                         variant="ghost"
                         size="xs"
                         tooltip="What does Approve do?"
-                        onClick="actionHelpFor = 'approve'" />
+                        onClick="approveHelpDialog.open()" />
                     </Theme>
                   </HStack>
                   <HStack gap="$space-1" verticalAlignment="center">
@@ -361,7 +358,7 @@
                         variant="ghost"
                         size="xs"
                         tooltip="What does Iterate do?"
-                        onClick="actionHelpFor = 'iterate'" />
+                        onClick="iterateHelpDialog.open()" />
                     </Theme>
                   </HStack>
                   <HStack gap="$space-1" verticalAlignment="center">
@@ -376,7 +373,7 @@
                         variant="ghost"
                         size="xs"
                         tooltip="What does Drop do?"
-                        onClick="actionHelpFor = 'drop'" />
+                        onClick="dropHelpDialog.open()" />
                     </Theme>
                   </HStack>
                   <Button
@@ -441,9 +438,8 @@
       </VStack>
 
     <ModalDialog
-      when="{statusHelpFor === 'proposed'}"
-      title="TO APPLY"
-      onClose="statusHelpFor = null">
+      id="statusProposedHelpDialog"
+      title="TO APPLY">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           The agent is asking permission to make file edits. Nothing has happened
@@ -454,15 +450,14 @@
 - Click **Drop** to discard the item — it's removed without any file changes.
 - Ask the agent in chat to tweak an item's scope, before/after prose, or split it up — useful when the proposal is *almost* right." />
         <HStack>
-          <Button label="Got it" onClick="statusHelpFor = null" />
+          <Button label="Got it" onClick="statusProposedHelpDialog.close()" />
         </HStack>
       </VStack>
     </ModalDialog>
 
     <ModalDialog
-      when="{feedbackHelpFor === 'proposed'}"
-      title="Per-item feedback (TO APPLY)"
-      onClose="feedbackHelpFor = null">
+      id="feedbackProposedHelpDialog"
+      title="Per-item feedback (TO APPLY)">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           Your note travels with this specific item, whichever button you click:
@@ -471,15 +466,14 @@
 - **Iterate** — refinement direction; item stays TO APPLY (the agent revises the proposal text in place).
 - **Drop** — reason for the drop." />
         <HStack>
-          <Button label="Got it" onClick="feedbackHelpFor = null" />
+          <Button label="Got it" onClick="feedbackProposedHelpDialog.close()" />
         </HStack>
       </VStack>
     </ModalDialog>
 
     <ModalDialog
-      when="{feedbackHelpFor === 'applied'}"
-      title="Per-item feedback (TO COMMIT)"
-      onClose="feedbackHelpFor = null">
+      id="feedbackAppliedHelpDialog"
+      title="Per-item feedback (TO COMMIT)">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           Your note travels with this specific item, whichever button you click:
@@ -488,7 +482,7 @@
 - **Iterate** — refinement direction; item stays TO COMMIT (the agent edits files in place and expands the item's after).
 - **Drop** — reason for the drop. Files stay on disk; ask the agent to discard if you want them gone." />
         <HStack>
-          <Button label="Got it" onClick="feedbackHelpFor = null" />
+          <Button label="Got it" onClick="feedbackAppliedHelpDialog.close()" />
         </HStack>
       </VStack>
     </ModalDialog>
@@ -539,9 +533,8 @@
     </ModalDialog>
 
     <ModalDialog
-      when="{statusHelpFor === 'applied'}"
-      title="TO COMMIT"
-      onClose="statusHelpFor = null">
+      id="statusAppliedHelpDialog"
+      title="TO COMMIT">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           The agent has made the file edits and the change is sitting in your
@@ -553,15 +546,14 @@
 - Click **Approve** when you're satisfied — the agent creates the git commit with the item's prose as the message.
 - Click **Drop** if it turned out wrong — the worklist entry is removed, but **the disk edits stay** (the agent doesn't revert files unilaterally). Ask the agent to *discard those changes if you want them gone* — it knows how to use git commands like `git checkout -- &lt;file&gt;` or `git restore &lt;file&gt;`." />
         <HStack>
-          <Button label="Got it" onClick="statusHelpFor = null" />
+          <Button label="Got it" onClick="statusAppliedHelpDialog.close()" />
         </HStack>
       </VStack>
     </ModalDialog>
 
     <ModalDialog
-      when="{actionHelpFor === 'approve'}"
-      title="Approve"
-      onClose="actionHelpFor = null">
+      id="approveHelpDialog"
+      title="Approve">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           Approves the selected item for the agent to act on. What that means
@@ -572,15 +564,14 @@
 
 If the item carries `closesIssues` (because the agent detected the commit is likely an issue-closer), Approve on TO COMMIT first opens the close-issue confirm dialog. Any text in the per-item feedback box travels with the approval and gives the agent extra guidance." />
         <HStack>
-          <Button label="Got it" onClick="actionHelpFor = null" />
+          <Button label="Got it" onClick="approveHelpDialog.close()" />
         </HStack>
       </VStack>
     </ModalDialog>
 
     <ModalDialog
-      when="{actionHelpFor === 'iterate'}"
-      title="Iterate"
-      onClose="actionHelpFor = null">
+      id="iterateHelpDialog"
+      title="Iterate">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           Refines the item in place — the channel for "keep working on this
@@ -593,7 +584,7 @@ If the item carries `closesIssues` (because the agent detected the commit is lik
 
 Iterate is the right move when the agent's first cut is *almost* what you want." />
         <HStack>
-          <Button label="Got it" onClick="actionHelpFor = null" />
+          <Button label="Got it" onClick="iterateHelpDialog.close()" />
         </HStack>
       </VStack>
     </ModalDialog>
@@ -657,27 +648,25 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
     </ModalDialog>
 
     <ModalDialog
-      when="{actionHelpFor === 'drop'}"
-      title="Drop"
-      onClose="actionHelpFor = null">
+      id="dropHelpDialog"
+      title="Drop">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           Removes the item from the worklist. The agent will not act on it.
-        </Text>x
+        </Text>
         <Markdown content="- **TO APPLY** → the item is removed; nothing on disk changes.
 - **TO COMMIT** → the item is removed, but the file edits the agent already made on your behalf **stay on disk**. If you want them gone, ask the agent to discard them — it knows how to use `git checkout -- &lt;file&gt;` or `git restore &lt;file&gt;`.
 
 Drop is the clean rejection path; Iterate is what you want if the item just needs to change shape." />
         <HStack>
-          <Button label="Got it" onClick="actionHelpFor = null" />
+          <Button label="Got it" onClick="dropHelpDialog.close()" />
         </HStack>
       </VStack>
     </ModalDialog>
 
     <ModalDialog
-      when="{actionHelpFor === 'batch'}"
-      title="Approve all / Drop all"
-      onClose="actionHelpFor = null">
+      id="batchHelpDialog"
+      title="Approve all / Drop all">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           Batch actions for TO COMMIT items — they act on every TO COMMIT
@@ -690,7 +679,7 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
 
 TO APPLY items are unaffected — approve, iterate, or drop those individually. **Issues flagged via `closesIssues` are not auto-closed in a batch** — close them through a single-item Approve, or ask the agent in chat." />
         <HStack>
-          <Button label="Got it" onClick="actionHelpFor = null" />
+          <Button label="Got it" onClick="batchHelpDialog.close()" />
         </HStack>
       </VStack>
     </ModalDialog>

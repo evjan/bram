@@ -2274,6 +2274,168 @@ fn gh_issue_close<R: tauri::Runtime>(
     }
 }
 
+fn close_issue_commit_comment(repo_slug: &str, full_sha: &str) -> String {
+    format!(
+        "Closed by https://github.com/{}/commit/{}",
+        repo_slug, full_sha
+    )
+}
+
+fn issue_close_json_error(code: &str, issue: u64, sha: &str, message: String) -> Vec<u8> {
+    serde_json::json!({
+        "ok": false,
+        "code": code,
+        "issue": issue,
+        "sha": sha,
+        "message": message,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+fn git_full_commit_sha<R: tauri::Runtime>(app: &AppHandle<R>, sha: &str) -> Result<String, String> {
+    let trimmed = sha.trim();
+    if trimmed.is_empty() || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("invalid commit sha".to_string());
+    }
+    let rev = format!("{}^{{commit}}", trimmed);
+    git_run(app, &["rev-parse", "--verify", &rev]).map(|s| s.trim().to_string())
+}
+
+fn gh_commit_visible<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    repo_slug: &str,
+    full_sha: &str,
+) -> Result<bool, String> {
+    let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
+    let path = format!("repos/{}/commits/{}", repo_slug, full_sha);
+    let out = std::process::Command::new("gh")
+        .current_dir(&root)
+        .args(["api", &path])
+        .output()
+        .map_err(|e| format!("failed to spawn gh: {}", e))?;
+    if out.status.success() {
+        Ok(true)
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        eprintln!("[gh commit visible {}] non-zero exit: {}", full_sha, stderr);
+        if gh_commit_missing_stderr(&stderr) {
+            Ok(false)
+        } else {
+            Err(stderr)
+        }
+    }
+}
+
+fn gh_commit_missing_stderr(stderr: &str) -> bool {
+    stderr.contains("HTTP 404")
+        || stderr.contains("HTTP 422")
+        || stderr.contains("Not Found")
+        || stderr.contains("No commit found")
+}
+
+fn gh_issue_close_with_commit<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    number: u64,
+    sha: &str,
+    push_before_close: bool,
+) -> (u16, &'static str, Vec<u8>) {
+    let full_sha = match git_full_commit_sha(app, sha) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                400,
+                "application/json; charset=utf-8",
+                issue_close_json_error("invalid-commit", number, sha, e),
+            );
+        }
+    };
+    let repo_slug = match repo_owner_name(app) {
+        Some(slug) => slug,
+        None => {
+            return (
+                400,
+                "application/json; charset=utf-8",
+                issue_close_json_error(
+                    "no-github-remote",
+                    number,
+                    &full_sha,
+                    "Cannot close with a commit link because origin is not a GitHub remote."
+                        .to_string(),
+                ),
+            );
+        }
+    };
+    if push_before_close {
+        if let Err(e) = auto_rebase_and_push(app) {
+            return (
+                502,
+                "application/json; charset=utf-8",
+                issue_close_json_error("push-failed", number, &full_sha, e),
+            );
+        }
+    }
+    match gh_commit_visible(app, &repo_slug, &full_sha) {
+        Ok(true) => {}
+        Ok(false) => {
+            let short_sha: String = full_sha.chars().take(7).collect();
+            return (
+                409,
+                "application/json; charset=utf-8",
+                issue_close_json_error(
+                    "commit-not-visible",
+                    number,
+                    &full_sha,
+                    format!(
+                        "Committed {}, but did not close #{} because GitHub cannot see the commit yet. Push the commit, then close #{} with the generated commit URL.",
+                        short_sha, number, number
+                    ),
+                ),
+            );
+        }
+        Err(e) => {
+            return (
+                502,
+                "application/json; charset=utf-8",
+                issue_close_json_error("commit-visibility-check-failed", number, &full_sha, e),
+            );
+        }
+    }
+
+    let comment = close_issue_commit_comment(&repo_slug, &full_sha);
+    match gh_issue_close(app, number, &comment) {
+        Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+        Err(e) => {
+            eprintln!("[gh issue close {}] {}", number, e);
+            (500, "text/plain; charset=utf-8", e.into_bytes())
+        }
+    }
+}
+
+#[cfg(test)]
+mod issue_close_tests {
+    use super::{close_issue_commit_comment, gh_commit_missing_stderr};
+
+    #[test]
+    fn generated_commit_close_comment_uses_full_url_without_trailing_period() {
+        let comment =
+            close_issue_commit_comment("judell/bram", "8b7c4407c0ffee00000000000000000000000000");
+
+        assert_eq!(
+            comment,
+            "Closed by https://github.com/judell/bram/commit/8b7c4407c0ffee00000000000000000000000000"
+        );
+        assert!(!comment.ends_with('.'));
+    }
+
+    #[test]
+    fn github_no_commit_422_is_not_visible() {
+        assert!(gh_commit_missing_stderr(
+            "gh: No commit found for SHA: abcdef1234567890 (HTTP 422)\n"
+        ));
+    }
+}
+
 fn issue_actor_label(value: &serde_json::Value) -> Option<String> {
     if let Some(s) = value.as_str() {
         let trimmed = s.trim();
@@ -8892,11 +9054,7 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
         && (!matches!((file_port, meta_port), (Some(file), Some(meta)) if file == meta)
             || meta_pid.map_or(false, |pid| pid != current_pid)
             || (!meta_root.is_empty() && !current_root.is_empty() && meta_root != current_root));
-    let file_port_probe = match (bound_port, file_port) {
-        (Some(bound), Some(file)) if bound == file => Some(PortStatus::Live),
-        (_, Some(file)) => Some(probe_port_http(file, "/__app-info")),
-        _ => None,
-    };
+    let file_port_probe = file_port.map(|file| probe_port_http(file, "/__app-info"));
     let probe_problem = matches!(
         file_port_probe,
         Some(PortStatus::NotListening) | Some(PortStatus::Unresponsive(_))
@@ -8947,6 +9105,27 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
             _ => "No bound port available".to_string(),
         },
         "seen": port_file.as_ref().map(|p| file_modified_iso(p)).unwrap_or_default(),
+    });
+    let loopback_row = serde_json::json!({
+        "signal": "Loopback HTTP",
+        "level": match &file_port_probe {
+            Some(PortStatus::Live) => "ok",
+            Some(PortStatus::NotListening) | Some(PortStatus::Unresponsive(_)) => "warn",
+            None => "neutral",
+        },
+        "state": match &file_port_probe {
+            Some(PortStatus::Live) => "responsive",
+            Some(PortStatus::NotListening) => "refused",
+            Some(PortStatus::Unresponsive(_)) => "unresponsive",
+            None => "not probed",
+        },
+        "detail": match &file_port_probe {
+            Some(PortStatus::Live) => format!("GET /__app-info succeeded on 127.0.0.1:{}", file_port.unwrap_or_default()),
+            Some(PortStatus::NotListening) => format!("GET /__app-info refused on 127.0.0.1:{}", file_port.unwrap_or_default()),
+            Some(PortStatus::Unresponsive(reason)) => format!("GET /__app-info failed on 127.0.0.1:{}: {}", file_port.unwrap_or_default(), reason),
+            None => "No readable port file to probe".to_string(),
+        },
+        "seen": format_iso_utc_ms(now),
     });
     let (authorization_rows, orphan_auth, orphan_auth_detail) = authorization_rows(app, now);
     let current_claim_state = if claim_ids.is_empty() {
@@ -9059,7 +9238,8 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
                         "detail": "Recent [inflight-sentinel] records from bram-trace.log",
                         "seen": trace["lastInflight"].as_str().unwrap_or(""),
                     },
-                    port_row
+                    port_row,
+                    loopback_row
                 ]
             },
             {
@@ -10767,15 +10947,25 @@ fn route_request<R: tauri::Runtime>(
     if path == "__issue/close" {
         let mut number: u64 = 0;
         let mut comment = String::new();
+        let mut commit = String::new();
+        let mut push_before_close = false;
         for pair in query.split('&') {
             if let Some(v) = pair.strip_prefix("number=") {
                 number = percent_decode(v).parse().unwrap_or(0);
             } else if let Some(v) = pair.strip_prefix("comment=") {
                 comment = percent_decode(v);
+            } else if let Some(v) = pair.strip_prefix("commit=") {
+                commit = percent_decode(v);
+            } else if let Some(v) = pair.strip_prefix("push=") {
+                let v = percent_decode(v);
+                push_before_close = v == "1" || v.eq_ignore_ascii_case("true");
             }
         }
         if number == 0 {
             return (400, "text/plain; charset=utf-8", b"missing number".to_vec());
+        }
+        if !commit.trim().is_empty() {
+            return gh_issue_close_with_commit(app, number, &commit, push_before_close);
         }
         return match gh_issue_close(app, number, &comment) {
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),

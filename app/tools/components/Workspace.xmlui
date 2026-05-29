@@ -46,6 +46,9 @@
     id="openIssues"
     url="/__issues"
     when="{newItemHelp}" />
+  <DataSource
+    id="gitStatus"
+    url="/__git/status" />
   <!-- Sentinel-derived inflight consumer (#84 item 3). The host writes
        resources/.inflight-claim.json on /__worklist/resolve (approved
        / drop) and /__iterate/begin. Approved/drop sentinels clear at
@@ -519,7 +522,14 @@
         <HStack gap="$space-2" paddingTop="$space-2">
           <Button
             label="Confirm"
-            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines((feedbackBox &amp;&amp; feedbackBox.value) || '', buildCloseIssueLines(closeIssuesState)))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            enabled="{gitStatus.value &amp;&amp; !gitStatus.value.dirty &amp;&amp; gitStatus.value.ahead === 0}"
+            tooltip="{gitStatus.value &amp;&amp; (gitStatus.value.dirty || gitStatus.value.ahead &gt; 0) ? 'Disabled until the commit is pushed and visible on GitHub' : 'Close without pushing first'}"
+            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines((feedbackBox &amp;&amp; feedbackBox.value) || '', buildCloseIssueLines(closeIssuesState), false))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+          <Button
+            label="Push then close"
+            enabled="{!gitStatus.value || gitStatus.value.dirty || gitStatus.value.ahead &gt; 0}"
+            tooltip="{gitStatus.value &amp;&amp; !gitStatus.value.dirty &amp;&amp; gitStatus.value.ahead === 0 ? 'Nothing local needs pushing' : 'Commit, push, then close with a commit link'}"
+            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines((feedbackBox &amp;&amp; feedbackBox.value) || '', buildCloseIssueLines(closeIssuesState), true))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Approve without closing"
             variant="outlined"

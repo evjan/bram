@@ -832,11 +832,14 @@ function buildCloseIssueLines(state) {
 // Merge user-typed feedback with the dialog-generated close-issue lines.
 // Empty base + no lines → empty string; otherwise lines come after the user's
 // text separated by a blank line so the agent can split on `\n\n`.
-function combineFeedbackWithCloseLines(base, lines) {
+function combineFeedbackWithCloseLines(base, lines, pushBeforeClose) {
   const baseTrim = (base || '').trim();
-  if (!lines || lines.length === 0) return baseTrim;
-  if (!baseTrim) return lines.join('\n');
-  return baseTrim + '\n\n' + lines.join('\n');
+  const generated = [];
+  if (pushBeforeClose) generated.push('push-before-close: true');
+  if (lines && lines.length > 0) generated.push.apply(generated, lines);
+  if (generated.length === 0) return baseTrim;
+  if (!baseTrim) return generated.join('\n');
+  return baseTrim + '\n\n' + generated.join('\n');
 }
 
 // Worklist-hotspot instrumentation helpers (`Workspace.xmlui` per-item

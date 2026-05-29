@@ -7,8 +7,12 @@
   <VStack padding="$space-6" gap="$space-3">
     <Heading level="h2">History</Heading>
 
+    <Spinner
+      when="{!history.value}"
+      size="sm" />
+
     <Text
-      when="{!history.value || history.value.length === 0}"
+      when="{history.value && history.value.length === 0}"
       color="$textColor-secondary"
       fontSize="$fontSize-sm">
       No worklist history yet.

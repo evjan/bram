@@ -1,8 +1,10 @@
 # Worklist history
 
-Bram snapshots `resources/worklist.json` on every meaningful
-change, so the prose of past items survives after they've been
-committed or dropped. This document sketches how the pieces fit.
+Bram snapshots the effective worklist on every meaningful change, so
+the prose of past items survives after they've been committed or
+dropped. "Effective" means `resources/worklist.json` after any
+metadata-only items have been resolved through
+`resources/worklist-drafts/<id>.md`.
 
 ## Who reads this
 
@@ -35,12 +37,19 @@ year has no other retrieval — that committed history is their context.
 ## Flow
 
 A filesystem watcher in `src-tauri/src/lib.rs` notices writes to
-`resources/worklist.json` and calls `maybe_snapshot_worklist`, which
-compares the new contents to a cached prior state. If anything
-meaningful changed — see *Phases* below — it writes:
+`resources/worklist.json` and draft files under
+`resources/worklist-drafts/`, then calls `maybe_snapshot_worklist`.
+That function keeps two caches:
+
+- a raw `worklist.json` cache used only for approval/drop guard
+  enforcement
+- an effective cache used for history, with draft prose frozen into
+  each item before diffing or writing snapshots
+
+If anything meaningful changed — see *Phases* below — it writes:
 
 - `resources/worklist-history/<unix_ms>.json` — the *current*
-  (post-change) worklist contents
+  (post-change) effective worklist contents
 - `resources/worklist-history/<unix_ms>.md` — a human-readable
   changelog describing the transition from the prior snapshot
 
@@ -48,6 +57,13 @@ Trivial writes (re-wording an item's `before` or `after` prose
 without changing its identity, status, or the worklist's
 description) are suppressed. The cache is always updated regardless,
 so the next change diffs against the latest state.
+
+For draft-backed items, prose edits are not trivial: changing
+`resources/worklist-drafts/<id>.md` changes the effective item and
+can produce a history phase even when `resources/worklist.json` is
+unchanged. If the draft file is missing at snapshot time, the item is
+recorded with empty `before` / `after` plus `_draftMissing: true`, so
+the audit trail reflects what the app could actually resolve then.
 
 ## Phases
 
@@ -84,7 +100,7 @@ The right-pane loopback server (`lib.rs::route_request`) exposes:
 | Route | Returns |
 |-------|---------|
 | `/__worklist` | `worklist.json` augmented with a `diff` field on each `applied` item (the `git diff -- <file>` output) |
-| `/__worklist-history/list` | reverse-chronological snapshots with `ts`, `iso`, `summary`, and the full `changelog` text embedded |
+| `/__worklist-history/list` | reverse-chronological item groups with compact subtitles, phase diffs, latest frozen item prose, and fate/provenance fields for the History card |
 | `/__worklist-history/changelog?ts=<ms>` | raw `.md` body for one snapshot |
 | `/__worklist-history/snapshot?ts=<ms>` | raw `.json` body for one snapshot |
 
@@ -113,12 +129,13 @@ keep this honest end-to-end:
 
 ## UI
 
-`app/tools/components/Workspace.xmlui` polls
-`/__worklist-history/list` every 10 seconds and renders a
-chronological list of `iso + summary` rows under the worklist
-itself. Expanding any row renders the snapshot's `.md` via
-`<Markdown content="{$item.changelog}" />` — phase headers plus
-the prose of each item that moved through the transition.
+`app/tools/components/History.xmlui` reads
+`/__worklist-history/list` and renders item cards. Each card is meant
+to tell the story without opening a raw diff: latest prose preview,
+whether the prose came from the proposal or apply phase, current fate
+(active, committed, or dropped), and a compact date range for grouped
+phases. The card can still expose the raw grouped JSON for debugging,
+but the primary view should not depend on a phase-diff expander.
 
 ## Per-project applicability
 

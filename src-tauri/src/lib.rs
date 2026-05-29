@@ -7661,12 +7661,17 @@ fn toml_basic_string(s: &str) -> String {
 // ============================================================================
 
 static LAST_WORKLIST: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static LAST_WORKLIST_EFFECTIVE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 const HISTORY_DIFF_MAX_LINES: usize = 80;
 const HISTORY_DIFF_MAX_BYTES: usize = 4 * 1024;
 const WORKLIST_HISTORY_DEFAULT_LIMIT: usize = 120;
 
 fn last_worklist_cell() -> &'static Mutex<Option<String>> {
     LAST_WORKLIST.get_or_init(|| Mutex::new(None))
+}
+
+fn last_worklist_effective_cell() -> &'static Mutex<Option<String>> {
+    LAST_WORKLIST_EFFECTIVE.get_or_init(|| Mutex::new(None))
 }
 
 fn worklist_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
@@ -8212,6 +8217,19 @@ fn resolve_worklist_item_draft(
             serde_json::Value::String(String::new()),
         );
         obj.insert("_draftMissing".to_string(), serde_json::Value::Bool(true));
+    }
+    resolved
+}
+
+fn resolve_worklist_doc_drafts(
+    drafts_dir: Option<&Path>,
+    doc: &serde_json::Value,
+) -> serde_json::Value {
+    let mut resolved = doc.clone();
+    if let Some(items) = resolved.get_mut("items").and_then(|v| v.as_array_mut()) {
+        for item in items {
+            *item = resolve_worklist_item_draft(drafts_dir, item);
+        }
     }
     resolved
 }
@@ -10265,36 +10283,71 @@ fn maybe_snapshot_worklist<R: tauri::Runtime>(app: &AppHandle<R>) {
     let Some(history_dir) = worklist_history_dir(app) else {
         return;
     };
-    let current_str = match std::fs::read_to_string(&file) {
+    let current_raw_str = match std::fs::read_to_string(&file) {
         Ok(s) => s,
         Err(_) => return,
     };
-    let cell = last_worklist_cell();
-    let mut guard = match cell.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
-    let prior_str = match guard.clone() {
-        Some(s) => s,
-        None => {
-            // First observation — seed cache, no snapshot.
-            *guard = Some(current_str);
+    let current_raw_doc: serde_json::Value =
+        serde_json::from_str(&current_raw_str).unwrap_or_default();
+    let drafts_dir = worklist_drafts_dir(app);
+    let current_doc = resolve_worklist_doc_drafts(drafts_dir.as_deref(), &current_raw_doc);
+    let current_effective_str = serde_json::to_string_pretty(&current_doc)
+        .map(|s| format!("{}\n", s))
+        .unwrap_or_else(|_| current_raw_str.clone());
+
+    {
+        let cell = last_worklist_cell();
+        let mut guard = match cell.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        match guard.clone() {
+            Some(prior_raw_str) => {
+                if prior_raw_str != current_raw_str {
+                    if !maybe_enforce_worklist_policy(app, &prior_raw_str, &current_raw_str) {
+                        return;
+                    }
+                    // Raw cache is for authorization enforcement only. History
+                    // below uses the separately resolved/effective cache.
+                    *guard = Some(current_raw_str.clone());
+                }
+            }
+            None => {
+                // First raw observation: seed both caches, no snapshot.
+                *guard = Some(current_raw_str);
+                if let Ok(mut effective_guard) = last_worklist_effective_cell().lock() {
+                    *effective_guard = Some(current_effective_str);
+                }
+                return;
+            }
+        }
+    }
+
+    let prior_effective_str = {
+        let cell = last_worklist_effective_cell();
+        let mut guard = match cell.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        let prior = match guard.clone() {
+            Some(s) => s,
+            None => {
+                *guard = Some(current_effective_str);
+                return;
+            }
+        };
+        if prior == current_effective_str {
             return;
         }
+        // Always update the effective cache so the next history diff sees the
+        // latest resolved prose, even when this write is suppressed below.
+        *guard = Some(current_effective_str.clone());
+        prior
     };
-    if prior_str == current_str {
-        return;
-    }
-    if !maybe_enforce_worklist_policy(app, &prior_str, &current_str) {
-        return;
-    }
-    // Always update the cache so the next change diffs against the most
-    // recent contents, even when this change is suppressed below.
-    *guard = Some(current_str.clone());
 
     let ts = unix_now_ms();
-    let prior_doc: serde_json::Value = serde_json::from_str(&prior_str).unwrap_or_default();
-    let current_doc: serde_json::Value = serde_json::from_str(&current_str).unwrap_or_default();
+    let prior_doc: serde_json::Value =
+        serde_json::from_str(&prior_effective_str).unwrap_or_default();
     let changelog = match generate_worklist_changelog(app, &prior_doc, &current_doc, ts) {
         Some(s) => s,
         None => {
@@ -10310,7 +10363,7 @@ fn maybe_snapshot_worklist<R: tauri::Runtime>(app: &AppHandle<R>) {
     // the worklist as it stands at that moment. The .md changelog
     // describes the transition from the prior checkpoint.
     let snapshot_path = history_dir.join(format!("{}.json", ts));
-    if let Err(e) = std::fs::write(&snapshot_path, &current_str) {
+    if let Err(e) = std::fs::write(&snapshot_path, &current_effective_str) {
         eprintln!("[worklist-history] write snapshot failed: {}", e);
     }
     let changelog_path = history_dir.join(format!("{}.md", ts));
@@ -10320,7 +10373,7 @@ fn maybe_snapshot_worklist<R: tauri::Runtime>(app: &AppHandle<R>) {
     eprintln!(
         "[worklist-history] snapshot @ {} ({} bytes)",
         ts,
-        current_str.len()
+        current_effective_str.len()
     );
 }
 
@@ -10330,7 +10383,15 @@ fn init_worklist_cache<R: tauri::Runtime>(app: &AppHandle<R>) {
     };
     if let Ok(s) = std::fs::read_to_string(&file) {
         if let Ok(mut guard) = last_worklist_cell().lock() {
-            *guard = Some(s);
+            *guard = Some(s.clone());
+        }
+        let doc: serde_json::Value = serde_json::from_str(&s).unwrap_or_default();
+        let drafts_dir = worklist_drafts_dir(app);
+        let effective_doc = resolve_worklist_doc_drafts(drafts_dir.as_deref(), &doc);
+        if let Ok(mut guard) = last_worklist_effective_cell().lock() {
+            *guard = serde_json::to_string_pretty(&effective_doc)
+                .ok()
+                .map(|body| format!("{}\n", body));
         }
     }
 }
@@ -10396,6 +10457,41 @@ struct WorklistHistoryGroup {
     phase_count: usize,
     subtitle: String,
     kind: String,
+    current_item: Option<serde_json::Value>,
+    prose_phase_summary: String,
+}
+
+fn history_compact_iso(iso: &str) -> String {
+    if iso.len() >= 16 {
+        format!("{} {}", &iso[8..10], &iso[11..16])
+    } else {
+        iso.to_string()
+    }
+}
+
+fn history_compact_range(first_iso: &str, last_iso: &str) -> String {
+    if first_iso.len() >= 16 && last_iso.len() >= 16 && first_iso.get(0..7) == last_iso.get(0..7) {
+        if first_iso.get(0..10) == last_iso.get(0..10) {
+            format!(
+                "{} {} -> {}",
+                &first_iso[8..10],
+                &first_iso[11..16],
+                &last_iso[11..16]
+            )
+        } else {
+            format!(
+                "{} -> {}",
+                history_compact_iso(first_iso),
+                history_compact_iso(last_iso)
+            )
+        }
+    } else {
+        format!(
+            "{} -> {}",
+            first_iso.chars().take(16).collect::<String>(),
+            last_iso.chars().take(16).collect::<String>()
+        )
+    }
 }
 
 fn worklist_history_summary(changelog: &str) -> String {
@@ -10568,6 +10664,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
             let current = worklist_history_item_state(&doc, &id);
             let previous = last_state.get(&id);
             let diff = worklist_history_item_diff(previous, current.as_ref());
+            let display_item = current.clone().or_else(|| previous.cloned());
             match current {
                 Some(item) => {
                     last_state.insert(id.clone(), item);
@@ -10604,6 +10701,8 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                         phase_count: 0,
                         subtitle: String::new(),
                         kind: String::from("item"),
+                        current_item: None,
+                        prose_phase_summary: String::new(),
                     });
                     idx
                 }
@@ -10612,6 +10711,8 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                 group.latest_ts = ts;
                 group.latest_iso = iso;
                 group.phases.push(phase);
+                group.current_item = display_item;
+                group.prose_phase_summary = summary;
             }
         } else {
             let phase = WorklistHistoryPhase {
@@ -10641,6 +10742,8 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                 phase_count: 0,
                 subtitle: String::new(),
                 kind: String::from("snapshot"),
+                current_item: None,
+                prose_phase_summary: String::new(),
             });
         }
     }
@@ -10651,20 +10754,20 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
             let first = group
                 .phases
                 .first()
-                .map(|p| p.iso.chars().take(16).collect::<String>())
+                .map(|p| p.iso.clone())
                 .unwrap_or_default();
             let last = group
                 .phases
                 .last()
-                .map(|p| p.iso.chars().take(16).collect::<String>())
+                .map(|p| p.iso.clone())
                 .unwrap_or_default();
-            group.subtitle = format!("{} phases · {} → {}", group.phase_count, first, last);
-        } else if let Some(phase) = group.phases.last() {
             group.subtitle = format!(
-                "{} · {}",
-                phase.iso.chars().take(16).collect::<String>(),
-                phase.summary
+                "{} phases · {}",
+                group.phase_count,
+                history_compact_range(&first, &last)
             );
+        } else if let Some(phase) = group.phases.last() {
+            group.subtitle = format!("{} · {}", history_compact_iso(&phase.iso), phase.summary);
         }
     }
     groups.sort_by(|a, b| b.latest_ts.cmp(&a.latest_ts));
@@ -10676,7 +10779,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
 
 #[cfg(test)]
 mod worklist_history_tests {
-    use super::worklist_history_item_diff;
+    use super::{history_compact_range, resolve_worklist_doc_drafts, worklist_history_item_diff};
     use serde_json::json;
 
     #[test]
@@ -10699,6 +10802,49 @@ mod worklist_history_tests {
 
         assert!(diff.contains("- {"));
         assert!(diff.contains("-   \"id\": \"x\""));
+    }
+
+    #[test]
+    fn resolves_draft_prose_for_history_snapshots() {
+        let dir =
+            std::env::temp_dir().join(format!("bram-worklist-history-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp draft dir");
+        std::fs::write(
+            dir.join("draft-item.md"),
+            "# Before\nold prose\n\n# After\nnew prose\n",
+        )
+        .expect("write draft");
+        let doc = json!({
+            "description": "test",
+            "items": [{"id": "draft-item", "status": "proposed", "files": ["a.md"]}]
+        });
+
+        let resolved = resolve_worklist_doc_drafts(Some(&dir), &doc);
+        let item = &resolved["items"][0];
+
+        assert_eq!(
+            item.get("before").and_then(|v| v.as_str()),
+            Some("old prose")
+        );
+        assert_eq!(
+            item.get("after").and_then(|v| v.as_str()),
+            Some("new prose")
+        );
+        assert!(item.get("_draftMissing").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compact_history_range_drops_redundant_year_month() {
+        assert_eq!(
+            history_compact_range("2026-05-29T10:00:00Z", "2026-05-29T10:45:00Z"),
+            "29 10:00 -> 10:45"
+        );
+        assert_eq!(
+            history_compact_range("2026-05-29T10:00:00Z", "2026-05-30T09:15:00Z"),
+            "29 10:00 -> 30 09:15"
+        );
     }
 }
 
@@ -13408,8 +13554,11 @@ pub fn run() {
                     // Detect them here, snapshot the prior contents, then
                     // fall through to the normal skip.
                     let is_worklist_event = event.paths.iter().any(|p| {
-                        p.ends_with("worklist.json")
-                            && p.components().any(|c| c.as_os_str() == "resources")
+                        let in_resources = p.components().any(|c| c.as_os_str() == "resources");
+                        let in_drafts = p
+                            .components()
+                            .any(|c| c.as_os_str() == "worklist-drafts");
+                        in_resources && (p.ends_with("worklist.json") || in_drafts)
                     });
                     if is_worklist_event {
                         maybe_snapshot_worklist(&app_handle);

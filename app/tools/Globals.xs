@@ -99,14 +99,40 @@ function historyExtractProseFromDiff(diff) {
 }
 
 function historyCurrentProsePhase(group) {
+  const item = historyCurrentItem(group);
+  const itemProse = historyItemProse(item);
+  if (itemProse) {
+    return {
+      phase: historyLatestPhase(group),
+      prose: itemProse,
+      source: 'snapshot'
+    };
+  }
   const phases = (group && group.phases) || [];
   for (let i = phases.length - 1; i >= 0; i--) {
     const prose = historyExtractProseFromDiff(phases[i].diff || '');
     if (prose) {
-      return { phase: phases[i], prose };
+      return { phase: phases[i], prose, source: 'diff' };
     }
   }
-  return { phase: null, prose: '' };
+  return { phase: null, prose: '', source: '' };
+}
+
+function historyLatestPhase(group) {
+  const phases = (group && group.phases) || [];
+  return phases.length > 0 ? phases[phases.length - 1] : null;
+}
+
+function historyCurrentItem(group) {
+  return (group && group.currentItem) || null;
+}
+
+function historyItemProse(item) {
+  if (!item) return '';
+  const after = typeof item.after === 'string' ? item.after.trim() : '';
+  if (after) return after;
+  const before = typeof item.before === 'string' ? item.before.trim() : '';
+  return before;
 }
 
 function historyCurrentProsePreview(group) {
@@ -121,15 +147,33 @@ function historyCurrentProsePreview(group) {
 
 function historyProseProvenance(group) {
   const current = historyCurrentProsePhase(group);
-  const kind = historyPhaseKind(current.phase);
+  const kind = historyPhaseKind(current.phase) || historyPhaseKind({ summary: group && group.prosePhaseSummary });
   const fate = historyItemFate(group);
+  if (historyDraftWasMissing(group)) {
+    return 'Draft missing:';
+  }
   if (kind === 'applied') {
-    return fate === 'Fate: committed.' ? 'As committed:' : 'As applied:';
+    const changed = historyLatestProseChanged(group);
+    if (fate === 'Fate: committed.') {
+      return changed ? 'As committed, changed from proposal:' : 'As committed, unchanged from proposal:';
+    }
+    return changed ? 'As applied, changed from proposal:' : 'As applied, unchanged from proposal:';
   }
   if (kind === 'proposed') {
     return fate === 'Fate: committed.' ? 'As committed:' : 'As proposed:';
   }
   return 'No prose:';
+}
+
+function historyLatestProseChanged(group) {
+  const phase = historyLatestPhase(group);
+  const diff = (phase && phase.diff) || '';
+  return diff.indexOf('"before"') >= 0 || diff.indexOf('"after"') >= 0;
+}
+
+function historyDraftWasMissing(group) {
+  const item = historyCurrentItem(group);
+  return !!(item && item._draftMissing);
 }
 
 function historyItemFate(group) {

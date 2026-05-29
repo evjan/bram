@@ -184,6 +184,8 @@ struct ProjectConfig {
     server: Option<ServerConfig>,
     #[serde(default)]
     shell: Option<ShellConfig>,
+    #[serde(default)]
+    worklist: Option<WorklistConfig>,
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -203,6 +205,12 @@ struct ServerConfig {
 struct ShellConfig {
     #[serde(default)]
     agent: Option<String>,
+}
+
+#[derive(Default, Clone, serde::Deserialize)]
+struct WorklistConfig {
+    #[serde(default, rename = "batchCommitActions")]
+    batch_commit_actions: Option<bool>,
 }
 
 fn default_server_path() -> String {
@@ -3265,6 +3273,13 @@ fn load_project_config(root: &Path) -> Option<ProjectConfig> {
         };
     }
     None
+}
+
+fn project_config_batch_commit_actions(config: Option<ProjectConfig>) -> bool {
+    config
+        .and_then(|c| c.worklist)
+        .and_then(|w| w.batch_commit_actions)
+        .unwrap_or(false)
 }
 
 fn is_project_config_path(path: &Path) -> bool {
@@ -11468,6 +11483,15 @@ fn route_request<R: tauri::Runtime>(
         };
     }
 
+    if path == "__worklist-config" {
+        let config = project_root(Some(app)).and_then(|root| load_project_config(&root));
+        let enabled = project_config_batch_commit_actions(config);
+        let body = serde_json::json!({ "batchCommitActions": enabled })
+            .to_string()
+            .into_bytes();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
     // /__worklist/resolve[?ids=foo,bar] — verified-authorization endpoint
     // the agent reads instead of parsing the `approved:` / `drop:` turn
     // line. Returns the current `.worklist-authorization.json` body, with
@@ -12424,6 +12448,26 @@ mod worklist_authorization_tests {
         // case: no sentinel was written, so the mutate caller must emit its own
         // reconcile signal rather than relying on the clear.
         assert!(!inflight_claim_fully_covered(&ids(&[]), &ids(&["a"])));
+    }
+}
+
+#[cfg(test)]
+mod project_config_tests {
+    use super::{project_config_batch_commit_actions, ProjectConfig};
+
+    fn flag(json: &str) -> bool {
+        let config = serde_json::from_str::<ProjectConfig>(json).ok();
+        project_config_batch_commit_actions(config)
+    }
+
+    #[test]
+    fn batch_commit_actions_defaults_to_false() {
+        assert!(flag(r#"{ "worklist": { "batchCommitActions": true } }"#));
+        assert!(!flag(r#"{ "worklist": { "batchCommitActions": false } }"#));
+        assert!(!flag(r#"{ "worklist": {} }"#));
+        assert!(!flag(r#"{}"#));
+        assert!(!flag(r#"{ "worklist": "#));
+        assert!(!project_config_batch_commit_actions(None));
     }
 }
 

@@ -43,6 +43,9 @@
       lastWorklistSig = currentSig;
     }" />
   <DataSource
+    id="worklistConfig"
+    url="/__worklist-config" />
+  <DataSource
     id="openIssues"
     url="/__issues"
     when="{newItemHelp}" />
@@ -192,7 +195,7 @@
           color="$textColor-secondary"
           value="Select an item" />
         <HStack
-          when="{worklist.value.items && countByStatus(worklist.value.items, 'applied') >= 2}"
+          when="{worklistConfig.value && worklistConfig.value.batchCommitActions && worklist.value.items && countByStatus(worklist.value.items, 'applied') >= 2}"
           gap="$space-2"
           verticalAlignment="center"
           padding="$space-2"
@@ -676,7 +679,8 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
 
     <ModalDialog
       id="batchHelpDialog"
-      title="Approve all / Drop all">
+      title="Approve all / Drop all"
+      when="{worklistConfig.value && worklistConfig.value.batchCommitActions}">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           Batch actions for TO COMMIT items — they act on every TO COMMIT

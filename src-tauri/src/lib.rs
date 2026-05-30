@@ -3150,6 +3150,43 @@ fn pty_write_internal<R: tauri::Runtime>(
 // read-then-truncate phase. Bracketed-paste framing for `kind:
 // "toTurn"` is applied here (in the drain) so the right pane stays
 // ignorant of PTY framing.
+// Write a feedback draft to `resources/feedback-drafts/<id>.md` without
+// routing through the PTY paste channel. Pulls long Iterate feedback off
+// `toTurn`'s `\s+` whitespace collapse + downstream TUI paste buffer
+// limits; the iterate payload then carries only a small `feedbackRef` and
+// the agent reads the file directly. See #144.
+#[tauri::command]
+fn queue_feedback_draft<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    payload: serde_json::Value,
+) -> Result<(), String> {
+    let feedback_id = payload
+        .get("feedback_id")
+        .and_then(|v| v.as_str())
+        .ok_or("missing feedback_id")?
+        .to_string();
+    let text = payload
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let dir = feedback_drafts_dir(&app).ok_or("project root unknown".to_string())?;
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return Err(format!("create feedback-drafts dir: {}", e));
+    }
+    let path = feedback_draft_path(&dir, &feedback_id).ok_or("invalid feedback_id".to_string())?;
+    let bytes = text.len();
+    std::fs::write(&path, text.as_bytes()).map_err(|e| format!("write feedback draft: {}", e))?;
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            &app,
+            "feedback-draft",
+            &format!("op=write feedback_id={} bytes={}", feedback_id, bytes),
+        );
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn queue_pty_intent(
     app: AppHandle,
@@ -7833,6 +7870,120 @@ fn worklist_drafts_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf>
 
 fn worklist_auth_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     project_root(Some(app)).map(|p| p.join(WORKLIST_AUTH_REL))
+}
+
+fn feedback_drafts_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| p.join("resources").join("feedback-drafts"))
+}
+
+fn feedback_history_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| p.join("resources").join("feedback-history"))
+}
+
+fn feedback_draft_path(drafts_dir: &Path, feedback_id: &str) -> Option<PathBuf> {
+    if feedback_id.is_empty() || feedback_id.contains('/') || feedback_id.contains('\\') {
+        return None;
+    }
+    Some(drafts_dir.join(format!("{}.md", feedback_id)))
+}
+
+fn feedback_draft_belongs_to_item(file_name: &str, item_id: &str) -> bool {
+    file_name == format!("{}.md", item_id) || file_name.ends_with(&format!("-{}.md", item_id))
+}
+
+fn unique_feedback_history_path(history_dir: &Path, file_name: &str) -> PathBuf {
+    let initial = history_dir.join(file_name);
+    if !initial.exists() {
+        return initial;
+    }
+    let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
+    for n in 1..1000 {
+        let candidate = history_dir.join(format!("{}-{}.md", stem, n));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    history_dir.join(format!("{}-{}.md", stem, unix_now_ms()))
+}
+
+fn promote_feedback_drafts_for_items<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    item_ids: &[String],
+    reason: &str,
+) {
+    if item_ids.is_empty() {
+        return;
+    }
+    let Some(drafts_dir) = feedback_drafts_dir(app) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&drafts_dir) else {
+        return;
+    };
+    let Some(history_dir) = feedback_history_dir(app) else {
+        return;
+    };
+    let mut matched: Vec<(PathBuf, String, String)> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if let Some(item_id) = item_ids
+            .iter()
+            .find(|id| feedback_draft_belongs_to_item(&file_name, id))
+        {
+            matched.push((path, file_name, item_id.clone()));
+        }
+    }
+    if matched.is_empty() {
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(&history_dir) {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "feedback-draft",
+                &format!("op=promote-dir-failed reason={} error={}", reason, e),
+            );
+        }
+        return;
+    }
+    for (path, file_name, item_id) in matched {
+        let dest = unique_feedback_history_path(&history_dir, &file_name);
+        match std::fs::rename(&path, &dest) {
+            Ok(()) => {
+                if bram_trace_enabled() {
+                    append_bram_trace_line(
+                        app,
+                        "feedback-draft",
+                        &format!(
+                            "op=promote reason={} item_id={} feedback_id={}",
+                            reason,
+                            item_id,
+                            file_name.strip_suffix(".md").unwrap_or(&file_name)
+                        ),
+                    );
+                }
+            }
+            Err(e) => {
+                if bram_trace_enabled() {
+                    append_bram_trace_line(
+                        app,
+                        "feedback-draft",
+                        &format!(
+                            "op=promote-failed reason={} item_id={} feedback_id={} error={}",
+                            reason,
+                            item_id,
+                            file_name.strip_suffix(".md").unwrap_or(&file_name),
+                            e
+                        ),
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn worklist_history_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
@@ -12551,6 +12702,7 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
     if op == "prune" && auth_kind == "drop" {
         consume_worklist_authorization(app);
     }
+    promote_feedback_drafts_for_items(app, completion_ids, op);
 
     let result_key = if op == "prune" { "pruned" } else { "advanced" };
     let response = format!(
@@ -13141,6 +13293,7 @@ pub fn run() {
             pty_spawn,
             pty_write,
             queue_pty_intent,
+            queue_feedback_draft,
             pty_resize,
             log_from_right_pane,
             open_devtools,

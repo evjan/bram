@@ -240,6 +240,25 @@ serves an empty default; the Worklist tab creates the file (and
      (first action) and `POST /__iterate/end` (last action) — see
      *Host-managed inflight sentinel*.
 
+     The Iterate payload's per-item shape is `{id, hash, feedbackRef}`
+     where `feedbackRef` names a file at
+     `resources/feedback-drafts/<feedbackRef>.md` containing the user's
+     full-fidelity feedback text. Read that file directly to get the
+     feedback content — `toTurn`'s `\s+ → " "` collapse and the
+     receiving TUI's bracketed-paste limits don't apply because the
+     text never rode the PTY paste channel. Feedback refs are allocated
+     per click, typically `<unix-ms>-<item-id>`; they are not item ids,
+     and feedback content is not hash-verified. The item `hash` still
+     verifies the worklist item identity; the feedback text is the new
+     user-authored submission for this turn. Successful
+     `/__worklist/mutate` advance/prune promotes matching drafts from
+     `feedback-drafts/` to `feedback-history/` so drafts do not
+     accumulate. Each draft write emits a `[feedback-draft] op=write`
+     trace line with `feedback_id` and byte count. Approve and Drop
+     still use the older inline `{id, hash, feedback}` shape (their
+     feedback is usually short); their migration to `feedbackRef` is
+     filed as follow-up. See #144.
+
 3. **Mechanical transitions** — `POST /__worklist/mutate` is the only
    channel for approval-driven state changes:
    - `{"op":"advance","ids":[...],"status":"applied"}` after an

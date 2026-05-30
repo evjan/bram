@@ -379,7 +379,7 @@
                       label="Iterate"
                       size="xs"
                       enabled="{!submitting && !!selected && ((feedbackBox &amp;&amp; feedbackBox.value) || '').trim().length > 0}"
-                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); toTurn('iterate: ' + buildIteratePayload(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || ''))" />
+                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); sendIterateWithFeedbackDraft(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || '')" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"

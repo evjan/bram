@@ -981,9 +981,17 @@ function buildApprovePayload(items, selectedId, feedback) {
 
 function buildIteratePayload(items, selectedId, feedback) {
   App.mark('build-iterate-payload');
+  // feedback may be either an inline string (backward-compat, used by
+  // any caller that hasn't migrated to the backing-store flow yet) or
+  // a `{ feedbackRef: "<id>" }` object (new, used by the Iterate click
+  // after queueFeedbackDraft has written the draft to disk). See #144.
   return JSON.stringify({
     items: (items || []).filter(function (i) { return i.id === selectedId; })
-      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback }; })
+      .map(function (i) {
+        return feedback && typeof feedback === 'object' && feedback.feedbackRef
+          ? { id: i.id, hash: i.hash, feedbackRef: feedback.feedbackRef }
+          : { id: i.id, hash: i.hash, feedback: feedback };
+      })
   });
 }
 

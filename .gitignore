@@ -44,6 +44,8 @@ resources/worklist-history/
 # Worklist proposals are per-developer scratch; keep them out of the repo.
 resources/worklist.json
 resources/worklist-drafts/
+resources/feedback-drafts/
+resources/feedback-history/
 resources/.bram-port
 resources/.bram-port.json
 resources/.inflight-claim.json

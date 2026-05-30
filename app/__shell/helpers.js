@@ -180,6 +180,77 @@ window._xsLogs = window._xsLogs || [];
 // data, trailing newline for toShell) is applied host-side in the
 // drain so the right pane stays ignorant of terminal escape
 // sequences.
+// Write per-item feedback to resources/feedback-drafts/<feedbackId>.md
+// without going through the PTY paste channel. toTurn collapses every
+// whitespace run into a single space (line 227) and the receiving TUI's
+// bracketed-paste buffer has its own content limits, so long Iterate
+// feedback can lose structure or get truncated. Iterate now writes the
+// feedback to disk via this helper and sends only a small feedbackRef
+// in the toTurn payload; the agent reads the draft file directly. See
+// #144.
+window.queueFeedbackDraft = function (feedbackId, text) {
+  var id = String(feedbackId || "");
+  var s = String(text == null ? "" : text);
+  // stage=source: what the iframe got from the textbox. stage=sink:
+  // what was passed to the invoke. Identical lengths confirm no
+  // client-side mangling; a delta points at iframe-side regression.
+  try {
+    window.logToHost({
+      kind: "iframe-trace",
+      subkind: "feedback-draft-write",
+      stage: "source",
+      feedback_id: id,
+      source_bytes: s.length,
+      at: new Date().toISOString(),
+    });
+  } catch (e) {}
+  var invoke = getTauriInvoke();
+  if (!invoke) return Promise.resolve(false);
+  try {
+    invoke("log_from_right_pane", {
+      payload: {
+        kind: "iframe-trace",
+        subkind: "feedback-draft-write",
+        stage: "sink",
+        feedback_id: id,
+        sink_bytes: s.length,
+        at: new Date().toISOString(),
+      },
+    }).catch(function () {});
+  } catch (e) {}
+  return invoke("queue_feedback_draft", { payload: { feedback_id: id, text: s } })
+    .then(function () {
+      return true;
+    })
+    .catch(function (e) {
+      console.error("queueFeedbackDraft invoke", e);
+      try {
+        window.logToHost({
+          kind: "iframe-trace",
+          subkind: "feedback-draft-write-failed",
+          feedback_id: id,
+          error: String((e && e.message) || e),
+          at: new Date().toISOString(),
+        });
+      } catch (le) {}
+      return false;
+    });
+};
+
+window.sendIterateWithFeedbackDraft = function (items, selectedId, text) {
+  var feedbackId = Date.now() + "-" + selectedId;
+  window.queueFeedbackDraft(feedbackId, text).then(function (wroteDraft) {
+    window.toTurn("iterate: " + JSON.stringify({
+      items: (items || []).filter(function (i) { return i.id === selectedId; })
+        .map(function (i) {
+          return wroteDraft
+            ? { id: i.id, hash: i.hash, feedbackRef: feedbackId }
+            : { id: i.id, hash: i.hash, feedback: text };
+        }),
+    }));
+  });
+};
+
 window.toShell = function (text) {
   var s = String(text);
   // Trace the entry so #86's "click swallowed" diagnostic flow can

@@ -354,7 +354,7 @@ two coordination dot-files instead:
 The Codex PreToolUse guard exempts `.worklist-intent.json` from
 worklist coverage — it's a coordination file, like the loopback curl
 is for Claude. Trace each drain by grepping `[worklist-intent]` in
-`resources/bram-trace.log`.
+`resources/bram-traces/bram-trace.log`.
 
 ### Authoring conventions
 
@@ -739,12 +739,12 @@ without a restart:
 Three forensics surfaces, used together. The first two are raw
 streams; the third is a dashboard that derives signals from them.
 
-**`resources/bram-trace.log`** — host-side rolling log of HTTP
+**`resources/bram-traces/bram-trace.log`** — host-side rolling log of HTTP
 routes, iframe events, and inflight-sentinel writes / clears.
 Always on; grep it directly. Best for plumbing: stuck spinner,
 sentinel anomalies, route errors, agent-turn-end detection,
 heartbeat drift, close-cycle verification (`grep
-"path=__issue/close" resources/bram-trace.log` — absence around a
+"path=__issue/close" resources/bram-traces/bram-trace.log` — absence around a
 known close timestamp means the agent bypassed
 `gh_issue_close_with_commit` and shelled out to `gh issue close`
 directly).

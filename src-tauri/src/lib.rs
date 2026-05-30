@@ -317,8 +317,8 @@ fn first_nonempty_env(names: &[&str]) -> Option<String> {
 // --- Comms-path trace foundation -----------------------------------------
 //
 // Process-global toggle for the comms-path trace log
-// (`resources/bram-trace.log`, with prior runs archived at startup as
-// `resources/bram-trace-YYYY-MM-DD*.log`). Set once at startup by
+// (`resources/bram-traces/bram-trace.log`, with prior runs archived at
+// startup as `resources/bram-traces/bram-trace-YYYY-MM-DD*.log`). Set once at startup by
 // `init_bram_trace_from_env`; every potential waypoint checks
 // `bram_trace_enabled()` (a single atomic load) before doing any work,
 // so the cost when off is essentially zero. Spec:
@@ -368,18 +368,18 @@ fn init_bram_trace_from_env() {
     BRAM_TRACE_ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
     if on {
         eprintln!(
-            "[bram-trace] enabled (BRAM_TRACE=1); live trace destination: <project_root>/resources/bram-trace.log; previous runs archived at startup as <project_root>/resources/bram-trace-YYYY-MM-DD*.log"
+            "[bram-trace] enabled (BRAM_TRACE=1); live trace destination: <project_root>/resources/bram-traces/bram-trace.log; previous runs archived at startup as <project_root>/resources/bram-traces/bram-trace-YYYY-MM-DD*.log"
         );
     }
 }
 
 #[allow(dead_code)]
 fn bram_trace_log_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join("resources/bram-trace.log"))
+    project_root(Some(app)).map(|p| p.join("resources/bram-traces/bram-trace.log"))
 }
 
 fn is_bram_trace_archive_rel(rel: &str) -> bool {
-    rel.starts_with("resources/bram-trace-") && rel.ends_with(".log")
+    rel.starts_with("resources/bram-traces/bram-trace-") && rel.ends_with(".log")
 }
 
 fn bram_trace_date_stamp_local() -> String {
@@ -2897,7 +2897,7 @@ fn pty_spawn(
     // the host. See trace-category-hook.
     if bram_trace_enabled() {
         command.env("BRAM_TRACE", "1");
-        if let Some(path) = project_root(Some(&app)).map(|p| p.join("resources/bram-trace.log")) {
+        if let Some(path) = bram_trace_log_file(&app) {
             command.env("BRAM_TRACE_LOG", path.to_string_lossy().into_owned());
         }
     }
@@ -9210,8 +9210,7 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
         "info"
     };
 
-    let trace_text = project_root(Some(app))
-        .map(|p| p.join("resources/bram-trace.log"))
+    let trace_text = bram_trace_log_file(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_default();
     let trace = coordination_trace_summary(&trace_text);
@@ -13636,7 +13635,7 @@ pub fn run() {
                     // to avoid self-feeding loop / reload noise: the
                     // live file is written by append_bram_trace_line,
                     // and startup archiving may create
-                    // resources/bram-trace-YYYY-MM-DD*.log files.
+                    // resources/bram-traces/bram-trace-YYYY-MM-DD*.log files.
                     // Neither should emit more watcher trace or reload
                     // behavior. See fix-watcher-trace-self-feeding-loop.
                     if bram_trace_enabled() {
@@ -13655,7 +13654,7 @@ pub fn run() {
                                         .unwrap_or("")
                                         .to_string()
                                 });
-                            if rel == "resources/bram-trace.log"
+                            if rel == "resources/bram-traces/bram-trace.log"
                                 || is_bram_trace_archive_rel(&rel)
                             {
                                 continue;

@@ -258,7 +258,7 @@ window.toShell = function (text) {
   // "helper invoked but queue / drain lost" (trace line present but
   // no [pty-intent] op=enqueue follows). kind: "iframe-trace" routes
   // through log_from_right_pane's iframe-trace branch into the
-  // [iframe] category of resources/bram-trace.log.
+  // [iframe] category of resources/bram-traces/bram-trace.log.
   try {
     window.logToHost({
       kind: "iframe-trace",

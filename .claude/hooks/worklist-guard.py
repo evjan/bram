@@ -43,7 +43,7 @@ def _trace_hook(event, tool, target, decision, reason, cwd=None):
       BRAM_TRACE being enabled. Refs #95 — phantom worklist writes need
       this signal to distinguish hook-block from cwd-mismatch from
       watcher-revert.
-    - Additionally appends to resources/bram-trace.log when BRAM_TRACE=1
+    - Additionally appends to resources/bram-traces/bram-trace.log when BRAM_TRACE=1
       and BRAM_TRACE_LOG is set on the agent's PTY child env (existing
       issue #49 behavior).
     """

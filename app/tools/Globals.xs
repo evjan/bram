@@ -386,7 +386,7 @@ function isWaitingForAssistant(jsonlText) {
 // Iframe-side trace helper for the [iframe] category of the comms-path
 // trace log (issue #49). Forwards a structured record to the host's
 // `log_from_right_pane` Tauri command, which routes records whose
-// `kind` is `"iframe-trace"` into resources/bram-trace.log when
+// `kind` is `"iframe-trace"` into resources/bram-traces/bram-trace.log when
 // BRAM_TRACE=1 is set on the host. No-op when logToHost isn't wired up.
 // subkind is a token from the spec's maintained vocabulary (click,
 // inflight-set, inflight-clear, listener-fired, ...); fields are

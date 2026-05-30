@@ -51,7 +51,7 @@ BYPASS_TTL_SECONDS = 60 * 60  # an authorization record is fresh for 1h
 # - Always emits one `[worklist-guard]` line to stderr, including cwd,
 #   so the hook's decision is visible to the agent / user without
 #   BRAM_TRACE being enabled. Refs #95.
-# - Additionally appends to resources/bram-trace.log when BRAM_TRACE=1
+# - Additionally appends to resources/bram-traces/bram-trace.log when BRAM_TRACE=1
 #   and BRAM_TRACE_LOG is set on the agent's PTY child env (existing
 #   issue #49 behavior).
 def _trace_hook(event, tool, target, decision, reason, cwd=None):

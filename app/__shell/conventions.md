@@ -307,12 +307,17 @@ two coordination dot-files instead:
    ```
 
    `route` is one of `worklist-resolve`, `worklist-mutate`,
-   `iterate-begin`, `iterate-end` (alias `worklist-end`). `body`
-   matches the HTTP route:
+   `iterate-begin`, `iterate-end` (alias `worklist-end`),
+   `issue-close`. `body` matches the HTTP route:
    - `worklist-resolve` — omit, or `{ "ids": [...] }` to filter.
    - `worklist-mutate` — `{ "op": "advance", "ids": [...], "status": "applied" }`
      or `{ "op": "prune", "ids": [...] }`.
    - `iterate-begin` / `iterate-end` — `{ "ids": [...] }`.
+   - `issue-close` — `{ "number": N, "commit": "<full-sha>", "push": <bool> }`
+     for the generated-comment verified path, or
+     `{ "number": N, "comment": "<user-supplied>" }` for the
+     user-supplied-comment path. Same field semantics as
+     `/__issue/close` — see the close-on-commit section below.
 
 2. **Read** `resources/.worklist-result.json` for the record whose
    `nonce` matches (ignore stale results from prior requests):
@@ -604,21 +609,33 @@ After resolving and committing as usual:
    line toggles push-before-close.
 2. Resolve the new commit's full SHA.
 3. For each `close-issue: N` **without** a user-supplied comment,
-   call Bram's backend route (don't `gh issue close` directly):
+   call Bram's backend route through your transport (don't `gh issue
+   close` directly):
 
-   ```sh
-   curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \
-     "http://127.0.0.1:<bram-port>/__issue/close?number=N&commit=<full-sha>[&push=true]"
-   ```
+   - **Claude (loopback curl):**
 
-   Append `&push=true` if `push-before-close: true` was present. The
-   backend pushes (if requested), verifies GitHub sees the commit,
-   and on success closes with the generated comment
+     ```sh
+     curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \
+       "http://127.0.0.1:<bram-port>/__issue/close?number=N&commit=<full-sha>[&push=true]"
+     ```
+
+     Append `&push=true` if `push-before-close: true` was present.
+
+   - **Codex (filesystem intent):** write `resources/.worklist-intent.json`
+     with `{ "nonce": "...", "route": "issue-close", "body": { "number": N,
+     "commit": "<full-sha>", "push": <bool> } }` and read
+     `resources/.worklist-result.json` for the matching nonce. Same
+     drain-and-retry rules as the worklist routes above.
+
+   Either way, the backend pushes (if requested), verifies GitHub
+   sees the commit, and on success closes with the generated comment
    `Closed by https://github.com/<owner>/<repo>/commit/<full-sha>`.
 
-4. For `close-issue: N comment: "..."`, close via
-   `/__issue/close?number=N&comment=<encoded-comment>` — don't
-   rewrite the user's comment into the generated form.
+4. For `close-issue: N comment: "..."`, close with the same transport
+   shapes — Claude:
+   `/__issue/close?number=N&comment=<encoded-comment>`; Codex:
+   `route: "issue-close", body: { "number": N, "comment": "..." }`.
+   Don't rewrite the user's comment into the generated form.
 
 5. On backend refusal (`{"ok":false,"code":"commit-not-visible"}` or
    `"push-failed"`), do **not** fall back to `gh issue close`. Report

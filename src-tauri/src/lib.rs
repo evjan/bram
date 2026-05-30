@@ -2282,11 +2282,14 @@ fn gh_issue_close<R: tauri::Runtime>(
     }
 }
 
-fn close_issue_commit_comment(repo_slug: &str, full_sha: &str) -> String {
-    format!(
-        "Closed by https://github.com/{}/commit/{}",
-        repo_slug, full_sha
-    )
+fn close_issue_commit_comment(repo_slug: &str, full_sha: &str, subject: &str) -> String {
+    let commit_url = format!("https://github.com/{}/commit/{}", repo_slug, full_sha);
+    let trimmed_subject = subject.trim();
+    if trimmed_subject.is_empty() {
+        format!("Closed by {}", commit_url)
+    } else {
+        format!("Closed by {}\n\nCommit: {}", commit_url, trimmed_subject)
+    }
 }
 
 fn issue_close_json_error(code: &str, issue: u64, sha: &str, message: String) -> Vec<u8> {
@@ -2308,6 +2311,13 @@ fn git_full_commit_sha<R: tauri::Runtime>(app: &AppHandle<R>, sha: &str) -> Resu
     }
     let rev = format!("{}^{{commit}}", trimmed);
     git_run(app, &["rev-parse", "--verify", &rev]).map(|s| s.trim().to_string())
+}
+
+fn git_commit_subject<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    full_sha: &str,
+) -> Result<String, String> {
+    git_run(app, &["show", "-s", "--format=%s", full_sha]).map(|s| s.trim().to_string())
 }
 
 fn gh_commit_visible<R: tauri::Runtime>(
@@ -2348,7 +2358,7 @@ fn gh_issue_close_with_commit<R: tauri::Runtime>(
     sha: &str,
     push_before_close: bool,
 ) -> (u16, &'static str, Vec<u8>) {
-    let full_sha = match git_full_commit_sha(app, sha) {
+    let mut full_sha = match git_full_commit_sha(app, sha) {
         Ok(s) => s,
         Err(e) => {
             return (
@@ -2375,12 +2385,15 @@ fn gh_issue_close_with_commit<R: tauri::Runtime>(
         }
     };
     if push_before_close {
-        if let Err(e) = auto_rebase_and_push(app) {
-            return (
-                502,
-                "application/json; charset=utf-8",
-                issue_close_json_error("push-failed", number, &full_sha, e),
-            );
+        match push_focused_commit(app, &full_sha) {
+            Ok(pushed_sha) => full_sha = pushed_sha,
+            Err(e) => {
+                return (
+                    502,
+                    "application/json; charset=utf-8",
+                    issue_close_json_error("focused-push-failed", number, &full_sha, e),
+                );
+            }
         }
     }
     match gh_commit_visible(app, &repo_slug, &full_sha) {
@@ -2395,8 +2408,8 @@ fn gh_issue_close_with_commit<R: tauri::Runtime>(
                     number,
                     &full_sha,
                     format!(
-                        "Committed {}, but did not close #{} because GitHub cannot see the commit yet. Push the commit, then close #{} with the generated commit URL.",
-                        short_sha, number, number
+                        "Committed {}, but did not close #{} because GitHub cannot see the commit yet. Retry the verified close helper after the push problem is resolved.",
+                        short_sha, number
                     ),
                 ),
             );
@@ -2410,11 +2423,59 @@ fn gh_issue_close_with_commit<R: tauri::Runtime>(
         }
     }
 
-    let comment = close_issue_commit_comment(&repo_slug, &full_sha);
+    let subject = git_commit_subject(app, &full_sha).unwrap_or_default();
+    let comment = close_issue_commit_comment(&repo_slug, &full_sha, &subject);
     match gh_issue_close(app, number, &comment) {
         Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
         Err(e) => {
             eprintln!("[gh issue close {}] {}", number, e);
+            (500, "text/plain; charset=utf-8", e.into_bytes())
+        }
+    }
+}
+
+fn handle_issue_close_json<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    body: &[u8],
+) -> (u16, &'static str, Vec<u8>) {
+    let parsed: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
+    if parsed.is_null() {
+        return (
+            400,
+            "application/json; charset=utf-8",
+            br#"{"error":"malformed issue close JSON"}"#.to_vec(),
+        );
+    }
+    let number = parsed.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
+    if number == 0 {
+        return (
+            400,
+            "application/json; charset=utf-8",
+            br#"{"error":"missing number"}"#.to_vec(),
+        );
+    }
+    let commit = parsed
+        .get("commit")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let push_before_close = parsed
+        .get("push")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let comment = parsed
+        .get("comment")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if !commit.is_empty() {
+        return gh_issue_close_with_commit(app, number, &commit, push_before_close);
+    }
+    match gh_issue_close(app, number, &comment) {
+        Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+        Err(e) => {
+            eprintln!("[issue close intent number={}] {}", number, e);
             (500, "text/plain; charset=utf-8", e.into_bytes())
         }
     }
@@ -2426,14 +2487,31 @@ mod issue_close_tests {
 
     #[test]
     fn generated_commit_close_comment_uses_full_url_without_trailing_period() {
-        let comment =
-            close_issue_commit_comment("judell/bram", "8b7c4407c0ffee00000000000000000000000000");
+        let comment = close_issue_commit_comment(
+            "judell/bram",
+            "8b7c4407c0ffee00000000000000000000000000",
+            "Fix draft-backed worklist history",
+        );
+
+        assert_eq!(
+            comment,
+            "Closed by https://github.com/judell/bram/commit/8b7c4407c0ffee00000000000000000000000000\n\nCommit: Fix draft-backed worklist history"
+        );
+        assert!(!comment.ends_with('.'));
+    }
+
+    #[test]
+    fn generated_commit_close_comment_tolerates_missing_subject() {
+        let comment = close_issue_commit_comment(
+            "judell/bram",
+            "8b7c4407c0ffee00000000000000000000000000",
+            "",
+        );
 
         assert_eq!(
             comment,
             "Closed by https://github.com/judell/bram/commit/8b7c4407c0ffee00000000000000000000000000"
         );
-        assert!(!comment.ends_with('.'));
     }
 
     #[test]
@@ -3844,6 +3922,76 @@ fn auto_rebase_and_push<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), Str
                 .unwrap_or_else(|| "push succeeded".to_string());
             return Err(format!(
                 "{}; stash pop failed: {} (stash retained — recover with `git stash list` / `git stash apply`)",
+                prefix,
+                pop_err.trim()
+            ));
+        }
+    }
+
+    result
+}
+
+fn push_focused_commit<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    full_sha: &str,
+) -> Result<String, String> {
+    let branch =
+        git_run(app, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|s| s.trim().to_string())?;
+    if branch == "HEAD" || branch.is_empty() {
+        return Err("refusing focused close push from a detached HEAD".to_string());
+    }
+    let head_sha = git_run(app, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string())?;
+    if head_sha != full_sha {
+        return Err(format!(
+            "refusing focused close push because commit {} is not HEAD ({})",
+            full_sha, head_sha
+        ));
+    }
+
+    let dirty = git_run(app, &["status", "--porcelain"])
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let mut stashed = false;
+    if dirty {
+        git_run(
+            app,
+            &[
+                "stash",
+                "push",
+                "--include-untracked",
+                "-m",
+                "bram-focused-close-push",
+            ],
+        )
+        .map_err(|e| format!("auto-stash failed: {}", e))?;
+        stashed = true;
+    }
+
+    let result: Result<String, String> = (|| {
+        git_run(app, &["fetch", "origin"])?;
+        let upstream = format!("origin/{}", branch);
+        if let Err(rebase_err) = git_run(app, &["rebase", &upstream]) {
+            let _ = git_run(app, &["rebase", "--abort"]);
+            return Err(format!(
+                "rebase conflicts (aborted, working tree clean - re-run the rebase manually or ask the agent, then retry close): {}",
+                rebase_err.trim()
+            ));
+        }
+        let pushed_sha = git_run(app, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string())?;
+        let refspec = format!("{}:refs/heads/{}", pushed_sha, branch);
+        git_run(app, &["push", "origin", &refspec])?;
+        Ok(pushed_sha)
+    })();
+
+    if stashed {
+        if let Err(pop_err) = git_run(app, &["stash", "pop"]) {
+            let prefix = result
+                .as_ref()
+                .err()
+                .cloned()
+                .unwrap_or_else(|| "focused push succeeded".to_string());
+            return Err(format!(
+                "{}; stash pop failed: {} (stash retained - recover with `git stash list` / `git stash apply`)",
                 prefix,
                 pop_err.trim()
             ));
@@ -6457,6 +6605,7 @@ const CLAUDE_CURL_ALLOW_PATTERNS: &[&str] = &[
     "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__iterate*)",
     "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST \"http://127.0.0.1*__iterate*)",
     "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST * \"http://127.0.0.1*__iterate*)",
+    "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__issue*)",
     "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__enhance*)",
 ];
 // Compact high-priority gate prose embedded in the Bram binary. Keep detailed
@@ -11925,7 +12074,7 @@ fn handle_worklist_resolve<R: tauri::Runtime>(
 //
 // Intent shape:  {"nonce": "...", "route": "<r>", "body": { ... }}
 //   routes: worklist-resolve | worklist-mutate | iterate-begin |
-//           iterate-end | worklist-end
+//           iterate-end | worklist-end | issue-close
 // Result shape:  {"nonce": "...", "ok": <bool>, "status": <u16>,
 //                 "result"|"error": <json>, "completedAtMs": <ms>}
 fn drain_worklist_intent<R: tauri::Runtime>(app: &AppHandle<R>) {
@@ -11980,6 +12129,10 @@ fn drain_worklist_intent<R: tauri::Runtime>(app: &AppHandle<R>) {
             }
             "iterate-end" | "worklist-end" => {
                 let (s, _m, b) = handle_iterate_end(app, &body_bytes);
+                (s, b)
+            }
+            "issue-close" => {
+                let (s, _m, b) = handle_issue_close_json(app, &body_bytes);
                 (s, b)
             }
             other => (

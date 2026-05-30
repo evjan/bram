@@ -1,42 +1,72 @@
 # Backend APIs
 
-Inventory of the backend surfaces produced by `src-tauri/src/lib.rs`.
-Bram hosts two iframes inside the parent shell — the **right
-pane** (the project under development; any web app served by the
-project's HTTP server) and the **agent-tools drawer** (Bram's
-own XMLUI control surface at `app/tools/`, providing Transcript,
-Worklist, Commits, Issues, Sessions, Context, README tabs). Two
-transport channels carry traffic between the Rust host and everything
-else (those two iframes, the parent shell, and the agent running in the
-terminal):
+This document inventories Bram's route-like surfaces. The `__*` HTTP endpoints
+are only one subset; the app also uses project-content routing, bundled asset
+routes, Tauri IPC, filesystem coordination files, watcher events, and one
+external local service.
 
-- **HTTP loopback.** A `tiny_http` server bound to `127.0.0.1:<random-port>`
-  serves the agent directly (via `curl`) and serves both iframes
-  *indirectly* through the `tauri://localhost` custom-scheme handler.
-  Every route lives under the `__<name>` prefix (and a small set of
-  static fallbacks). When an iframe fetches
-  `tauri://localhost/__worklist`, the scheme handler's loopback tier
-  proxies the request to `http://127.0.0.1:<port>/__worklist` and
-  returns the body. The two call sites (`curl` from the agent, `fetch`
-  from an iframe) hit the same handlers with different base URLs.
-- **Tauri IPC.** `#[tauri::command]` functions registered in
-  `tauri::generate_handler!` at the bottom of `lib.rs`. Reachable from
-  any window owned by this app process. Because both iframes are
-  same-origin with the parent shell at `tauri://localhost`, they call
-  IPC directly via `window.parent.__TAURI__.core.invoke(...)`;
-  `app/__shell/helpers.js:getTauriInvoke` formalizes a `window.__TAURI__`
-  → `window.parent.__TAURI__` → `window.top.__TAURI__` fallback chain.
-  The `postMessage` bridge to `app/main.js` has been retired except for
-  voice (`voice-start` / `voice-stop`), which still routes through the
-  parent because the parent shell owns the MediaRecorder pipeline. The
-  agent itself cannot call IPC — it has no Tauri runtime.
+## Key terms
+
+**Route**
+: A URL-addressable path such as `/__worklist` or `/__project/index.html`.
+  Routes are convenient for browser navigation, XMLUI `DataSource` reads,
+  image/file previews, and compatibility calls from tools such as `curl`.
+
+**Loopback**
+: A real TCP network call from this machine back to this machine, usually to
+  `127.0.0.1` or `localhost`. In Bram, loopback usually means an agent or helper
+  calls the tiny HTTP server at `http://127.0.0.1:<bram-port>/...`. A URL that
+  merely contains the word `localhost`, such as `tauri://localhost/...`, is not
+  necessarily loopback.
+
+**Tauri scheme**
+: Browser URL handling inside the WebView, using `tauri://localhost/...` (or
+  `http://tauri.localhost/...` on some platforms). It looks URL-like and can
+  serve the same internal route shapes, but it is handled inside Tauri rather
+  than by opening a TCP connection to `127.0.0.1`.
+
+**Tauri IPC**
+: Direct WebView-to-host commands and events through `window.__TAURI__`, such as
+  `invoke(...)` calls and events like `worklist-changed`. IPC is not URL routing
+  and is not loopback.
+
+**Filesystem coordination**
+: Communication through watched files under `resources/`, such as
+  `.worklist-intent.json`, `.worklist-result.json`, `.worklist-authorization.json`,
+  `.inflight-claim.json`, `worklist.json`, and history files. This is not
+  loopback; it is file I/O plus host watcher dispatch.
+
+Bram hosts two iframes inside the parent shell: the **right pane** (the project
+under development; any web app served by the project's HTTP server) and the
+**agent-tools drawer** (Bram's own XMLUI control surface at `app/tools/`,
+providing Transcript, Worklist, Commits, Issues, Sessions, and Context tabs).
+These surfaces use several transports:
+
+- **Tauri scheme routing** loads shell pages, project content, bundled assets,
+  and internal route-shaped APIs for the browser-facing iframes.
+- **Internal HTTP-style routes** are request/response handlers in
+  `src-tauri/src/lib.rs`. The browser usually reaches them through the Tauri
+  scheme; agents historically reached some of them through loopback `curl`.
+- **Loopback HTTP** is the real `127.0.0.1:<bram-port>` tiny HTTP server path.
+  It remains useful as a compatibility path, but Codex cannot reliably use it
+  under the current sandbox.
+- **Tauri IPC commands and events** carry direct WebView-to-host commands and
+  invalidation signals. `app/__shell/helpers.js:getTauriInvoke` formalizes a
+  `window.__TAURI__` -> `window.parent.__TAURI__` -> `window.top.__TAURI__`
+  fallback chain.
+- **Filesystem coordination** is now the preferred direction for agent
+  lifecycle work: intent/result files, authorization records, inflight claims,
+  worklist state, and history.
+- **External local services** are separate loopback services outside Bram's
+  route handler, currently represented by the Whisper voice endpoint at
+  `http://127.0.0.1:18080`.
 
 The right-pane iframe URL is provisioned via the IPC command
 `get_right_pane_url`, which returns the `tauri://localhost/__project/...`
-form (the scheme handler routes `/__project/*` to the project's HTTP
-server). The loopback port is not exposed to the iframes — they only
-see the `tauri://` origin. There is no auth on either channel beyond
-loopback / process scope.
+form. The scheme handler routes `/__project/*` to the project's HTTP server or
+serves files directly. The loopback port is not exposed to the iframes; they see
+the `tauri://` origin. The agent itself cannot call IPC because it has no Tauri
+runtime.
 
 When a route or command is added or removed, update this catalog. Code is
 the source of truth; this is the announcement surface.
@@ -301,7 +331,7 @@ with a generated commit-URL comment; see the table note below. Issue
 | `/__issues/search` | HTTP GET | `q=` | filtered issue list | agent-tools iframe |
 | `/__issue` | HTTP GET | `n=<number>` | `{ number, title, body, state, comments: [...] }` | agent-tools iframe |
 | `/__issue/comment` | HTTP GET | `number=<n>&body=<urlencoded>` | `gh issue comment` JSON on success, 400 if `number` missing | agent-tools iframe |
-| `/__issue/close` | HTTP GET | plain: `number=<n>&comment=<urlencoded>`; close-on-commit: `number=<n>&commit=<sha>[&push=true]` | plain: `gh issue close` JSON. Close-on-commit: verifies the commit is visible on GitHub (pushing first when `push=true`), then closes with a generated `Closed by https://github.com/<owner>/<repo>/commit/<full-sha>` comment; on refusal returns `{ok:false,code,...}` where `code` ∈ `commit-not-visible` \| `push-failed` \| `no-github-remote` \| `invalid-commit` \| `commit-visibility-check-failed`. 400 if `number` missing | agent-tools iframe |
+| `/__issue/close` | HTTP GET | plain: `number=<n>&comment=<urlencoded>`; close-on-commit: `number=<n>&commit=<sha>[&push=true]` | plain: `gh issue close` JSON. Close-on-commit: verifies the commit is visible on GitHub (pushing first when `push=true`), then closes with a generated commit-link comment that includes `Closed by https://github.com/<owner>/<repo>/commit/<full-sha>` and, when available, `Commit: <subject>`; on refusal returns `{ok:false,code,...}` where `code` ∈ `commit-not-visible` \| `focused-push-failed` \| `no-github-remote` \| `invalid-commit` \| `commit-visibility-check-failed`. 400 if `number` missing | agent-tools iframe |
 
 ## 8. Context
 

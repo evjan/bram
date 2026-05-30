@@ -522,7 +522,7 @@
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           This commit is flagged as resolving the GitHub issue(s) below.
-          Confirm to close them, or approve without closing.
+          Confirm to let the close helper push this commit, verify GitHub can see it, then close with a commit-link comment.
         </Text>
         <Items data="{closeIssuesItemRef ? closeIssuesItemRef.closesIssues : []}">
           <VStack
@@ -547,13 +547,7 @@
         <HStack gap="$space-2" paddingTop="$space-2">
           <Button
             label="Confirm"
-            enabled="{gitStatus.value &amp;&amp; !gitStatus.value.dirty &amp;&amp; gitStatus.value.ahead === 0}"
-            tooltip="{gitStatus.value &amp;&amp; (gitStatus.value.dirty || gitStatus.value.ahead &gt; 0) ? 'Disabled until the commit is pushed and visible on GitHub' : 'Close without pushing first'}"
-            onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines((feedbackBox &amp;&amp; feedbackBox.value) || '', buildCloseIssueLines(closeIssuesState), false))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
-          <Button
-            label="Push then close"
-            enabled="{!gitStatus.value || gitStatus.value.dirty || gitStatus.value.ahead &gt; 0}"
-            tooltip="{gitStatus.value &amp;&amp; !gitStatus.value.dirty &amp;&amp; gitStatus.value.ahead === 0 ? 'Nothing local needs pushing' : 'Commit, push, then close with a commit link'}"
+            tooltip="Commit, push this commit through the verified close helper, then close"
             onClick="submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines((feedbackBox &amp;&amp; feedbackBox.value) || '', buildCloseIssueLines(closeIssuesState), true))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Approve without closing"

@@ -11,6 +11,9 @@
   var.closeIssuesItemRef="{null}"
   var.closeIssuesState="{null}"
   var.newItemHelp="{false}"
+  var.newItemSubmitting="{false}"
+  var.newItemStartSig="{''}"
+  var.newItemTurnEnded="{false}"
   var.newItemIssue="{null}"
   var.pendingMenu="{null}"
   var.inflightTick="{0}"
@@ -39,6 +42,15 @@
         selected = null;
         selectedFeedback = '';
         feedbackExpanded = false; expandedItemId = null;
+      }
+      if (newItemSubmitting && newItemStartSig && currentSig !== newItemStartSig) {
+        newItemSubmitting = false;
+        newItemStartSig = '';
+        newItemTurnEnded = false;
+      } else if (newItemSubmitting && newItemTurnEnded) {
+        newItemSubmitting = false;
+        newItemStartSig = '';
+        newItemTurnEnded = false;
       }
       lastWorklistSig = currentSig;
     }" />
@@ -123,6 +135,12 @@
       iframeTrace('refetch-called', {context: 'worklist-changed'});
       worklist.refetch();
     });
+    subscribeTauriEvent('__bramWorkspaceAgentTurnEndUnsub', 'agent-turn-end', () => {
+      if (newItemSubmitting) {
+        newItemTurnEnded = true;
+        worklist.refetch();
+      }
+    });
     subscribeTauriEvent('__bramInflightClaimUnsub', 'inflight-claim-changed', () => {
       iframeTrace('listener-fired', {context: 'inflight-claim-changed'});
       inflightTick = inflightTick + 1;
@@ -138,7 +156,11 @@
           <Button
             label="+ New item"
             size="xs"
+            enabled="{!newItemSubmitting}"
             onClick="newItemHelp = true" />
+          <Theme size-Spinner="1em">
+            <Spinner when="{newItemSubmitting}" />
+          </Theme>
         </HStack>
         <VStack
           when="{pendingMenu}"
@@ -639,7 +661,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
           <HStack gap="$space-2">
             <Button
               label="Send"
-              enabled="{!!newItemIssue || (newItemBox.value &amp;&amp; newItemBox.value.trim().length > 0)}"
+              enabled="{!newItemSubmitting &amp;&amp; (!!newItemIssue || (newItemBox.value &amp;&amp; newItemBox.value.trim().length > 0))}"
               onClick="(() => {
                 const issuesArr = (openIssues.value) || [];
                 const issueObj = newItemIssue ? issuesArr.find(i => String(i.number) === String(newItemIssue)) : null;
@@ -648,6 +670,9 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
                 if (issueObj &amp;&amp; text) { msg = 'Propose a worklist item to address #' + issueObj.number + ' (' + issueObj.title + '): ' + text; }
                 else if (issueObj) { msg = 'Propose a worklist item to address #' + issueObj.number + ' (' + issueObj.title + ').'; }
                 else { msg = 'Propose a worklist item: ' + text; }
+                newItemStartSig = lastWorklistSig;
+                newItemTurnEnded = false;
+                newItemSubmitting = true;
                 toTurn(msg);
                 newItemHelp = false; newItemIssue = null; newItemBox.setValue('');
               })()" />

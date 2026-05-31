@@ -4,6 +4,8 @@
 
 A desktop app that helps you make best use of git and GitHub for AI-assisted software development.
 
+Bram runs agents mindfully.
+
 ## Who is it for?
 
 Anyone who wants to use AI coding agents in a safe and accountable way.
@@ -11,8 +13,6 @@ Anyone who wants to use AI coding agents in a safe and accountable way.
 Bram has opinions. It thinks versioning and collaboration are well-handled by git and GitHub, so it guides agents to make best use of them on your behalf, in conversation with you. And it thinks GitHub is great for accountability, so it also guides agents to join you in orderly and well-documented collaboration that leaves an auditable trail.
 
 <img width="1920" height="1198" alt="image" src="https://github.com/user-attachments/assets/51452b11-efdc-4298-8ef2-414004bccb0f" />
-
-
 
 
 ## How does it work?

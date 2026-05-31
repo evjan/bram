@@ -543,6 +543,26 @@ covering both. This avoids intermediate "kinda-works" commits where
 a feature is split from its companion fix — bad for git history and
 bisect.
 
+### Warn when a new item would entangle a TO COMMIT
+
+Whenever you're about to **propose** or **apply** an item whose
+`files` overlaps the `files` of an existing TO COMMIT item, surface
+that fact in chat *before* writing the proposal or applying the
+edits:
+
+> "issue-X is TO COMMIT and touches the same file(s) — recommend
+> committing it first; otherwise this item's edits will mix into
+> X's on-disk diff and need manual separation later."
+
+Don't auto-block — the user may have a reason to proceed (the two
+items are genuinely meant to ship together, X is about to be
+dropped, etc.). The warning is so the user can decide *order*
+intentionally rather than discovering the entanglement at commit
+time. The check is mechanical: intersect the candidate item's
+`files` list with the union of `files` across `applied`-status items
+in `resources/worklist.json`; non-empty intersection triggers the
+warning.
+
 ### Suggest a branch when isolation helps
 
 Bram should guide users toward good git practice, not force ceremony.

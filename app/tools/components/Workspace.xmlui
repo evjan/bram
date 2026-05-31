@@ -433,17 +433,8 @@
                     summary="Diff"
                     initiallyExpanded="false"
                     fullWidthSummary="true">
-                    <VStack
-                      gap="$space-1"
-                      padding="$space-2"
-                      backgroundColor="$color-surface-50"
-                      borderRadius="$borderRadius"
-                      overflowX="auto">
-                      <Text
-                        fontFamily="$fontFamily-monospace"
-                        fontSize="$fontSize-sm"
-                        whiteSpace="pre-wrap"
-                        value="{($item.diff || '').slice(0, 20000)}" />
+                    <VStack gap="$space-1">
+                      <DiffView text="{($item.diff || '').slice(0, 20000)}" />
                       <Text
                         when="{($item.diff || '').length > 20000}"
                         fontSize="$fontSize-xs"

@@ -374,22 +374,7 @@
                 <Text color="green" value="+{$item.additions}" />
                 <Text color="red" value="-{$item.deletions}" />
               </HStack>
-              <VStack gap="0" overflowX="auto">
-                <Items data="{$item.patch ? $item.patch.split('\n') : ['(no textual diff)']}">
-                  <Text
-                    fontFamily="$fontFamily-monospace"
-                    fontSize="$fontSize-sm"
-                    paddingHorizontal="$space-2"
-                    whiteSpace="pre"
-                    backgroundColor="{
-                      $item.startsWith('@@') ? '#e0f2fe' :
-                      ($item.startsWith('+') &amp;&amp; !$item.startsWith('+++')) ? '#dcfce7' :
-                      ($item.startsWith('-') &amp;&amp; !$item.startsWith('---')) ? '#fee2e2' :
-                      'transparent'
-                    }"
-                    value="{$item || ' '}" />
-                </Items>
-              </VStack>
+              <DiffView text="{$item.patch || '(no textual diff)'}" />
             </VStack>
           </Items>
         </VStack>

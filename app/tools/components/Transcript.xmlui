@@ -67,17 +67,9 @@
         fontSize="$fontSize-sm"
         color="$textColor-secondary"
         value="{openTool.summary}" />
-      <Items
+      <DiffView
         when="{openTool &amp;&amp; (openTool.name === 'Edit' || openTool.name === 'MultiEdit')}"
-        data="{editDiffLines(modalInput)}">
-        <Text
-          fontFamily="$fontFamily-monospace"
-          fontSize="$fontSize-sm"
-          whiteSpace="pre-wrap"
-          paddingHorizontal="$space-2"
-          backgroundColor="{$item.kind === 'del' ? '$color-danger-100' : '$color-success-100'}"
-          value="{$item.sign + ' ' + $item.text}" />
-      </Items>
+        text="{unifiedDiffFromEdit(modalInput)}" />
       <VStack when="{openTool &amp;&amp; openTool.name === 'Write'}" gap="{0}" var.writeBody="{writeBodyLines(modalInput, 200)}">
         <Items data="{writeBody.lines}">
           <Text

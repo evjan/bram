@@ -533,18 +533,6 @@ function codexToolSummary(payload) {
   return name;
 }
 
-// Synthetic diff for an Edit/MultiEdit tool_use input. Returns one entry
-// per line, prefixed sign + kind so the renderer can tint accordingly.
-function editDiffLines(input) {
-  if (!input) return [];
-  const oldLines = (input.old_string || '').split('\n');
-  const newLines = (input.new_string || '').split('\n');
-  const out = [];
-  for (const line of oldLines) out.push({ sign: '-', kind: 'del', text: line });
-  for (const line of newLines) out.push({ sign: '+', kind: 'add', text: line });
-  return out;
-}
-
 // First N lines of a Write tool's content, plus the leftover count for
 // the truncation footer.
 function writeBodyLines(input, maxLines) {
@@ -1041,4 +1029,70 @@ function settingsBatch(s) {
 }
 function settingsMinimized(s) {
   return !!(s && s.ui && s.ui.targetAppMinimized);
+}
+
+// Diff rendering — used by the DiffView component, which all three
+// diff sites (Transcript, Workspace, Commits) share. Per-line
+// classification + theme-variable backgrounds; no syntax highlighter
+// is bundled with xmlui-standalone so we hand-classify.
+function diffLineRows(text) {
+  if (!text) return [];
+  return text.split('\n').map(function (line) {
+    let kind = 'context';
+    if (line.startsWith('@@')) kind = 'hunk';
+    else if (line.startsWith('+++') || line.startsWith('---')) kind = 'fileheader';
+    else if (line.startsWith('diff ') || line.startsWith('index ')) kind = 'fileheader';
+    else if (line.startsWith('+')) kind = 'add';
+    else if (line.startsWith('-')) kind = 'del';
+    return { kind: kind, text: line || ' ' };
+  });
+}
+function diffLineBg(kind) {
+  if (kind === 'add') return '$color-success-100';
+  if (kind === 'del') return '$color-danger-100';
+  if (kind === 'hunk') return '$color-info-100';
+  return 'transparent';
+}
+function diffLineColor(kind) {
+  if (kind === 'fileheader') return '$textColor-secondary';
+  return '$textColor-primary';
+}
+
+// Normalize either the backend's annotated rows (with optional per-line
+// `segments`) or, as a fallback while the backend round-trip is in
+// flight, the locally-classified rows from diffLineRows(). Returns rows
+// in a single uniform shape DiffView can iterate: each row carries
+// row-level `bg`/`color` plus a non-empty `segments` array. Segments
+// without their own `bg` render transparent (no intra-line emphasis).
+function diffViewRows(apiResult, fallbackText) {
+  const raw = (apiResult && apiResult.length) ? apiResult : diffLineRows(fallbackText);
+  return raw.map(function (row) {
+    const lineColor = diffLineColor(row.kind);
+    const segs = (row.segments && row.segments.length)
+      ? row.segments
+      : [{ text: row.text }];
+    return {
+      kind: row.kind,
+      bg: diffLineBg(row.kind),
+      color: lineColor,
+      segments: segs.map(function (s) {
+        return { text: s.text, bg: s.bg || null, color: lineColor };
+      }),
+    };
+  });
+}
+
+// Build a unified-diff string from an Edit/MultiEdit tool's
+// old_string/new_string so DiffView can render it the same way it
+// renders git's output.
+function unifiedDiffFromEdit(input) {
+  if (!input) return '';
+  const oldLines = (input.old_string || '').split('\n');
+  const newLines = (input.new_string || '').split('\n');
+  const head = '--- a\n+++ b\n';
+  const hunk = '@@ -1,' + oldLines.length + ' +1,' + newLines.length + ' @@\n';
+  const minus = oldLines.map(function (l) { return '-' + l; }).join('\n');
+  const plus  = newLines.map(function (l) { return '+' + l; }).join('\n');
+  const body = (oldLines.length && newLines.length) ? (minus + '\n' + plus) : (minus + plus);
+  return head + hunk + body;
 }

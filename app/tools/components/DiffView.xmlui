@@ -1,0 +1,41 @@
+<Component name="DiffView">
+  <APICall
+    id="annotate"
+    method="post"
+    url="/__diff/annotate"
+    body="{ { diff: $props.text } }" />
+  <ChangeListener
+    listenTo="{$props.text}"
+    onDidChange="annotate.execute()" />
+  <Theme
+    backgroundColor-row-List--hover="transparent"
+    backgroundColor-row-List="transparent">
+    <VStack
+      gap="0"
+      padding="$space-2"
+      backgroundColor="$color-surface-50"
+      borderRadius="$borderRadius"
+      overflowX="auto"
+      onInit="annotate.execute()">
+      <List
+        data="{diffViewRows(annotate.lastResult, $props.text)}"
+        height="60vh"
+        fixedItemSize="true">
+        <HStack
+          gap="0"
+          backgroundColor="{$item.bg}"
+          paddingHorizontal="$space-2">
+          <Items data="{$item.segments}">
+            <Text
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-sm"
+              whiteSpace="pre"
+              backgroundColor="{$item.bg || 'transparent'}"
+              color="{$item.color}"
+              value="{$item.text}" />
+          </Items>
+        </HStack>
+      </List>
+    </VStack>
+  </Theme>
+</Component>

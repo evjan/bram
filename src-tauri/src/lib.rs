@@ -4188,6 +4188,144 @@ fn handle_git_pull_rebase<R: tauri::Runtime>(app: &AppHandle<R>) -> (u16, &'stat
     }
 }
 
+// Classify one diff line by leading char. Mirrors the iframe-side
+// diffLineRows() in Globals.xs so the two stay aligned if the iframe
+// fallback (unannotated) and the backend path ever render the same diff.
+fn classify_diff_line(line: &str) -> &'static str {
+    if line.starts_with("@@") {
+        "hunk"
+    } else if line.starts_with("+++") || line.starts_with("---")
+        || line.starts_with("diff ") || line.starts_with("index ")
+    {
+        "fileheader"
+    } else if line.starts_with('+') {
+        "add"
+    } else if line.starts_with('-') {
+        "del"
+    } else {
+        "context"
+    }
+}
+
+// Word-diff the body of a paired (-line, +line) using `similar`, return
+// per-side inline segments. The "+"/"-" prefix is stripped before the word
+// diff so leading-sign changes don't show as emphasized.
+//
+// Each segment is { text, bg? } — bg is a theme variable string the
+// renderer applies directly, "$color-{danger,success}-200" for the
+// emphasized runs, omitted (transparent) for unchanged runs.
+fn word_diff_segments(minus_line: &str, plus_line: &str) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+    use similar::{ChangeTag, TextDiff};
+    let a = minus_line.strip_prefix('-').unwrap_or(minus_line);
+    let b = plus_line.strip_prefix('+').unwrap_or(plus_line);
+    let diff = TextDiff::from_words(a, b);
+    let mut minus_segs: Vec<serde_json::Value> = vec![serde_json::json!({ "text": "-" })];
+    let mut plus_segs: Vec<serde_json::Value> = vec![serde_json::json!({ "text": "+" })];
+    for change in diff.iter_all_changes() {
+        let text = change.value().to_string();
+        match change.tag() {
+            ChangeTag::Equal => {
+                minus_segs.push(serde_json::json!({ "text": text }));
+                plus_segs.push(serde_json::json!({ "text": text }));
+            }
+            ChangeTag::Delete => {
+                minus_segs.push(serde_json::json!({ "text": text, "bg": "$color-danger-200" }));
+            }
+            ChangeTag::Insert => {
+                plus_segs.push(serde_json::json!({ "text": text, "bg": "$color-success-200" }));
+            }
+        }
+    }
+    (minus_segs, plus_segs)
+}
+
+// Annotate a unified-diff string with per-line classification and, for
+// adjacent (one -, one +) pairs, intra-line word-diff segments. Returns
+// a flat list of rows the DiffView consumes directly. Unequal -/+ block
+// sizes get plain per-line rendering with no inline segments (no
+// well-defined pairing).
+// Skip word-diffing on diffs above this line count — past this size,
+// per-line DOM cost (HStack-of-segments) outweighs the readability win,
+// and the iframe-main-thread heartbeat (#dcef719) is what we have to
+// protect. Plain per-line tinting still applies; word emphasis just
+// turns off uniformly so the user gets a consistent fallback rather
+// than partial coloring.
+const DIFF_ANNOTATE_LINE_CAP: usize = 1500;
+
+fn annotate_unified_diff(diff: &str) -> serde_json::Value {
+    let lines: Vec<&str> = diff.split('\n').collect();
+    let n = lines.len();
+    let word_diff_enabled = n <= DIFF_ANNOTATE_LINE_CAP;
+    let mut rows: Vec<serde_json::Value> = Vec::with_capacity(n);
+    let mut i = 0usize;
+    while i < n {
+        let line = lines[i];
+        let kind = classify_diff_line(line);
+        if kind == "del" && word_diff_enabled {
+            // Collect run of consecutive del lines.
+            let del_start = i;
+            while i < n && classify_diff_line(lines[i]) == "del" {
+                i += 1;
+            }
+            let del_end = i;
+            // Then collect any immediately-following run of add lines.
+            let add_start = i;
+            while i < n && classify_diff_line(lines[i]) == "add" {
+                i += 1;
+            }
+            let add_end = i;
+            let del_count = del_end - del_start;
+            let add_count = add_end - add_start;
+            if del_count == add_count && del_count > 0 {
+                // 1:1 pair lines by position, emit word-diff for each.
+                for k in 0..del_count {
+                    let (m_segs, p_segs) =
+                        word_diff_segments(lines[del_start + k], lines[add_start + k]);
+                    rows.push(serde_json::json!({
+                        "kind": "del",
+                        "text": lines[del_start + k],
+                        "segments": m_segs,
+                    }));
+                    rows.push(serde_json::json!({
+                        "kind": "add",
+                        "text": lines[add_start + k],
+                        "segments": p_segs,
+                    }));
+                }
+            } else {
+                // Unequal block: emit plain rows, no inline word-diff.
+                for k in del_start..del_end {
+                    rows.push(serde_json::json!({ "kind": "del", "text": lines[k] }));
+                }
+                for k in add_start..add_end {
+                    rows.push(serde_json::json!({ "kind": "add", "text": lines[k] }));
+                }
+            }
+        } else {
+            rows.push(serde_json::json!({ "kind": kind, "text": line }));
+            i += 1;
+        }
+    }
+    serde_json::Value::Array(rows)
+}
+
+fn handle_diff_annotate(body: &[u8]) -> (u16, &'static str, Vec<u8>) {
+    let parsed: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                400,
+                "text/plain; charset=utf-8",
+                format!("invalid JSON: {}", e).into_bytes(),
+            );
+        }
+    };
+    let diff = parsed.get("diff").and_then(|v| v.as_str()).unwrap_or("");
+    let rows = annotate_unified_diff(diff);
+    let body = serde_json::to_vec(&rows).unwrap_or_default();
+    (200, "application/json; charset=utf-8", body)
+}
+
 fn handle_settings_post<R: tauri::Runtime>(
     app: &AppHandle<R>,
     body: &[u8],
@@ -13172,6 +13310,10 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Re
         let mut buf = Vec::new();
         let _ = request.as_reader().read_to_end(&mut buf);
         handle_settings_post(app, &buf)
+    } else if path == "__diff/annotate" && method == "POST" {
+        let mut buf = Vec::new();
+        let _ = request.as_reader().read_to_end(&mut buf);
+        handle_diff_annotate(&buf)
     } else {
         route_request(app, path, query)
     };

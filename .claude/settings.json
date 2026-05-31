@@ -1,4 +1,17 @@
 {
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/worklist-guard.py",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit"
+      }
+    ]
+  },
   "permissions": {
     "allow": [
       "Write(./resources/worklist.json)",
@@ -12,20 +25,8 @@
       "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__enhance*)",
       "Bash(cat resources/.bram-port)",
       "Bash(cat resources/.bram-port:*)",
-      "mcp__xmlui"
-    ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/worklist-guard.py"
-          }
-        ]
-      }
+      "mcp__xmlui",
+      "Bash(curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 \"http://127.0.0.1*__issue*)"
     ]
   }
 }

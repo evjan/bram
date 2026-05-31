@@ -1,10 +1,21 @@
 <Component
   name="History"
-  var.selectedHistoryGroup="{null}">
+  var.selectedHistoryGroup="{null}"
+  var.query="{''}">
 
   <DataSource
     id="history"
     url="/__worklist-history/list" />
+
+  <DataSource
+    id="historySearch"
+    url="/__worklist-history/search"
+    queryParams="{{ q: query }}"
+    when="{!!query &amp;&amp; query.trim().length >= 2}" />
+
+  <variable
+    name="displayedHistory"
+    value="{(query &amp;&amp; query.trim().length >= 2) ? ((historySearch.value &amp;&amp; historySearch.value.results) || []) : (history.value || [])}" />
 
   <ModalDialog
     when="{!!selectedHistoryGroup}"
@@ -55,23 +66,38 @@
   </ModalDialog>
 
   <VStack padding="$space-6" gap="$space-3">
-    <Heading level="h2">History</Heading>
+    <HStack gap="$space-3" verticalAlignment="center">
+      <Heading level="h2">History</Heading>
+      <SpaceFiller />
+      <SearchBox
+        placeholder="Search history…"
+        inProgress="{historySearch.inProgress}"
+        onQueryChange="(q) => query = q"
+        onClear="selectedHistoryGroup = null" />
+    </HStack>
 
     <Spinner
       when="{!history.value}"
       size="sm" />
 
     <Text
-      when="{history.value && history.value.length === 0}"
+      when="{history.value &amp;&amp; history.value.length === 0}"
       color="$textColor-secondary"
       fontSize="$fontSize-sm">
       No worklist history yet.
     </Text>
 
+    <Text
+      when="{query &amp;&amp; query.trim().length >= 2 &amp;&amp; historySearch.value &amp;&amp; (!historySearch.value.results || historySearch.value.results.length === 0) &amp;&amp; !historySearch.inProgress}"
+      color="$textColor-secondary"
+      fontSize="$fontSize-sm">
+      No matches.
+    </Text>
+
     <VStack
-      when="{history.value && history.value.length > 0}"
+      when="{displayedHistory &amp;&amp; displayedHistory.length > 0}"
       gap="$space-3">
-      <Items data="{history.value}">
+      <Items data="{displayedHistory}">
         <VStack
           gap="$space-2"
           padding="$space-3"

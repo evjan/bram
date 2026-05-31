@@ -12406,6 +12406,95 @@ fn route_request<R: tauri::Runtime>(
         };
     }
 
+    // /__worklist-history/search?q=<query> — filter the same group rows
+    // /__worklist-history/list produces by substring-matching the
+    // serialized JSON of each group (catches title, ids, subtitle, prose
+    // summaries, before/after fields inside current_item). Case-insensitive.
+    // Returns {results: [...]} (Commits/Issues shape, the new standard).
+    if path == "__worklist-history/search" {
+        let mut q = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("q=") {
+                q = percent_decode(v);
+                break;
+            }
+        }
+        let trimmed = q.trim();
+        if trimmed.len() < 2 {
+            return (
+                200,
+                "application/json; charset=utf-8",
+                br#"{"results":[]}"#.to_vec(),
+            );
+        }
+        let needle = trimmed.to_lowercase();
+        let groups = recent_worklist_history_groups(app, WORKLIST_HISTORY_DEFAULT_LIMIT);
+        let results: Vec<&WorklistHistoryGroup> = groups
+            .iter()
+            .filter(|g| {
+                serde_json::to_string(g)
+                    .map(|s| s.to_lowercase().contains(&needle))
+                    .unwrap_or(false)
+            })
+            .collect();
+        let body = serde_json::json!({ "results": results })
+            .to_string()
+            .into_bytes();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    // /__feedback-history/search?q=<query> — substring-match the .md body
+    // of each entry, return {ts, itemId, fileName, snippet}. Snippet is a
+    // ~200-char window centered on the first match. Case-insensitive.
+    if path == "__feedback-history/search" {
+        let mut q = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("q=") {
+                q = percent_decode(v);
+                break;
+            }
+        }
+        let trimmed = q.trim();
+        if trimmed.len() < 2 {
+            return (
+                200,
+                "application/json; charset=utf-8",
+                br#"{"results":[]}"#.to_vec(),
+            );
+        }
+        let needle = trimmed.to_lowercase();
+        let entries = recent_feedback_history(app, WORKLIST_HISTORY_DEFAULT_LIMIT);
+        let mut results: Vec<serde_json::Value> = Vec::new();
+        if let Some(dir) = feedback_history_dir(app) {
+            for entry in entries {
+                let Some(file_name) = entry.get("fileName").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let p = dir.join(file_name);
+                let body = std::fs::read_to_string(&p).unwrap_or_default();
+                let lower = body.to_lowercase();
+                let Some(pos) = lower.find(&needle) else {
+                    continue;
+                };
+                let start = pos.saturating_sub(80);
+                let end = (pos + needle.len() + 120).min(body.len());
+                let snippet = body
+                    .get(start..end)
+                    .unwrap_or("")
+                    .replace('\n', " ");
+                let mut row = entry.clone();
+                if let Some(obj) = row.as_object_mut() {
+                    obj.insert("snippet".to_string(), serde_json::Value::String(snippet));
+                }
+                results.push(row);
+            }
+        }
+        let body = serde_json::json!({ "results": results })
+            .to_string()
+            .into_bytes();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
     // /__feedback-history/list[?limit=N] — reverse-chronological list of
     // feedback drafts promoted from resources/feedback-drafts/ to
     // resources/feedback-history/ by promote_feedback_drafts_for_items.

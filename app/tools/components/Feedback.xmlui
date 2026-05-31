@@ -1,10 +1,21 @@
 <Component
   name="Feedback"
-  var.selectedFeedback="{null}">
+  var.selectedFeedback="{null}"
+  var.query="{''}">
 
   <DataSource
     id="feedbackList"
     url="/__feedback-history/list" />
+
+  <DataSource
+    id="feedbackSearch"
+    url="/__feedback-history/search"
+    queryParams="{{ q: query }}"
+    when="{!!query &amp;&amp; query.trim().length >= 2}" />
+
+  <variable
+    name="displayedFeedback"
+    value="{(query &amp;&amp; query.trim().length >= 2) ? ((feedbackSearch.value &amp;&amp; feedbackSearch.value.results) || []) : (feedbackList.value || [])}" />
 
   <DataSource
     id="feedbackContent"
@@ -29,7 +40,15 @@
     padding="$space-6"
     gap="$space-3"
     onInit="subscribeTauriEvent('__bramFeedbackHistoryUnsub', 'feedback-history-changed', () => feedbackList.refetch())">
-    <Heading level="h2">Feedback</Heading>
+    <HStack gap="$space-3" verticalAlignment="center">
+      <Heading level="h2">Feedback</Heading>
+      <SpaceFiller />
+      <SearchBox
+        placeholder="Search feedback…"
+        inProgress="{feedbackSearch.inProgress}"
+        onQueryChange="(q) => query = q"
+        onClear="selectedFeedback = null" />
+    </HStack>
 
     <Spinner
       when="{!feedbackList.value}"
@@ -42,10 +61,17 @@
       No feedback history yet. Iterate on a TO COMMIT item to populate.
     </Text>
 
+    <Text
+      when="{query &amp;&amp; query.trim().length >= 2 &amp;&amp; feedbackSearch.value &amp;&amp; (!feedbackSearch.value.results || feedbackSearch.value.results.length === 0) &amp;&amp; !feedbackSearch.inProgress}"
+      color="$textColor-secondary"
+      fontSize="$fontSize-sm">
+      No matches.
+    </Text>
+
     <VStack
-      when="{feedbackList.value &amp;&amp; feedbackList.value.length > 0}"
+      when="{displayedFeedback &amp;&amp; displayedFeedback.length > 0}"
       gap="$space-3">
-      <Items data="{feedbackList.value}">
+      <Items data="{displayedFeedback}">
         <VStack
           gap="$space-2"
           padding="$space-3"

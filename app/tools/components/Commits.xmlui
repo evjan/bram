@@ -3,7 +3,6 @@
   var.selectedSha="{null}"
   var.selectedLine="{null}"
   var.commitsExpanded="{false}"
-  var.queryDraft=""
   var.query=""
   var.pullError="{null}"
   var.pushError="{null}">
@@ -35,11 +34,6 @@
     queryParams="{{ q: query }}"
     when="{!!query &amp;&amp; query.trim().length >= 2}" />
 
-  <ChangeListener
-    listenTo="{queryDraft}"
-    debounceWaitInMs="250"
-    onDidChange="query = queryDraft" />
-
   <variable
     name="selectedCommit"
     value="{!selectedSha ? null : ((((searchResults.value &amp;&amp; searchResults.value.results) || []).find(c => c.sha === selectedSha)) || ((commits.value || []).find(c => c.sha === selectedSha)))}" />
@@ -61,20 +55,11 @@
           enabled="{!pullRebase.inProgress &amp;&amp; gitStatus.value &amp;&amp; gitStatus.value.behind > 0}"
           onClick="pullError = null; pullRebase.execute()" />
         <SpaceFiller />
-        <HStack gap="$space-1" verticalAlignment="center" width="*" maxWidth="20rem">
-          <TextBox
-            id="searchBox"
-            placeholder="Search…"
-            width="*"
-            initialValue="{queryDraft}"
-            onDidChange="(v) => queryDraft = v" />
-          <Button
-            label="✕"
-            variant="ghost"
-            size="xs"
-            tooltip="Clear search"
-            onClick="searchBox.setValue(''); queryDraft = ''; query = ''; selectedSha = null; selectedLine = null" />
-        </HStack>
+        <SearchBox
+          placeholder="Search…"
+          inProgress="{searchResults.inProgress}"
+          onQueryChange="(q) => query = q"
+          onClear="selectedSha = null; selectedLine = null" />
       </HStack>
 
       <HStack

@@ -9,7 +9,6 @@
   var.newIssuePolls="{0}"
   var.newIssueText="{''}"
   var.lastIssuesSig="{''}"
-  var.queryDraft=""
   var.query=""
   var.selectedHitLine="{null}"
   var.sortField="updatedAt"
@@ -74,11 +73,6 @@
     queryParams="{{ number: $param.number, body: $param.body }}"
     completedNotificationMessage="Comment posted."
     onSuccess="closeCommentBox.setValue(''); issueDetail.refetch(); issues.refetch()" />
-
-  <ChangeListener
-    listenTo="{queryDraft}"
-    debounceWaitInMs="250"
-    onDidChange="query = queryDraft" />
 
   <variable
     name="displayedIssues"
@@ -157,25 +151,11 @@
           <Spinner when="{newIssueSubmitting || (issues.inProgress &amp;&amp; !issues.loaded)}" />
         </Theme>
         <SpaceFiller />
-        <HStack gap="$space-1" verticalAlignment="center" width="*" maxWidth="20rem">
-          <TextBox
-            id="searchBox"
-            placeholder="Search title, body, comments, authors…"
-            width="*"
-            initialValue="{queryDraft}"
-            onDidChange="(v) => queryDraft = v" />
-          <Button
-            label="✕"
-            variant="ghost"
-            size="xs"
-            tooltip="Clear search"
-            onClick="searchBox.setValue(''); queryDraft = ''; query = ''; expandedNumber = null; selectedHitLine = null" />
-        </HStack>
-        <Text
-          when="{searchResults.inProgress}"
-          fontSize="$fontSize-sm"
-          color="$textColor-secondary"
-          value="Searching…" />
+        <SearchBox
+          placeholder="Search title, body, comments, authors…"
+          inProgress="{searchResults.inProgress}"
+          onQueryChange="(q) => query = q"
+          onClear="expandedNumber = null; selectedHitLine = null" />
       </HStack>
 
       <Text
@@ -430,7 +410,7 @@
           value="Mentioned in {issueDetail.value.crossReferences.length} {issueDetail.value.crossReferences.length === 1 ? 'issue' : 'issues'}" />
         <Items data="{issueDetail.value.crossReferences}">
           <Link
-            onClick="expandedNumber = $item.number; selectedHitLine = null; queryDraft = ''; query = ''"
+            onClick="expandedNumber = $item.number; selectedHitLine = null; query = ''"
             noIndicator>
             <HStack gap="$space-2" verticalAlignment="center">
               <Text value="#{$item.number}" fontSize="$fontSize-sm" color="$textColor-secondary" />

@@ -1,0 +1,20 @@
+<Component name="SearchBox">
+  <HStack gap="$space-1" verticalAlignment="center" width="*" maxWidth="20rem">
+    <TextBox
+      id="searchBox"
+      placeholder="{$props.placeholder || 'Search…'}"
+      width="*"
+      onDidChange="(v) => debounce($props.debounceMs || 250, (q) => emitEvent('queryChange', q), v)" />
+    <Button
+      label="✕"
+      variant="ghost"
+      size="xs"
+      tooltip="Clear search"
+      onClick="searchBox.setValue(''); emitEvent('queryChange', ''); emitEvent('clear')" />
+    <Text
+      when="{$props.inProgress}"
+      fontSize="$fontSize-sm"
+      color="$textColor-secondary"
+      value="Searching…" />
+  </HStack>
+</Component>

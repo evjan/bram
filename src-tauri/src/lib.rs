@@ -375,7 +375,7 @@ fn init_bram_trace_from_env() {
 
 #[allow(dead_code)]
 fn bram_trace_log_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join("resources/bram-traces/bram-trace.log"))
+    project_resource_path(app, "bram-traces/bram-trace.log")
 }
 
 fn is_bram_trace_archive_rel(rel: &str) -> bool {
@@ -7861,30 +7861,52 @@ fn last_worklist_effective_cell() -> &'static Mutex<Option<String>> {
 }
 
 fn worklist_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join("resources").join("worklist.json"))
+    project_resource_path(app, "worklist.json")
 }
 
 fn worklist_drafts_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join("resources").join("worklist-drafts"))
+    project_resource_path(app, "worklist-drafts")
 }
 
 fn worklist_auth_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join(WORKLIST_AUTH_REL))
+    project_relative_path(app, WORKLIST_AUTH_REL)
 }
 
 fn feedback_drafts_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join("resources").join("feedback-drafts"))
+    project_resource_path(app, "feedback-drafts")
 }
 
 fn feedback_history_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join("resources").join("feedback-history"))
+    project_resource_path(app, "feedback-history")
+}
+
+fn project_relative_path<R: tauri::Runtime, P: AsRef<Path>>(
+    app: &AppHandle<R>,
+    rel: P,
+) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| p.join(rel))
+}
+
+fn resource_relative_path<P: AsRef<Path>>(root: &Path, rel: P) -> PathBuf {
+    root.join("resources").join(rel)
+}
+
+fn project_resource_path<R: tauri::Runtime, P: AsRef<Path>>(
+    app: &AppHandle<R>,
+    rel: P,
+) -> Option<PathBuf> {
+    project_root(Some(app)).map(|p| resource_relative_path(&p, rel))
+}
+
+fn draft_markdown_path(dir: &Path, id: &str) -> Option<PathBuf> {
+    if id.is_empty() || id.contains('/') || id.contains('\\') {
+        return None;
+    }
+    Some(dir.join(format!("{}.md", id)))
 }
 
 fn feedback_draft_path(drafts_dir: &Path, feedback_id: &str) -> Option<PathBuf> {
-    if feedback_id.is_empty() || feedback_id.contains('/') || feedback_id.contains('\\') {
-        return None;
-    }
-    Some(drafts_dir.join(format!("{}.md", feedback_id)))
+    draft_markdown_path(drafts_dir, feedback_id)
 }
 
 fn feedback_draft_belongs_to_item(file_name: &str, item_id: &str) -> bool {
@@ -7987,19 +8009,19 @@ fn promote_feedback_drafts_for_items<R: tauri::Runtime>(
 }
 
 fn worklist_history_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join("resources").join("worklist-history"))
+    project_resource_path(app, "worklist-history")
 }
 
 fn inflight_claim_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join(INFLIGHT_CLAIM_REL))
+    project_relative_path(app, INFLIGHT_CLAIM_REL)
 }
 
 fn worklist_intent_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join(WORKLIST_INTENT_REL))
+    project_relative_path(app, WORKLIST_INTENT_REL)
 }
 
 fn worklist_result_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join(WORKLIST_RESULT_REL))
+    project_relative_path(app, WORKLIST_RESULT_REL)
 }
 
 // Write the inflight sentinel (#84). Atomic via .tmp + rename so the
@@ -8379,7 +8401,7 @@ fn cleanup_stale_worklist_intent<R: tauri::Runtime>(app: &AppHandle<R>) {
 }
 
 fn pty_intent_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
-    project_root(Some(app)).map(|p| p.join(PTY_INTENT_REL))
+    project_relative_path(app, PTY_INTENT_REL)
 }
 
 // Serializes append + drain in queue_pty_intent so concurrent calls
@@ -8479,10 +8501,7 @@ fn parse_worklist_draft(raw: &str) -> Option<(String, String)> {
 }
 
 fn worklist_draft_path(drafts_dir: &Path, item_id: &str) -> Option<PathBuf> {
-    if item_id.is_empty() || item_id.contains('/') || item_id.contains('\\') {
-        return None;
-    }
-    Some(drafts_dir.join(format!("{}.md", item_id)))
+    draft_markdown_path(drafts_dir, item_id)
 }
 
 fn resolve_worklist_item_draft(
@@ -12720,11 +12739,13 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
 mod worklist_authorization_tests {
     use super::{
         apply_worklist_mutation, build_worklist_authorization_record, canonical_item_hash,
-        classify_worklist_removals, inflight_claim_fully_covered,
-        parse_worklist_authorization_message, validate_post_commit_prune_status,
-        validate_worklist_mutate_authorization,
+        classify_worklist_removals, draft_markdown_path, feedback_draft_path,
+        inflight_claim_fully_covered, parse_worklist_authorization_message, resource_relative_path,
+        validate_post_commit_prune_status, validate_worklist_mutate_authorization,
+        worklist_draft_path,
     };
     use serde_json::json;
+    use std::path::Path;
 
     fn ids(values: &[&str]) -> Vec<String> {
         values.iter().map(|v| v.to_string()).collect()
@@ -12898,6 +12919,43 @@ mod worklist_authorization_tests {
         // case: no sentinel was written, so the mutate caller must emit its own
         // reconcile signal rather than relying on the clear.
         assert!(!inflight_claim_fully_covered(&ids(&[]), &ids(&["a"])));
+    }
+
+    #[test]
+    fn resource_relative_path_joins_under_resources() {
+        assert_eq!(
+            resource_relative_path(Path::new("/tmp/bram"), "worklist.json"),
+            Path::new("/tmp/bram")
+                .join("resources")
+                .join("worklist.json")
+        );
+        assert_eq!(
+            resource_relative_path(Path::new("/tmp/bram"), Path::new("feedback-drafts")),
+            Path::new("/tmp/bram")
+                .join("resources")
+                .join("feedback-drafts")
+        );
+    }
+
+    #[test]
+    fn draft_markdown_path_accepts_leaf_ids_only() {
+        let dir = Path::new("/tmp/bram/resources/worklist-drafts");
+        assert_eq!(
+            draft_markdown_path(dir, "issue-145"),
+            Some(dir.join("issue-145.md"))
+        );
+        assert_eq!(
+            worklist_draft_path(dir, "issue-145"),
+            Some(dir.join("issue-145.md"))
+        );
+        assert_eq!(
+            feedback_draft_path(dir, "1780200000-issue-145"),
+            Some(dir.join("1780200000-issue-145.md"))
+        );
+        assert_eq!(draft_markdown_path(dir, ""), None);
+        assert_eq!(draft_markdown_path(dir, "../escape"), None);
+        assert_eq!(draft_markdown_path(dir, "nested/item"), None);
+        assert_eq!(draft_markdown_path(dir, "nested\\item"), None);
     }
 }
 

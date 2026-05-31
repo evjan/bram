@@ -1032,3 +1032,13 @@ function buildBatchDropPayload(items, feedback) {
       .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback || '' }; })
   });
 }
+
+function settingsAgent(s) {
+  return (s && s.shell && s.shell.agent) || '';
+}
+function settingsBatch(s) {
+  return !!(s && s.worklist && s.worklist.batchCommitActions);
+}
+function settingsMinimized(s) {
+  return !!(s && s.ui && s.ui.targetAppMinimized);
+}

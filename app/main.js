@@ -657,6 +657,39 @@ const { listen } = window.__TAURI__.event;
   listen("tools-pane-reload", reloadAll);
 })();
 
+// ui.targetAppMinimized driver. The Settings tab and hand-edits to
+// .bram.json both flow here via the `settings-changed` event (emitted
+// by handle_project_config_reload in src-tauri/src/lib.rs). True =
+// drive the right-column h-splitter to its MIN_PX floor on the
+// target-app side, leaving the tools drawer to fill the column. False
+// = clear the override and let the splitter fall back to default flex
+// behavior; user drags are not persisted, so prior manual sizes are
+// not restored.
+(() => {
+  const TARGET_MIN_PX = 80; // matches the h-splitter MIN_PX above
+  function apply(minimized) {
+    const tools = document.getElementById("tools-pane");
+    const column = document.querySelector(".right-column");
+    const hSplitter = document.getElementById("h-splitter");
+    if (!tools || !column || !hSplitter) return;
+    if (!minimized) {
+      tools.style.flexBasis = "";
+      return;
+    }
+    const rect = column.getBoundingClientRect();
+    const h = rect.height - TARGET_MIN_PX - hSplitter.offsetHeight;
+    if (h > 0) tools.style.flexBasis = h + "px";
+  }
+  fetch("/__settings")
+    .then((r) => r.json())
+    .then((v) => apply(!!(v && v.ui && v.ui.targetAppMinimized)))
+    .catch(() => {});
+  listen("settings-changed", (e) => {
+    const v = e && e.payload;
+    apply(!!(v && v.ui && v.ui.targetAppMinimized));
+  });
+})();
+
 // Click-to-toggle voice. The toolbar 🎤 button toggles its own recording;
 // iframes (Workspace, etc.) drive the same recorder via voice-start/voice-stop
 // messages. Auto-starts whisper-server on first record click.

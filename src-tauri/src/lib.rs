@@ -186,6 +186,8 @@ struct ProjectConfig {
     shell: Option<ShellConfig>,
     #[serde(default)]
     worklist: Option<WorklistConfig>,
+    #[serde(default)]
+    ui: Option<UiConfig>,
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -211,6 +213,14 @@ struct ShellConfig {
 struct WorklistConfig {
     #[serde(default, rename = "batchCommitActions")]
     batch_commit_actions: Option<bool>,
+}
+
+// Optional UI block. Currently only `targetAppMinimized`, which drives
+// the right-column h-splitter from the parent shell — see app/main.js.
+#[derive(Default, Clone, serde::Deserialize)]
+struct UiConfig {
+    #[serde(default, rename = "targetAppMinimized")]
+    target_app_minimized: Option<bool>,
 }
 
 fn default_server_path() -> String {
@@ -3397,9 +3407,90 @@ fn project_config_batch_commit_actions(config: Option<ProjectConfig>) -> bool {
         .unwrap_or(false)
 }
 
+// User-facing slice of .bram.json exposed to the Settings tab and the
+// parent shell. Always returns a populated value (false / empty string)
+// so the consumer never sees nulls; out-of-scope blocks like `server`
+// stay invisible — they're project infrastructure, not Settings knobs.
+fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value {
+    let (agent, batch, minimized) = match config {
+        Some(c) => (
+            c.shell.and_then(|s| s.agent).unwrap_or_default(),
+            c.worklist.and_then(|w| w.batch_commit_actions).unwrap_or(false),
+            c.ui.and_then(|u| u.target_app_minimized).unwrap_or(false),
+        ),
+        None => (String::new(), false, false),
+    };
+    serde_json::json!({
+        "shell": { "agent": agent },
+        "worklist": { "batchCommitActions": batch },
+        "ui": { "targetAppMinimized": minimized },
+    })
+}
+
 fn is_project_config_path(path: &Path) -> bool {
     path.file_name()
         .map_or(false, |n| n == ".bram.json" || n == ".xmlui-desktop.json")
+}
+
+// Merge a Settings-tab POST body into the on-disk .bram.json, preserving
+// any top-level keys the user may have hand-added (e.g. `server`) and
+// nested keys we don't surface. The body is the same shape
+// settings_view_from_config returns; we treat absent keys as "no change"
+// rather than "set to default" — partial updates from the form are valid.
+fn merge_settings_into_config(
+    existing: serde_json::Value,
+    update: &serde_json::Value,
+) -> serde_json::Value {
+    fn merge_obj(into: &mut serde_json::Map<String, serde_json::Value>, from: &serde_json::Value) {
+        let Some(from_obj) = from.as_object() else {
+            return;
+        };
+        for (k, v) in from_obj {
+            match (into.get_mut(k), v) {
+                (Some(existing_val), serde_json::Value::Object(_))
+                    if existing_val.is_object() =>
+                {
+                    if let Some(existing_map) = existing_val.as_object_mut() {
+                        merge_obj(existing_map, v);
+                    }
+                }
+                _ => {
+                    into.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+    let mut base = match existing {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    merge_obj(&mut base, update);
+    serde_json::Value::Object(base)
+}
+
+fn settings_target_path(root: &Path) -> PathBuf {
+    let bram = root.join(".bram.json");
+    if bram.exists() {
+        return bram;
+    }
+    let legacy = root.join(".xmlui-desktop.json");
+    if legacy.exists() {
+        return legacy;
+    }
+    bram
+}
+
+fn write_settings_to_config(root: &Path, update: &serde_json::Value) -> Result<(), String> {
+    let path = settings_target_path(root);
+    let existing: serde_json::Value = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|e| format!("parse {}: {}", path.display(), e))?,
+        Err(_) => serde_json::Value::Object(serde_json::Map::new()),
+    };
+    let merged = merge_settings_into_config(existing, update);
+    let text = serde_json::to_string_pretty(&merged)
+        .map_err(|e| format!("serialize {}: {}", path.display(), e))?;
+    atomic_write_text(&path, &format!("{}\n", text))
 }
 
 fn is_port_listening(port: u16) -> bool {
@@ -3710,6 +3801,8 @@ fn handle_project_config_reload<R: tauri::Runtime>(app_handle: &AppHandle<R>, pr
     );
     trace_emit_signal(&app_handle, "right-pane-reload");
     let _ = app_handle.emit("right-pane-reload", ());
+
+    let _ = app_handle.emit("settings-changed", settings_view_from_config(new_cfg));
 }
 
 #[derive(serde::Serialize)]
@@ -4093,6 +4186,41 @@ fn handle_git_pull_rebase<R: tauri::Runtime>(app: &AppHandle<R>) -> (u16, &'stat
             (500, "text/plain; charset=utf-8", e.into_bytes())
         }
     }
+}
+
+fn handle_settings_post<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    body: &[u8],
+) -> (u16, &'static str, Vec<u8>) {
+    let update: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                400,
+                "text/plain; charset=utf-8",
+                format!("invalid JSON: {}", e).into_bytes(),
+            );
+        }
+    };
+    let root = match project_root(Some(app)) {
+        Some(r) => r,
+        None => {
+            return (
+                500,
+                "text/plain; charset=utf-8",
+                b"project root unavailable".to_vec(),
+            );
+        }
+    };
+    if let Err(e) = write_settings_to_config(&root, &update) {
+        return (500, "text/plain; charset=utf-8", e.into_bytes());
+    }
+    // Return the freshly merged view rather than echoing the POST body so
+    // the form sees the same shape it gets from GET. The filesystem watcher
+    // will also emit `settings-changed`; the duplicate refresh is harmless.
+    let config = load_project_config(&root);
+    let body = settings_view_from_config(config).to_string().into_bytes();
+    (200, "application/json; charset=utf-8", body)
 }
 
 #[tauri::command]
@@ -11956,6 +12084,16 @@ fn route_request<R: tauri::Runtime>(
         return (200, "application/json; charset=utf-8", body);
     }
 
+    // /__settings — user-facing slice of .bram.json. GET returns the merged
+    // view (Settings tab + parent shell consume this); POST is handled
+    // separately in handle_http's POST-only block. The Tauri
+    // `settings-changed` event carries the same payload.
+    if path == "__settings" {
+        let config = project_root(Some(app)).and_then(|root| load_project_config(&root));
+        let body = settings_view_from_config(config).to_string().into_bytes();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
     // /__worklist/resolve[?ids=foo,bar] — verified-authorization endpoint
     // the agent reads instead of parsing the `approved:` / `drop:` turn
     // line. Returns the current `.worklist-authorization.json` body, with
@@ -13030,6 +13168,10 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Re
         } else {
             handle_git_pull_rebase(app)
         }
+    } else if path == "__settings" && method == "POST" {
+        let mut buf = Vec::new();
+        let _ = request.as_reader().read_to_end(&mut buf);
+        handle_settings_post(app, &buf)
     } else {
         route_request(app, path, query)
     };

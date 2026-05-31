@@ -1,5 +1,11 @@
 {
   "shell": {
     "agent": "agent --continue"
+  },
+  "ui": {
+    "targetAppMinimized": true
+  },
+  "worklist": {
+    "batchCommitActions": false
   }
 }

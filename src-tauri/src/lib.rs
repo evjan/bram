@@ -12429,14 +12429,66 @@ fn route_request<R: tauri::Runtime>(
         }
         let needle = trimmed.to_lowercase();
         let groups = recent_worklist_history_groups(app, WORKLIST_HISTORY_DEFAULT_LIMIT);
-        let results: Vec<&WorklistHistoryGroup> = groups
-            .iter()
-            .filter(|g| {
-                serde_json::to_string(g)
-                    .map(|s| s.to_lowercase().contains(&needle))
-                    .unwrap_or(false)
-            })
-            .collect();
+        let mut results: Vec<serde_json::Value> = Vec::new();
+        for g in &groups {
+            let serialized = serde_json::to_string(g).unwrap_or_default();
+            if !serialized.to_lowercase().contains(&needle) {
+                continue;
+            }
+            // hitBody concatenates the human-readable text fields the modal
+            // and card-snippet renderer can window into. Mirrors what the
+            // serialized-JSON filter above matches against, but in a
+            // reader-friendly format (no JSON syntax noise).
+            let mut hit_body = String::new();
+            hit_body.push_str(&g.title);
+            hit_body.push('\n');
+            if !g.subtitle.is_empty() {
+                hit_body.push_str(&g.subtitle);
+                hit_body.push('\n');
+            }
+            if !g.prose_phase_summary.is_empty() {
+                hit_body.push_str(&g.prose_phase_summary);
+                hit_body.push('\n');
+            }
+            if let Some(item) = g.current_item.as_ref() {
+                if let Some(obj) = item.as_object() {
+                    for key in ["before", "after", "feedback"] {
+                        if let Some(v) = obj.get(key).and_then(|v| v.as_str()) {
+                            if !v.is_empty() {
+                                hit_body.push_str(v);
+                                hit_body.push('\n');
+                            }
+                        }
+                    }
+                }
+            }
+            // Center hitBody on the first match and cap at 4 KB. The
+            // iframe modal uses a 500-char window and the card preview
+            // uses 160; 4 KB gives both room without blowing up the
+            // payload size (a "pe" query against 120 groups was 949 KB
+            // before this cap; per-row cap drops it to ~120 * 4 KB ≈
+            // 480 KB worst case, and typical groups are smaller than
+            // the cap so the real reduction is larger).
+            const HIT_BODY_CAP: usize = 4096;
+            let lower_body = hit_body.to_lowercase();
+            let centered = if let Some(pos) = lower_body.find(&needle) {
+                let half = HIT_BODY_CAP / 2;
+                let start = pos.saturating_sub(half);
+                let end = (start + HIT_BODY_CAP).min(hit_body.len());
+                let start = end.saturating_sub(HIT_BODY_CAP);
+                hit_body
+                    .get(start..end)
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                hit_body.chars().take(HIT_BODY_CAP).collect()
+            };
+            let mut row = serde_json::to_value(g).unwrap_or(serde_json::Value::Null);
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert("hitBody".to_string(), serde_json::Value::String(centered));
+            }
+            results.push(row);
+        }
         let body = serde_json::json!({ "results": results })
             .to_string()
             .into_bytes();
@@ -12485,6 +12537,7 @@ fn route_request<R: tauri::Runtime>(
                 let mut row = entry.clone();
                 if let Some(obj) = row.as_object_mut() {
                     obj.insert("snippet".to_string(), serde_json::Value::String(snippet));
+                    obj.insert("body".to_string(), serde_json::Value::String(body.clone()));
                 }
                 results.push(row);
             }

@@ -4,6 +4,8 @@
   var.selectedLine="{null}"
   var.commitsExpanded="{false}"
   var.query=""
+  var.searchHitTitle="{''}"
+  var.searchHitBody="{''}"
   var.pullError="{null}"
   var.pushError="{null}">
 
@@ -38,8 +40,14 @@
     name="selectedCommit"
     value="{!selectedSha ? null : ((((searchResults.value &amp;&amp; searchResults.value.results) || []).find(c => c.sha === selectedSha)) || ((commits.value || []).find(c => c.sha === selectedSha)))}" />
 
+  <SearchHitModal
+    id="searchHitModalRef"
+    title="{searchHitTitle}"
+    body="{searchHitBody}"
+    query="{query}" />
+
   <HSplitter height="100%" initialPrimarySize="50%"
-    onInit="(() => { const tauri = (window.parent &amp;&amp; window.parent.__TAURI__) || window.__TAURI__; if (!(tauri &amp;&amp; tauri.event &amp;&amp; tauri.event.listen)) return; if (typeof window.__bramCommitsUnlisten === 'function') { try { window.__bramCommitsUnlisten(); } catch (err) {} window.__bramCommitsUnlisten = null; } tauri.event.listen('git-status-changed', () => commits.refetch()).then((unlisten) => { window.__bramCommitsUnlisten = unlisten; }).catch(() => {}); })()">
+    onInit="subscribeTauriEvent('__bramCommitsUnlisten', 'git-status-changed', () => commits.refetch())">
 
     <VStack padding="$space-4" gap="$space-4" overflowY="auto">
       <HStack gap="$space-3" verticalAlignment="center">
@@ -56,10 +64,10 @@
           onClick="pullError = null; pullRebase.execute()" />
         <SpaceFiller />
         <SearchBox
-          placeholder="Search…"
+          placeholder="Search commits…"
           inProgress="{searchResults.inProgress}"
           onQueryChange="(q) => query = q"
-          onClear="selectedSha = null; selectedLine = null" />
+          onClear="selectedSha = null; selectedLine = null; searchHitModalRef.close()" />
       </HStack>
 
       <HStack
@@ -122,10 +130,9 @@
                   maxLines="1" />
               </HStack>
             </Link>
-            <Items data="{$item.hits}">
+            <Items data="{$item.hits}" var.parentBody="{$item.body}" var.parentRow="{$item}">
               <Link
-                onClick="selectedSha = commitSha; selectedLine = ($item.line || null)"
-                noIndicator="true">
+                onClick="searchHitBody = searchHitBestBody(query, [parentBody, $item.snippet, parentRow.commit.message]); searchHitTitle = parentRow.commit.message; searchHitModalRef.open()">
                 <HStack gap="$space-2" paddingLeft="$space-3">
                   <Text
                     value="{$item.field}"

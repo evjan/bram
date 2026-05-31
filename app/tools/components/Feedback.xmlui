@@ -1,7 +1,9 @@
 <Component
   name="Feedback"
   var.selectedFeedback="{null}"
-  var.query="{''}">
+  var.query="{''}"
+  var.searchHitTitle="{''}"
+  var.searchHitBody="{''}">
 
   <DataSource
     id="feedbackList"
@@ -36,6 +38,12 @@
     </VStack>
   </ModalDialog>
 
+  <SearchHitModal
+    id="searchHitModalRef"
+    title="{searchHitTitle}"
+    body="{searchHitBody}"
+    query="{query}" />
+
   <VStack
     padding="$space-6"
     gap="$space-3"
@@ -47,7 +55,7 @@
         placeholder="Search feedback…"
         inProgress="{feedbackSearch.inProgress}"
         onQueryChange="(q) => query = q"
-        onClear="selectedFeedback = null" />
+        onClear="selectedFeedback = null; searchHitModalRef.close()" />
     </HStack>
 
     <Spinner
@@ -87,10 +95,21 @@
             value="{feedbackHistoryDateLine($item)}"
             color="$textColor-secondary"
             fontSize="$fontSize-xs" />
+          <Text
+            when="{$item.snippet}"
+            fontSize="$fontSize-sm"
+            color="$textColor-secondary"
+            value="{'… ' + $item.snippet + ' …'}" />
           <Link
+            when="{!query || query.trim().length &lt; 2}"
             noIndicator="true"
             onClick="selectedFeedback = $item">
             <Text value="view feedback" fontSize="$fontSize-sm" />
+          </Link>
+          <Link
+            when="{query &amp;&amp; query.trim().length >= 2}"
+            onClick="searchHitBody = $item.body || ''; searchHitTitle = feedbackHistoryItemTitle($item); searchHitModalRef.open()">
+            <Text value="view hit context" fontSize="$fontSize-sm" />
           </Link>
         </VStack>
       </Items>

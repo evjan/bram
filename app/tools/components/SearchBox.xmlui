@@ -11,10 +11,8 @@
       size="xs"
       tooltip="Clear search"
       onClick="searchBox.setValue(''); emitEvent('queryChange', ''); emitEvent('clear')" />
-    <Text
-      when="{$props.inProgress}"
-      fontSize="$fontSize-sm"
-      color="$textColor-secondary"
-      value="Searching…" />
+    <Theme size-Spinner="1em">
+      <Spinner when="{$props.inProgress}" />
+    </Theme>
   </HStack>
 </Component>

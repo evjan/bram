@@ -198,6 +198,7 @@
     <NavLink label="Transcript" to="/" exact="true" />
     <NavLink label="Sessions" to="/sessions" />
     <NavLink label="History" to="/history" />
+    <NavLink label="Feedback" to="/feedback" />
     <NavLink label="Context" to="/context" />
     <NavLink label="Status" to="/status" />
     <NavLink label="Settings" to="/settings" />
@@ -284,6 +285,7 @@
     <Page url="/settings"><Settings /></Page>
     <Page url="/sessions"><Sessions /></Page>
     <Page url="/history"><History /></Page>
+    <Page url="/feedback"><Feedback /></Page>
     <Page url="/context"><Context activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
     <Page url="/issues"><Issues /></Page>
     <Page url="/commits"><Commits /></Page>

@@ -8179,6 +8179,54 @@ fn feedback_draft_belongs_to_item(file_name: &str, item_id: &str) -> bool {
     file_name == format!("{}.md", item_id) || file_name.ends_with(&format!("-{}.md", item_id))
 }
 
+// List recent feedback-history entries for the Feedback tab. Filenames
+// are <unix_ms>-<itemId>.md (per unique_feedback_history_path); a
+// uniqueness suffix `-<n>` may appear before `.md` on the rare collision
+// path. Parse ts as a leading numeric prefix and itemId as the remainder
+// between the first `-` and trailing `.md`. Reverse-chronological by ts.
+fn recent_feedback_history<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    limit: usize,
+) -> Vec<serde_json::Value> {
+    let Some(dir) = feedback_history_dir(app) else {
+        return Vec::new();
+    };
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut rows: Vec<(u64, String, String)> = Vec::new();
+    for entry in read.flatten() {
+        let name = match entry.file_name().into_string() {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let stem = match name.strip_suffix(".md") {
+            Some(s) => s,
+            None => continue,
+        };
+        let (ts_str, item_id) = match stem.split_once('-') {
+            Some(p) => p,
+            None => continue,
+        };
+        let ts: u64 = match ts_str.parse() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        rows.push((ts, item_id.to_string(), name));
+    }
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.into_iter()
+        .take(limit)
+        .map(|(ts, item_id, file_name)| {
+            serde_json::json!({
+                "ts": ts,
+                "itemId": item_id,
+                "fileName": file_name,
+            })
+        })
+        .collect()
+}
+
 fn unique_feedback_history_path(history_dir: &Path, file_name: &str) -> PathBuf {
     let initial = history_dir.join(file_name);
     if !initial.exists() {
@@ -12358,6 +12406,55 @@ fn route_request<R: tauri::Runtime>(
         };
     }
 
+    // /__feedback-history/list[?limit=N] — reverse-chronological list of
+    // feedback drafts promoted from resources/feedback-drafts/ to
+    // resources/feedback-history/ by promote_feedback_drafts_for_items.
+    // Each entry: { ts, itemId, fileName }. The Feedback tab consumes this.
+    if path == "__feedback-history/list" {
+        let mut limit = WORKLIST_HISTORY_DEFAULT_LIMIT;
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("limit=") {
+                limit = percent_decode(v)
+                    .parse::<usize>()
+                    .unwrap_or(WORKLIST_HISTORY_DEFAULT_LIMIT);
+            }
+        }
+        let entries = recent_feedback_history(app, limit);
+        let body = serde_json::to_vec(&entries).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    // /__feedback-history/content?ts=<unix_ms>&itemId=<id> — raw .md body
+    // for one entry. Reconstructs the filename rather than trusting a
+    // client-supplied path (no traversal).
+    if path == "__feedback-history/content" {
+        let mut ts = String::new();
+        let mut item_id = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("ts=") {
+                ts = percent_decode(v);
+            } else if let Some(v) = pair.strip_prefix("itemId=") {
+                item_id = percent_decode(v);
+            }
+        }
+        if ts.is_empty()
+            || item_id.is_empty()
+            || ts.chars().any(|c| !c.is_ascii_digit())
+            || item_id.contains('/')
+            || item_id.contains('\\')
+        {
+            return (400, "text/plain; charset=utf-8", b"bad params".to_vec());
+        }
+        let Some(dir) = feedback_history_dir(app) else {
+            return (404, "text/plain; charset=utf-8", Vec::new());
+        };
+        let p = dir.join(format!("{}-{}.md", ts, item_id));
+        return match std::fs::read(&p) {
+            Ok(bytes) => (200, "text/markdown; charset=utf-8", bytes),
+            Err(_) => (404, "text/plain; charset=utf-8", Vec::new()),
+        };
+    }
+
     // /__worklist-history/snapshot?ts=<unix_ms> — raw .json snapshot
     if path == "__worklist-history/snapshot" {
         let mut ts = String::new();
@@ -14141,6 +14238,19 @@ pub fn run() {
                         // above drains it when the window elapses. Refs
                         // #85 worklist-watcher-debounce.
                         pending_worklist_since = Some(Instant::now());
+                    }
+
+                    // feedback-history-changed: anything under
+                    // resources/feedback-history/. The Feedback tab's
+                    // DataSource refetches on this. Promotion is rare
+                    // (once per iterate cycle), so no debounce needed.
+                    let is_feedback_history_change = event.paths.iter().any(|p| {
+                        p.components().any(|c| c.as_os_str() == "feedback-history")
+                            && p.components().any(|c| c.as_os_str() == "resources")
+                    });
+                    if is_feedback_history_change {
+                        trace_emit_signal(&app_handle, "feedback-history-changed");
+                        let _ = app_handle.emit("feedback-history-changed", ());
                     }
 
                     // Codex filesystem lifecycle drain (#130). When Codex

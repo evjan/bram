@@ -1096,3 +1096,16 @@ function unifiedDiffFromEdit(input) {
   const body = (oldLines.length && newLines.length) ? (minus + '\n' + plus) : (minus + plus);
   return head + hunk + body;
 }
+
+// Feedback tab helpers — parallel to the history* family. The Feedback
+// tab browses entries from /__feedback-history/list, each shaped as
+// { ts: <unix_ms>, itemId: <string>, fileName: <string> }.
+function feedbackHistoryItemTitle(entry) {
+  return (entry && entry.itemId) || '(unknown item)';
+}
+function feedbackHistoryDateLine(entry) {
+  if (!entry || !entry.ts) return '';
+  const d = new Date(Number(entry.ts));
+  if (isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 16).replace('T', ' ');
+}

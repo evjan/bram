@@ -398,7 +398,11 @@ document
       const max = rect.height - MIN_PX - hSplitter.offsetHeight;
       if (h < MIN_PX) h = MIN_PX;
       if (h > max) h = max;
-      tools.style.flexBasis = h + "px";
+      // Store as percentage of the column height so window resizes
+      // preserve the user's chosen proportion. Absolute pixels (h +
+      // "px") locked the drawer to a fixed height and left a gap or
+      // overshoot when the Tauri window grew or shrank.
+      tools.style.flexBasis = ((h / rect.height) * 100) + "%";
     };
     const onUp = (ev) => {
       hSplitter.releasePointerCapture(ev.pointerId);
@@ -667,26 +671,43 @@ const { listen } = window.__TAURI__.event;
 // not restored.
 (() => {
   const TARGET_MIN_PX = 80; // matches the h-splitter MIN_PX above
-  function apply(minimized) {
+  let minimized = false;
+  function pin() {
     const tools = document.getElementById("tools-pane");
     const column = document.querySelector(".right-column");
     const hSplitter = document.getElementById("h-splitter");
     if (!tools || !column || !hSplitter) return;
-    if (!minimized) {
-      tools.style.flexBasis = "";
-      return;
-    }
     const rect = column.getBoundingClientRect();
     const h = rect.height - TARGET_MIN_PX - hSplitter.offsetHeight;
     if (h > 0) tools.style.flexBasis = h + "px";
   }
+  function set(next) {
+    const prev = minimized;
+    minimized = !!next;
+    if (minimized) {
+      pin();
+    } else if (prev) {
+      // Only clear the override when transitioning OFF, not on every
+      // tick of the resize listener — otherwise a non-minimized user
+      // drag (stored as percentage by the h-splitter handler) gets
+      // wiped on every window resize.
+      const tools = document.getElementById("tools-pane");
+      if (tools) tools.style.flexBasis = "";
+    }
+  }
   fetch("/__settings")
     .then((r) => r.json())
-    .then((v) => apply(!!(v && v.ui && v.ui.targetAppMinimized)))
+    .then((v) => set(v && v.ui && v.ui.targetAppMinimized))
     .catch(() => {});
   listen("settings-changed", (e) => {
     const v = e && e.payload;
-    apply(!!(v && v.ui && v.ui.targetAppMinimized));
+    set(v && v.ui && v.ui.targetAppMinimized);
+  });
+  // Reapply on window resize so the splitter stays at the floor when
+  // the Tauri window grows or shrinks. No-op when not minimized — the
+  // user's drag-set percentage flexBasis is responsive on its own.
+  window.addEventListener("resize", () => {
+    if (minimized) pin();
   });
 })();
 

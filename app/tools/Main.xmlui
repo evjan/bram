@@ -7,14 +7,15 @@
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
     onDidChange="(c) => { if (c.newValue) { if ($pathname !== '/') navigate('/'); window.scrollAllToTop(); } }" />
 
-  <ModalDialog id="setupInfoDialog" title="About repo setup">
+  <ModalDialog id="setupInfoDialog" title="About agent coordination">
     <VStack gap="$space-3">
       <Text>
-        Setup configures this repo so AI agents share a worklist-driven coordination flow. It installs a small, idempotent set of files; rerunning is safe.
+        Bram configures this repo so AI agents share a worklist-driven coordination flow. Setup and refresh both install a small, idempotent set of files; rerunning is safe.
       </Text>
       <VStack gap="$space-1">
-        <Text fontWeight="bold">What setup does</Text>
+        <Text fontWeight="bold">What setup and refresh do</Text>
         <Text>• Writes the shared `resources/.worklist-authorization.json` record that every adapter consumes.</Text>
+        <Text>• Refreshes the conventions sidecar so Claude and Codex use the current Bram workflow after upgrades.</Text>
         <Text>• Installs the Claude adapter: a `CLAUDE.md` @-import of the conventions sidecar plus `.claude/hooks/worklist-guard.py` (PreToolUse).</Text>
         <Text>• Installs the Codex adapter: an `AGENTS.md` block teaching Codex the worklist flow plus a `~/.codex/config.toml` PreToolUse hook.</Text>
       </VStack>
@@ -210,24 +211,29 @@
 <HStack verticalAlignment="center" gap="$space-2">
   <Heading level="h3">
     {enhanceStatus.value && enhanceStatus.value.providerSetupKind === 'codex-hook-refresh'
-      ? 'Refresh Codex Agent Adapter'
-      : 'Set Up This Repo For Agent Coordination'}
+      ? 'Refresh Agent Coordination'
+      : 'Set Up Agent Coordination'}
   </Heading>
   <Button
     label="ⓘ"
     variant="ghost"
     size="sm"
-    tooltip="{enhanceStatus.value && enhanceStatus.value.providerSetupKind === 'codex-hook-refresh' ? 'About Codex adapter refresh' : 'About repo setup'}"
+    tooltip="{enhanceStatus.value && enhanceStatus.value.providerSetupKind === 'codex-hook-refresh' ? 'About agent coordination refresh' : 'About agent coordination setup'}"
     onClick="setupInfoDialog.open()" />
 </HStack>
 <Text
   when="{enhanceStatus.value && enhanceStatus.value.providerSetupKind === 'codex-hook-refresh'}"
   fontSize="$fontSize-sm">
-  Bram's repo setup is current. The user-global Codex hook adapter needs a refresh.
+  Bram was upgraded. Refresh the coordination files so Claude and Codex use the current conventions and hooks.
+</Text>
+<Text
+  when="{!(enhanceStatus.value && enhanceStatus.value.providerSetupKind === 'codex-hook-refresh')}"
+  fontSize="$fontSize-sm">
+  Install Bram's worklist coordination files and agent adapters for this repo.
 </Text>
 <HStack>
   <Button
-    label="{enhanceStatus.value && enhanceStatus.value.providerSetupKind === 'codex-hook-refresh' ? 'Refresh Adapter' : 'Run Setup'}"
+    label="{enhanceStatus.value && enhanceStatus.value.providerSetupKind === 'codex-hook-refresh' ? 'Refresh Coordination' : 'Run Setup'}"
     onClick="setupCompleteProvider = enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider; window.fetch('/__enhance/run').then(() => enhanceStatus.refetch()).catch(() => { setupCompleteProvider = ''; enhanceStatus.refetch(); })" />
 </HStack>
   </VStack>

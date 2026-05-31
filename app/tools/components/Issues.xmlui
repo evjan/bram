@@ -154,7 +154,7 @@
           enabled="{!newIssueSubmitting}"
           onClick="showNewIssueHint = true" />
         <Theme size-Spinner="1em">
-          <Spinner when="{newIssueSubmitting}" />
+          <Spinner when="{newIssueSubmitting || (issues.inProgress &amp;&amp; !issues.loaded)}" />
         </Theme>
         <SpaceFiller />
         <HStack gap="$space-1" verticalAlignment="center" width="*" maxWidth="20rem">

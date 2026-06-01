@@ -47,6 +47,26 @@ def _trace_hook(event, tool, target, decision, reason, cwd=None):
       and BRAM_TRACE_LOG is set on the agent's PTY child env (existing
       issue #49 behavior).
     """
+    # Issue #69 probe: unconditionally log every invocation to
+    # /tmp/bram-hook-probe.log to bisect why [hook] traces stopped
+    # firing after 2026-05-24. Remove in a follow-up item once the
+    # root cause is identified.
+    try:
+        _probe_now = datetime.now(timezone.utc)
+        _probe_ts = (
+            _probe_now.strftime("%Y-%m-%dT%H:%M:%S.")
+            + f"{_probe_now.microsecond // 1000:03d}Z"
+        )
+        with open("/tmp/bram-hook-probe.log", "a") as _probe_f:
+            _probe_f.write(
+                f"[{_probe_ts}] pid={os.getpid()} script={__file__} "
+                f"event={event} tool={tool} target={target} "
+                f"decision={decision} "
+                f"BRAM_TRACE={os.environ.get('BRAM_TRACE', '<unset>')} "
+                f"BRAM_TRACE_LOG={os.environ.get('BRAM_TRACE_LOG', '<unset>')}\n"
+            )
+    except Exception:
+        pass
     if cwd is None:
         try:
             cwd = os.getcwd()

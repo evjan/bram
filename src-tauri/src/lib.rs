@@ -7593,6 +7593,66 @@ fn hook_matches_bundle<R: tauri::Runtime>(
     disk_bytes == bundle_bytes
 }
 
+fn extract_marker_block<'a>(disk: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let start_idx = disk.find(start)?;
+    let tail = &disk[start_idx..];
+    let end_off = tail.find(end)?;
+    let end_idx = start_idx + end_off + end.len();
+    Some(&disk[start_idx..end_idx])
+}
+
+fn codex_agents_block_current<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    agents_path: &Path,
+    is_source_repo: bool,
+) -> bool {
+    // Source repo carries AGENTS.md as the canonical content, not as a
+    // Bram-installed marker block. Setup doesn't rewrite it, so it can't
+    // go stale relative to the bundle.
+    if is_source_repo {
+        return true;
+    }
+    let Some((bundle_bytes, _)) = serve_app_file(Some(app), ENHANCE_CODEX_BUNDLE_REL) else {
+        return false;
+    };
+    let Ok(seed) = String::from_utf8(bundle_bytes) else {
+        return false;
+    };
+    let expected = format!(
+        "{}\n{}\n{}",
+        ENHANCE_MARKER_START,
+        seed.trim_end(),
+        ENHANCE_MARKER_END
+    );
+    let Ok(disk) = std::fs::read_to_string(agents_path) else {
+        return false;
+    };
+    // Legacy marker presence-only counts as stale: next Refresh will
+    // swap it for the new marker via replace_or_append_managed_block.
+    extract_marker_block(&disk, ENHANCE_MARKER_START, ENHANCE_MARKER_END)
+        .map(|slice| slice == expected)
+        .unwrap_or(false)
+}
+
+fn codex_instr_block_current(config_path: &Path) -> bool {
+    let expected = format!(
+        "{start}\ndeveloper_instructions = {body}\n{end}",
+        start = ENHANCE_CODEX_INSTR_MARKER_START,
+        end = ENHANCE_CODEX_INSTR_MARKER_END,
+        body = toml_basic_string(ENHANCE_CODEX_GATE_PROSE),
+    );
+    let Ok(disk) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    extract_marker_block(
+        &disk,
+        ENHANCE_CODEX_INSTR_MARKER_START,
+        ENHANCE_CODEX_INSTR_MARKER_END,
+    )
+    .map(|slice| slice == expected)
+    .unwrap_or(false)
+}
+
 fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     use serde_json::json;
     let proj = project_root(Some(app)).ok_or("no project root")?;
@@ -7634,6 +7694,12 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         .as_ref()
         .map(|p| hook_matches_bundle(app, p, ENHANCE_CODEX_HOOK_BUNDLE_REL))
         .unwrap_or(false);
+    let codex_agents_current = codex_agents_block_current(app, &codex_agents, is_source_repo);
+    let codex_config_path = home_dir().map(|h| h.join(ENHANCE_CODEX_CONFIG_REL));
+    let codex_instr_current = codex_config_path
+        .as_ref()
+        .map(|p| codex_instr_block_current(p))
+        .unwrap_or(false);
     let codex_trust_ack = home_dir()
         .and_then(|h| {
             let stored = std::fs::read_to_string(h.join(ENHANCE_CODEX_TRUST_ACK_REL)).ok()?;
@@ -7644,8 +7710,14 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let core_installed = worklist_auth.exists();
     let claude_installed =
         claude_md_has_marker && sidecar_exists && hook_script_current && hook_registered;
-    let codex_installed = core_installed && codex_agents_has_marker && codex_hook_current;
-    let codex_hook_stale_only = core_installed && codex_agents_has_marker && !codex_hook_current;
+    let codex_installed = core_installed
+        && codex_agents_has_marker
+        && codex_agents_current
+        && codex_hook_current
+        && codex_instr_current;
+    let codex_install_stale_only = core_installed
+        && codex_agents_has_marker
+        && (!codex_hook_current || !codex_agents_current || !codex_instr_current);
     let claude_needs_setup = !core_installed || !claude_installed;
     let codex_needs_setup = !core_installed || !codex_installed;
     let provider_needs_setup = match active_provider {
@@ -7667,8 +7739,8 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         "claudeNeedsSetup": claude_needs_setup,
         "codexNeedsSetup": codex_needs_setup,
         "providerNeedsSetup": provider_needs_setup,
-        "codexHookStaleOnly": codex_hook_stale_only,
-        "providerSetupKind": if matches!(active_provider, Some(SessionProvider::Codex)) && codex_hook_stale_only {
+        "codexInstallStaleOnly": codex_install_stale_only,
+        "providerSetupKind": if matches!(active_provider, Some(SessionProvider::Codex)) && codex_install_stale_only {
             "codex-hook-refresh"
         } else {
             "repo-setup"
@@ -7679,6 +7751,8 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         "hookScript": hook_script_exists,
         "hookScriptCurrent": hook_script_current,
         "codexHookCurrent": codex_hook_current,
+        "codexAgentsCurrent": codex_agents_current,
+        "codexInstrCurrent": codex_instr_current,
         "codexTrustAck": codex_trust_ack,
         "hookRegistered": hook_registered,
         "fallbackMode": "watcher-revert",

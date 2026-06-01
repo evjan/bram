@@ -8670,8 +8670,10 @@ fn clear_active_sentinel_with_reason<R: tauri::Runtime>(app: &AppHandle<R>, reas
             &format!("op=clear-request reason={}", reason),
         );
     }
-    let claimed_after = inflight_claim_ids_and_claimed_at(app)
-        .map(|(ids, claimed_at)| !ids.is_empty() && unix_now_ms() >= claimed_at)
+    let active_claim = inflight_claim_ids_and_claimed_at(app);
+    let claimed_after = active_claim
+        .as_ref()
+        .map(|(ids, claimed_at)| !ids.is_empty() && unix_now_ms() >= *claimed_at)
         .unwrap_or(false);
     record_turn_completion_monitor(
         "cancel",
@@ -8681,7 +8683,19 @@ fn clear_active_sentinel_with_reason<R: tauri::Runtime>(app: &AppHandle<R>, reas
         unix_now_ms(),
         claimed_after,
     );
-    clear_active_sentinel(app);
+    if let Some((ids, _claimed_at)) = active_claim {
+        clear_inflight_claim_sentinel(app, &ids);
+    } else {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "inflight-sentinel",
+                &format!("op=clear-miss-emitted reason={}", reason),
+            );
+        }
+        trace_emit_signal(app, "inflight-claim-changed");
+        let _ = app.emit("inflight-claim-changed", ());
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

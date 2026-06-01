@@ -106,7 +106,7 @@ uses them for the right-pane info dialog.
 | `/__settings` | HTTP GET | — | user-facing slice of `.bram.json`: `{ shell: { agent }, worklist: { batchCommitActions }, ui: { targetAppMinimized } }` (always populated, defaults filled) | agent-tools iframe (Settings tab), parent shell |
 | `/__settings` | HTTP POST | body matches GET shape | merged response after writing `.bram.json` atomically; preserves unknown top-level keys; 400 on JSON parse error / 500 on IO error | agent-tools iframe (Settings tab) |
 | `settings-changed` | Tauri event | — | same payload `GET /__settings` returns | agent-tools iframe (Settings DataSource refetch), parent shell (`app/main.js` `targetAppMinimized` driver) |
-| `/__coordination-status` | HTTP GET | — | derived status payload for the Status tab: `{ generatedAt, sections: [{ title, rows: [{ signal, level, state, detail, seen }] }] }`. Aggregates worklist counts by status, inflight sentinel state, authorization record freshness, watcher / hook health, recent trace tails. | agent-tools iframe (Status tab) |
+| `/__coordination-status` | HTTP GET | — | derived status payload for the Status tab: `{ generatedAt, sections: [{ title, rows: [{ signal, level, state, detail, seen }] }] }`. Aggregates worklist counts by status, inflight sentinel state, turn-completion monitor state, authorization record freshness, watcher / hook health, recent trace tails. | agent-tools iframe (Status tab) |
 | `pty_spawn` | IPC | `{ shell, cwd, env, agentAutostart? }` | `Result<(), String>` | parent shell |
 | `pty_write` | IPC | `{ data: String }` | `Result<(), String>` | parent shell, iframe helpers (direct) |
 | `pty_resize` | IPC | `{ cols, rows }` | `Result<(), String>` | parent shell |
@@ -465,6 +465,29 @@ file / event reference.
   sentinel and emits one final `inflight-claim-changed`). This is by
   design: a stuck spinner surfaces the failure case instead of hiding
   it.
+- **Independent turn completion detection.** In addition to cooperative
+  agent calls, the host watches session JSONL for durable completion
+  records. Claude clears on the most recent assistant record with
+  `message.stop_reason:"end_turn"`. Codex clears on `event_msg` /
+  `payload.type:"task_complete"`. Both providers use the sentinel's
+  `claimedAt` as a stale-line guard so a completion record from a prior
+  turn cannot clear a newly-started claim. PTY silence and explicit
+  cancellation remain fallback clear paths.
+- **Turn completion monitor.** `/__coordination-status` includes
+  `raw.turnCompletion` and the Status tab's Inflight Sentinel section
+  includes a `Turn completion` row. The row reports the last detector
+  source (`jsonl`, `pty-silence`, `mutate`, `iterate-end`, `cancel`),
+  provider, reason, timestamp, and whether the observed completion was
+  after the active claim. This is the first place to look when a spinner
+  is stuck.
+- **Scope boundary.** XMLUI component busy states and Bram Worklist
+  busy states have different sources of truth. APICall-driven controls
+  clear from the component's `inProgress` state and lifecycle handlers;
+  Worklist controls clear from the host-managed inflight sentinel served
+  by `/__inflight`. A scheduler fix in XMLUI APICall handling can
+  remove delayed component cleanup, but it does not remove the need for
+  this host-side turn-completion monitor for approved/drop/iterate
+  cycles.
 - **`inflight-claim-changed`** is emitted from inside the host helpers
   after the file write / delete completes. Iframe
   subscribers refetch `/__inflight` on receipt; the `Workspace.xmlui`
@@ -472,6 +495,8 @@ file / event reference.
 - **Trace categories.** `[inflight-sentinel] op=write kind=<…> ids=[…]`
   on writes, `[inflight-sentinel] op=clear ids=[…]` on clears,
   `[inflight-sentinel] op=stale-startup-clear` on startup-time cleanup.
+  `[jsonl-turn-end] op=enter|detect|skip provider=<claude|codex>
+  reason=<...>` records durable turn-completion detector decisions.
   Paired with `[emit] kind=inflight-claim-changed` and
   `[iframe] subkind=listener-fired context=inflight-claim-changed`
   downstream.

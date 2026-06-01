@@ -480,6 +480,9 @@ design decisions (which items to propose, what to bake in), not for
 mechanics.
 
 
+## Talking to users
+
+
 ## Host-managed inflight sentinel
 
 The Worklist spinner is keyed to `resources/.inflight-claim.json`,
@@ -498,8 +501,12 @@ reference: `docs/apis.md` §11. Agent-side conventions:
 
 ### Failure modes
 
-A stuck spinner is the convention enforcing itself; no live-session
-timeout. Most commonly:
+A stuck spinner is the convention enforcing itself; there is no
+arbitrary live-session timeout. Bram does have host-side completion
+detectors that can clear a lingering claim without a cooperative agent
+tail call: Claude session JSONL `stop_reason:"end_turn"`, Codex session
+JSONL `task_complete`, PTY silence, and explicit cancellation paths. Most
+commonly:
 
 - **Approved/drop stuck:** `mutate` was never called, or errored
   before the clear. Recovery: call mutate manually, or restart Bram
@@ -507,7 +514,22 @@ timeout. Most commonly:
 - **Iterate stuck:** `/__iterate/end` was never called. Convention
   violation — bracket every iterate response.
 - **Premature clear:** structurally impossible post-#84. If observed,
-  grep `[inflight-sentinel]` in `bram-trace.log`.
+  grep `[inflight-sentinel]` and `[jsonl-turn-end]` in
+  `bram-trace.log`.
+
+The Status tab's Inflight Sentinel section includes a `Turn completion`
+row. Use it first when diagnosing a stuck spinner: it reports the last
+detector source, provider, skip/detect reason, timestamp, and whether
+the observed completion happened after the active claim.
+
+Do not conflate this with XMLUI component-local busy states. APICall
+spinners/buttons are driven by the APICall component's `inProgress`
+state and lifecycle handlers; Worklist spinners are driven by Bram's
+host-managed inflight sentinel. XMLUI fixes such as
+xmlui-org/xmlui#3540 can resolve delayed APICall `onSuccess` cleanup,
+but they do not replace the host turn-completion detector needed for
+approved/drop/iterate worklist cycles, which are sent through `toTurn`
+and cleared through `/__inflight` plus host lifecycle events.
 
 
 ## Commit & git etiquette

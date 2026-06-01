@@ -814,9 +814,74 @@ static LOOPBACK_PORT: OnceLock<u16> = OnceLock::new();
 static LOOPBACK_STARTED_MS: OnceLock<i64> = OnceLock::new();
 
 #[derive(serde::Serialize, Clone)]
+struct MenuOption {
+    key: String,
+    label: String,
+}
+
+#[derive(serde::Serialize, Clone)]
 struct PtyMenu {
     tool: String,
     text: String,
+    options: Vec<MenuOption>,
+}
+
+// Parse `1. Foo` / `❯1. Foo` / `❯ 2. Bar` lines out of the captured menu
+// text. Cursor marker `❯` (U+276F) may or may not lead the first option;
+// subsequent options have a numeric prefix only. Stops at the first non-
+// matching line after at least one option has been collected so trailing
+// PTY chatter doesn't get swept in. Returns an empty Vec on no matches —
+// the UI falls back to its hardcoded buttons in that case.
+fn parse_menu_options(text: &str) -> Vec<MenuOption> {
+    let mut opts: Vec<MenuOption> = Vec::new();
+    for raw in text.lines() {
+        // Strip leading cursor marker (with optional space / NBSP) and whitespace.
+        let trimmed = raw
+            .trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
+        if trimmed.is_empty() {
+            // Blank line terminates after at least one option — the PTY emits
+            // an empty line between the option list and end-of-menu footer
+            // ("Esc to cancel · Tab to amend …").
+            if !opts.is_empty() {
+                break;
+            }
+            continue;
+        }
+        // Match leading digit(s) followed by "." and a label.
+        let (digits, rest) = match trimmed.find('.') {
+            Some(idx) => trimmed.split_at(idx),
+            None => (trimmed, ""),
+        };
+        let is_numbered = !digits.is_empty()
+            && digits.chars().all(|c| c.is_ascii_digit())
+            && !rest.is_empty();
+        if !is_numbered {
+            // Non-numbered, non-empty line. If we have a previous option,
+            // treat it as a wrapped continuation of that option's label —
+            // strip_ansi removes the cursor-positioning escapes Claude
+            // Code uses for indentation, so we can't rely on leading
+            // whitespace to distinguish continuation lines from
+            // post-menu chatter. Empty lines (above) are the terminator.
+            if let Some(last) = opts.last_mut() {
+                last.label.push(' ');
+                last.label.push_str(trimmed);
+            }
+            // Pre-menu chatter (no options yet) just gets skipped.
+            continue;
+        }
+        let label = rest.trim_start_matches('.').trim();
+        if label.is_empty() {
+            if !opts.is_empty() {
+                break;
+            }
+            continue;
+        }
+        opts.push(MenuOption {
+            key: digits.to_string(),
+            label: label.to_string(),
+        });
+    }
+    opts
 }
 
 // PtyMenu equality compares only `tool` — `text` carries surrounding
@@ -827,7 +892,13 @@ struct PtyMenu {
 // Refs #77 tighten-pty-menu-emit-cadence.
 impl PartialEq for PtyMenu {
     fn eq(&self, other: &Self) -> bool {
-        self.tool == other.tool
+        // Compare `tool` and the parsed option count. Text is intentionally
+        // excluded (it tracks PTY-tail position and would defeat dedup), but
+        // option count changes are real user-visible state — a first emit
+        // before options were buffered (`options=0`) followed by a re-detect
+        // with options populated should fire a fresh `state=shown` so the UI
+        // gets the parsed labels.
+        self.tool == other.tool && self.options.len() == other.options.len()
     }
 }
 impl Eq for PtyMenu {}
@@ -1161,7 +1232,11 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                 (Some(nm), _) => append_bram_trace_line(
                     app,
                     "pty-menu",
-                    &format!("state=shown tool={} reason=byte-pattern", nm.tool),
+                    &format!(
+                        "state=shown tool={} reason=byte-pattern options={}",
+                        nm.tool,
+                        nm.options.len()
+                    ),
                 ),
                 (None, Some(prev)) if prev.tool != PENDING_TOOL => append_bram_trace_line(
                     app,
@@ -1202,12 +1277,27 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
             match input[i + 1] {
                 b'[' => {
                     let mut j = i + 2;
+                    let mut final_byte = 0u8;
                     while j < input.len() {
                         let c = input[j];
                         j += 1;
                         if (0x40..=0x7E).contains(&c) {
+                            final_byte = c;
                             break;
                         }
+                    }
+                    // Claude Code's TUI (Ink/React-style) positions each
+                    // word in a menu/help row with a CSI "cursor column
+                    // absolute" escape (`\x1b[<N>G`) instead of writing
+                    // space bytes between words. Verified live: a raw-tail
+                    // capture during a real Bash permission menu showed
+                    // `\x1b[5G2.\x1b[8GYes,\x1b[13Gand\x1b[17Gallow…` etc.
+                    // Emit one space for CSI G so the parsed option
+                    // labels remain legible; other CSI codes (color `m`,
+                    // erase `K/J`, cursor-movement that doesn't imply a
+                    // visual gap) are still dropped entirely.
+                    if final_byte == b'G' {
+                        out.push(b' ');
                     }
                     i = j;
                     continue;
@@ -1336,7 +1426,8 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
                 }
             }
         };
-        Some(PtyMenu { tool, text })
+        let options = parse_menu_options(&text);
+        Some(PtyMenu { tool, text, options })
     })();
 
     // Diagnostic: when the menu prompt header is present but detection
@@ -10471,7 +10562,93 @@ impl IfEmpty for String {
 
 #[cfg(test)]
 mod pty_menu_tests {
-    use super::{pty_menu_input_clears_inflight, pty_output_clears_inflight};
+    use super::{parse_menu_options, pty_menu_input_clears_inflight, pty_output_clears_inflight};
+
+    #[test]
+    fn parses_three_option_claude_menu() {
+        let text = "Do you want to use Bash?\n❯1. Yes\n  2. Yes, and don't ask again\n  3. No, and tell agent what to do\n";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 3);
+        assert_eq!(opts[0].key, "1");
+        assert_eq!(opts[0].label, "Yes");
+        assert_eq!(opts[1].key, "2");
+        assert_eq!(opts[1].label, "Yes, and don't ask again");
+        assert_eq!(opts[2].key, "3");
+        assert_eq!(opts[2].label, "No, and tell agent what to do");
+    }
+
+    #[test]
+    fn parses_two_option_menu() {
+        // Real PTY menus emit a blank line between options and the
+        // "Esc to cancel · Tab to amend …" footer, which is what the
+        // parser uses to know the option list is done.
+        let text = "❯ 1. Allow\n  2. Deny\n\nEsc to cancel\n";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0].label, "Allow");
+        assert_eq!(opts[1].label, "Deny");
+    }
+
+    #[test]
+    fn cursor_with_nbsp_space_still_parses() {
+        // Newer Claude Code builds emit "❯\u{a0} 1." (cursor + NBSP + space + digit).
+        let text = "❯\u{a0} 1. Yes\n  2. No\n";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0].key, "1");
+        assert_eq!(opts[1].key, "2");
+    }
+
+    #[test]
+    fn returns_empty_when_no_numbered_lines() {
+        let opts = parse_menu_options("just some preamble text\nwith no options\n");
+        assert!(opts.is_empty());
+    }
+
+    #[test]
+    fn blank_line_terminates_option_collection() {
+        // Footer chatter after the blank line is correctly excluded — it
+        // doesn't appear as a phantom 3rd option, nor does it get
+        // appended to option 2's label.
+        let text = "❯1. Yes\n  2. No\n\nEsc to cancel · Tab to amend\n";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[1].label, "No");
+    }
+
+    #[test]
+    fn wrapped_label_continues_on_indented_line() {
+        // Real-world case from Bash permission: option 2's label wraps to a
+        // second visible line in the PTY because it's long.
+        let text = "❯ 1. Yes\n  2. Yes, and allow access to tmp/ and touch /tmp/bram-menu-test.txt\n     commands\n  3. No\n";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 3);
+        assert_eq!(opts[0].label, "Yes");
+        assert!(opts[1].label.starts_with("Yes, and allow access"));
+        assert!(opts[1].label.ends_with("commands"));
+        assert_eq!(opts[2].label, "No");
+    }
+
+    #[test]
+    fn wrapped_label_continues_when_indentation_was_stripped() {
+        // What actually arrives at the parser after `strip_ansi`: Claude
+        // Code renders indentation with cursor-positioning escapes rather
+        // than literal spaces, so the continuation line "commands" starts
+        // at column 0 in the stripped tail. Verified live during the #169
+        // verification pass — captured text snapshot in
+        // /tmp/bram-pty-menu-text.txt during the failing run.
+        let text = "Doyouwanttoproceed?\n❯1.Yes\n2.Yes,andallowaccesstotmp/andtouch/tmp/bram-menu-test.txt\ncommands\n3.No\n\nEsctocancel·Tabtoamend·ctrl+etoexplain\n";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 3);
+        assert_eq!(opts[0].key, "1");
+        assert_eq!(opts[0].label, "Yes");
+        assert_eq!(opts[1].key, "2");
+        assert!(opts[1].label.starts_with("Yes,andallowaccess"));
+        assert!(opts[1].label.ends_with("commands"));
+        assert_eq!(opts[2].key, "3");
+        assert_eq!(opts[2].label, "No");
+    }
+
 
     #[test]
     fn esc_clears_inflight() {
@@ -13591,6 +13768,19 @@ fn validate_post_commit_prune_status(
     Ok(())
 }
 
+fn validate_worklist_advance_status(op: &str, new_status: &str) -> Result<(), String> {
+    if op != "advance" {
+        return Ok(());
+    }
+    if new_status == "applied" {
+        return Ok(());
+    }
+    Err(format!(
+        "unsupported advance status: {}; use op:\"prune\" after a successful commit",
+        new_status
+    ))
+}
+
 fn apply_worklist_mutation(
     items: &mut Vec<serde_json::Value>,
     op: &str,
@@ -13731,6 +13921,13 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
         .get("status")
         .and_then(|v| v.as_str())
         .unwrap_or("applied");
+    if let Err(e) = validate_worklist_advance_status(op, new_status) {
+        return (
+            400,
+            "application/json; charset=utf-8",
+            serde_json::json!({ "error": e }).to_string().into_bytes(),
+        );
+    }
     let affected = apply_worklist_mutation(items, op, &ids, new_status);
 
     let new_text = serde_json::to_string_pretty(&wl).unwrap_or_default();
@@ -13828,8 +14025,8 @@ mod worklist_authorization_tests {
         apply_worklist_mutation, build_worklist_authorization_record, canonical_item_hash,
         classify_worklist_removals, draft_markdown_path, feedback_draft_path,
         inflight_claim_fully_covered, parse_worklist_authorization_message, resource_relative_path,
-        validate_post_commit_prune_status, validate_worklist_mutate_authorization,
-        worklist_draft_path,
+        validate_post_commit_prune_status, validate_worklist_advance_status,
+        validate_worklist_mutate_authorization, worklist_draft_path,
     };
     use serde_json::json;
     use std::path::Path;
@@ -13951,6 +14148,29 @@ mod worklist_authorization_tests {
 
         validate_post_commit_prune_status("prune", "approved", &ids(&["a"]), &applied_items)
             .expect("applied item can be pruned after commit");
+    }
+
+    #[test]
+    fn advance_rejects_non_applied_status() {
+        validate_worklist_advance_status("advance", "applied")
+            .expect("applied is the only active advance target");
+
+        let err = validate_worklist_advance_status("advance", "committed")
+            .expect_err("committed items should be pruned, not advanced");
+        assert_eq!(
+            err,
+            "unsupported advance status: committed; use op:\"prune\" after a successful commit"
+        );
+
+        let err = validate_worklist_advance_status("advance", "proposed")
+            .expect_err("advancing to proposed is undefined");
+        assert_eq!(
+            err,
+            "unsupported advance status: proposed; use op:\"prune\" after a successful commit"
+        );
+
+        validate_worklist_advance_status("prune", "committed")
+            .expect("prune does not use target status");
     }
 
     #[test]

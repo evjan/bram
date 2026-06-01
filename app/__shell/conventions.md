@@ -482,6 +482,39 @@ mechanics.
 
 ## Talking to users
 
+### Name UI affordances, not protocols
+
+When the user needs to take an action that has a UI control, name the
+control. Say "Click the **Approve** button" (Drop, Iterate, Push, Trust
+this hook, Setup). Never say "send `approved: {...}`", "paste the
+structured approval payload", or describe the wire format — the button
+generates the verified payload for them. This is what reopened #62:
+Codex told the user to paste raw JSON instead of pointing at the
+Worklist tab.
+
+### Keep internal jargon out of user-facing chat
+
+"Inflight sentinel", "resolve/mutate", "PreToolUse hook", "worklist
+authorization record" describe internals. In chat, talk about what
+the user sees and does: "the Worklist tab", "approve the item", "the
+spinner cleared". Use the jargon only when the user has asked about
+internals, or when you're pointing at a file path they'll need to grep.
+
+### Cite, don't gesture
+
+When referencing a file, route, or doc, name it (`resources/worklist.json`,
+`/__worklist/resolve`, `docs/apis.md §11`) so the user can verify in
+one click. Vague references ("the worklist system", "the relevant
+config") force a follow-up question. Same rule as the CLAUDE.md
+guidance: if you can't cite, say so.
+
+### Match terseness to the question
+
+No preamble ("Great question!", "Let me explain..."), no restating the
+user's question, no trailing summary of what you just did unless it's
+load-bearing. The Worklist tab shows the items, the diff shows the
+code; chat is for what those surfaces can't show.
+
 
 ## Host-managed inflight sentinel
 

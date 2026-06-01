@@ -63,7 +63,7 @@
   <APICall
     id="closeIssueCall"
     url="/__issue/close"
-    method="get"
+    method="post"
     queryParams="{{ number: $param.number, comment: $param.comment }}"
     completedNotificationMessage="Issue closed."
     onSuccess="closeCommentBox.setValue(''); issueDetail.refetch(); issues.refetch()" />
@@ -71,7 +71,7 @@
   <APICall
     id="commentIssueCall"
     url="/__issue/comment"
-    method="get"
+    method="post"
     queryParams="{{ number: $param.number, body: $param.body }}"
     completedNotificationMessage="Comment posted."
     onSuccess="closeCommentBox.setValue(''); issueDetail.refetch(); issues.refetch()" />
@@ -443,20 +443,25 @@
           resize="vertical"
           minRows="2"
           maxRows="12"
-          width="*" />
+          width="*"
+          enabled="{!commentIssueCall.inProgress &amp;&amp; !closeIssueCall.inProgress}" />
         <HStack gap="$space-2">
           <Button
             label="Comment"
             variant="outlined"
             size="sm"
-            enabled="{closeCommentBox.value &amp;&amp; closeCommentBox.value.trim().length > 0}"
+            enabled="{!commentIssueCall.inProgress &amp;&amp; !closeIssueCall.inProgress &amp;&amp; closeCommentBox.value &amp;&amp; closeCommentBox.value.trim().length > 0}"
             onClick="commentIssueCall.execute({ number: selectedIssue.number, body: closeCommentBox.value })" />
           <Button
             when="{selectedIssue.state === 'OPEN'}"
             label="Close issue"
             variant="outlined"
             size="sm"
+            enabled="{!commentIssueCall.inProgress &amp;&amp; !closeIssueCall.inProgress}"
             onClick="closeIssueCall.execute({ number: selectedIssue.number, comment: closeCommentBox.value || '' })" />
+          <Theme size-Spinner="1em">
+            <Spinner when="{commentIssueCall.inProgress || closeIssueCall.inProgress}" />
+          </Theme>
         </HStack>
       </VStack>
     </VStack>

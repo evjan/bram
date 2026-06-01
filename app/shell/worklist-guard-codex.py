@@ -381,13 +381,16 @@ def _draft_exists(cwd, item_id):
     )
 
 
-def _worklist_items_with_empty_body(content, cwd=None):
+def _worklist_items_violating_draft_only(content, cwd=None):
     """Parse a full worklist.json content string and return a list of
-    (id, missing_fields) tuples for proposed items missing any required
-    field. Required: id (non-empty), file or files (non-empty), before
-    (non-empty), after (non-empty), unless a matching draft file exists.
-    Returns None if the content can't be parsed as JSON (caller decides how
-    to handle)."""
+    (id, violations) tuples for proposed items that break the draft-only
+    rule. Violations: inline `before` (non-empty), inline `after`
+    (non-empty), missing `id`, missing `file`/`files`. Draft prose must
+    live in resources/worklist-drafts/<id>.md; inline keys are rejected.
+    Returns None if the content can't be parsed as JSON (caller decides
+    how to handle); cwd is accepted for call-site parity but not used by
+    the JSON-content path (no draft-existence check at hook time — let
+    the server's _draftMissing diagnostic surface missing drafts)."""
     try:
         doc = json.loads(content)
     except Exception:
@@ -399,35 +402,34 @@ def _worklist_items_with_empty_body(content, cwd=None):
     for it in items:
         if not isinstance(it, dict):
             continue
-        status = it.get("status", "proposed")
-        if status != "proposed":
-            continue  # only enforce the schema requirement on still-pending items
-        missing = []
+        if it.get("status", "proposed") != "proposed":
+            continue
+        violations = []
         item_id = it.get("id")
         if not isinstance(item_id, str) or not item_id.strip():
-            missing.append("id")
+            violations.append("id")
         if not _item_has_file(it):
-            missing.append("file (or non-empty files array)")
-        has_draft = cwd is not None and _draft_exists(cwd, item_id)
-        if not has_draft:
-            before = it.get("before")
-            if not isinstance(before, str) or not before.strip():
-                missing.append("before")
-            after = it.get("after")
-            if not isinstance(after, str) or not after.strip():
-                missing.append("after")
-        if missing:
+            violations.append("file (or non-empty files array)")
+        before = it.get("before")
+        if isinstance(before, str) and before.strip():
+            violations.append("inline `before` (move to resources/worklist-drafts/<id>.md)")
+        after = it.get("after")
+        if isinstance(after, str) and after.strip():
+            violations.append("inline `after` (move to resources/worklist-drafts/<id>.md)")
+        if violations:
             label = item_id if (isinstance(item_id, str) and item_id.strip()) else "<no-id>"
-            bad.append((label, missing))
+            bad.append((label, violations))
     return bad
 
 
-def _patch_adds_have_empty_bodies(patch_text, cwd=None):
+def _patch_adds_violating_draft_only(patch_text, cwd=None):
     """Heuristic for apply_patch on worklist.json: scan the patch's added
-    lines for new proposed items and verify each has all four required
-    fields (id, file or files, before, after) with non-empty values.
-    Returns a list of (label, missing_fields) tuples matching the JSON-path
-    validator's shape, or [] if everything looks OK or we can't tell."""
+    lines for new proposed items that break the draft-only rule.
+    Violations: presence of `"before":` / `"after":` with non-empty
+    values, or missing `id`/`file`/`files`. Returns a list of
+    (label, violations) tuples matching _worklist_items_violating_draft_only's
+    shape, or [] if everything looks OK or we can't tell. cwd accepted
+    for call-site parity but unused."""
     added = _added_block_text(patch_text)
     id_re = _ID_RE
     file_re = re.compile(r'"file"\s*:\s*"([^"]*?)"')
@@ -438,25 +440,22 @@ def _patch_adds_have_empty_bodies(patch_text, cwd=None):
     files = [v for v in file_re.findall(added) if v.strip()] + files_re.findall(added)
     befores = [b for b in before_re.findall(added) if b.strip()]
     afters = [a for a in after_re.findall(added) if a.strip()]
-    # Item count is the max of any field count — covers the case where
-    # codex adds before/after pairs without an accompanying id (ids=0 but
-    # before/after count > 0 still means new items being added).
-    item_count = max(len(ids), len(befores), len(afters))
-    if item_count == 0:
-        return []  # no new items being added (status change, etc.)
-    missing = []
-    if len(ids) < item_count:
-        missing.append(f"id (saw {len(ids)} of {item_count})")
-    if len(files) < item_count:
-        missing.append(f"file or files (saw {len(files)} of {item_count})")
-    draft_covers = bool(ids) and all(_draft_exists(cwd, item_id) for item_id in ids) if cwd else False
-    if len(befores) < item_count and not draft_covers:
-        missing.append(f"before (saw {len(befores)} of {item_count})")
-    if len(afters) < item_count and not draft_covers:
-        missing.append(f"after (saw {len(afters)} of {item_count})")
-    if missing:
+    # Item count is the max of id/file count — before/after presence is
+    # itself a violation, so we don't infer item count from it.
+    item_count = max(len(ids), len(files))
+    violations = []
+    if item_count > 0:
+        if len(ids) < item_count:
+            violations.append(f"id (saw {len(ids)} of {item_count})")
+        if len(files) < item_count:
+            violations.append(f"file or files (saw {len(files)} of {item_count})")
+    if befores:
+        violations.append(f"inline `before` (move to resources/worklist-drafts/<id>.md; saw {len(befores)})")
+    if afters:
+        violations.append(f"inline `after` (move to resources/worklist-drafts/<id>.md; saw {len(afters)})")
+    if violations:
         label = ids[0] if ids else "<missing-id>"
-        return [(label, missing)]
+        return [(label, violations)]
     return []
 
 
@@ -578,8 +577,6 @@ def self_test():
                     "id": "existing",
                     "status": "proposed",
                     "file": "a.txt",
-                    "before": "old",
-                    "after": "new",
                 }
             ],
         }
@@ -594,8 +591,6 @@ def self_test():
                     "id": "new-item",
                     "status": "proposed",
                     "file": "b.txt",
-                    "before": "old",
-                    "after": "new",
                 }
             ],
         }
@@ -605,8 +600,32 @@ def self_test():
             _self_test_replacement_patch(old_content, new_item_content),
         )
         assert applied == new_item_content
-        assert _worklist_items_with_empty_body(applied, str(root)) == []
+        assert _worklist_items_violating_draft_only(applied, str(root)) == []
         assert worklist_state_changes(old_content, applied) == ([], [])
+
+        # Inline prose on a new proposed item is rejected.
+        inline_doc = {
+            "description": "",
+            "items": old_doc["items"]
+            + [
+                {
+                    "id": "inline-item",
+                    "status": "proposed",
+                    "file": "b.txt",
+                    "before": "old",
+                    "after": "new",
+                }
+            ],
+        }
+        inline_content = json.dumps(inline_doc, indent=2) + "\n"
+        inline_bad = _worklist_items_violating_draft_only(inline_content, str(root))
+        assert inline_bad and inline_bad[0][0] == "inline-item"
+        # Patch-text validator also flags an apply_patch that adds inline prose.
+        inline_patch_bad = _patch_adds_violating_draft_only(
+            _self_test_replacement_patch(old_content, inline_content),
+            str(root),
+        )
+        assert inline_patch_bad and "inline" in " ".join(inline_patch_bad[0][1])
 
         transitioned = old_content.replace('"status": "proposed"', '"status": "applied"')
         assert worklist_state_changes(old_content, transitioned) == (
@@ -652,18 +671,18 @@ def _worklist_validation_error(bad, tool_name):
     if not bad:
         return f"{tool_name} blocked: worklist validation failed."
     lines = []
-    for label, missing in bad:
-        lines.append(f"  - item {label}: missing {', '.join(missing)}")
+    for label, violations in bad:
+        lines.append(f"  - item {label}: {', '.join(violations)}")
     detail = "\n".join(lines)
     return (
-        f"{tool_name} blocked: proposed worklist item(s) are missing required "
-        f"fields.\n{detail}\n"
-        f"Required for every proposed item: \"id\" (kebab-case identifier), "
-        f"\"file\" (or \"files\" array for multi-file items), "
-        f"and either inline \"before\"/\"after\" prose or a matching "
-        f"resources/worklist-drafts/<id>.md file. Title-only or body-only items "
-        f"are not acceptable. Rewrite the proposal with complete content and try "
-        f"again."
+        f"{tool_name} blocked: proposed worklist item(s) violate draft-only "
+        f"rule.\n{detail}\n"
+        f"Required for every proposed item: \"id\" (kebab-case identifier) and "
+        f"\"file\" (or \"files\" array for multi-file items). Prose must live "
+        f"in resources/worklist-drafts/<id>.md (Markdown with `# Before` and "
+        f"`# After` sections); inline \"before\"/\"after\" keys in "
+        f"worklist.json are rejected. Write the draft file first, then add "
+        f"the metadata-only item to worklist.json."
     )
 
 
@@ -825,7 +844,7 @@ def main():
             patch_body = patch_text(tool_input)
             new_content = _worklist_content_after_apply_patch(cwd, patch_body)
             if new_content is not None:
-                bad_ids = _worklist_items_with_empty_body(new_content, cwd)
+                bad_ids = _worklist_items_violating_draft_only(new_content, cwd)
                 if bad_ids:
                     deny(_worklist_validation_error(bad_ids, "apply_patch"))
                 removed, status_changed = worklist_state_changes(
@@ -838,7 +857,7 @@ def main():
                 removed = _patch_removes_worklist_items(cwd, patch_body)
                 if removed:
                     deny(_mechanical_worklist_change_error(removed, [], "apply_patch"))
-                bad_ids = _patch_adds_have_empty_bodies(patch_body, cwd)
+                bad_ids = _patch_adds_violating_draft_only(patch_body, cwd)
                 if bad_ids:
                     deny(_worklist_validation_error(bad_ids, "apply_patch"))
         violations = []
@@ -919,7 +938,7 @@ def main():
                     f"use a write/edit shape whose resulting content the guard can inspect."
                 )
             if isinstance(new_content, str) and new_content.strip():
-                bad_ids = _worklist_items_with_empty_body(new_content, cwd)
+                bad_ids = _worklist_items_violating_draft_only(new_content, cwd)
                 if bad_ids:
                     deny(_worklist_validation_error(bad_ids, tool_name))
                 removed, status_changed = worklist_state_changes(

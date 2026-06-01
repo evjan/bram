@@ -68,9 +68,9 @@ change is "small":
 ### What worklist items represent (and when to drop)
 
 **Worklist items represent repository changes.** A `proposed` item
-names a `file` (or `files`) plus `before` / `after` prose, either
-inline or in `resources/worklist-drafts/<id>.md`, describing what
-would change on disk. An `applied` item has those changes on disk
+names a `file` (or `files`) plus `before` / `after` prose in
+`resources/worklist-drafts/<id>.md`, describing what would change
+on disk. An `applied` item has those changes on disk
 waiting for the user to approve a commit. Items exist to give the
 user explicit veto power over what lands in their repo.
 
@@ -144,9 +144,12 @@ cover metadata + resolved prose together. If a draft file is missing,
 `/__worklist` returns empty `before` / `after` plus
 `"_draftMissing": true` and the UI shows a placeholder.
 
-Inline `before` / `after` directly in `worklist.json` is the legacy
-form — still valid, and takes precedence when both are non-empty, but
-prefer draft files for new items (iterate-time edits stay small).
+Prose lives only in the draft file. Inline `before` / `after` keys
+in `worklist.json` are rejected by both guards — the proposal
+authoring channel writes metadata to `worklist.json` and prose to
+the matching `worklist-drafts/<id>.md`, never both. Iterate-time
+prose edits go to the draft file; `worklist.json` only changes
+when metadata (`files`, `closesIssues`, etc.) shifts.
 
 **Field notes:**
 
@@ -229,12 +232,11 @@ serves an empty default; the Worklist tab creates the file (and
      `resources/worklist.json` (metadata alone), and act per each
      item's current status:
      - **`proposed` (TO APPLY):** revise the draft file's `before` /
-       `after` prose (or inline `before` / `after` for older items);
-       update `files` only if scope shifts. Item stays `proposed`,
-       no project file edits.
+       `after` prose; update `files` only if scope shifts. Item
+       stays `proposed`, no project file edits.
      - **`applied` (TO COMMIT):** edit on-disk files per the feedback.
-       Update the draft or inline `after` only if scope materially
-       expanded. Item stays `applied`.
+       Update the draft only if scope materially expanded. Item
+       stays `applied`.
 
      Bracket every iterate response with `POST /__iterate/begin`
      (first action) and `POST /__iterate/end` (last action) — see
@@ -416,14 +418,11 @@ sparingly (e.g. **[chosen]**).
 
 #### Minimize the bytes of each worklist edit
 
-Prefer per-item draft files — `worklist.json` stays a compact
-metadata index; iterate-time prose edits hit only the draft.
-
-For older inline items: narrow `Edit` `old_string` to the smallest
-unique anchor (e.g. when appending to an item's `after`, the anchor
-is the last preserved paragraph, not the whole item). Full-item
-`Write` rewrites of `worklist.json` are valid but wasteful for
-one-paragraph tweaks. Mechanical prune / advance go through
+`worklist.json` stays a compact metadata index; iterate-time prose
+edits hit only the draft file. Full-item `Write` rewrites of
+`worklist.json` are valid but wasteful for one-paragraph tweaks
+that don't actually need to touch `worklist.json` — prose changes
+go to the draft alone. Mechanical prune / advance go through
 `/__worklist/mutate`, not direct rewrite.
 
 #### Don't `grep -n` a single-line JSON file
@@ -436,8 +435,8 @@ just what you need.
 
 Small TO-COMMIT refinements don't need an audit trail in the
 worklist — the commit message and diff cover it. Update the draft
-or inline `after` only when scope materially expands (new file
-added to `files`, or the change's intent shifts).
+file's `after` only when scope materially expands (new file added
+to `files`, or the change's intent shifts).
 
 #### Test Worklist UX through the worklist itself
 
@@ -465,9 +464,12 @@ the stored auth record, not just resolve's consumption state.
 
 Defense in depth: Claude and Codex each install PreToolUse hooks
 that validate worklist coverage before file-mutating tools run, and
-the desktop watcher reverts unauthorized prunes. Hook errors and
-revert messages are the convention enforcing itself — not bugs to
-work around.
+the desktop watcher reverts unauthorized prunes. Both guards also
+reject `worklist.json` writes that put non-empty `before` /
+`after` on any proposed item — prose must live in
+`resources/worklist-drafts/<id>.md`. Hook errors and revert
+messages are the convention enforcing itself — not bugs to work
+around.
 
 **Don't ask before editing the worklist or calling mutate.** The
 proposal-authoring write channel is hook-guarded, the mechanical

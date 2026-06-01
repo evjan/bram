@@ -174,6 +174,36 @@ def is_worklist_draft(rel):
     )
 
 
+def worklist_items_with_inline_prose(content):
+    """Parse worklist content; return list of ids that carry non-empty
+    inline `before` or `after`. Draft-only: prose belongs in
+    resources/worklist-drafts/<id>.md, not in the metadata index."""
+    try:
+        doc = json.loads(content)
+    except Exception:
+        return []
+    items = doc.get("items") if isinstance(doc, dict) else None
+    if not isinstance(items, list):
+        return []
+    bad = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        if it.get("status", "proposed") != "proposed":
+            continue
+        before = it.get("before")
+        after = it.get("after")
+        has_inline = (
+            (isinstance(before, str) and before.strip())
+            or (isinstance(after, str) and after.strip())
+        )
+        if has_inline:
+            item_id = it.get("id")
+            label = item_id if (isinstance(item_id, str) and item_id.strip()) else "<no-id>"
+            bad.append(label)
+    return bad
+
+
 def worklist_covered_files(project_root):
     """Set of project-relative paths covered by proposed/applied items."""
     try:
@@ -255,6 +285,30 @@ def worklist_state_changes(old_items, new_items):
     return removed, status_changed
 
 
+def deny_inline_prose(bad):
+    lines = [
+        "Blocked: inline `before` / `after` on proposed worklist item(s) — "
+        "prose must live in resources/worklist-drafts/<id>.md."
+    ]
+    for label in bad:
+        lines.append(f"  - item {label}: remove inline before/after; write prose to "
+                     f"resources/worklist-drafts/{label}.md instead")
+    lines.append(
+        "Draft file format: `# Before` section then `# After` section, both "
+        "in Markdown. The server merge surfaces the draft prose alongside "
+        "the metadata in worklist.json."
+    )
+    _trace_hook(
+        "PreToolUse",
+        os.environ.get("__BRAM_TRACE_TOOL", "Write"),
+        WORKLIST_REL,
+        "deny",
+        "worklist-inline-prose",
+    )
+    print("\n".join(lines), file=sys.stderr)
+    sys.exit(2)
+
+
 def deny_mechanical_worklist_change(removed, status_changed):
     lines = [
         "Blocked: mechanical worklist state changes must go through "
@@ -334,6 +388,9 @@ def main():
         new_items = items_by_id(new)
         removed, status_changed = worklist_state_changes(old_items, new_items)
         if not removed and not status_changed:
+            inline_bad = worklist_items_with_inline_prose(new)
+            if inline_bad:
+                deny_inline_prose(inline_bad)
             _trace_hook("PreToolUse", tool_name, rel, "allow", "worklist-author")
             sys.exit(0)
         deny_mechanical_worklist_change(removed, status_changed)

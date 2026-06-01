@@ -8768,12 +8768,6 @@ fn canonical_item_hash(item: &serde_json::Value) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn item_has_nonempty_string(item: &serde_json::Value, key: &str) -> bool {
-    item.get(key)
-        .and_then(|v| v.as_str())
-        .map_or(false, |s| !s.trim().is_empty())
-}
-
 fn parse_worklist_draft(raw: &str) -> Option<(String, String)> {
     enum Section {
         Before,
@@ -8822,10 +8816,11 @@ fn resolve_worklist_item_draft(
     drafts_dir: Option<&Path>,
     item: &serde_json::Value,
 ) -> serde_json::Value {
-    if item_has_nonempty_string(item, "before") && item_has_nonempty_string(item, "after") {
-        return item.clone();
-    }
-
+    // Draft-only: prose always comes from resources/worklist-drafts/<id>.md.
+    // Inline `before`/`after` keys in worklist.json are rejected by both
+    // guards, so we overwrite them here unconditionally. The merge that
+    // used to short-circuit when both inline fields were non-empty has
+    // been removed.
     let mut resolved = item.clone();
     let Some(obj) = resolved.as_object_mut() else {
         return resolved;
@@ -10107,21 +10102,57 @@ mod worklist_doc_tests {
     }
 
     #[test]
-    fn draft_resolver_prefers_inline_when_present() {
+    fn draft_resolver_ignores_inline_and_uses_draft_file() {
+        let dir = std::env::temp_dir()
+            .join(format!("bram-draft-only-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create temp draft dir");
+        fs::write(
+            dir.join("legacy-with-inline.md"),
+            "# Before\n\ndraft before\n\n# After\n\ndraft after\n",
+        )
+        .expect("write draft");
+
+        // Legacy item still carries inline keys (shouldn't happen post-guards
+        // but verify the merge overrides them with draft content).
         let item = json!({
-            "id": "inline",
+            "id": "legacy-with-inline",
             "files": ["docs/a.md"],
-            "before": "inline before",
-            "after": "inline after",
+            "before": "inline before (should be ignored)",
+            "after": "inline after (should be ignored)",
+        });
+
+        let resolved = resolve_worklist_item_draft(Some(&dir), &item);
+
+        assert_eq!(
+            resolved.get("before").and_then(|v| v.as_str()),
+            Some("draft before")
+        );
+        assert_eq!(
+            resolved.get("after").and_then(|v| v.as_str()),
+            Some("draft after")
+        );
+        assert_eq!(resolved.get("_draftMissing"), None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn draft_resolver_overrides_inline_with_missing_marker_when_no_draft() {
+        let item = json!({
+            "id": "inline-without-draft",
+            "files": ["docs/a.md"],
+            "before": "inline before (should be overridden)",
+            "after": "inline after (should be overridden)",
         });
 
         let resolved = resolve_worklist_item_draft(None, &item);
 
+        assert_eq!(resolved.get("before").and_then(|v| v.as_str()), Some(""));
+        assert_eq!(resolved.get("after").and_then(|v| v.as_str()), Some(""));
         assert_eq!(
-            resolved.get("before").and_then(|v| v.as_str()),
-            Some("inline before")
+            resolved.get("_draftMissing").and_then(|v| v.as_bool()),
+            Some(true)
         );
-        assert_eq!(resolved.get("_draftMissing"), None);
     }
 
     #[test]
@@ -13268,21 +13299,33 @@ mod worklist_authorization_tests {
 
     #[test]
     fn approval_record_verifies_hash_and_embeds_feedback() {
+        let dir = std::env::temp_dir()
+            .join(format!("bram-approval-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp draft dir");
+        std::fs::write(
+            dir.join("doc-update.md"),
+            "# Before\n\nold\n\n# After\n\nnew\n",
+        )
+        .expect("write draft");
+
+        // Draft-only: item carries metadata only; prose lives in the draft.
         let item = json!({
             "id": "doc-update",
             "status": "proposed",
             "file": "docs/a.md",
-            "before": "old",
-            "after": "new"
         });
-        let hash = canonical_item_hash(&item);
+        // Hash covers the resolved item (metadata + draft prose) — same shape
+        // the agent computes after reading /__worklist.
+        let resolved = super::resolve_worklist_item_draft(Some(&dir), &item);
+        let hash = canonical_item_hash(&resolved);
         let msg = format!(
             r#"approved: {{"items":[{{"id":"doc-update","hash":"{}","feedback":"tighten scope"}}]}}"#,
             hash
         );
 
         let parsed = parse_worklist_authorization_message(&msg).expect("approval parses");
-        let record = build_worklist_authorization_record(parsed, &[item], None, 123, "test-source");
+        let record =
+            build_worklist_authorization_record(parsed, &[item], Some(&dir), 123, "test-source");
 
         assert_eq!(record.kind, "approved");
         assert_eq!(record.ids, ids(&["doc-update"]));
@@ -13294,6 +13337,8 @@ mod worklist_authorization_tests {
         );
         assert_eq!(record.issued_at_ms, 123);
         assert_eq!(record.source, "test-source");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

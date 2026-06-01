@@ -1002,6 +1002,20 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // turn-end removes that risk class. The explicit end routes
         // still work for agents that want to clear early.
         if turn_end_silence_ms.map_or(false, |s| s >= MIN_SILENCE_FOR_SENTINEL_CLEAR_MS) {
+            let claimed_after = inflight_claim_ids_and_claimed_at(app)
+                .map(|(ids, claimed_at)| !ids.is_empty() && unix_now_ms() >= claimed_at)
+                .unwrap_or(false);
+            record_turn_completion_monitor(
+                "pty-silence",
+                "pty",
+                "silence-threshold",
+                format!(
+                    "PTY turn activity stopped after {} ms of silence",
+                    turn_end_silence_ms.unwrap_or(0)
+                ),
+                unix_now_ms(),
+                claimed_after,
+            );
             clear_active_sentinel(app);
         }
     }
@@ -3415,7 +3429,9 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
     let (agent, batch, minimized) = match config {
         Some(c) => (
             c.shell.and_then(|s| s.agent).unwrap_or_default(),
-            c.worklist.and_then(|w| w.batch_commit_actions).unwrap_or(false),
+            c.worklist
+                .and_then(|w| w.batch_commit_actions)
+                .unwrap_or(false),
             c.ui.and_then(|u| u.target_app_minimized).unwrap_or(false),
         ),
         None => (String::new(), false, false),
@@ -3447,9 +3463,7 @@ fn merge_settings_into_config(
         };
         for (k, v) in from_obj {
             match (into.get_mut(k), v) {
-                (Some(existing_val), serde_json::Value::Object(_))
-                    if existing_val.is_object() =>
-                {
+                (Some(existing_val), serde_json::Value::Object(_)) if existing_val.is_object() => {
                     if let Some(existing_map) = existing_val.as_object_mut() {
                         merge_obj(existing_map, v);
                     }
@@ -4194,8 +4208,10 @@ fn handle_git_pull_rebase<R: tauri::Runtime>(app: &AppHandle<R>) -> (u16, &'stat
 fn classify_diff_line(line: &str) -> &'static str {
     if line.starts_with("@@") {
         "hunk"
-    } else if line.starts_with("+++") || line.starts_with("---")
-        || line.starts_with("diff ") || line.starts_with("index ")
+    } else if line.starts_with("+++")
+        || line.starts_with("---")
+        || line.starts_with("diff ")
+        || line.starts_with("index ")
     {
         "fileheader"
     } else if line.starts_with('+') {
@@ -4214,7 +4230,10 @@ fn classify_diff_line(line: &str) -> &'static str {
 // Each segment is { text, bg? } — bg is a theme variable string the
 // renderer applies directly, "$color-{danger,success}-200" for the
 // emphasized runs, omitted (transparent) for unchanged runs.
-fn word_diff_segments(minus_line: &str, plus_line: &str) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
+fn word_diff_segments(
+    minus_line: &str,
+    plus_line: &str,
+) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
     use similar::{ChangeTag, TextDiff};
     let a = minus_line.strip_prefix('-').unwrap_or(minus_line);
     let b = plus_line.strip_prefix('+').unwrap_or(plus_line);
@@ -5340,6 +5359,8 @@ fn start_codex_session_poll_fallback<R: tauri::Runtime>(app_handle: AppHandle<R>
                 "jsonl-poll",
                 &format!("provider=codex file={} mtime={}", name, mtime_ms),
             );
+            trace_jsonl_detector_handoff(&app_handle, "codex-poll", &path, mtime_ms);
+            check_jsonl_for_turn_end(&app_handle, &path);
             trace_emit_signal(&app_handle, "talk-session-changed");
             let _ = app_handle.emit("talk-session-changed", ());
         }
@@ -8404,6 +8425,48 @@ fn inflight_claim_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf>
     project_relative_path(app, INFLIGHT_CLAIM_REL)
 }
 
+#[derive(Clone, Default)]
+struct TurnCompletionMonitor {
+    source: String,
+    provider: String,
+    reason: String,
+    detail: String,
+    seen_at_ms: i64,
+    claimed_after: bool,
+}
+
+fn turn_completion_monitor_cell() -> &'static Mutex<TurnCompletionMonitor> {
+    static CELL: OnceLock<Mutex<TurnCompletionMonitor>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(TurnCompletionMonitor::default()))
+}
+
+fn record_turn_completion_monitor(
+    source: &str,
+    provider: &str,
+    reason: &str,
+    detail: String,
+    seen_at_ms: i64,
+    claimed_after: bool,
+) {
+    if let Ok(mut monitor) = turn_completion_monitor_cell().lock() {
+        *monitor = TurnCompletionMonitor {
+            source: source.to_string(),
+            provider: provider.to_string(),
+            reason: reason.to_string(),
+            detail,
+            seen_at_ms,
+            claimed_after,
+        };
+    }
+}
+
+fn current_turn_completion_monitor() -> TurnCompletionMonitor {
+    turn_completion_monitor_cell()
+        .lock()
+        .map(|m| m.clone())
+        .unwrap_or_default()
+}
+
 fn worklist_intent_file<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     project_relative_path(app, WORKLIST_INTENT_REL)
 }
@@ -8453,6 +8516,25 @@ fn write_inflight_claim_sentinel<R: tauri::Runtime>(
     }
     trace_emit_signal(app, "inflight-claim-changed");
     let _ = app.emit("inflight-claim-changed", ());
+}
+
+fn inflight_claim_ids_and_claimed_at<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Option<(Vec<String>, i64)> {
+    let path = inflight_claim_file(app)?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    let claim: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let ids: Vec<String> = claim
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let claimed_at = claim.get("claimedAt").and_then(|v| v.as_i64()).unwrap_or(0);
+    Some((ids, claimed_at))
 }
 
 // Clear the inflight sentinel (#84). Conditions: a sentinel exists,
@@ -8575,26 +8657,7 @@ fn emit_or_defer_tools_pane_reload<R: tauri::Runtime>(app: &AppHandle<R>) {
 // without the caller having to know who's claimed. No-op if the
 // sentinel is absent or has no ids. Refs #91 follow-up.
 fn clear_active_sentinel<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(path) = inflight_claim_file(app) else {
-        return;
-    };
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return;
-    };
-    let claim: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    let ids: Vec<String> = claim
-        .get("ids")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    if !ids.is_empty() {
+    if let Some((ids, _claimed_at)) = inflight_claim_ids_and_claimed_at(app) {
         clear_inflight_claim_sentinel(app, &ids);
     }
 }
@@ -8607,47 +8670,268 @@ fn clear_active_sentinel_with_reason<R: tauri::Runtime>(app: &AppHandle<R>, reas
             &format!("op=clear-request reason={}", reason),
         );
     }
+    let claimed_after = inflight_claim_ids_and_claimed_at(app)
+        .map(|(ids, claimed_at)| !ids.is_empty() && unix_now_ms() >= claimed_at)
+        .unwrap_or(false);
+    record_turn_completion_monitor(
+        "cancel",
+        "pty",
+        reason,
+        "PTY cancellation path requested active sentinel clear".to_string(),
+        unix_now_ms(),
+        claimed_after,
+    );
     clear_active_sentinel(app);
 }
 
-// JSONL-driven turn-end detection (#91 follow-up). The PTY-silence
-// path (`pty_agent_turn_update`) fires `agent-turn-end` events on
-// silence_ms exceeding a threshold, then clears the sentinel — but
-// a multi-second silence between bursts is indistinguishable from a
-// real end-of-turn via PTY signal alone. The session JSONL has an
-// explicit `stop_reason: "end_turn"` marker on the assistant's final
-// message of a turn, which is the durable, structured signal we want.
-//
-// First cut: Claude Code sessions only (detected by the `.claude`
-// segment in the path). Codex sessions don't carry a `stop_reason`
-// field on assistant messages, so this parser's `end_turn` branch
-// would never fire for them — the silence-detector fallback at
-// `MIN_SILENCE_FOR_SENTINEL_CLEAR_MS=3000ms` covers Codex today.
-// A Codex-shaped detector is only worth adding if that 3s floor
-// becomes user-visibly slow.
-//
-// Stale-line guard: if the file's mtime predates the sentinel's
-// `claimedAt`, the last line is from a prior turn that ended before
-// the current click — skip and trace as `skipped=stale-prior-turn`.
-fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::path::Path) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JsonlCompletionProvider {
+    Claude,
+    Codex,
+}
+
+impl JsonlCompletionProvider {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct JsonlCompletionDecision {
+    detected: bool,
+    reason: &'static str,
+}
+
+fn jsonl_completion_provider_for_path(path: &std::path::Path) -> Option<JsonlCompletionProvider> {
     let path_str = path.to_string_lossy();
-    if !path_str.contains("/.claude/") {
+    if path_str.contains("/.claude/") {
+        Some(JsonlCompletionProvider::Claude)
+    } else if path_str.contains("/.codex/") {
+        Some(JsonlCompletionProvider::Codex)
+    } else {
+        None
+    }
+}
+
+fn jsonl_file_basename(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn format_inflight_claim_for_trace<R: tauri::Runtime>(app: &AppHandle<R>) -> String {
+    inflight_claim_ids_and_claimed_at(app)
+        .map(|(ids, claimed_at)| {
+            if ids.is_empty() {
+                "empty".to_string()
+            } else {
+                format!(
+                    "ids={} claimedAt={}",
+                    serde_json::to_string(&ids).unwrap_or_else(|_| "[]".to_string()),
+                    claimed_at
+                )
+            }
+        })
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn trace_jsonl_detector_handoff<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    source: &str,
+    path: &std::path::Path,
+    mtime_ms: i64,
+) {
+    if !bram_trace_enabled() {
         return;
     }
+    let provider = jsonl_completion_provider_for_path(path)
+        .map(|p| p.label())
+        .unwrap_or("unknown");
+    append_bram_trace_line(
+        app,
+        "jsonl-turn-end",
+        &format!(
+            "op=poll-handoff source={} provider={} path={} mtime={} activeClaim={}",
+            source,
+            provider,
+            jsonl_file_basename(path),
+            mtime_ms,
+            format_inflight_claim_for_trace(app)
+        ),
+    );
+}
 
-    let basename = path
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+fn jsonl_tail_shape(content: &str, max_records: usize) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for line in content.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            out.push("unparseable".to_string());
+            if out.len() >= max_records {
+                break;
+            }
+            continue;
+        };
+        let typ = entry
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        if typ == "event_msg" {
+            let payload_type = entry
+                .get("payload")
+                .and_then(|p| p.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            out.push(format!("event_msg:{}", payload_type));
+        } else {
+            out.push(typ.to_string());
+        }
+        if out.len() >= max_records {
+            break;
+        }
+    }
+    out.reverse();
+    if out.is_empty() {
+        "empty".to_string()
+    } else {
+        out.join(",")
+    }
+}
+
+fn claude_jsonl_completion_decision(content: &str) -> JsonlCompletionDecision {
+    for line in content.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        if entry.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        let stop_reason = entry
+            .get("message")
+            .and_then(|m| m.get("stop_reason"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        return JsonlCompletionDecision {
+            detected: stop_reason == "end_turn",
+            reason: if stop_reason == "end_turn" {
+                "end_turn"
+            } else {
+                "non-final-assistant"
+            },
+        };
+    }
+    JsonlCompletionDecision {
+        detected: false,
+        reason: "no-assistant-record",
+    }
+}
+
+fn codex_jsonl_completion_decision(content: &str) -> JsonlCompletionDecision {
+    for line in content.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        let Some(entry_type) = entry.get("type").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if entry_type == "event_msg" {
+            let payload_type = entry
+                .get("payload")
+                .and_then(|p| p.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if payload_type == "task_complete" {
+                return JsonlCompletionDecision {
+                    detected: true,
+                    reason: "task_complete",
+                };
+            }
+            if payload_type == "task_started" || payload_type == "user_message" {
+                return JsonlCompletionDecision {
+                    detected: false,
+                    reason: "next-task-started",
+                };
+            }
+            continue;
+        }
+        if entry_type == "response_item" || entry_type == "turn_context" {
+            continue;
+        }
+        return JsonlCompletionDecision {
+            detected: false,
+            reason: "non-final-record",
+        };
+    }
+    JsonlCompletionDecision {
+        detected: false,
+        reason: "no-completion-record",
+    }
+}
+
+fn jsonl_completion_decision(
+    provider: JsonlCompletionProvider,
+    content: &str,
+) -> JsonlCompletionDecision {
+    match provider {
+        JsonlCompletionProvider::Claude => claude_jsonl_completion_decision(content),
+        JsonlCompletionProvider::Codex => codex_jsonl_completion_decision(content),
+    }
+}
+
+// JSONL-driven turn-end detection (#91 follow-up, broadened by #153).
+// Durable session output is the primary independent completion signal:
+// Claude writes assistant `stop_reason:"end_turn"`; Codex writes
+// `event_msg`/`task_complete`. PTY silence remains a fallback.
+fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::path::Path) {
+    let provider = match jsonl_completion_provider_for_path(path) {
+        Some(p) => p,
+        None => {
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    app,
+                    "jsonl-turn-end",
+                    &format!(
+                        "op=skip provider=unknown reason=unrecognized-path path={}",
+                        jsonl_file_basename(path)
+                    ),
+                );
+            }
+            return;
+        }
+    };
+    let provider_label = provider.label();
+    let basename = jsonl_file_basename(path);
     if bram_trace_enabled() {
         append_bram_trace_line(
             app,
             "jsonl-turn-end",
-            &format!("op=enter path={}", basename),
+            &format!("op=enter provider={} path={}", provider_label, basename),
         );
     }
 
     let Ok(metadata) = std::fs::metadata(path) else {
+        record_turn_completion_monitor(
+            "jsonl",
+            provider_label,
+            "metadata-read-failed",
+            format!("Could not stat {}", basename),
+            unix_now_ms(),
+            false,
+        );
         return;
     };
     let file_mtime_ms = metadata
@@ -8658,76 +8942,126 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
         .unwrap_or(0);
 
     let Ok(content) = std::fs::read_to_string(path) else {
+        record_turn_completion_monitor(
+            "jsonl",
+            provider_label,
+            "read-failed",
+            format!("Could not read {}", basename),
+            file_mtime_ms,
+            false,
+        );
         return;
     };
-
-    // Claude Code appends `last-prompt` and `permission-mode` metadata
-    // lines after every assistant turn, so the file's last non-empty
-    // line is reliably NOT the assistant message. Scan backwards,
-    // skipping unparseable lines and non-assistant types, to find the
-    // most recent `type=assistant` entry.
-    let mut assistant_entry: Option<serde_json::Value> = None;
-    for line in content.lines().rev() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(entry) = serde_json::from_str::<serde_json::Value>(trimmed) else {
-            continue;
-        };
-        if entry.get("type").and_then(|v| v.as_str()) == Some("assistant") {
-            assistant_entry = Some(entry);
-            break;
-        }
-    }
-    let Some(entry) = assistant_entry else {
-        return;
-    };
-
-    let stop_reason = entry
-        .get("message")
-        .and_then(|m| m.get("stop_reason"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if stop_reason != "end_turn" {
-        return;
+    let decision = jsonl_completion_decision(provider, &content);
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "jsonl-turn-end",
+            &format!(
+                "op=scan provider={} path={} tailTypes={}",
+                provider_label,
+                basename,
+                jsonl_tail_shape(&content, 6)
+            ),
+        );
     }
 
-    let Some(sentinel_path) = inflight_claim_file(app) else {
+    let Some((claimed_ids, claimed_at)) = inflight_claim_ids_and_claimed_at(app) else {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "jsonl-turn-end",
+                &format!(
+                    "op=skip provider={} reason=no-active-sentinel decision={} path={} mtime={}",
+                    provider_label, decision.reason, basename, file_mtime_ms
+                ),
+            );
+        }
+        record_turn_completion_monitor(
+            "jsonl",
+            provider_label,
+            "no-active-sentinel",
+            format!("{} decision from {}", decision.reason, basename),
+            file_mtime_ms,
+            false,
+        );
         return;
     };
-    let Ok(sentinel_content) = std::fs::read_to_string(&sentinel_path) else {
-        return;
-    };
-    let Ok(claim) = serde_json::from_str::<serde_json::Value>(&sentinel_content) else {
-        return;
-    };
-
-    let claimed_ids: Vec<String> = claim
-        .get("ids")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
     if claimed_ids.is_empty() {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "jsonl-turn-end",
+                &format!(
+                    "op=skip provider={} reason=empty-sentinel decision={} path={} mtime={}",
+                    provider_label, decision.reason, basename, file_mtime_ms
+                ),
+            );
+        }
+        record_turn_completion_monitor(
+            "jsonl",
+            provider_label,
+            "empty-sentinel",
+            format!("{} decision from {}", decision.reason, basename),
+            file_mtime_ms,
+            false,
+        );
         return;
     }
 
-    let claimed_at = claim.get("claimedAt").and_then(|v| v.as_i64()).unwrap_or(0);
+    let claimed_after = file_mtime_ms >= claimed_at;
     if file_mtime_ms < claimed_at {
         if bram_trace_enabled() {
             append_bram_trace_line(
                 app,
                 "jsonl-turn-end",
                 &format!(
-                    "op=detect kind=claude stop_reason=end_turn skipped=stale-prior-turn claimed={}",
+                    "op=skip provider={} reason=stale-prior-turn decision={} path={} mtime={} claimed={}",
+                    provider_label,
+                    decision.reason,
+                    basename,
+                    file_mtime_ms,
                     serde_json::to_string(&claimed_ids).unwrap_or_else(|_| "[]".to_string())
                 ),
             );
         }
+        record_turn_completion_monitor(
+            "jsonl",
+            provider_label,
+            "stale-prior-turn",
+            format!(
+                "{} from {} predates active claim",
+                decision.reason, basename
+            ),
+            file_mtime_ms,
+            false,
+        );
+        return;
+    }
+
+    if !decision.detected {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "jsonl-turn-end",
+                &format!(
+                    "op=skip provider={} reason={} path={} mtime={} claimed={}",
+                    provider_label,
+                    decision.reason,
+                    basename,
+                    file_mtime_ms,
+                    serde_json::to_string(&claimed_ids).unwrap_or_else(|_| "[]".to_string())
+                ),
+            );
+        }
+        record_turn_completion_monitor(
+            "jsonl",
+            provider_label,
+            decision.reason,
+            format!("No provider completion marker in {}", basename),
+            file_mtime_ms,
+            claimed_after,
+        );
         return;
     }
 
@@ -8736,11 +9070,23 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
             app,
             "jsonl-turn-end",
             &format!(
-                "op=detect kind=claude stop_reason=end_turn claimed={}",
+                "op=detect provider={} reason={} path={} mtime={} claimed={}",
+                provider_label,
+                decision.reason,
+                basename,
+                file_mtime_ms,
                 serde_json::to_string(&claimed_ids).unwrap_or_else(|_| "[]".to_string())
             ),
         );
     }
+    record_turn_completion_monitor(
+        "jsonl",
+        provider_label,
+        decision.reason,
+        format!("Provider completion marker in {}", basename),
+        file_mtime_ms,
+        claimed_after,
+    );
 
     clear_inflight_claim_sentinel(app, &claimed_ids);
 }
@@ -8774,10 +9120,7 @@ fn cleanup_stale_worklist_intent<R: tauri::Runtime>(app: &AppHandle<R>) {
         if path.exists() {
             let _ = std::fs::remove_file(&path);
             if bram_trace_enabled() {
-                let name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 append_bram_trace_line(
                     app,
                     "worklist-intent",
@@ -9892,6 +10235,29 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
     } else {
         claim_ids.join(", ")
     };
+    let completion_monitor = current_turn_completion_monitor();
+    let completion_after_claim = if claimed_at > 0 {
+        completion_monitor.seen_at_ms >= claimed_at && completion_monitor.claimed_after
+    } else {
+        completion_monitor.claimed_after
+    };
+    let completion_state = if completion_monitor.source.is_empty() {
+        "none".to_string()
+    } else if completion_after_claim {
+        format!("{} after claim", completion_monitor.source)
+    } else {
+        format!("{} before claim", completion_monitor.source)
+    };
+    let completion_detail = if completion_monitor.source.is_empty() {
+        "No turn completion detector decision recorded yet".to_string()
+    } else {
+        format!(
+            "provider {}; reason {}; {}",
+            completion_monitor.provider.clone().if_empty("unknown"),
+            completion_monitor.reason.clone().if_empty("unknown"),
+            completion_monitor.detail
+        )
+    };
     let trace_pairs_warn = trace["inflightWrites"].as_i64().unwrap_or(0)
         > trace["inflightClears"].as_i64().unwrap_or(0) + 1;
     let stale_reject_warn = trace["staleRejects"].as_i64().unwrap_or(0) > 0;
@@ -9908,6 +10274,14 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
             "trace": trace.clone(),
             "traceExport": trace_export.clone(),
             "startupRun": startup_run.clone(),
+            "turnCompletion": {
+                "source": completion_monitor.source.clone(),
+                "provider": completion_monitor.provider.clone(),
+                "reason": completion_monitor.reason.clone(),
+                "detail": completion_monitor.detail.clone(),
+                "seenAt": if completion_monitor.seen_at_ms > 0 { format_iso_utc_ms(completion_monitor.seen_at_ms) } else { String::new() },
+                "claimedAfter": completion_after_claim,
+            },
         },
         "sections": [
             {
@@ -9984,6 +10358,13 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
                         "state": format!("{} writes / {} clears", trace["inflightWrites"].as_i64().unwrap_or(0), trace["inflightClears"].as_i64().unwrap_or(0)),
                         "detail": "Recent [inflight-sentinel] records from bram-trace.log",
                         "seen": trace["lastInflight"].as_str().unwrap_or(""),
+                    },
+                    {
+                        "signal": "Turn completion",
+                        "level": if claim_ids.is_empty() || completion_after_claim { "ok" } else { "warn" },
+                        "state": completion_state,
+                        "detail": completion_detail,
+                        "seen": if completion_monitor.seen_at_ms > 0 { format_iso_utc_ms(completion_monitor.seen_at_ms) } else { String::new() },
                     },
                     port_row,
                     loopback_row
@@ -10125,6 +10506,68 @@ mod pty_menu_tests {
 }
 
 #[cfg(test)]
+mod turn_completion_tests {
+    use super::{
+        claude_jsonl_completion_decision, codex_jsonl_completion_decision,
+        jsonl_completion_provider_for_path,
+    };
+    use std::path::Path;
+
+    #[test]
+    fn claude_end_turn_detects_completion() {
+        let content = r#"{"type":"assistant","message":{"stop_reason":"end_turn","content":[]}}"#;
+        let decision = claude_jsonl_completion_decision(content);
+        assert!(decision.detected);
+        assert_eq!(decision.reason, "end_turn");
+    }
+
+    #[test]
+    fn claude_non_final_assistant_does_not_clear() {
+        let content = r#"{"type":"assistant","message":{"stop_reason":"tool_use","content":[]}}"#;
+        let decision = claude_jsonl_completion_decision(content);
+        assert!(!decision.detected);
+        assert_eq!(decision.reason, "non-final-assistant");
+    }
+
+    #[test]
+    fn codex_task_complete_detects_completion() {
+        let content = r#"
+{"type":"event_msg","payload":{"type":"agent_message","message":"done"}}
+{"type":"event_msg","payload":{"type":"token_count"}}
+{"type":"event_msg","payload":{"type":"task_complete"}}
+"#;
+        let decision = codex_jsonl_completion_decision(content);
+        assert!(decision.detected);
+        assert_eq!(decision.reason, "task_complete");
+    }
+
+    #[test]
+    fn codex_intermediate_tool_records_do_not_clear() {
+        let content = r#"
+{"type":"event_msg","payload":{"type":"agent_message","message":"working"}}
+{"type":"response_item","payload":{"type":"function_call","name":"exec_command"}}
+{"type":"event_msg","payload":{"type":"token_count"}}
+"#;
+        let decision = codex_jsonl_completion_decision(content);
+        assert!(!decision.detected);
+        assert_eq!(decision.reason, "no-completion-record");
+    }
+
+    #[test]
+    fn provider_detection_uses_session_roots() {
+        assert!(jsonl_completion_provider_for_path(Path::new(
+            "/Users/me/.claude/projects/x/session.jsonl"
+        ))
+        .is_some());
+        assert!(jsonl_completion_provider_for_path(Path::new(
+            "/Users/me/.codex/sessions/2026/06/01/rollout.jsonl"
+        ))
+        .is_some());
+        assert!(jsonl_completion_provider_for_path(Path::new("/tmp/session.jsonl")).is_none());
+    }
+}
+
+#[cfg(test)]
 mod worklist_doc_tests {
     use super::{
         base_worklist_doc_from_parsed, canonical_item_hash, parse_worklist_draft,
@@ -10177,8 +10620,7 @@ mod worklist_doc_tests {
 
     #[test]
     fn draft_resolver_ignores_inline_and_uses_draft_file() {
-        let dir = std::env::temp_dir()
-            .join(format!("bram-draft-only-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bram-draft-only-test-{}", std::process::id()));
         fs::create_dir_all(&dir).expect("create temp draft dir");
         fs::write(
             dir.join("legacy-with-inline.md"),
@@ -12581,10 +13023,7 @@ fn route_request<R: tauri::Runtime>(
                 let start = pos.saturating_sub(half);
                 let end = (start + HIT_BODY_CAP).min(hit_body.len());
                 let start = end.saturating_sub(HIT_BODY_CAP);
-                hit_body
-                    .get(start..end)
-                    .unwrap_or("")
-                    .to_string()
+                hit_body.get(start..end).unwrap_or("").to_string()
             } else {
                 hit_body.chars().take(HIT_BODY_CAP).collect()
             };
@@ -12635,10 +13074,7 @@ fn route_request<R: tauri::Runtime>(
                 };
                 let start = pos.saturating_sub(80);
                 let end = (pos + needle.len() + 120).min(body.len());
-                let snippet = body
-                    .get(start..end)
-                    .unwrap_or("")
-                    .replace('\n', " ");
+                let snippet = body.get(start..end).unwrap_or("").replace('\n', " ");
                 let mut row = entry.clone();
                 if let Some(obj) = row.as_object_mut() {
                     obj.insert("snippet".to_string(), serde_json::Value::String(snippet));
@@ -12889,10 +13325,7 @@ fn drain_worklist_intent<R: tauri::Runtime>(app: &AppHandle<R>) {
     let body_bytes = serde_json::to_vec(&body_val).unwrap_or_default();
 
     let (status, resp_bytes): (u16, Vec<u8>) = if parsed.is_null() {
-        (
-            400,
-            br#"{"error":"malformed intent JSON"}"#.to_vec(),
-        )
+        (400, br#"{"error":"malformed intent JSON"}"#.to_vec())
     } else {
         match route {
             "worklist-resolve" => {
@@ -12932,10 +13365,8 @@ fn drain_worklist_intent<R: tauri::Runtime>(app: &AppHandle<R>) {
     };
 
     let ok = (200..300).contains(&status);
-    let payload: serde_json::Value =
-        serde_json::from_slice(&resp_bytes).unwrap_or_else(|_| {
-            serde_json::json!({ "raw": String::from_utf8_lossy(&resp_bytes) })
-        });
+    let payload: serde_json::Value = serde_json::from_slice(&resp_bytes)
+        .unwrap_or_else(|_| serde_json::json!({ "raw": String::from_utf8_lossy(&resp_bytes) }));
     let mut envelope = serde_json::json!({
         "nonce": nonce,
         "ok": ok,
@@ -12959,7 +13390,10 @@ fn drain_worklist_intent<R: tauri::Runtime>(app: &AppHandle<R>) {
         append_bram_trace_line(
             app,
             "worklist-intent",
-            &format!("route={} nonce={} ok={} status={}", route, nonce, ok, status),
+            &format!(
+                "route={} nonce={} ok={} status={}",
+                route, nonce, ok, status
+            ),
         );
     }
 }
@@ -13048,6 +13482,16 @@ fn handle_iterate_end<R: tauri::Runtime>(
             br#"{"error":"ids[] required"}"#.to_vec(),
         );
     }
+    record_turn_completion_monitor(
+        "iterate-end",
+        "agent",
+        "explicit-end",
+        format!("Iterate end covering {}", ids.join(", ")),
+        unix_now_ms(),
+        inflight_claim_ids_and_claimed_at(app)
+            .map(|(claim_ids, claimed_at)| !claim_ids.is_empty() && unix_now_ms() >= claimed_at)
+            .unwrap_or(false),
+    );
     clear_inflight_claim_sentinel(app, &ids);
     (
         200,
@@ -13315,6 +13759,16 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
         &affected
     };
     if !completion_ids.is_empty() {
+        record_turn_completion_monitor(
+            "mutate",
+            "agent",
+            op,
+            format!("{} covering {}", op, completion_ids.join(", ")),
+            unix_now_ms(),
+            inflight_claim_ids_and_claimed_at(app)
+                .map(|(claim_ids, claimed_at)| !claim_ids.is_empty() && unix_now_ms() >= claimed_at)
+                .unwrap_or(false),
+        );
         let cleared = clear_inflight_claim_sentinel(app, completion_ids);
         if !cleared {
             // No sentinel existed to clear — the agent reached mutate without a
@@ -13328,8 +13782,7 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
                     "inflight-sentinel",
                     &format!(
                         "op=reconcile-no-claim ids={}",
-                        serde_json::to_string(completion_ids)
-                            .unwrap_or_else(|_| "[]".to_string())
+                        serde_json::to_string(completion_ids).unwrap_or_else(|_| "[]".to_string())
                     ),
                 );
             }
@@ -13373,8 +13826,7 @@ mod worklist_authorization_tests {
 
     #[test]
     fn approval_record_verifies_hash_and_embeds_feedback() {
-        let dir = std::env::temp_dir()
-            .join(format!("bram-approval-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bram-approval-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp draft dir");
         std::fs::write(
             dir.join("doc-update.md"),
@@ -13528,7 +13980,10 @@ mod worklist_authorization_tests {
         let (dropped, violations) =
             classify_worklist_removals(&prior, &current, Some("drop"), &drop_ids);
         assert_eq!(dropped, ids(&["a"]));
-        assert!(violations.is_empty(), "applied removals are never violations");
+        assert!(
+            violations.is_empty(),
+            "applied removals are never violations"
+        );
 
         // No live auth — the consumed-auth state the false-success-drop race
         // produces. The same proposed 'a' removal is now an unauthorized
@@ -13536,8 +13991,7 @@ mod worklist_authorization_tests {
         // handle_worklist_mutate prevents the watcher from ever reaching this
         // classification for an authorized drop.
         let empty: HashSet<String> = HashSet::new();
-        let (dropped, violations) =
-            classify_worklist_removals(&prior, &current, None, &empty);
+        let (dropped, violations) = classify_worklist_removals(&prior, &current, None, &empty);
         assert!(dropped.is_empty());
         assert_eq!(violations, vec![("a".to_string(), "proposed".to_string())]);
     }
@@ -13546,7 +14000,10 @@ mod worklist_authorization_tests {
     fn inflight_claim_fully_covered_requires_nonempty_and_all_covered() {
         let claimed = ids(&["a", "b"]);
         // Every claimed id present in mutated -> covered (clear + emit).
-        assert!(inflight_claim_fully_covered(&claimed, &ids(&["a", "b", "c"])));
+        assert!(inflight_claim_fully_covered(
+            &claimed,
+            &ids(&["a", "b", "c"])
+        ));
         // Partial coverage -> not covered (don't clear the sentinel).
         assert!(!inflight_claim_fully_covered(&claimed, &ids(&["a"])));
         // Empty/absent claim -> not covered. This is the #133 skipped-resolve
@@ -14026,6 +14483,13 @@ pub fn run() {
                 remove_bram_port_files(proj);
             }
             prepare_bram_trace_log(app.handle());
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    app.handle(),
+                    "jsonl-turn-end",
+                    "op=init providers=claude,codex codexMarker=event_msg/task_complete",
+                );
+            }
             // Remove any stale inflight sentinel from a prior session
             // that didn't complete cleanly. Refs #84.
             cleanup_stale_inflight_claim(app.handle());
@@ -14416,6 +14880,17 @@ pub fn run() {
                         // is a no-op because the sentinel is already gone.
                         for p in &event.paths {
                             if p.extension().map_or(false, |e| e == "jsonl") {
+                                let mtime_ms = std::fs::metadata(p)
+                                    .ok()
+                                    .and_then(|md| md.modified().ok())
+                                    .and_then(system_time_ms)
+                                    .unwrap_or(0);
+                                trace_jsonl_detector_handoff(
+                                    &app_handle,
+                                    "watcher",
+                                    p,
+                                    mtime_ms,
+                                );
                                 check_jsonl_for_turn_end(&app_handle, p);
                             }
                         }

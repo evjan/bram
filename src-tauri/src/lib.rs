@@ -536,18 +536,30 @@ fn append_bram_trace_line<R: tauri::Runtime>(app: &AppHandle<R>, category: &str,
         return;
     };
     // First write of the session: ensure the parent dir exists, open
-    // with truncate, write the session-start line, then cache the
+    // in append mode, write the session-start line, then cache the
     // handle. Every subsequent write reuses the cached handle and
     // pays only a single `write(2)` per line — measurably keeps the
     // PTY read loop responsive under heavy TUI animation. Refs #82.
+    //
+    // Append mode is load-bearing: subprocess hooks (e.g. .claude/hooks/
+    // worklist-guard.py) also append to this file via plain open("a").
+    // Without O_APPEND on the host's cached fd, the host's position-
+    // tracked writeln! would silently overwrite hook bytes appended
+    // since the host's last write. That was the root cause of #69
+    // (after May 24, no [hook] records appeared in the trace log even
+    // though the hook was firing and BRAM_TRACE/BRAM_TRACE_LOG were
+    // both set — the hook's appends were being clobbered).
+    //
+    // prepare_bram_trace_log already archives the prior session's log
+    // and creates a fresh empty live log at startup, so .truncate(true)
+    // here is redundant and incompatible with append mode anyway.
     if guard.is_none() {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let opened = std::fs::OpenOptions::new()
             .create(true)
-            .write(true)
-            .truncate(true)
+            .append(true)
             .open(&path);
         let Ok(mut file) = opened else {
             return;

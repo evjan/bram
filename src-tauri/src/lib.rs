@@ -9052,7 +9052,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
 
     // Codex user-global hook install. Runs unconditionally (incl. source repo)
     // because the install is keyed to $HOME, not the project.
-    let codex_hook_install = install_codex_worklist_guard(app, force)?;
+    let codex_hook_install = install_codex_worklist_guard(app)?;
     for path in &codex_hook_install.wrote {
         wrote.push(path.clone());
     }
@@ -9111,7 +9111,6 @@ struct CodexHookInstall {
 
 fn install_codex_worklist_guard<R: tauri::Runtime>(
     app: &AppHandle<R>,
-    force: bool,
 ) -> Result<CodexHookInstall, String> {
     let home = home_dir().ok_or("no HOME or USERPROFILE")?;
     let script_path = home.join(ENHANCE_CODEX_HOOK_INSTALL_REL);
@@ -9125,8 +9124,11 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create {}: {}", parent.display(), e))?;
     }
+    // Whole-file Setup-managed bundle; force-write so bundle bumps land on
+    // existing installs. No source-repo carve-out — this hook installs to
+    // $HOME/.bram/ on every machine. Issue #174.
     let codex_hook_written =
-        write_template_if_safe(&script_path, &script_bytes, force, &mut wrote, &mut skipped)?;
+        write_template_if_safe(&script_path, &script_bytes, true, &mut wrote, &mut skipped)?;
     #[cfg(unix)]
     if codex_hook_written {
         use std::os::unix::fs::PermissionsExt;
@@ -9200,10 +9202,14 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
     } else {
         format!("{}\n\n{}\n", cleaned.trim_end(), toml_block)
     };
+    // Force-write the merged result so bundle-format changes (matcher regex,
+    // timeout, command shape) land on existing installs. The strip-and-insert
+    // merge above already preserves user-authored TOML outside the marker
+    // block. Issue #174.
     write_template_if_safe(
         &config_path,
         new_content.as_bytes(),
-        force,
+        true,
         &mut wrote,
         &mut skipped,
     )?;
@@ -11059,6 +11065,381 @@ fn authorization_rows<R: tauri::Runtime>(
     )
 }
 
+// One row per Setup-managed file. Each row shows expected (bundle / marker
+// format) vs actual (disk state) so the Status tab can surface stale or
+// legacy state without requiring a synthetic verification dance. Mirrors the
+// invariants enforced by run_enhance + install_codex_worklist_guard. Refs #174.
+fn agent_coordination_rows<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<serde_json::Value> {
+    use serde_json::json;
+    let proj = match project_root(Some(app)) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let is_source_repo = proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+
+    // --- Claude sidecar ---
+    {
+        let path = proj.join(ENHANCE_SIDECAR_REL);
+        let seen = file_modified_iso(&path);
+        if is_source_repo {
+            rows.push(json!({
+                "signal": ENHANCE_SIDECAR_REL,
+                "level": "neutral",
+                "state": "source-repo",
+                "detail": "Source repo: bundle is on-disk at app/__shell/conventions.md; Setup does not manage this path here.",
+                "seen": seen,
+            }));
+        } else if !path.exists() {
+            rows.push(json!({
+                "signal": ENHANCE_SIDECAR_REL,
+                "level": "warn",
+                "state": "missing",
+                "detail": "Sidecar not installed. Run Setup to install agent guidance.",
+                "seen": seen,
+            }));
+        } else {
+            let matches = hook_matches_bundle(app, &path, "__shell/conventions.md");
+            let disk_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let bundle_len = serve_app_file(Some(app), "__shell/conventions.md")
+                .map(|(b, _)| b.len() as u64)
+                .unwrap_or(0);
+            rows.push(json!({
+                "signal": ENHANCE_SIDECAR_REL,
+                "level": if matches { "ok" } else { "warn" },
+                "state": if matches { "current" } else { "stale" },
+                "detail": if matches {
+                    format!("Byte-matches bundle ({} B)", bundle_len)
+                } else {
+                    format!("Disk {} B, bundle {} B — run Setup to refresh", disk_len, bundle_len)
+                },
+                "seen": seen,
+            }));
+        }
+    }
+
+    // --- CLAUDE.md marker block ---
+    {
+        let path = proj.join("CLAUDE.md");
+        let seen = file_modified_iso(&path);
+        if is_source_repo {
+            rows.push(json!({
+                "signal": "CLAUDE.md (marker block)",
+                "level": "neutral",
+                "state": "source-repo",
+                "detail": "Source repo: CLAUDE.md is hand-maintained; Setup does not write a marker block here.",
+                "seen": seen,
+            }));
+        } else if !path.exists() {
+            rows.push(json!({
+                "signal": "CLAUDE.md (marker block)",
+                "level": "warn",
+                "state": "missing",
+                "detail": "CLAUDE.md not present. Run Setup to install the @-import.",
+                "seen": seen,
+            }));
+        } else {
+            let disk = std::fs::read_to_string(&path).unwrap_or_default();
+            let has_new = disk.contains(ENHANCE_MARKER_START);
+            let has_legacy = disk.contains(ENHANCE_LEGACY_MARKER_START);
+            if has_legacy && !has_new {
+                rows.push(json!({
+                    "signal": "CLAUDE.md (marker block)",
+                    "level": "warn",
+                    "state": "legacy-markers",
+                    "detail": "Block uses legacy <!-- xmlui-desktop: --> markers. Run Setup to migrate.",
+                    "seen": seen,
+                }));
+            } else if !has_new {
+                rows.push(json!({
+                    "signal": "CLAUDE.md (marker block)",
+                    "level": "warn",
+                    "state": "missing",
+                    "detail": "CLAUDE.md present but has no Bram marker block.",
+                    "seen": seen,
+                }));
+            } else {
+                let expected = format!(
+                    "{}\n@{}\n{}",
+                    ENHANCE_MARKER_START, ENHANCE_SIDECAR_REL, ENHANCE_MARKER_END
+                );
+                let block =
+                    extract_marker_block(&disk, ENHANCE_MARKER_START, ENHANCE_MARKER_END)
+                        .unwrap_or("");
+                let matches = block == expected;
+                rows.push(json!({
+                    "signal": "CLAUDE.md (marker block)",
+                    "level": if matches { "ok" } else { "warn" },
+                    "state": if matches { "current" } else { "stale" },
+                    "detail": if matches {
+                        format!("Block matches bundle: @{}", ENHANCE_SIDECAR_REL)
+                    } else {
+                        "Block content differs from bundle. Run Setup to refresh.".to_string()
+                    },
+                    "seen": seen,
+                }));
+            }
+        }
+    }
+
+    // --- Claude project hook script ---
+    {
+        let path = proj.join(ENHANCE_HOOK_SCRIPT_REL);
+        let seen = file_modified_iso(&path);
+        if !path.exists() {
+            rows.push(json!({
+                "signal": ENHANCE_HOOK_SCRIPT_REL,
+                "level": "warn",
+                "state": "missing",
+                "detail": "Project hook not installed. Run Setup.",
+                "seen": seen,
+            }));
+        } else {
+            let matches = hook_matches_bundle(app, &path, ENHANCE_HOOK_BUNDLE_REL);
+            let disk_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let bundle_len = serve_app_file(Some(app), ENHANCE_HOOK_BUNDLE_REL)
+                .map(|(b, _)| b.len() as u64)
+                .unwrap_or(0);
+            let detail_when_stale = if is_source_repo {
+                format!(
+                    "Disk {} B, bundle {} B (source repo: divergence may reflect an in-flight diagnostic edit, not stale Setup)",
+                    disk_len, bundle_len
+                )
+            } else {
+                format!(
+                    "Disk {} B, bundle {} B — run Setup to refresh",
+                    disk_len, bundle_len
+                )
+            };
+            rows.push(json!({
+                "signal": ENHANCE_HOOK_SCRIPT_REL,
+                "level": if matches { "ok" } else if is_source_repo { "neutral" } else { "warn" },
+                "state": if matches { "current" } else { "stale" },
+                "detail": if matches {
+                    format!("Byte-matches bundle ({} B)", bundle_len)
+                } else {
+                    detail_when_stale
+                },
+                "seen": seen,
+            }));
+        }
+    }
+
+    // --- settings.json hook registration ---
+    {
+        let path = proj.join(ENHANCE_SETTINGS_REL);
+        let seen = file_modified_iso(&path);
+        let exists = path.exists();
+        let registered = settings_has_worklist_guard_hook(&path);
+        rows.push(json!({
+            "signal": ENHANCE_SETTINGS_REL,
+            "level": if registered { "ok" } else { "warn" },
+            "state": if registered { "registered" } else if exists { "not-registered" } else { "missing" },
+            "detail": if registered {
+                "worklist-guard.py registered as PreToolUse hook for Write|Edit"
+            } else if exists {
+                "settings.json present but worklist-guard.py is not registered"
+            } else {
+                "settings.json not present"
+            },
+            "seen": seen,
+        }));
+    }
+
+    // --- AGENTS.md marker block ---
+    {
+        let path = proj.join(ENHANCE_CODEX_AGENTS_REL);
+        let seen = file_modified_iso(&path);
+        if is_source_repo {
+            rows.push(json!({
+                "signal": "AGENTS.md (marker block)",
+                "level": "neutral",
+                "state": "source-repo",
+                "detail": "Source repo: AGENTS.md is hand-maintained; Setup does not write a marker block here.",
+                "seen": seen,
+            }));
+        } else if !path.exists() {
+            rows.push(json!({
+                "signal": "AGENTS.md (marker block)",
+                "level": "warn",
+                "state": "missing",
+                "detail": "AGENTS.md not present. Run Setup to install.",
+                "seen": seen,
+            }));
+        } else {
+            let disk = std::fs::read_to_string(&path).unwrap_or_default();
+            let has_new = disk.contains(ENHANCE_MARKER_START);
+            let has_legacy = disk.contains(ENHANCE_LEGACY_MARKER_START);
+            if has_legacy && !has_new {
+                rows.push(json!({
+                    "signal": "AGENTS.md (marker block)",
+                    "level": "warn",
+                    "state": "legacy-markers",
+                    "detail": "Block uses legacy <!-- xmlui-desktop: --> markers. Run Setup to migrate.",
+                    "seen": seen,
+                }));
+            } else if !has_new {
+                rows.push(json!({
+                    "signal": "AGENTS.md (marker block)",
+                    "level": "warn",
+                    "state": "missing",
+                    "detail": "AGENTS.md present but has no Bram marker block.",
+                    "seen": seen,
+                }));
+            } else {
+                let current = codex_agents_block_current(app, &path, is_source_repo);
+                rows.push(json!({
+                    "signal": "AGENTS.md (marker block)",
+                    "level": if current { "ok" } else { "warn" },
+                    "state": if current { "current" } else { "stale" },
+                    "detail": if current {
+                        "Block matches codex-startup-instructions bundle"
+                    } else {
+                        "Block content differs from bundle. Run Setup to refresh."
+                    },
+                    "seen": seen,
+                }));
+            }
+        }
+    }
+
+    // --- User-global codex hook script ---
+    {
+        let path_opt = home_dir().map(|h| h.join(ENHANCE_CODEX_HOOK_INSTALL_REL));
+        let signal = "~/.bram/codex-worklist-guard.py";
+        match path_opt {
+            None => rows.push(json!({
+                "signal": signal, "level": "warn", "state": "missing",
+                "detail": "HOME unset; cannot locate codex hook install path.",
+                "seen": "",
+            })),
+            Some(path) => {
+                let seen = file_modified_iso(&path);
+                if !path.exists() {
+                    rows.push(json!({
+                        "signal": signal,
+                        "level": "warn",
+                        "state": "missing",
+                        "detail": "User-global codex hook not installed. Run Setup.",
+                        "seen": seen,
+                    }));
+                } else {
+                    let matches = hook_matches_bundle(app, &path, ENHANCE_CODEX_HOOK_BUNDLE_REL);
+                    let disk_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    let bundle_len = serve_app_file(Some(app), ENHANCE_CODEX_HOOK_BUNDLE_REL)
+                        .map(|(b, _)| b.len() as u64)
+                        .unwrap_or(0);
+                    rows.push(json!({
+                        "signal": signal,
+                        "level": if matches { "ok" } else { "warn" },
+                        "state": if matches { "current" } else { "stale" },
+                        "detail": if matches {
+                            format!("Byte-matches bundle ({} B)", bundle_len)
+                        } else {
+                            format!("Disk {} B, bundle {} B — run Setup to refresh", disk_len, bundle_len)
+                        },
+                        "seen": seen,
+                    }));
+                }
+            }
+        }
+    }
+
+    // --- ~/.codex/config.toml hook block ---
+    {
+        let path_opt = home_dir().map(|h| h.join(ENHANCE_CODEX_CONFIG_REL));
+        let signal = "~/.codex/config.toml (hook block)";
+        match path_opt {
+            None => rows.push(json!({
+                "signal": signal, "level": "warn", "state": "missing",
+                "detail": "HOME unset; cannot locate Codex config.",
+                "seen": "",
+            })),
+            Some(path) => {
+                let seen = file_modified_iso(&path);
+                if !path.exists() {
+                    rows.push(json!({
+                        "signal": signal,
+                        "level": "warn",
+                        "state": "missing",
+                        "detail": "Codex config.toml not present.",
+                        "seen": seen,
+                    }));
+                } else {
+                    let disk = std::fs::read_to_string(&path).unwrap_or_default();
+                    let has_new = disk.contains(ENHANCE_CODEX_TOML_MARKER_START);
+                    let has_legacy = disk.contains(ENHANCE_CODEX_LEGACY_TOML_MARKER_START);
+                    if has_legacy && !has_new {
+                        rows.push(json!({
+                            "signal": signal,
+                            "level": "warn",
+                            "state": "legacy-markers",
+                            "detail": "Hook block uses legacy # xmlui-desktop: markers. Run Setup to migrate.",
+                            "seen": seen,
+                        }));
+                    } else if !has_new {
+                        rows.push(json!({
+                            "signal": signal,
+                            "level": "warn",
+                            "state": "missing",
+                            "detail": "config.toml present but has no Bram hook block. Run Setup to install.",
+                            "seen": seen,
+                        }));
+                    } else {
+                        rows.push(json!({
+                            "signal": signal,
+                            "level": "ok",
+                            "state": "current",
+                            "detail": "Hook block present with current # bram: markers (content check via worklist-guard-codex.py bundle row)",
+                            "seen": seen,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    // --- ~/.codex/config.toml developer_instructions ---
+    {
+        let path_opt = home_dir().map(|h| h.join(ENHANCE_CODEX_CONFIG_REL));
+        let signal = "~/.codex/config.toml (developer_instructions)";
+        match path_opt {
+            None => rows.push(json!({
+                "signal": signal, "level": "warn", "state": "missing",
+                "detail": "HOME unset; cannot locate Codex config.",
+                "seen": "",
+            })),
+            Some(path) => {
+                let seen = file_modified_iso(&path);
+                if !path.exists() {
+                    rows.push(json!({
+                        "signal": signal,
+                        "level": "warn",
+                        "state": "missing",
+                        "detail": "Codex config.toml not present.",
+                        "seen": seen,
+                    }));
+                } else {
+                    let current = codex_instr_block_current(&path);
+                    rows.push(json!({
+                        "signal": signal,
+                        "level": if current { "ok" } else { "warn" },
+                        "state": if current { "current" } else { "stale" },
+                        "detail": if current {
+                            "developer_instructions block matches current gate prose"
+                        } else {
+                            "developer_instructions absent or stale — run Setup"
+                        },
+                        "seen": seen,
+                    }));
+                }
+            }
+        }
+    }
+
+    rows
+}
+
 fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     let now = unix_now_ms();
     let worklist = worklist_doc(app);
@@ -11525,6 +11906,10 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
             {
                 "title": "Hooks",
                 "rows": hooks_rows
+            },
+            {
+                "title": "Agent Coordination",
+                "rows": agent_coordination_rows(app)
             },
             {
                 "title": "Authorization",

@@ -8939,10 +8939,13 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create {}: {}", parent.display(), e))?;
         }
+        // Always write in non-source repos — the sidecar is a whole-file
+        // Setup-managed bundle with no user-edit story, and conventions.md
+        // changes ship every release. Issue #173.
         write_template_if_safe(
             &sidecar_path,
             conventions.as_bytes(),
-            force,
+            true,
             &mut wrote,
             &mut skipped,
         )?;
@@ -8969,19 +8972,25 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
         );
         let existing_agents = std::fs::read_to_string(&codex_agents_path).unwrap_or_default();
         let new_agents = replace_or_append_managed_block(&existing_agents, &codex_block);
+        // Force when legacy markers are on disk — divergence is the
+        // Setup-managed marker rename, not a user edit. Issue #173.
+        let migrate = existing_agents.contains(ENHANCE_LEGACY_MARKER_START);
         write_template_if_safe(
             &codex_agents_path,
             new_agents.as_bytes(),
-            force,
+            force || migrate,
             &mut wrote,
             &mut skipped,
         )?;
     }
 
-    // Proposal-guard hook script. Content-comparison gated so a committed
-    // edit to the installed hook (e.g. an in-flight diagnostic-logging change
-    // that hasn't shipped in a rebuilt binary yet) survives Setup. chmod runs
-    // only after an actual write — preserves the user's mode if we skipped.
+    // Proposal-guard hook script. In the source repo, content-comparison gates
+    // the write so a committed in-flight diagnostic-logging edit to the hook
+    // survives Setup (the case #99 was designed for). In non-source repos the
+    // hook has no documented user-extension point, so bundle bumps must always
+    // land — passing force=true here avoids stranding projects on a stale hook
+    // every release that touches the bundle. Issue #173. chmod still runs only
+    // after an actual write — preserves the user's mode if we skipped.
     let (hook_bytes, _mime) = serve_app_file(Some(app), ENHANCE_HOOK_BUNDLE_REL)
         .ok_or_else(|| "worklist-guard.py bundle not found".to_string())?;
     let hook_path = proj.join(ENHANCE_HOOK_SCRIPT_REL);
@@ -8989,8 +8998,13 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create {}: {}", parent.display(), e))?;
     }
-    let hook_written =
-        write_template_if_safe(&hook_path, &hook_bytes, force, &mut wrote, &mut skipped)?;
+    let hook_written = write_template_if_safe(
+        &hook_path,
+        &hook_bytes,
+        force || !is_source_repo,
+        &mut wrote,
+        &mut skipped,
+    )?;
     #[cfg(unix)]
     if hook_written {
         use std::os::unix::fs::PermissionsExt;
@@ -9023,10 +9037,14 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
             ENHANCE_MARKER_START, ENHANCE_SIDECAR_REL, ENHANCE_MARKER_END
         );
         let new_content = replace_or_append_managed_block(&existing, &block);
+        // Force when legacy markers are on disk — divergence is the
+        // Setup-managed marker rename and the @-import path swap onto the
+        // new sidecar file, not a user edit. Issue #173.
+        let migrate = existing.contains(ENHANCE_LEGACY_MARKER_START);
         write_template_if_safe(
             &claude_md_path,
             new_content.as_bytes(),
-            force,
+            force || migrate,
             &mut wrote,
             &mut skipped,
         )?;

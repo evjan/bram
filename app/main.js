@@ -659,6 +659,15 @@ const { listen } = window.__TAURI__.event;
     });
   listen("right-pane-reload", reloadRightPaneOnly);
   listen("tools-pane-reload", reloadAll);
+  // #150 follow-up (refs #170): the host now stores right-pane-reload
+  // and tools-pane-reload payloads via emit_replayable_signal so a
+  // late-attaching listener can recover them. main.js's listeners
+  // attach after Tauri is ready; if the host fired a reload during
+  // the gap (project-config-reload at startup, etc.), the live emit
+  // was lost and the iframes stayed frozen. Ask the host to replay
+  // each on attach; the request is idempotent on no-stored-payload.
+  fetch("/__startup-ready?event=right-pane-reload", { cache: "no-store" }).catch(() => {});
+  fetch("/__startup-ready?event=tools-pane-reload", { cache: "no-store" }).catch(() => {});
 })();
 
 // ui.targetAppMinimized driver. The Settings tab and hand-edits to

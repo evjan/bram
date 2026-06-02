@@ -147,7 +147,7 @@
     });
     subscribeTauriEvent('__bramPtyMenuUnsub', 'pty-menu-changed', (e) => {
       pendingMenu = e &amp;&amp; e.payload ? e.payload : null;
-      iframeTrace('listener-fired', {context: 'pty-menu-changed', tool: (pendingMenu &amp;&amp; pendingMenu.tool) || ''});
+      iframeTrace('listener-fired', {context: 'pty-menu-changed', surface: 'worklist', tool: (pendingMenu &amp;&amp; pendingMenu.tool) || '', hasSignature: !!(pendingMenu &amp;&amp; pendingMenu.toolCallSignature), signatureChars: pendingMenu &amp;&amp; pendingMenu.toolCallSignature ? pendingMenu.toolCallSignature.length : 0});
     });">
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">
@@ -172,6 +172,23 @@
           <Text fontSize="$fontSize-sm" color="$color-warn-800">
             Agent wants to use <Text fontFamily="$fontFamily-monospace" inline="true">{pendingMenu.tool}</Text>
           </Text>
+          <VStack
+            when="{pendingMenu.toolCallSignature}"
+            maxHeight="20em"
+            overflowY="auto"
+            padding="$space-2"
+            borderRadius="$borderRadius"
+            backgroundColor="$color-surface-100">
+            <Text
+              when="{!pendingMenu.toolCallDiff}"
+              value="{pendingMenu.toolCallSignature}"
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-sm"
+              preserveLinebreaks="true" />
+            <DiffView
+              when="{pendingMenu.toolCallDiff}"
+              text="{(pendingMenu.toolCallDiff || '').slice(0, 20000)}" />
+          </VStack>
           <VStack
             when="{pendingMenu.options &amp;&amp; pendingMenu.options.length > 0}"
             gap="$space-1">

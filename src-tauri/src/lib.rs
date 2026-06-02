@@ -688,6 +688,17 @@ fn remember_tauri_event(event_name: &str, payload: serde_json::Value) {
 fn emit_replayable_signal<R: tauri::Runtime>(app: &AppHandle<R>, event_name: &str) {
     trace_emit_signal(app, event_name);
     remember_tauri_event(event_name, serde_json::Value::Null);
+    // #150 regression instrumentation: every remember is observable, so a
+    // post-restart `event-replay-skip` for the same event tells us the
+    // store didn't persist (i.e., the route that should have re-emitted
+    // before the iframe attached hadn't fired yet, or didn't fire at all).
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "event-remember",
+            &format!("kind={} payload_size=4 source=signal", event_name),
+        );
+    }
     let _ = app.emit(event_name, ());
 }
 
@@ -698,7 +709,17 @@ where
 {
     trace_emit_payload(app, event_name, &payload);
     let replay_payload = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+    let payload_size = serde_json::to_vec(&replay_payload)
+        .map(|v| v.len())
+        .unwrap_or(0);
     remember_tauri_event(event_name, replay_payload);
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "event-remember",
+            &format!("kind={} payload_size={} source=payload", event_name, payload_size),
+        );
+    }
     let _ = app.emit(event_name, payload);
 }
 
@@ -732,6 +753,19 @@ fn replay_tauri_event_live<R: tauri::Runtime>(
         .ok()
         .and_then(|guard| guard.get(event_name).cloned());
     let Some(ev) = found else {
+        // #150 regression instrumentation. Pairs with the
+        // `event-remember` trace: a replay-skip for an event the host
+        // emitted earlier in the session is the smoking gun for a #150
+        // regression. A replay-skip with no prior remember is harmless
+        // (the iframe asked speculatively and there was nothing to
+        // replay yet).
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "event-replay-skip",
+                &format!("kind={} reason=no-stored-payload", event_name),
+            );
+        }
         return serde_json::json!({
             "ok": true,
             "exists": false,
@@ -935,6 +969,10 @@ struct PtyMenu {
     tool: String,
     text: String,
     options: Vec<MenuOption>,
+    #[serde(rename = "toolCallSignature", skip_serializing_if = "Option::is_none")]
+    tool_call_signature: Option<String>,
+    #[serde(rename = "toolCallDiff", skip_serializing_if = "Option::is_none")]
+    tool_call_diff: Option<String>,
 }
 
 // Parse `1. Foo` / `❯1. Foo` / `❯ 2. Bar` lines out of the captured menu
@@ -947,8 +985,20 @@ fn parse_menu_options(text: &str) -> Vec<MenuOption> {
     let mut opts: Vec<MenuOption> = Vec::new();
     for raw in text.lines() {
         // Strip leading cursor marker (with optional space / NBSP) and whitespace.
-        let trimmed =
+        let mut trimmed =
             raw.trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
+        // If the cursor glyph appears mid-line — e.g. ANSI strip collapsed
+        // the "Do you want to proceed? ❯1. Yes" prompt onto one line —
+        // restart parsing from the cursor position so option 1 doesn't
+        // get swallowed as pre-menu chatter. Observed live at
+        // 2026-06-02 ~04:42Z: panel rendered options 2 and 3 but missing
+        // 1 because option 1's line had the menu header in front of it.
+        // Refs #170.
+        if let Some(cursor_idx) = trimmed.find('❯') {
+            trimmed = trimmed[cursor_idx..].trim_start_matches(|c: char| {
+                c == '❯' || c == '\u{a0}' || c.is_whitespace()
+            });
+        }
         if trimmed.is_empty() {
             // Blank line terminates after at least one option — the PTY emits
             // an empty line between the option list and end-of-menu footer
@@ -1008,7 +1058,10 @@ impl PartialEq for PtyMenu {
         // before options were buffered (`options=0`) followed by a re-detect
         // with options populated should fire a fresh `state=shown` so the UI
         // gets the parsed labels.
-        self.tool == other.tool && self.options.len() == other.options.len()
+        self.tool == other.tool
+            && self.options.len() == other.options.len()
+            && self.tool_call_signature.is_some() == other.tool_call_signature.is_some()
+            && self.tool_call_diff.is_some() == other.tool_call_diff.is_some()
     }
 }
 impl Eq for PtyMenu {}
@@ -1233,6 +1286,24 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     let mut detected = pty_menu_detect(&tail);
     drop(tail);
 
+    let mut signature_trace: Option<(bool, &'static str, usize, usize)> = None;
+    if let Some(menu) = detected.as_mut() {
+        let lookup = lookup_pending_tool_call(app);
+        let signature_chars = lookup
+            .signature
+            .as_ref()
+            .map(|s| s.chars().count())
+            .unwrap_or(0);
+        signature_trace = Some((
+            lookup.signature.is_some(),
+            lookup.reason,
+            signature_chars,
+            lookup.tail_bytes,
+        ));
+        menu.tool_call_signature = lookup.signature;
+        menu.tool_call_diff = lookup.diff;
+    }
+
     // Post-click suppression: if the user just dismissed a menu for
     // tool X, ignore detections of tool X for ~2s. The just-dismissed
     // menu's text is still sitting in PTY_TAIL.
@@ -1257,6 +1328,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     // Emitting under the lock would risk deadlock if listeners synchronously
     // call back into pty_menu_cell (they don't today, but cheap to avoid).
     let mut emit_payload: Option<Option<PtyMenu>> = None;
+    let mut recheck_target: Option<String> = None;
 
     if let Ok(mut menu) = pty_menu_cell().lock() {
         let prev_menu = menu.as_ref().cloned();
@@ -1313,6 +1385,26 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             }
         }
 
+        // Symmetric: don't downgrade a known menu's options from a
+        // parsed count back to 0 for the same tool. Same rolling-
+        // buffer drift cause as the tool-name carry-forward above —
+        // a later pty_menu_detect cycle anchors on `❯1.` but the
+        // 200-byte `text` window no longer contains all option lines,
+        // so parse_menu_options returns []. Without this guard the
+        // iframe sees options=0, pendingMenu.options.length === 0
+        // evaluates true, and the panel falls back to the hardcoded
+        // 3-button HStack instead of the #169 dynamic vertical
+        // layout. Empirically observed on the 02:56:09Z Write menu
+        // test for #170. If a later cycle genuinely re-parses options
+        // for the same tool, PartialEq lets it through; this only
+        // carries forward when the new detection would degrade.
+        // Refs #170.
+        if let (Some(d), Some(p)) = (detected.as_mut(), prev_menu.as_ref()) {
+            if d.options.is_empty() && !p.options.is_empty() && d.tool == p.tool {
+                d.options = p.options.clone();
+            }
+        }
+
         let state_changed = prev_menu.as_ref() != detected.as_ref();
         // First-cycle pending: store the state so the next detect cycle
         // can see we've already waited one, but suppress the `shown`
@@ -1343,9 +1435,16 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                     app,
                     "pty-menu",
                     &format!(
-                        "state=shown tool={} reason=byte-pattern options={}",
+                        "state=shown tool={} reason=byte-pattern options={} signature={} signature_reason={} signature_chars={} jsonl_tail_bytes={}",
                         nm.tool,
-                        nm.options.len()
+                        nm.options.len(),
+                        if nm.tool_call_signature.is_some() { "present" } else { "absent" },
+                        signature_trace.map(|t| t.1).unwrap_or("not-checked"),
+                        nm.tool_call_signature
+                            .as_ref()
+                            .map(|s| s.chars().count())
+                            .unwrap_or_else(|| signature_trace.map(|t| t.2).unwrap_or(0)),
+                        signature_trace.map(|t| t.3).unwrap_or(0)
                     ),
                 ),
                 (None, Some(prev)) if prev.tool != PENDING_TOOL => append_bram_trace_line(
@@ -1364,12 +1463,192 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             // PtyMenu's PartialEq compares `tool` only — text/cursor
             // drift no longer flaps the emit cadence. Refs #77.
             emit_payload = Some(menu.clone());
+            // If we're emitting a menu without a signature, schedule a
+            // deferred re-check. JSONL flush typically completes within
+            // sub-100ms after the assistant emits the tool_use, but it
+            // can lag if the user dismisses the menu quickly OR if no
+            // further PTY activity arrives to re-trigger detection.
+            // Without a deferred re-check the PartialEq race-window fix
+            // can't help — there's no cycle to compare against. The
+            // recheck thread polls lookup_pending_tool_call twice
+            // (200ms, 800ms) and emits an updated payload when the
+            // signature arrives. Refs #170.
+            if let Some(m) = menu.as_ref() {
+                if m.tool != PENDING_TOOL && m.tool_call_signature.is_none() {
+                    recheck_target = Some(m.tool.clone());
+                }
+            }
         }
     }
 
     if let Some(payload) = emit_payload {
         emit_replayable_payload(app, "pty-menu-changed", &payload);
     }
+
+    if let Some(target_tool) = recheck_target {
+        schedule_signature_recheck(app.clone(), target_tool);
+    }
+}
+
+// Deferred JSONL re-check for a menu that was emitted with
+// `tool_call_signature: None` because the assistant's `tool_use` line
+// hadn't flushed to the Claude session JSONL yet at PTY detection time.
+// Polls `lookup_pending_tool_call` twice (200 ms then 800 ms); if either
+// poll returns a signature, updates the cached `PtyMenu` and emits a
+// fresh `pty-menu-changed` so the inline permission panel can render
+// the signature without waiting for a subsequent PTY chunk. Guards
+// against firing for a different menu by capturing the original
+// `target_tool` and checking it under the cache lock before mutating.
+// Refs #170.
+// Synchronous one-shot signature recheck driven by a JSONL watcher event.
+// Pairs with `schedule_signature_recheck` (timer-based) for the case
+// where the timer cadence (5.2 s cumulative) is too tight for very
+// large `tool_use` payloads — Claude flushes a multi-KB issue body
+// only when it's done writing, which can exceed the timer window. The
+// watcher sees the JSONL grow at the exact moment of that flush; this
+// helper turns that signal into an immediate retry. No-op when no
+// menu is shown or the signature is already populated. Refs #170.
+fn try_signature_recheck_on_jsonl_change<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let needs_lookup = {
+        if let Ok(menu) = pty_menu_cell().lock() {
+            menu.as_ref()
+                .map(|m| m.tool != PENDING_TOOL && m.tool_call_signature.is_none())
+                .unwrap_or(false)
+        } else {
+            false
+        }
+    };
+    if !needs_lookup {
+        return;
+    }
+    let lookup = lookup_pending_tool_call(app);
+    if lookup.signature.is_none() {
+        return;
+    }
+    let mut emit_payload: Option<Option<PtyMenu>> = None;
+    let mut updated_tool: Option<String> = None;
+    let mut updated_chars: usize = 0;
+    if let Ok(mut menu) = pty_menu_cell().lock() {
+        if let Some(m) = menu.as_mut() {
+            if m.tool != PENDING_TOOL && m.tool_call_signature.is_none() {
+                updated_tool = Some(m.tool.clone());
+                updated_chars = lookup
+                    .signature
+                    .as_ref()
+                    .map(|s| s.chars().count())
+                    .unwrap_or(0);
+                m.tool_call_signature = lookup.signature.clone();
+                m.tool_call_diff = lookup.diff.clone();
+                emit_payload = Some(menu.clone());
+            }
+        }
+    }
+    if let (Some(payload), Some(tool)) = (emit_payload, updated_tool) {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "pty-menu",
+                &format!(
+                    "state=updated tool={} reason=signature-watcher-recheck signature_chars={}",
+                    tool, updated_chars
+                ),
+            );
+        }
+        emit_replayable_payload(app, "pty-menu-changed", &payload);
+    }
+}
+
+fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, target_tool: String) {
+    let app_for_trace = app_handle.clone();
+    let target_for_trace = target_tool.clone();
+    std::thread::spawn(move || {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                &app_for_trace,
+                "pty-menu",
+                &format!(
+                    "state=recheck-spawn tool={} reason=signature-deferred-recheck",
+                    target_for_trace
+                ),
+            );
+        }
+        // Stretched recheck schedule: original [200, 800] missed cases
+        // where the JSONL hadn't flushed by 1 s (observed live at
+        // 2026-06-02 ~04:35Z, user reported 10-second wait with
+        // signature still absent). The new cadence covers up to ~5 s
+        // wall-clock so realistic JSONL flush delays are tolerated.
+        // Each tick is cumulative sleep time, not a delta. Refs #170.
+        for delay_ms in [200u64, 500u64, 1500u64, 3000u64] {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            // Quick out: if the cached menu's tool no longer matches
+            // (user clicked or a different menu took its place) or
+            // signature was already populated by some other path,
+            // there's nothing to do.
+            let still_needs = {
+                if let Ok(menu) = pty_menu_cell().lock() {
+                    menu.as_ref()
+                        .map(|m| m.tool == target_tool && m.tool_call_signature.is_none())
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            };
+            if !still_needs {
+                return;
+            }
+            let lookup = lookup_pending_tool_call(&app_handle);
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    &app_handle,
+                    "pty-menu",
+                    &format!(
+                        "state=recheck-poll tool={} delay_ms={} signature={} reason={} signature_chars={} tail_bytes={}",
+                        target_tool,
+                        delay_ms,
+                        if lookup.signature.is_some() { "present" } else { "absent" },
+                        lookup.reason,
+                        lookup.signature.as_ref().map(|s| s.chars().count()).unwrap_or(0),
+                        lookup.tail_bytes
+                    ),
+                );
+            }
+            if lookup.signature.is_none() {
+                continue;
+            }
+            // Update under the lock, re-checking the conditions in case
+            // the cached menu shifted between the unlocked lookup and
+            // the locked write.
+            let mut emit_payload: Option<Option<PtyMenu>> = None;
+            if let Ok(mut menu) = pty_menu_cell().lock() {
+                if let Some(m) = menu.as_mut() {
+                    if m.tool == target_tool && m.tool_call_signature.is_none() {
+                        m.tool_call_signature = lookup.signature.clone();
+                        m.tool_call_diff = lookup.diff.clone();
+                        emit_payload = Some(menu.clone());
+                    }
+                }
+            }
+            if let Some(payload) = emit_payload {
+                if bram_trace_enabled() {
+                    let signature_chars = payload
+                        .as_ref()
+                        .and_then(|p| p.tool_call_signature.as_ref())
+                        .map(|s| s.chars().count())
+                        .unwrap_or(0);
+                    append_bram_trace_line(
+                        &app_handle,
+                        "pty-menu",
+                        &format!(
+                            "state=updated tool={} reason=signature-deferred-recheck delay_ms={} signature_chars={}",
+                            target_tool, delay_ms, signature_chars
+                        ),
+                    );
+                }
+                emit_replayable_payload(&app_handle, "pty-menu-changed", &payload);
+            }
+            return;
+        }
+    });
 }
 
 // Strip ANSI escape sequences so literal-byte matchers aren't fragmented
@@ -1540,6 +1819,8 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
             tool,
             text,
             options,
+            tool_call_signature: None,
+            tool_call_diff: None,
         })
     })();
 
@@ -3912,8 +4193,6 @@ fn wait_for_port(port: u16, total_ms: u64) -> bool {
 // service workers (XMLUI's apiInterceptor, MSW) won't rebind cleanly, so we
 // log a warning telling the user to restart.
 fn handle_project_config_reload<R: tauri::Runtime>(app_handle: &AppHandle<R>, proj_root: &Path) {
-    use tauri::Emitter;
-
     let new_cfg = load_project_config(proj_root);
     let new_server = new_cfg.as_ref().and_then(|c| c.server.as_ref()).cloned();
 
@@ -4016,8 +4295,16 @@ fn handle_project_config_reload<R: tauri::Runtime>(app_handle: &AppHandle<R>, pr
         "[project-config] reloaded; right-pane url -> {} upstream -> {}",
         new_right_pane_url, new_right_pane_upstream
     );
-    trace_emit_signal(&app_handle, "right-pane-reload");
-    let _ = app_handle.emit("right-pane-reload", ());
+    // Replayable: the parent-shell listener may not be ready when this
+    // fires during early startup. Without a stored payload to replay at
+    // iframe-attach, the iframe stays frozen on whatever it loaded
+    // first. A "spurious" reload-on-attach is cheap (one refetch of the
+    // already-current state) and is exactly what fixes the late-attach
+    // frozen-iframe case. Refs #170 follow-up after the post-restart
+    // regression at 2026-06-02T03:53Z, where two right-pane-reload
+    // emits at startup were lost and the right pane stayed frozen
+    // because the watcher then went idle.
+    emit_replayable_signal(&app_handle, "right-pane-reload");
 
     emit_replayable_payload(
         app_handle,
@@ -5771,6 +6058,422 @@ fn read_latest_session_pending<R: tauri::Runtime>(
         );
     }
     result
+}
+
+#[derive(Clone, Debug)]
+struct PendingToolCall {
+    name: String,
+    input: serde_json::Value,
+}
+
+#[derive(Debug)]
+struct PendingToolCallLookup {
+    signature: Option<String>,
+    diff: Option<String>,
+    reason: &'static str,
+    tail_bytes: usize,
+}
+
+fn one_line_json(value: &serde_json::Value, cap: usize) -> String {
+    let mut s = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+    s = s.split_whitespace().collect::<Vec<&str>>().join(" ");
+    if s.chars().count() > cap {
+        let mut truncated = s.chars().take(cap.saturating_sub(1)).collect::<String>();
+        truncated.push('…');
+        truncated
+    } else {
+        s
+    }
+}
+
+fn count_lines_bytes(s: &str) -> (usize, usize) {
+    let lines = if s.is_empty() {
+        0
+    } else {
+        s.lines().count().max(1)
+    };
+    (lines, s.len())
+}
+
+// Build a unified-diff string for a pending Edit/MultiEdit tool call so
+// the inline permission panel can render it via the existing `<DiffView>`
+// XMLUI component (same renderer the worklist item details use at
+// Workspace.xmlui:469). Uses `similar::TextDiff::from_lines` so the diff
+// rules match the rest of the app's diff surface — the prior hand-rolled
+// "first differing line" preview made shared-prefix Edits look like
+// no-ops. Refs #170.
+fn pending_tool_call_diff<R: tauri::Runtime>(
+    call: &PendingToolCall,
+    app: &AppHandle<R>,
+) -> Option<String> {
+    use similar::TextDiff;
+    if call.name != "Edit" && call.name != "MultiEdit" {
+        return None;
+    }
+    let input = &call.input;
+    let field = |name: &str| input.get(name).and_then(|v| v.as_str()).unwrap_or("");
+    let old_string = field("old_string");
+    let new_string = field("new_string");
+    if old_string.is_empty() && new_string.is_empty() {
+        return None;
+    }
+    // Display path: relativize absolute paths to the project root if
+    // possible (matches git's `a/<rel> b/<rel>` convention used elsewhere
+    // in Bram's diff surface). If the path isn't under the project root,
+    // strip the leading `/` so we don't end up with `a//Users/...`.
+    let file_path = field("file_path");
+    let display_path = if file_path.is_empty() {
+        String::new()
+    } else if let Some(root) = project_root(Some(app)) {
+        match std::path::Path::new(file_path).strip_prefix(&root) {
+            Ok(rel) => rel.to_string_lossy().into_owned(),
+            Err(_) => file_path.trim_start_matches('/').to_string(),
+        }
+    } else {
+        file_path.trim_start_matches('/').to_string()
+    };
+    let header_old = if display_path.is_empty() {
+        "a".to_string()
+    } else {
+        format!("a/{}", display_path)
+    };
+    let header_new = if display_path.is_empty() {
+        "b".to_string()
+    } else {
+        format!("b/{}", display_path)
+    };
+    let diff_text = TextDiff::from_lines(old_string, new_string)
+        .unified_diff()
+        .context_radius(3)
+        .missing_newline_hint(false)
+        .header(&header_old, &header_new)
+        .to_string();
+    if diff_text.is_empty() {
+        None
+    } else {
+        Some(diff_text)
+    }
+}
+
+fn patch_paths(patch: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in patch.lines() {
+        let candidate = line
+            .strip_prefix("*** Update File: ")
+            .or_else(|| line.strip_prefix("*** Add File: "))
+            .or_else(|| line.strip_prefix("*** Delete File: "))
+            .or_else(|| line.strip_prefix("--- a/"))
+            .or_else(|| line.strip_prefix("+++ b/"));
+        if let Some(path) = candidate {
+            let p = path.trim();
+            if !p.is_empty() && p != "/dev/null" && !paths.iter().any(|seen| seen == p) {
+                paths.push(p.to_string());
+            }
+        }
+    }
+    paths
+}
+
+fn format_pending_tool_call(call: &PendingToolCall) -> String {
+    let input = &call.input;
+    let field = |name: &str| input.get(name).and_then(|v| v.as_str()).unwrap_or("");
+    match call.name.as_str() {
+        "Bash" => format!("Bash({})", field("command")),
+        "Edit" | "MultiEdit" => {
+            let file_path = field("file_path");
+            if file_path.is_empty() {
+                format!("{}({})", call.name, one_line_json(input, 200))
+            } else {
+                // Signature stays a single-line header; the diff content
+                // travels in `tool_call_diff` for `<DiffView>` rendering.
+                // Refs #170.
+                format!("{}({})", call.name, file_path)
+            }
+        }
+        "Write" => {
+            let file_path = field("file_path");
+            let content = field("content");
+            let (lines, bytes) = count_lines_bytes(content);
+            if file_path.is_empty() {
+                format!("Write(<{} lines, {} bytes>)", lines, bytes)
+            } else {
+                format!("Write({})\n  <{} lines, {} bytes>", file_path, lines, bytes)
+            }
+        }
+        "Read" => format!("Read({})", field("file_path")),
+        "Glob" => format!("Glob({})", field("pattern")),
+        "Grep" => {
+            let pattern = field("pattern");
+            let path = field("path");
+            if path.is_empty() {
+                format!("Grep({})", pattern)
+            } else {
+                format!("Grep({} in {})", pattern, path)
+            }
+        }
+        "apply_patch" => {
+            let patch = field("patch");
+            let paths = patch_paths(patch);
+            if paths.is_empty() {
+                "apply_patch(<unknown paths>)".to_string()
+            } else {
+                format!("apply_patch({})", paths.join(", "))
+            }
+        }
+        name if name.starts_with("mcp__") => {
+            let parts: Vec<&str> = name.split("__").collect();
+            if parts.len() >= 3 {
+                format!("{}:{}({})", parts[1], parts[2], one_line_json(input, 200))
+            } else {
+                format!("{}({})", name, one_line_json(input, 200))
+            }
+        }
+        _ => format!("{}({})", call.name, one_line_json(input, 200)),
+    }
+}
+
+fn extract_pending_tool_call_from_jsonl(text: &str) -> Option<PendingToolCall> {
+    // Two-pass design (replaced the prior reverse-walk-with-breaks because
+    // any interleaved regular `user` text turn or thinking-only `assistant`
+    // turn between the pending `tool_use` and the search start would
+    // prematurely terminate the walk, surfacing as `signature_reason=
+    // no-unmatched-tool-use` even when the JSONL clearly had the unresolved
+    // entry. Refs #170, repro at 2026-06-02T03:33:47Z where the tool_use
+    // line was 6 s old and still missed by the prior parser).
+    //
+    // Pass 1 collects every `tool_result.tool_use_id` from every `user`
+    // message in the buffer — no early termination, no assumption about
+    // arrival order. Pass 2 walks lines in reverse and returns the first
+    // assistant tool_use whose id isn't in the resolved set.
+    let mut parsed: Vec<serde_json::Value> = Vec::new();
+    let mut parse_errors: usize = 0;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<serde_json::Value>(trimmed) {
+            Ok(value) => parsed.push(value),
+            Err(_) => parse_errors += 1,
+        }
+    }
+    let mut resolved: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for r in &parsed {
+        if r.get("type").and_then(|v| v.as_str()) != Some("user") {
+            continue;
+        }
+        let Some(arr) = r
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+        else {
+            continue;
+        };
+        for c in arr {
+            if c.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                continue;
+            }
+            if let Some(id) = c.get("tool_use_id").and_then(|v| v.as_str()) {
+                resolved.insert(id.to_string());
+            }
+        }
+    }
+    // Track the last few assistant tool_use IDs we encounter while walking
+    // back — surfaced in the dump-on-fail diagnostic so we can see exactly
+    // what the parser saw vs. what we expected.
+    let mut recent_tool_use_ids: Vec<(String, String, bool)> = Vec::new();
+    for r in parsed.iter().rev() {
+        if r.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(arr) = r
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+        else {
+            continue;
+        };
+        for c in arr {
+            if c.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                continue;
+            }
+            let id = c.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if recent_tool_use_ids.len() < 6 {
+                recent_tool_use_ids.push((
+                    id.to_string(),
+                    name.to_string(),
+                    resolved.contains(id),
+                ));
+            }
+            if id.is_empty() || resolved.contains(id) {
+                continue;
+            }
+            if name.is_empty() {
+                continue;
+            }
+            let input = c
+                .get("input")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            return Some(PendingToolCall {
+                name: name.to_string(),
+                input,
+            });
+        }
+        // No unresolved tool_use in this assistant message — keep walking
+        // back. The latest tool_use might live in a prior assistant turn
+        // if interleaved thinking-only or text-only assistant messages
+        // came after it (rare, but possible).
+    }
+    // Dump-on-fail diagnostic: when the parser walks the full buffer and
+    // returns None, write a snapshot to /tmp/bram-jsonl-parse-debug.log
+    // showing what it actually saw. Pairs with the `[pty-menu]
+    // signature_reason=no-unmatched-tool-use` trace to bisect parser-vs-
+    // file-state vs. file-state-vs-disk discrepancies. Bounded to a single
+    // line per failure; appends. Refs #170.
+    // Tally top-level type values across all parsed lines so we can see
+    // what shapes the buffer actually contained. Distinguishes "Rust read
+    // an empty buffer" from "Rust read fine but skipped every assistant
+    // line for some reason."
+    let mut type_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut assistant_content_shapes: Vec<String> = Vec::new();
+    for r in &parsed {
+        let typ = r
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<no-type>")
+            .to_string();
+        *type_counts.entry(typ.clone()).or_insert(0) += 1;
+        if typ == "assistant" && assistant_content_shapes.len() < 4 {
+            // What content types does this assistant message hold?
+            let shape = match r
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_array())
+            {
+                Some(arr) => {
+                    let ts: Vec<&str> = arr
+                        .iter()
+                        .map(|c| c.get("type").and_then(|t| t.as_str()).unwrap_or("?"))
+                        .collect();
+                    format!("[{}]", ts.join(","))
+                }
+                None => "<no-content-array>".to_string(),
+            };
+            assistant_content_shapes.push(shape);
+        }
+    }
+    let now = unix_now_ms();
+    let snapshot = format!(
+        "[{}] [parser-debug] text_bytes={} parsed_lines={} parse_errors={} resolved_ids={} types={:?} assistant_shapes={:?} recent_tool_use_ids={:?}\n",
+        format_iso_utc_ms(now),
+        text.len(),
+        parsed.len(),
+        parse_errors,
+        resolved.len(),
+        type_counts,
+        assistant_content_shapes,
+        recent_tool_use_ids,
+    );
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/bram-jsonl-parse-debug.log")
+        .and_then(|mut f| std::io::Write::write_all(&mut f, snapshot.as_bytes()));
+    None
+}
+
+fn lookup_pending_tool_call<R: tauri::Runtime>(app: &AppHandle<R>) -> PendingToolCallLookup {
+    use std::io::{Read, Seek, SeekFrom};
+    let Some(path) = latest_claude_session_path(app).ok().flatten() else {
+        return PendingToolCallLookup {
+            signature: None,
+            diff: None,
+            reason: "no-session-path",
+            tail_bytes: 0,
+        };
+    };
+    let Ok(mut file) = std::fs::File::open(&path) else {
+        return PendingToolCallLookup {
+            signature: None,
+            diff: None,
+            reason: "open-failed",
+            tail_bytes: 0,
+        };
+    };
+    let Ok(metadata) = file.metadata() else {
+        return PendingToolCallLookup {
+            signature: None,
+            diff: None,
+            reason: "metadata-failed",
+            tail_bytes: 0,
+        };
+    };
+    let file_size = metadata.len();
+    // Tail read budget. 256 KB turned out to be too small in practice:
+    // Claude's `file-history-snapshot` records (one per file read) are
+    // 4-6 KB each, so a session with many Read tool calls pushes the
+    // actual assistant/user messages out the back of the window before
+    // the parser can see them. Live repro at 2026-06-02T04:19Z showed
+    // a 256 KB tail with 40 file-history-snapshot records and zero
+    // assistant messages — pending tool_use scrolled past. 4 MB covers
+    // ~400 snapshot records plus the usual assistant/user traffic.
+    // Cost: a few ms extra of read+parse per menu detection. Refs #170.
+    let want: u64 = 4 * 1024 * 1024;
+    let read_from = file_size.saturating_sub(want);
+    if file.seek(SeekFrom::Start(read_from)).is_err() {
+        return PendingToolCallLookup {
+            signature: None,
+            diff: None,
+            reason: "seek-failed",
+            tail_bytes: 0,
+        };
+    }
+    let mut tail = Vec::with_capacity((file_size - read_from) as usize);
+    if file.read_to_end(&mut tail).is_err() {
+        return PendingToolCallLookup {
+            signature: None,
+            diff: None,
+            reason: "read-failed",
+            tail_bytes: 0,
+        };
+    }
+    let tail_bytes = tail.len();
+    let text = String::from_utf8_lossy(&tail);
+    let result = extract_pending_tool_call_from_jsonl(&text);
+    // Path + size diagnostic pairs with the parser-debug dump on failure.
+    // Written only when the parser returned None so we can correlate.
+    if result.is_none() {
+        let snapshot = format!(
+            "[{}] [parser-debug-lookup] path={:?} file_size={} read_from={} tail_bytes={}\n",
+            format_iso_utc_ms(unix_now_ms()),
+            path,
+            file_size,
+            read_from,
+            tail_bytes,
+        );
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/bram-jsonl-parse-debug.log")
+            .and_then(|mut f| std::io::Write::write_all(&mut f, snapshot.as_bytes()));
+    }
+    match result {
+        Some(call) => PendingToolCallLookup {
+            signature: Some(format_pending_tool_call(&call)),
+            diff: pending_tool_call_diff(&call, app),
+            reason: "found",
+            tail_bytes,
+        },
+        None => PendingToolCallLookup {
+            signature: None,
+            diff: None,
+            reason: "no-unmatched-tool-use",
+            tail_bytes,
+        },
+    }
 }
 
 // Pick whichever provider's latest session file has the most recent
@@ -8266,13 +8969,8 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create {}: {}", parent.display(), e))?;
     }
-    let codex_hook_written = write_template_if_safe(
-        &script_path,
-        &script_bytes,
-        force,
-        &mut wrote,
-        &mut skipped,
-    )?;
+    let codex_hook_written =
+        write_template_if_safe(&script_path, &script_bytes, force, &mut wrote, &mut skipped)?;
     #[cfg(unix)]
     if codex_hook_written {
         use std::os::unix::fs::PermissionsExt;
@@ -8888,8 +9586,10 @@ fn clear_inflight_claim_sentinel<R: tauri::Runtime>(
         if bram_trace_enabled() {
             append_bram_trace_line(app, "tools-pane-reload", "op=flushed-on-clear");
         }
-        trace_emit_signal(app, "tools-pane-reload");
-        let _ = app.emit("tools-pane-reload", ());
+        // Replayable: same late-attach reasoning as right-pane-reload
+        // above. A reload-on-attach refreshes the agent-tools drawer
+        // iframe with current state, which is idempotent. Refs #170.
+        emit_replayable_signal(app, "tools-pane-reload");
     }
     true
 }
@@ -10753,7 +11453,11 @@ impl IfEmpty for String {
 
 #[cfg(test)]
 mod pty_menu_tests {
-    use super::{parse_menu_options, pty_menu_input_clears_inflight, pty_output_clears_inflight};
+    use super::{
+        extract_pending_tool_call_from_jsonl, format_pending_tool_call, parse_menu_options,
+        pty_menu_input_clears_inflight, pty_output_clears_inflight,
+    };
+    use serde_json::json;
 
     #[test]
     fn parses_three_option_claude_menu() {
@@ -10766,6 +11470,53 @@ mod pty_menu_tests {
         assert_eq!(opts[1].label, "Yes, and don't ask again");
         assert_eq!(opts[2].key, "3");
         assert_eq!(opts[2].label, "No, and tell agent what to do");
+    }
+
+    #[test]
+    fn pending_tool_call_uses_latest_unresolved_tool_use() {
+        let text = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"old","name":"Bash","input":{"command":"ls /tmp"}},{"type":"tool_use","id":"pending","name":"Bash","input":{"command":"touch /tmp/x.txt"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"old","content":"ok"}]}}"#;
+
+        let call = extract_pending_tool_call_from_jsonl(text).expect("pending tool use");
+        assert_eq!(format_pending_tool_call(&call), "Bash(touch /tmp/x.txt)");
+    }
+
+    #[test]
+    fn pending_tool_call_formats_write_and_mcp() {
+        let write = super::PendingToolCall {
+            name: "Write".to_string(),
+            input: json!({"file_path":"/tmp/a.txt","content":"one\ntwo\n"}),
+        };
+        assert_eq!(
+            format_pending_tool_call(&write),
+            "Write(/tmp/a.txt)\n  <2 lines, 8 bytes>"
+        );
+
+        let mcp = super::PendingToolCall {
+            name: "mcp__filesystem__edit_file".to_string(),
+            input: json!({"path":"/tmp/a.txt","edits":[{"oldText":"a","newText":"b"}]}),
+        };
+        assert!(format_pending_tool_call(&mcp).starts_with("filesystem:edit_file("));
+    }
+
+    #[test]
+    fn pty_menu_equality_treats_signature_appearing_as_visible_state_change() {
+        let before = super::PtyMenu {
+            tool: "Bash".to_string(),
+            text: "Do you want to proceed?".to_string(),
+            options: vec![super::MenuOption {
+                key: "1".to_string(),
+                label: "Yes".to_string(),
+            }],
+            tool_call_signature: None,
+            tool_call_diff: None,
+        };
+        let after = super::PtyMenu {
+            tool_call_signature: Some("Bash(touch /tmp/x.txt)".to_string()),
+            ..before.clone()
+        };
+
+        assert!(before != after);
     }
 
     #[test]
@@ -15361,6 +16112,16 @@ pub fn run() {
                                     mtime_ms,
                                 );
                                 check_jsonl_for_turn_end(&app_handle, p);
+                                // #170 follow-up: when a menu is currently
+                                // shown without a signature, the cumulative
+                                // recheck schedule (200 / 500 / 1500 / 3000
+                                // ms) may still be too tight for very large
+                                // tool_use payloads (e.g. `gh issue create`
+                                // with multi-KB issue bodies). The watcher
+                                // already sees JSONL grow on each Claude
+                                // write; piggyback on that here for a
+                                // dynamic retry the moment the file changes.
+                                try_signature_recheck_on_jsonl_change(&app_handle);
                             }
                         }
                         // Removed the 100ms leading-edge debounce: it

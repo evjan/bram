@@ -539,22 +539,38 @@ try {
 // blocks stacked one live listener per onInit re-run.
 var __tauriEventSubscribers = {};
 var __tauriEventListening = {};
+var __tauriEventListenReady = {};
 function __ensureTauriEventListener(eventName) {
-  if (__tauriEventListening[eventName]) return;
+  if (__tauriEventListening[eventName]) return __tauriEventListenReady[eventName] || Promise.resolve(true);
   var ev = (window.parent && window.parent.__TAURI__ && window.parent.__TAURI__.event)
     || (window.__TAURI__ && window.__TAURI__.event);
-  if (!ev || typeof ev.listen !== "function") return;
+  if (!ev || typeof ev.listen !== "function") return Promise.resolve(false);
   __tauriEventListening[eventName] = true;
   try {
-    ev.listen(eventName, function (e) {
+    var listenResult = ev.listen(eventName, function (e) {
       var subs = __tauriEventSubscribers[eventName] || [];
       for (var i = 0; i < subs.length; i++) {
         try { subs[i](e); } catch (err) {}
       }
     });
+    __tauriEventListenReady[eventName] = Promise.resolve(listenResult).then(
+      function () { return true; },
+      function () {
+        __tauriEventListening[eventName] = false;
+        return false;
+      },
+    );
   } catch (err) {
     __tauriEventListening[eventName] = false;
+    __tauriEventListenReady[eventName] = Promise.resolve(false);
   }
+  return __tauriEventListenReady[eventName];
+}
+function __notifyStartupReadyForEvent(eventName) {
+  if (typeof window.fetch !== "function") return;
+  window.fetch("/__startup-ready?event=" + encodeURIComponent(eventName), { cache: "no-store" })
+    .then(function () {})
+    .catch(function () {});
 }
 window.subscribeTauriEvent = function (key, eventName, fn) {
   if (typeof window[key] === "function") {
@@ -565,7 +581,7 @@ window.subscribeTauriEvent = function (key, eventName, fn) {
     return function () {};
   }
   if (!__tauriEventSubscribers[eventName]) __tauriEventSubscribers[eventName] = [];
-  __ensureTauriEventListener(eventName);
+  var listenReady = __ensureTauriEventListener(eventName);
   __tauriEventSubscribers[eventName].push(fn);
   window[key] = function () {
     var subs = __tauriEventSubscribers[eventName] || [];
@@ -573,6 +589,11 @@ window.subscribeTauriEvent = function (key, eventName, fn) {
     if (idx >= 0) subs.splice(idx, 1);
     window[key] = null;
   };
+  Promise.resolve(listenReady).then(function (ready) {
+    if (!ready) return;
+    var subs = __tauriEventSubscribers[eventName] || [];
+    if (subs.indexOf(fn) >= 0) __notifyStartupReadyForEvent(eventName);
+  });
   return window[key];
 };
 

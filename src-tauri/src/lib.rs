@@ -650,6 +650,105 @@ fn trace_emit_payload<R: tauri::Runtime, S: serde::Serialize>(
     );
 }
 
+#[derive(Clone)]
+struct LastTauriEvent {
+    payload: serde_json::Value,
+    ts_ms: i64,
+}
+
+fn last_tauri_events_cell() -> &'static Mutex<HashMap<String, LastTauriEvent>> {
+    static CELL: OnceLock<Mutex<HashMap<String, LastTauriEvent>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember_tauri_event(event_name: &str, payload: serde_json::Value) {
+    if let Ok(mut guard) = last_tauri_events_cell().lock() {
+        guard.insert(
+            event_name.to_string(),
+            LastTauriEvent {
+                payload,
+                ts_ms: unix_now_ms(),
+            },
+        );
+    }
+}
+
+fn emit_replayable_signal<R: tauri::Runtime>(app: &AppHandle<R>, event_name: &str) {
+    trace_emit_signal(app, event_name);
+    remember_tauri_event(event_name, serde_json::Value::Null);
+    let _ = app.emit(event_name, ());
+}
+
+fn emit_replayable_payload<R, P>(app: &AppHandle<R>, event_name: &str, payload: P)
+where
+    R: tauri::Runtime,
+    P: serde::Serialize + Clone,
+{
+    trace_emit_payload(app, event_name, &payload);
+    let replay_payload = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+    remember_tauri_event(event_name, replay_payload);
+    let _ = app.emit(event_name, payload);
+}
+
+fn latest_tauri_event_response(event_name: &str) -> serde_json::Value {
+    let found = last_tauri_events_cell()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(event_name).cloned());
+    match found {
+        Some(ev) => serde_json::json!({
+            "ok": true,
+            "exists": true,
+            "name": event_name,
+            "tsMs": ev.ts_ms,
+            "payload": ev.payload,
+        }),
+        None => serde_json::json!({
+            "ok": true,
+            "exists": false,
+            "name": event_name,
+        }),
+    }
+}
+
+fn replay_tauri_event_live<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    event_name: &str,
+) -> serde_json::Value {
+    let found = last_tauri_events_cell()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(event_name).cloned());
+    let Some(ev) = found else {
+        return serde_json::json!({
+            "ok": true,
+            "exists": false,
+            "name": event_name,
+            "replayed": false,
+        });
+    };
+    let payload_size = serde_json::to_vec(&ev.payload)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    append_bram_trace_line(
+        app,
+        "event-replay",
+        &format!(
+            "kind={} ts_ms={} payload_size={}",
+            event_name, ev.ts_ms, payload_size
+        ),
+    );
+    let emit_result = app.emit(event_name, ev.payload.clone());
+    serde_json::json!({
+        "ok": emit_result.is_ok(),
+        "exists": true,
+        "name": event_name,
+        "replayed": emit_result.is_ok(),
+        "tsMs": ev.ts_ms,
+        "error": emit_result.err().map(|e| e.to_string()),
+    })
+}
+
 // Process-local sequence number for [route] correlation ids. Combined
 // with the entry timestamp it disambiguates two concurrent requests
 // that arrive in the same millisecond.
@@ -836,8 +935,8 @@ fn parse_menu_options(text: &str) -> Vec<MenuOption> {
     let mut opts: Vec<MenuOption> = Vec::new();
     for raw in text.lines() {
         // Strip leading cursor marker (with optional space / NBSP) and whitespace.
-        let trimmed = raw
-            .trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
+        let trimmed =
+            raw.trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
         if trimmed.is_empty() {
             // Blank line terminates after at least one option — the PTY emits
             // an empty line between the option list and end-of-menu footer
@@ -852,9 +951,8 @@ fn parse_menu_options(text: &str) -> Vec<MenuOption> {
             Some(idx) => trimmed.split_at(idx),
             None => (trimmed, ""),
         };
-        let is_numbered = !digits.is_empty()
-            && digits.chars().all(|c| c.is_ascii_digit())
-            && !rest.is_empty();
+        let is_numbered =
+            !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty();
         if !is_numbered {
             // Non-numbered, non-empty line. If we have a previous option,
             // treat it as a wrapped continuation of that option's label —
@@ -1258,8 +1356,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     }
 
     if let Some(payload) = emit_payload {
-        trace_emit_payload(app, "pty-menu-changed", &payload);
-        let _ = app.emit("pty-menu-changed", &payload);
+        emit_replayable_payload(app, "pty-menu-changed", &payload);
     }
 }
 
@@ -1427,7 +1524,11 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
             }
         };
         let options = parse_menu_options(&text);
-        Some(PtyMenu { tool, text, options })
+        Some(PtyMenu {
+            tool,
+            text,
+            options,
+        })
     })();
 
     // Diagnostic: when the menu prompt header is present but detection
@@ -1581,8 +1682,7 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
         // Tell subscribers the menu went away. Emit AFTER releasing all
         // pty_menu_* locks for the same anti-deadlock reason as in
         // pty_menu_update.
-        trace_emit_signal(app, "pty-menu-changed");
-        let _ = app.emit::<Option<PtyMenu>>("pty-menu-changed", None);
+        emit_replayable_payload(app, "pty-menu-changed", Option::<PtyMenu>::None);
     } else if input == "\x1b" {
         clear_active_sentinel_with_reason(app, "pty-escape");
     }
@@ -3907,7 +4007,11 @@ fn handle_project_config_reload<R: tauri::Runtime>(app_handle: &AppHandle<R>, pr
     trace_emit_signal(&app_handle, "right-pane-reload");
     let _ = app_handle.emit("right-pane-reload", ());
 
-    let _ = app_handle.emit("settings-changed", settings_view_from_config(new_cfg));
+    emit_replayable_payload(
+        app_handle,
+        "settings-changed",
+        settings_view_from_config(new_cfg),
+    );
 }
 
 #[derive(serde::Serialize)]
@@ -5452,8 +5556,7 @@ fn start_codex_session_poll_fallback<R: tauri::Runtime>(app_handle: AppHandle<R>
             );
             trace_jsonl_detector_handoff(&app_handle, "codex-poll", &path, mtime_ms);
             check_jsonl_for_turn_end(&app_handle, &path);
-            trace_emit_signal(&app_handle, "talk-session-changed");
-            let _ = app_handle.emit("talk-session-changed", ());
+            emit_replayable_signal(&app_handle, "talk-session-changed");
         }
     });
 }
@@ -8605,8 +8708,7 @@ fn write_inflight_claim_sentinel<R: tauri::Runtime>(
             ),
         );
     }
-    trace_emit_signal(app, "inflight-claim-changed");
-    let _ = app.emit("inflight-claim-changed", ());
+    emit_replayable_signal(app, "inflight-claim-changed");
 }
 
 fn inflight_claim_ids_and_claimed_at<R: tauri::Runtime>(
@@ -8685,8 +8787,7 @@ fn clear_inflight_claim_sentinel<R: tauri::Runtime>(
             ),
         );
     }
-    trace_emit_signal(app, "inflight-claim-changed");
-    let _ = app.emit("inflight-claim-changed", ());
+    emit_replayable_signal(app, "inflight-claim-changed");
 
     // Flush a deferred tools-pane-reload if one was queued during the
     // cycle (refs #93). Atomic swap-to-false; the previous value tells
@@ -8784,8 +8885,7 @@ fn clear_active_sentinel_with_reason<R: tauri::Runtime>(app: &AppHandle<R>, reas
                 &format!("op=clear-miss-emitted reason={}", reason),
             );
         }
-        trace_emit_signal(app, "inflight-claim-changed");
-        let _ = app.emit("inflight-claim-changed", ());
+        emit_replayable_signal(app, "inflight-claim-changed");
     }
 }
 
@@ -9210,8 +9310,7 @@ fn cleanup_stale_inflight_claim<R: tauri::Runtime>(app: &AppHandle<R>) {
     if bram_trace_enabled() {
         append_bram_trace_line(app, "inflight-sentinel", "op=stale-startup-clear");
     }
-    trace_emit_signal(app, "inflight-claim-changed");
-    let _ = app.emit("inflight-claim-changed", ());
+    emit_replayable_signal(app, "inflight-claim-changed");
 }
 
 // Delete any leftover Codex lifecycle intent/result files from a prior
@@ -10648,7 +10747,6 @@ mod pty_menu_tests {
         assert_eq!(opts[2].key, "3");
         assert_eq!(opts[2].label, "No");
     }
-
 
     #[test]
     fn esc_clears_inflight() {
@@ -12276,6 +12374,44 @@ fn route_request<R: tauri::Runtime>(
         return (200, "application/json; charset=utf-8", body);
     }
 
+    if path == "__event/latest" {
+        let mut name = String::new();
+        for pair in query.split('&') {
+            if let Some(enc) = pair.strip_prefix("name=") {
+                name = percent_decode(enc);
+                break;
+            }
+        }
+        if name.is_empty() {
+            return (
+                400,
+                "application/json; charset=utf-8",
+                br#"{"ok":false,"error":"name query parameter required"}"#.to_vec(),
+            );
+        }
+        let body = serde_json::to_vec(&latest_tauri_event_response(&name)).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    if path == "__startup-ready" {
+        let mut event = String::new();
+        for pair in query.split('&') {
+            if let Some(enc) = pair.strip_prefix("event=") {
+                event = percent_decode(enc);
+                break;
+            }
+        }
+        if event.is_empty() {
+            return (
+                400,
+                "application/json; charset=utf-8",
+                br#"{"ok":false,"error":"event query parameter required"}"#.to_vec(),
+            );
+        }
+        let body = serde_json::to_vec(&replay_tauri_event_live(app, &event)).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
     if path == "__right-pane-info" {
         #[derive(serde::Serialize)]
         struct RightPaneInfo<'a> {
@@ -12865,8 +13001,7 @@ fn route_request<R: tauri::Runtime>(
     if path == "__enhance/codex-trust-ack" {
         return match write_codex_trust_ack() {
             Ok(()) => {
-                trace_emit_signal(app, "enhance-status-changed");
-                let _ = app.emit("enhance-status-changed", ());
+                emit_replayable_signal(app, "enhance-status-changed");
                 (
                     200,
                     "application/json; charset=utf-8",
@@ -13997,8 +14132,7 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
                     ),
                 );
             }
-            trace_emit_signal(app, "inflight-claim-changed");
-            let _ = app.emit("inflight-claim-changed", ());
+            emit_replayable_signal(app, "inflight-claim-changed");
         }
     }
     if op == "prune" && auth_kind == "drop" {
@@ -15006,8 +15140,7 @@ pub fn run() {
                     if let Some(since) = pending_worklist_since {
                         if since.elapsed() >= worklist_debounce {
                             eprintln!("[watcher] change detected, emitting worklist-changed (debounced)");
-                            trace_emit_signal(&app_handle, "worklist-changed");
-                            let _ = app_handle.emit("worklist-changed", ());
+                            emit_replayable_signal(&app_handle, "worklist-changed");
                             pending_worklist_since = None;
                         }
                     }
@@ -15136,8 +15269,7 @@ pub fn run() {
                         // next user activity. XMLUI dedupes refetches
                         // via structural sharing, so burst-emitting per
                         // event is fine.
-                        trace_emit_signal(&app_handle, "talk-session-changed");
-                        let _ = app_handle.emit("talk-session-changed", ());
+                        emit_replayable_signal(&app_handle, "talk-session-changed");
                         continue;
                     }
 
@@ -15165,8 +15297,7 @@ pub fn run() {
                             || in_bram_dir
                     });
                     if is_enhance_event {
-                        trace_emit_signal(&app_handle, "enhance-status-changed");
-                        let _ = app_handle.emit("enhance-status-changed", ());
+                        emit_replayable_signal(&app_handle, "enhance-status-changed");
                     }
 
                     // sessions-list-changed: any mutation under either
@@ -15183,8 +15314,7 @@ pub fn run() {
                                 .map_or(false, |sd| p.starts_with(sd))
                     });
                     if is_sessions_list_event {
-                        trace_emit_signal(&app_handle, "sessions-list-changed");
-                        let _ = app_handle.emit("sessions-list-changed", ());
+                        emit_replayable_signal(&app_handle, "sessions-list-changed");
                     }
 
                     // worklist-changed: resources/worklist.json, any draft
@@ -15219,8 +15349,7 @@ pub fn run() {
                             && p.components().any(|c| c.as_os_str() == "resources")
                     });
                     if is_feedback_history_change {
-                        trace_emit_signal(&app_handle, "feedback-history-changed");
-                        let _ = app_handle.emit("feedback-history-changed", ());
+                        emit_replayable_signal(&app_handle, "feedback-history-changed");
                     }
 
                     // Codex filesystem lifecycle drain (#130). When Codex
@@ -15247,8 +15376,7 @@ pub fn run() {
                         p.starts_with(&proj_root_path) && !in_ignored_dir(p)
                     });
                     if is_git_status_event {
-                        trace_emit_signal(&app_handle, "git-status-changed");
-                        let _ = app_handle.emit("git-status-changed", ());
+                        emit_replayable_signal(&app_handle, "git-status-changed");
                     }
 
                     // .bram.json gets its own dispatch: we have to

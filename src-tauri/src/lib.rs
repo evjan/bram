@@ -7981,7 +7981,46 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     serde_json::to_vec(&body).map_err(|e| e.to_string())
 }
 
-fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+/// Write `new_content` to `path` only when safe to do so without trampling
+/// user-modified disk content. Returns `Ok(true)` if a write occurred,
+/// `Ok(false)` if skipped (either no-op or divergence preserved).
+///
+/// Semantics:
+///   - disk == new_content → no-op, returns Ok(false), neither list updated.
+///   - disk missing       → write, push to `wrote`, returns Ok(true).
+///   - disk differs && force → write, push to `wrote`, returns Ok(true).
+///   - disk differs && !force → preserve, push to `skipped`, returns Ok(false).
+fn write_template_if_safe(
+    path: &Path,
+    new_content: &[u8],
+    force: bool,
+    wrote: &mut Vec<String>,
+    skipped: &mut Vec<String>,
+) -> Result<bool, String> {
+    match std::fs::read(path) {
+        Ok(existing) if existing == new_content => Ok(false),
+        Ok(_) => {
+            if force {
+                std::fs::write(path, new_content)
+                    .map_err(|e| format!("write {}: {}", path.display(), e))?;
+                wrote.push(path.display().to_string());
+                Ok(true)
+            } else {
+                skipped.push(path.display().to_string());
+                Ok(false)
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::write(path, new_content)
+                .map_err(|e2| format!("write {}: {}", path.display(), e2))?;
+            wrote.push(path.display().to_string());
+            Ok(true)
+        }
+        Err(e) => Err(format!("read {}: {}", path.display(), e)),
+    }
+}
+
+fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec<u8>, String> {
     let proj = project_root(Some(app)).ok_or("no project root")?;
     // When running on the source repo, skip writes that would
     // self-overwrite (recreating the deleted local sidecar, reverting
@@ -7990,6 +8029,11 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
     let is_source_repo = proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
 
     let mut wrote: Vec<String> = Vec::new();
+    // Paths whose on-disk content diverges from the bundle and which Setup
+    // chose to preserve (default behavior). Empty when force=true or when
+    // disk == bundle at every managed path. Surfaced in the response so the
+    // agent-tools-drawer can warn the user.
+    let mut skipped: Vec<String> = Vec::new();
 
     // Provider-neutral worklist authorization cache. Bram records the
     // latest structured `approved:` / `drop:` payload here so the desktop-side
@@ -8042,8 +8086,13 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("create {}: {}", parent.display(), e))?;
         }
-        std::fs::write(&sidecar_path, &conventions).map_err(|e| format!("write sidecar: {}", e))?;
-        wrote.push(sidecar_path.display().to_string());
+        write_template_if_safe(
+            &sidecar_path,
+            conventions.as_bytes(),
+            force,
+            &mut wrote,
+            &mut skipped,
+        )?;
         // Migration: remove the legacy sidecar so the project doesn't end
         // up with two convention files. NotFound is fine (legacy install
         // wasn't there, or already migrated).
@@ -8051,24 +8100,35 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
         let _ = std::fs::remove_file(&legacy_sidecar);
     }
 
+    // AGENTS.md marker block — skipped on the source repo (its AGENTS.md is
+    // the canonical hand-maintained content, not a Setup-managed target).
     let codex_agents_path = proj.join(ENHANCE_CODEX_AGENTS_REL);
-    let (codex_seed_bytes, _mime) = serve_app_file(Some(app), ENHANCE_CODEX_BUNDLE_REL)
-        .ok_or_else(|| "codex startup instructions bundle not found".to_string())?;
-    let codex_seed = String::from_utf8(codex_seed_bytes)
-        .map_err(|e| format!("codex startup instructions not utf-8: {}", e))?;
-    let codex_block = format!(
-        "{}\n{}\n{}",
-        ENHANCE_MARKER_START,
-        codex_seed.trim_end(),
-        ENHANCE_MARKER_END
-    );
-    let existing_agents = std::fs::read_to_string(&codex_agents_path).unwrap_or_default();
-    let new_agents = replace_or_append_managed_block(&existing_agents, &codex_block);
-    std::fs::write(&codex_agents_path, &new_agents)
-        .map_err(|e| format!("write AGENTS.md: {}", e))?;
-    wrote.push(codex_agents_path.display().to_string());
+    if !is_source_repo {
+        let (codex_seed_bytes, _mime) = serve_app_file(Some(app), ENHANCE_CODEX_BUNDLE_REL)
+            .ok_or_else(|| "codex startup instructions bundle not found".to_string())?;
+        let codex_seed = String::from_utf8(codex_seed_bytes)
+            .map_err(|e| format!("codex startup instructions not utf-8: {}", e))?;
+        let codex_block = format!(
+            "{}\n{}\n{}",
+            ENHANCE_MARKER_START,
+            codex_seed.trim_end(),
+            ENHANCE_MARKER_END
+        );
+        let existing_agents = std::fs::read_to_string(&codex_agents_path).unwrap_or_default();
+        let new_agents = replace_or_append_managed_block(&existing_agents, &codex_block);
+        write_template_if_safe(
+            &codex_agents_path,
+            new_agents.as_bytes(),
+            force,
+            &mut wrote,
+            &mut skipped,
+        )?;
+    }
 
-    // Proposal-guard hook script (idempotent — same content on re-run).
+    // Proposal-guard hook script. Content-comparison gated so a committed
+    // edit to the installed hook (e.g. an in-flight diagnostic-logging change
+    // that hasn't shipped in a rebuilt binary yet) survives Setup. chmod runs
+    // only after an actual write — preserves the user's mode if we skipped.
     let (hook_bytes, _mime) = serve_app_file(Some(app), ENHANCE_HOOK_BUNDLE_REL)
         .ok_or_else(|| "worklist-guard.py bundle not found".to_string())?;
     let hook_path = proj.join(ENHANCE_HOOK_SCRIPT_REL);
@@ -8076,9 +8136,10 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create {}: {}", parent.display(), e))?;
     }
-    std::fs::write(&hook_path, &hook_bytes).map_err(|e| format!("write hook: {}", e))?;
+    let hook_written =
+        write_template_if_safe(&hook_path, &hook_bytes, force, &mut wrote, &mut skipped)?;
     #[cfg(unix)]
-    {
+    if hook_written {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&hook_path)
             .map_err(|e| format!("stat hook: {}", e))?
@@ -8086,7 +8147,6 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
         perms.set_mode(0o755);
         std::fs::set_permissions(&hook_path, perms).map_err(|e| format!("chmod hook: {}", e))?;
     }
-    wrote.push(hook_path.display().to_string());
 
     // Pre-rename leftover script (bc3ee31). Idempotent: NotFound is fine.
     let old_hook_path = proj.join(".claude/hooks/proposal-guard.py");
@@ -8110,16 +8170,23 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
             ENHANCE_MARKER_START, ENHANCE_SIDECAR_REL, ENHANCE_MARKER_END
         );
         let new_content = replace_or_append_managed_block(&existing, &block);
-        std::fs::write(&claude_md_path, &new_content)
-            .map_err(|e| format!("write CLAUDE.md: {}", e))?;
-        wrote.push(claude_md_path.display().to_string());
+        write_template_if_safe(
+            &claude_md_path,
+            new_content.as_bytes(),
+            force,
+            &mut wrote,
+            &mut skipped,
+        )?;
     }
 
     // Codex user-global hook install. Runs unconditionally (incl. source repo)
     // because the install is keyed to $HOME, not the project.
-    let codex_hook_install = install_codex_worklist_guard(app)?;
+    let codex_hook_install = install_codex_worklist_guard(app, force)?;
     for path in &codex_hook_install.wrote {
         wrote.push(path.clone());
+    }
+    for path in &codex_hook_install.skipped {
+        skipped.push(path.clone());
     }
     // Developer-instructions install — top-level config.toml scalar carrying
     // the gate prose. Replaced the per-turn UserPromptSubmit injection after
@@ -8130,6 +8197,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String>
         "enhanced": true,
         "isSourceRepo": is_source_repo,
         "wrote": wrote,
+        "divergedSkipped": skipped,
         "codexHookInstalled": codex_hook_install.installed,
         "codexHookScriptPath": codex_hook_install.script_path,
         "codexConfigPath": codex_hook_install.config_path,
@@ -8167,15 +8235,18 @@ struct CodexHookInstall {
     script_path: String,
     config_path: String,
     wrote: Vec<String>,
+    skipped: Vec<String>,
 }
 
 fn install_codex_worklist_guard<R: tauri::Runtime>(
     app: &AppHandle<R>,
+    force: bool,
 ) -> Result<CodexHookInstall, String> {
     let home = home_dir().ok_or("no HOME or USERPROFILE")?;
     let script_path = home.join(ENHANCE_CODEX_HOOK_INSTALL_REL);
     let config_path = home.join(ENHANCE_CODEX_CONFIG_REL);
     let mut wrote: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
 
     let (script_bytes, _mime) = serve_app_file(Some(app), ENHANCE_CODEX_HOOK_BUNDLE_REL)
         .ok_or_else(|| "worklist-guard-codex.py bundle not found".to_string())?;
@@ -8183,10 +8254,15 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create {}: {}", parent.display(), e))?;
     }
-    std::fs::write(&script_path, &script_bytes)
-        .map_err(|e| format!("write codex hook script: {}", e))?;
+    let codex_hook_written = write_template_if_safe(
+        &script_path,
+        &script_bytes,
+        force,
+        &mut wrote,
+        &mut skipped,
+    )?;
     #[cfg(unix)]
-    {
+    if codex_hook_written {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(&script_path)
             .map_err(|e| format!("stat codex hook: {}", e))?
@@ -8195,7 +8271,6 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
         std::fs::set_permissions(&script_path, perms)
             .map_err(|e| format!("chmod codex hook: {}", e))?;
     }
-    wrote.push(script_path.display().to_string());
 
     // Build the TOML block. On Windows we invoke through `py -3` for the
     // same reason as the Claude hook; on Unix we run the script directly via
@@ -8259,15 +8334,20 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
     } else {
         format!("{}\n\n{}\n", cleaned.trim_end(), toml_block)
     };
-    std::fs::write(&config_path, &new_content)
-        .map_err(|e| format!("write codex config.toml: {}", e))?;
-    wrote.push(config_path.display().to_string());
+    write_template_if_safe(
+        &config_path,
+        new_content.as_bytes(),
+        force,
+        &mut wrote,
+        &mut skipped,
+    )?;
 
     Ok(CodexHookInstall {
         installed: true,
         script_path: script_path.display().to_string(),
         config_path: config_path.display().to_string(),
         wrote,
+        skipped,
     })
 }
 
@@ -12987,9 +13067,19 @@ fn route_request<R: tauri::Runtime>(
         };
     }
     if path == "__enhance/run" {
-        return match run_enhance(app) {
+        let mut force = false;
+        for pair in query.split('&') {
+            if let Some(enc) = pair.strip_prefix("force=") {
+                force = matches!(percent_decode(enc).as_str(), "true" | "1");
+                break;
+            }
+        }
+        return match run_enhance(app, force) {
             Ok(bytes) => {
-                eprintln!("[http /__enhance/run] wrote sidecar + updated CLAUDE.md");
+                eprintln!(
+                    "[http /__enhance/run] force={} wrote sidecar + updated CLAUDE.md",
+                    force
+                );
                 (200, "application/json; charset=utf-8", bytes)
             }
             Err(e) => {

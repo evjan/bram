@@ -973,6 +973,17 @@ struct PtyMenu {
     tool_call_signature: Option<String>,
     #[serde(rename = "toolCallDiff", skip_serializing_if = "Option::is_none")]
     tool_call_diff: Option<String>,
+    // Origin of the current `tool_call_signature` for trace introspection.
+    // Not serialized to the iframe — purely a host-side bookkeeping field
+    // surfaced via the [pty-menu] state=... trace lines.
+    // "pty" — produced by `extract_pty_tool_call` from the rendered
+    //         `⏺ <Tool>(...)` line in the PTY tail.
+    // "jsonl" — produced by `lookup_pending_tool_call` from the Claude
+    //          session JSONL (initial detect or recheck).
+    // None — signature is currently None.
+    // Refs #170 follow-up.
+    #[serde(skip)]
+    signature_source: Option<&'static str>,
 }
 
 // Parse `1. Foo` / `❯1. Foo` / `❯ 2. Bar` lines out of the captured menu
@@ -1300,7 +1311,16 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             signature_chars,
             lookup.tail_bytes,
         ));
-        menu.tool_call_signature = lookup.signature;
+        // PTY-preferred: if `pty_menu_detect` already populated a
+        // signature from the rendered `⏺ <Tool>(...)` tail line, keep
+        // it. Use JSONL only when PTY missed. Diff is always JSONL —
+        // it's an enrichment field, not a fallback. Refs #170 follow-up.
+        if menu.tool_call_signature.is_none() {
+            if let Some(jsonl_sig) = lookup.signature {
+                menu.tool_call_signature = Some(jsonl_sig);
+                menu.signature_source = Some("jsonl");
+            }
+        }
         menu.tool_call_diff = lookup.diff;
     }
 
@@ -1435,10 +1455,11 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                     app,
                     "pty-menu",
                     &format!(
-                        "state=shown tool={} reason=byte-pattern options={} signature={} signature_reason={} signature_chars={} jsonl_tail_bytes={}",
+                        "state=shown tool={} reason=byte-pattern options={} signature={} signature_source={} signature_reason={} signature_chars={} jsonl_tail_bytes={}",
                         nm.tool,
                         nm.options.len(),
                         if nm.tool_call_signature.is_some() { "present" } else { "absent" },
+                        nm.signature_source.unwrap_or("none"),
                         signature_trace.map(|t| t.1).unwrap_or("not-checked"),
                         nm.tool_call_signature
                             .as_ref()
@@ -1539,6 +1560,7 @@ fn try_signature_recheck_on_jsonl_change<R: tauri::Runtime>(app: &AppHandle<R>) 
                     .unwrap_or(0);
                 m.tool_call_signature = lookup.signature.clone();
                 m.tool_call_diff = lookup.diff.clone();
+                m.signature_source = Some("jsonl");
                 emit_payload = Some(menu.clone());
             }
         }
@@ -1549,7 +1571,7 @@ fn try_signature_recheck_on_jsonl_change<R: tauri::Runtime>(app: &AppHandle<R>) 
                 app,
                 "pty-menu",
                 &format!(
-                    "state=updated tool={} reason=signature-watcher-recheck signature_chars={}",
+                    "state=updated tool={} reason=signature-watcher-recheck signature_source=jsonl signature_chars={}",
                     tool, updated_chars
                 ),
             );
@@ -1602,10 +1624,11 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                     &app_handle,
                     "pty-menu",
                     &format!(
-                        "state=recheck-poll tool={} delay_ms={} signature={} reason={} signature_chars={} tail_bytes={}",
+                        "state=recheck-poll tool={} delay_ms={} signature={} signature_source={} reason={} signature_chars={} tail_bytes={}",
                         target_tool,
                         delay_ms,
                         if lookup.signature.is_some() { "present" } else { "absent" },
+                        if lookup.signature.is_some() { "jsonl" } else { "none" },
                         lookup.reason,
                         lookup.signature.as_ref().map(|s| s.chars().count()).unwrap_or(0),
                         lookup.tail_bytes
@@ -1624,6 +1647,7 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                     if m.tool == target_tool && m.tool_call_signature.is_none() {
                         m.tool_call_signature = lookup.signature.clone();
                         m.tool_call_diff = lookup.diff.clone();
+                        m.signature_source = Some("jsonl");
                         emit_payload = Some(menu.clone());
                     }
                 }
@@ -1639,7 +1663,7 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                         &app_handle,
                         "pty-menu",
                         &format!(
-                            "state=updated tool={} reason=signature-deferred-recheck delay_ms={} signature_chars={}",
+                            "state=updated tool={} reason=signature-deferred-recheck signature_source=jsonl delay_ms={} signature_chars={}",
                             target_tool, delay_ms, signature_chars
                         ),
                     );
@@ -1726,6 +1750,108 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
 // the anchor survives the format drift. Walk back to older arrows when
 // the newest one is a redraw artifact rather than the option-1 row.
 // Refs #36.
+// Scan the ANSI-stripped PTY tail for the rightmost `⏺ <Tool>(...)`
+// line — Claude's standard tool-call render. The cursor glyph
+// (U+23FA, three UTF-8 bytes E2 8F BA) must sit at start-of-line to
+// avoid matches inside prose / tool output. Walks the argument body
+// paren-balanced AND quote-aware so multi-line Bash with embedded
+// quoted parens (`Bash(grep "foo (bar)" file)`) parses correctly.
+// Returns `Some((tool_name, signature))` where `signature` is the full
+// `<Tool>(args)` slice (matching what the panel renders). Returns None
+// when no anchor is found OR the paren walk hits buffer end without
+// closing — partial captures are not emitted. Refs #170 follow-up.
+fn extract_pty_tool_call(stripped_tail: &[u8]) -> Option<(String, String)> {
+    let cursor_glyph: &[u8] = b"\xe2\x8f\xba";
+    let mut search_end = stripped_tail.len();
+    while let Some(rel) = stripped_tail[..search_end]
+        .windows(cursor_glyph.len())
+        .rposition(|w| w == cursor_glyph)
+    {
+        // Anchor must be the first non-whitespace on its line. Claude
+        // positions the cursor at column 3 via ANSI escapes; after
+        // `strip_ansi` those positioning bytes are gone but the cursor
+        // glyph still sits with leading whitespace before it. Walk back
+        // to the line start (or buffer start), then verify only spaces /
+        // tabs / carriage returns intervene. Refs #170 follow-up.
+        let line_start = stripped_tail[..rel]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let prefix = &stripped_tail[line_start..rel];
+        let at_line_start = prefix
+            .iter()
+            .all(|&b| b == b' ' || b == b'\t' || b == b'\r');
+        if !at_line_start {
+            search_end = rel;
+            continue;
+        }
+        let mut k = rel + cursor_glyph.len();
+        if stripped_tail.get(k) == Some(&b' ') {
+            k += 1;
+        }
+        let name_start = k;
+        while let Some(&b) = stripped_tail.get(k) {
+            if b.is_ascii_alphanumeric() || b == b'_' || b == b':' {
+                k += 1;
+            } else {
+                break;
+            }
+        }
+        if k == name_start || stripped_tail.get(k) != Some(&b'(') {
+            search_end = rel;
+            continue;
+        }
+        let Ok(name) = std::str::from_utf8(&stripped_tail[name_start..k]) else {
+            search_end = rel;
+            continue;
+        };
+        let body_start = k + 1;
+        let mut depth: i32 = 1;
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut escape = false;
+        let mut end_idx = body_start;
+        let mut found_close: Option<usize> = None;
+        while let Some(&b) = stripped_tail.get(end_idx) {
+            if escape {
+                escape = false;
+            } else if (in_single || in_double) && b == b'\\' {
+                escape = true;
+            } else if in_double {
+                if b == b'"' {
+                    in_double = false;
+                }
+            } else if in_single {
+                if b == b'\'' {
+                    in_single = false;
+                }
+            } else if b == b'"' {
+                in_double = true;
+            } else if b == b'\'' {
+                in_single = true;
+            } else if b == b'(' {
+                depth += 1;
+            } else if b == b')' {
+                depth -= 1;
+                if depth == 0 {
+                    found_close = Some(end_idx);
+                    break;
+                }
+            }
+            end_idx += 1;
+        }
+        if let Some(close_idx) = found_close {
+            let signature_bytes = &stripped_tail[name_start..=close_idx];
+            if let Ok(signature) = std::str::from_utf8(signature_bytes) {
+                return Some((name.to_string(), signature.to_string()));
+            }
+        }
+        search_end = rel;
+    }
+    None
+}
+
 fn pty_menu_anchor_pos(tail: &[u8]) -> Option<usize> {
     let arrow: &[u8] = b"\xe2\x9d\xaf";
     let mut end = tail.len();
@@ -1815,12 +1941,24 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
             }
         };
         let options = parse_menu_options(&text);
+        // PTY-preferred signature. Scan the full ANSI-stripped tail for
+        // `⏺ <Tool>(...)`. When found, override the menu's tool name with
+        // the PTY-derived one — `pty_menu_tool_from_header` /
+        // `pty_menu_guess_tool` have proven unreliable (live: "MultiEdit"
+        // header for a Bash gh issue comment, and again for a Write). The
+        // PTY scan finds the actual tool call. Refs #170 follow-up.
+        let pty_call = extract_pty_tool_call(tail);
+        let (final_tool, signature, signature_source) = match pty_call {
+            Some((name, signature)) => (name, Some(signature), Some("pty")),
+            None => (tool, None, None),
+        };
         Some(PtyMenu {
-            tool,
+            tool: final_tool,
             text,
             options,
-            tool_call_signature: None,
+            tool_call_signature: signature,
             tool_call_diff: None,
+            signature_source,
         })
     })();
 
@@ -11510,6 +11648,7 @@ mod pty_menu_tests {
             }],
             tool_call_signature: None,
             tool_call_diff: None,
+            signature_source: None,
         };
         let after = super::PtyMenu {
             tool_call_signature: Some("Bash(touch /tmp/x.txt)".to_string()),

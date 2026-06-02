@@ -619,7 +619,7 @@
           working tree, not yet committed. This phase is intentionally
           fluid — you don't have to approve or drop right away. You can:
         </Text>
-        <Markdown content="- **Verify** the change actually does what was promised — reload the right pane, run the affected feature, read the diff.
+        <Markdown content="- **Verify** the change actually does what was promised — reload the target app, run the affected feature, read the diff.
 - **Ask for follow-on tweaks** that get folded into the *same* item (the agent expands the item's `after` and applies more edits, the commit you eventually approve covers the whole thing). This is preferred over proposing a sibling item.
 - Click **Approve** when you're satisfied — the agent creates the git commit with the item's prose as the message.
 - Click **Drop** if it turned out wrong — the worklist entry is removed, but **the disk edits stay** (the agent doesn't revert files unilaterally). Ask the agent to *discard those changes if you want them gone* — it knows how to use git commands like `git checkout -- &lt;file&gt;` or `git restore &lt;file&gt;`." />

@@ -36,9 +36,9 @@ external local service.
   `.inflight-claim.json`, `worklist.json`, and history files. This is not
   loopback; it is file I/O plus host watcher dispatch.
 
-Bram hosts two iframes inside the parent shell: the **right pane** (the project
+Bram hosts two iframes inside the parent shell: the **target app** (the project
 under development; any web app served by the project's HTTP server) and the
-**agent-tools drawer** (Bram's own XMLUI control surface at `app/tools/`,
+**agent pane** (Bram's own agent pane at `app/tools/`,
 providing Transcript, Worklist, Commits, Issues, Sessions, and Context tabs).
 These surfaces use several transports:
 
@@ -61,7 +61,7 @@ These surfaces use several transports:
   route handler, currently represented by the Whisper voice endpoint at
   `http://127.0.0.1:18080`.
 
-The right-pane iframe URL is provisioned via the IPC command
+The target app iframe URL is provisioned via the IPC command
 `get_right_pane_url`, which returns the `tauri://localhost/__project/...`
 form. The scheme handler routes `/__project/*` to the project's HTTP server or
 serves files directly. The loopback port is not exposed to the iframes; they see
@@ -75,38 +75,38 @@ the source of truth; this is the announcement surface.
 
 | # | Section | What it covers | Primary consumers |
 | --- | --- | --- | --- |
-| 1 | [App & shell meta](#1-app--shell-meta) | Version banner, right-pane info, restart, error reporting, PTY views and control | parent shell, both iframes |
-| 2 | [Setup (agent coordination)](#2-setup-agent-coordination) | Per-repo installer of the shared worklist core + per-agent adapters | agent-tools iframe |
-| 3 | [Worklist & authorization](#3-worklist--authorization) | Pending items + verified `approved:` / `drop:` records | agent-tools iframe, agent (curl) |
-| 4 | [Worklist history](#4-worklist-history) | Reverse-chronological archive of worklist transitions | agent-tools iframe |
-| 5 | [Sessions](#5-sessions) | Claude / Codex JSONL session enumeration, content, search | agent-tools iframe |
-| 6 | [Git & repo](#6-git--repo) | Commits, diffs, file reads, origin, push | agent-tools iframe, parent shell |
-| 7 | [Issues](#7-issues) | GitHub passthrough via `gh` | agent-tools iframe |
-| 8 | [Context](#8-context) | `CLAUDE.md` / `AGENTS.md` import chain + memory + hooks + settings | agent-tools iframe |
+| 1 | [App & shell meta](#1-app--shell-meta) | Version banner, target app info, restart, error reporting, PTY views and control | parent shell, both iframes |
+| 2 | [Setup (agent coordination)](#2-setup-agent-coordination) | Per-repo installer of the shared worklist core + per-agent adapters | agent pane iframe |
+| 3 | [Worklist & authorization](#3-worklist--authorization) | Pending items + verified `approved:` / `drop:` records | agent pane iframe, agent (curl) |
+| 4 | [Worklist history](#4-worklist-history) | Reverse-chronological archive of worklist transitions | agent pane iframe |
+| 5 | [Sessions](#5-sessions) | Claude / Codex JSONL session enumeration, content, search | agent pane iframe |
+| 6 | [Git & repo](#6-git--repo) | Commits, diffs, file reads, origin, push | agent pane iframe, parent shell |
+| 7 | [Issues](#7-issues) | GitHub passthrough via `gh` | agent pane iframe |
+| 8 | [Context](#8-context) | `CLAUDE.md` / `AGENTS.md` import chain + memory + hooks + settings | agent pane iframe |
 | 9 | [Voice / transcription](#9-voice--transcription) | Whisper subprocess lifecycle | parent shell |
 | 10 | [Static & hot-reload](#10-static--hot-reload) | Files served from disk or embedded; iframe reload coupling | both iframes |
-| 11 | [Inflight sentinel](#11-inflight-sentinel) | Host-managed claim file driving the Worklist tab's spinner state | agent-tools iframe, agent (curl) |
+| 11 | [Inflight sentinel](#11-inflight-sentinel) | Host-managed claim file driving the Worklist tab's spinner state | agent pane iframe, agent (curl) |
 
 ## 1. App & shell meta
 
 App-wide version, screen, and process information; PTY echo views and
 write/resize control. The parent shell uses these to render the
-update-available banner and to drive the terminal; the agent-tools iframe
-uses them for the right-pane info dialog.
+update-available banner and to drive the terminal; the agent pane iframe
+uses them for the target app info dialog.
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__app-info` | HTTP GET | — | `{ current, latest, has_update, release_url }` | parent shell, agent-tools iframe |
-| `/__right-pane-info` | HTTP GET | — | `{ url, default_right_pane, spawned? }` | agent-tools iframe |
-| `/__restart-server` | HTTP GET | — | empty / 200 on success | agent-tools iframe |
-| `/__error` | HTTP GET | — | reported error context | agent-tools iframe |
-| `/__pty-tail` | HTTP GET | `lines=` | last N lines of PTY output, `text/plain` | agent-tools iframe |
-| `/__pty-stripped` | HTTP GET | — | PTY output with ANSI escapes removed, `text/plain` | agent-tools iframe |
-| `/__pty-menu` | HTTP GET | — | current permission menu (if any), JSON | agent-tools iframe |
-| `/__settings` | HTTP GET | — | user-facing slice of `.bram.json`: `{ shell: { agent }, worklist: { batchCommitActions }, ui: { targetAppMinimized } }` (always populated, defaults filled) | agent-tools iframe (Settings tab), parent shell |
-| `/__settings` | HTTP POST | body matches GET shape | merged response after writing `.bram.json` atomically; preserves unknown top-level keys; 400 on JSON parse error / 500 on IO error | agent-tools iframe (Settings tab) |
-| `settings-changed` | Tauri event | — | same payload `GET /__settings` returns | agent-tools iframe (Settings DataSource refetch), parent shell (`app/main.js` `targetAppMinimized` driver) |
-| `/__coordination-status` | HTTP GET | — | derived status payload for the Status tab: `{ generatedAt, sections: [{ title, rows: [{ signal, level, state, detail, seen }] }] }`. Aggregates worklist counts by status, inflight sentinel state, turn-completion monitor state, authorization record freshness, watcher / hook health, recent trace tails. | agent-tools iframe (Status tab) |
+| `/__app-info` | HTTP GET | — | `{ current, latest, has_update, release_url }` | parent shell, agent pane iframe |
+| `/__target app-info` | HTTP GET | — | `{ url, default_right_pane, spawned? }` | agent pane iframe |
+| `/__restart-server` | HTTP GET | — | empty / 200 on success | agent pane iframe |
+| `/__error` | HTTP GET | — | reported error context | agent pane iframe |
+| `/__pty-tail` | HTTP GET | `lines=` | last N lines of PTY output, `text/plain` | agent pane iframe |
+| `/__pty-stripped` | HTTP GET | — | PTY output with ANSI escapes removed, `text/plain` | agent pane iframe |
+| `/__pty-menu` | HTTP GET | — | current permission menu (if any), JSON | agent pane iframe |
+| `/__settings` | HTTP GET | — | user-facing slice of `.bram.json`: `{ shell: { agent }, worklist: { batchCommitActions }, ui: { targetAppMinimized } }` (always populated, defaults filled) | agent pane iframe (Settings tab), parent shell |
+| `/__settings` | HTTP POST | body matches GET shape | merged response after writing `.bram.json` atomically; preserves unknown top-level keys; 400 on JSON parse error / 500 on IO error | agent pane iframe (Settings tab) |
+| `settings-changed` | Tauri event | — | same payload `GET /__settings` returns | agent pane iframe (Settings DataSource refetch), parent shell (`app/main.js` `targetAppMinimized` driver) |
+| `/__coordination-status` | HTTP GET | — | derived status payload for the Status tab: `{ generatedAt, sections: [{ title, rows: [{ signal, level, state, detail, seen }] }] }`. Aggregates worklist counts by status, inflight sentinel state, turn-completion monitor state, authorization record freshness, watcher / hook health, recent trace tails. | agent pane iframe (Status tab) |
 | `pty_spawn` | IPC | `{ shell, cwd, env, agentAutostart? }` | `Result<(), String>` | parent shell |
 | `pty_write` | IPC | `{ data: String }` | `Result<(), String>` | parent shell, iframe helpers (direct) |
 | `pty_resize` | IPC | `{ cols, rows }` | `Result<(), String>` | parent shell |
@@ -132,9 +132,9 @@ when running in the Bram source repo itself (detected via
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__enhance/status` | HTTP GET | — | `{ enhanced, claudeMd, sidecarExists, hookScriptExists, hookRegistered, … }` | agent-tools iframe |
-| `/__enhance/run` | HTTP GET | — | `{ enhanced: true, wrote: [<path>, …] }` | agent-tools iframe |
-| `/__enhance/codex-trust-ack` | HTTP GET | — | `{ ok: true }` (emits `enhance-status-changed` Tauri event) | agent-tools iframe |
+| `/__enhance/status` | HTTP GET | — | `{ enhanced, claudeMd, sidecarExists, hookScriptExists, hookRegistered, … }` | agent pane iframe |
+| `/__enhance/run` | HTTP GET | — | `{ enhanced: true, wrote: [<path>, …] }` | agent pane iframe |
+| `/__enhance/codex-trust-ack` | HTTP GET | — | `{ ok: true }` (emits `enhance-status-changed` Tauri event) | agent pane iframe |
 
 ## 3. Worklist & authorization
 
@@ -147,11 +147,11 @@ without re-shipping content.
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__worklist` | HTTP GET | — | `{ description, items: [{ id, status, file(s), before, after, hash, diff? }], exists, resourcesExists, path }` | agent-tools iframe |
-| `/__worklist/init` | HTTP GET | — | same shape as `/__worklist` (file created if missing) | agent-tools iframe |
+| `/__worklist` | HTTP GET | — | `{ description, items: [{ id, status, file(s), before, after, hash, diff? }], exists, resourcesExists, path }` | agent pane iframe |
+| `/__worklist/init` | HTTP GET | — | same shape as `/__worklist` (file created if missing) | agent pane iframe |
 | `/__worklist/resolve` | HTTP GET | `ids=foo,bar` | active: `{ kind, ids, items, mismatchedIds, issuedAtMs, source, consumedAtMs }` · consumed: `{ kind: "no_active_authorization", consumedAtMs }` | agent (curl) |
 | `/__worklist/mutate` | HTTP POST | body `{ op: "prune" \| "advance", ids: [...], status?: "applied" }` | `{ ok: true, pruned: [...] }` / `{ ok: true, advanced: [...] }`, or 400 `{ error: "…" }` on auth-kind mismatch | agent (curl) |
-| `/__worklist-config` | HTTP GET | — | `{ batchCommitActions: bool }` from `.bram.json` `worklist` block; defaults to `false` | agent-tools iframe (`Workspace.xmlui` gates batch-commit UI on this) |
+| `/__worklist-config` | HTTP GET | — | `{ batchCommitActions: bool }` from `.bram.json` `worklist` block; defaults to `false` | agent pane iframe (`Workspace.xmlui` gates batch-commit UI on this) |
 
 - `/__worklist` injects a `diff` field on each `applied` item (the output
   of `git diff -- <file>`) so the TO COMMIT rows can preview their pending
@@ -240,10 +240,10 @@ worklist state at that moment; Markdown is the changelog narrative
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__worklist-history/list` | HTTP GET | — | `[{ ts, iso, summary, ids, changelog }, …]` (newest first) | agent-tools iframe |
-| `/__worklist-history/changelog` | HTTP GET | `ts=<ms>` | raw `.md` body, `text/markdown` | agent-tools iframe |
-| `/__worklist-history/snapshot` | HTTP GET | `ts=<ms>` | raw `.json` body | agent-tools iframe |
-| `/__worklist-history/search` | HTTP GET | `q=<query>` (min 2 chars; shorter returns `{results:[]}`) | `{ results: [<WorklistHistoryGroup augmented with `hitBody`>, …] }`. `hitBody` is concatenated title + subtitle + prose summary + before / after, centered on the first match, capped at 4 KB. | agent-tools iframe (History tab `<SearchHitModal>`) |
+| `/__worklist-history/list` | HTTP GET | — | `[{ ts, iso, summary, ids, changelog }, …]` (newest first) | agent pane iframe |
+| `/__worklist-history/changelog` | HTTP GET | `ts=<ms>` | raw `.md` body, `text/markdown` | agent pane iframe |
+| `/__worklist-history/snapshot` | HTTP GET | `ts=<ms>` | raw `.json` body | agent pane iframe |
+| `/__worklist-history/search` | HTTP GET | `q=<query>` (min 2 chars; shorter returns `{results:[]}`) | `{ results: [<WorklistHistoryGroup augmented with `hitBody`>, …] }`. `hitBody` is concatenated title + subtitle + prose summary + before / after, centered on the first match, capped at 4 KB. | agent pane iframe (History tab `<SearchHitModal>`) |
 
 - The list endpoint parses item ids out of changelog bullet lines
   (`` - `<id>` (was …) ``, `` - `<id>` (proposed, …) ``,
@@ -261,14 +261,14 @@ when the cycle's `advance` / `prune` mutation lands,
 `promote_feedback_drafts_for_items` moves the file to
 `resources/feedback-history/<unix_ms>-<itemId>.md` so the draft
 directory stays small and the history dir accumulates a permanent
-record. The Feedback tab in the agent-tools drawer browses this archive.
+record. The Feedback tab in the agent pane browses this archive.
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__feedback-history/list` | HTTP GET | `limit=<n>` (default 120) | `[{ ts, itemId, fileName }, …]` (newest first) | agent-tools iframe (Feedback tab) |
-| `/__feedback-history/content` | HTTP GET | `ts=<unix_ms>`, `itemId=<id>` | raw `.md` body, `text/markdown`; 400 on missing / unsafe params; 404 if no matching file | agent-tools iframe (Feedback tab modal) |
-| `/__feedback-history/search` | HTTP GET | `q=<query>` (min 2 chars) | `{ results: [{ ts, itemId, fileName, snippet, body }, …] }`. `snippet` is a ~200-char window centered on the first match; `body` is the full `.md` body for the `<SearchHitModal>` 500-char centered window. | agent-tools iframe (Feedback tab) |
-| `feedback-history-changed` | Tauri event | — | empty payload | agent-tools iframe (Feedback DataSource refetch) |
+| `/__feedback-history/list` | HTTP GET | `limit=<n>` (default 120) | `[{ ts, itemId, fileName }, …]` (newest first) | agent pane iframe (Feedback tab) |
+| `/__feedback-history/content` | HTTP GET | `ts=<unix_ms>`, `itemId=<id>` | raw `.md` body, `text/markdown`; 400 on missing / unsafe params; 404 if no matching file | agent pane iframe (Feedback tab modal) |
+| `/__feedback-history/search` | HTTP GET | `q=<query>` (min 2 chars) | `{ results: [{ ts, itemId, fileName, snippet, body }, …] }`. `snippet` is a ~200-char window centered on the first match; `body` is the full `.md` body for the `<SearchHitModal>` 500-char centered window. | agent pane iframe (Feedback tab) |
+| `feedback-history-changed` | Tauri event | — | empty payload | agent pane iframe (Feedback DataSource refetch) |
 
 - Filename schema is `<unix_ms>-<itemId>.md`. Uniqueness collisions
   (rare) get a `-<n>` suffix before `.md` via
@@ -287,21 +287,21 @@ providers, switched by the `provider=` query.
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__sessions/meta` | HTTP GET | `provider=` | `{ count, latest_mtime, … }` | agent-tools iframe |
-| `/__sessions/list` | HTTP GET | `provider=` | `[{ id, mtime, title, … }, …]` | agent-tools iframe |
-| `/__sessions/latest` | HTTP GET | `provider=` | full JSONL body, `text/plain` | agent-tools iframe |
-| `/__sessions/latest-meta` | HTTP GET | `provider=` | `{ size, mtime, id }` | agent-tools iframe |
-| `/__sessions/latest-pending` | HTTP GET | `provider=` | pending tool-use record, JSON | agent-tools iframe |
-| `/__sessions/latest-tail` | HTTP GET | `provider=`, `since=N`, `sid=ID`, `lines=N\|all` | JSON envelope `{sid, offset, content, reset}` | agent-tools iframe |
-| `/__sessions/content` | HTTP GET | `provider=`, `id=` | full JSONL body for that session, `text/plain` | agent-tools iframe |
-| `/__sessions/search` | HTTP GET | `provider=`, `q=`, `scope=recent\|all` | `[{ id, title, hits: [{ line, snippet }] }, …]` | agent-tools iframe |
-| `/__sessions/delete` | HTTP GET | `provider=`, `id=` | `{ ok: true }` | agent-tools iframe |
-| `/__sessions/rename` | HTTP GET | `provider=`, `id=`, `title=` | `{ ok: true }` | agent-tools iframe |
-| `/__last-assistant-text` | HTTP GET | — | `{ text, mtime, path, source }`. Host walks the current session JSONL's trailing 32 KB in reverse, returns the most recent assistant text. Replaces the per-fanout iframe-side `lastAssistantText(lastJsonl)` walk (250-300 ms cost per call) — see commit dcef719. | agent-tools iframe (Workspace `Last agent response` panel) |
-| `/__current-turn-edits` | HTTP GET | — | `{ added, removed, filePath, kind, lastToolId }` for the current turn's edit aggregates. Same derive-at-the-boundary pattern: host parses the 64 KB tail once per request, iframe binds via DataSource instead of running `currentTurnEdits(lastJsonl)` on every fanout. | agent-tools iframe (Workspace turn-edits hint) |
-| `/__waiting-for-assistant` | HTTP GET | — | `{ waiting: bool }` — true when the most recent meaningful JSONL record is a user message (`tool_result`-only records skipped). Mirror of the iframe `isWaitingForAssistant` helper. | agent-tools iframe |
-| `/__session-turns` | HTTP GET | — | `[{ role, text, entries, images }, …]` — host-derived turn timeline. Mirror of the iframe `sessionTurns(jsonlText)` helper that walked the full JSONL per fanout. | agent-tools iframe (Transcript tab) |
-| `/__tool-detail` | HTTP GET | `id=<toolId>` | `{ input, result }` or `null` for a single tool by id. Companion to `/__session-turns`; mirrors `getToolDetail(jsonlText, toolId)`. | agent-tools iframe (Transcript tool-detail modal) |
+| `/__sessions/meta` | HTTP GET | `provider=` | `{ count, latest_mtime, … }` | agent pane iframe |
+| `/__sessions/list` | HTTP GET | `provider=` | `[{ id, mtime, title, … }, …]` | agent pane iframe |
+| `/__sessions/latest` | HTTP GET | `provider=` | full JSONL body, `text/plain` | agent pane iframe |
+| `/__sessions/latest-meta` | HTTP GET | `provider=` | `{ size, mtime, id }` | agent pane iframe |
+| `/__sessions/latest-pending` | HTTP GET | `provider=` | pending tool-use record, JSON | agent pane iframe |
+| `/__sessions/latest-tail` | HTTP GET | `provider=`, `since=N`, `sid=ID`, `lines=N\|all` | JSON envelope `{sid, offset, content, reset}` | agent pane iframe |
+| `/__sessions/content` | HTTP GET | `provider=`, `id=` | full JSONL body for that session, `text/plain` | agent pane iframe |
+| `/__sessions/search` | HTTP GET | `provider=`, `q=`, `scope=recent\|all` | `[{ id, title, hits: [{ line, snippet }] }, …]` | agent pane iframe |
+| `/__sessions/delete` | HTTP GET | `provider=`, `id=` | `{ ok: true }` | agent pane iframe |
+| `/__sessions/rename` | HTTP GET | `provider=`, `id=`, `title=` | `{ ok: true }` | agent pane iframe |
+| `/__last-assistant-text` | HTTP GET | — | `{ text, mtime, path, source }`. Host walks the current session JSONL's trailing 32 KB in reverse, returns the most recent assistant text. Replaces the per-fanout iframe-side `lastAssistantText(lastJsonl)` walk (250-300 ms cost per call) — see commit dcef719. | agent pane iframe (Workspace `Last agent response` panel) |
+| `/__current-turn-edits` | HTTP GET | — | `{ added, removed, filePath, kind, lastToolId }` for the current turn's edit aggregates. Same derive-at-the-boundary pattern: host parses the 64 KB tail once per request, iframe binds via DataSource instead of running `currentTurnEdits(lastJsonl)` on every fanout. | agent pane iframe (Workspace turn-edits hint) |
+| `/__waiting-for-assistant` | HTTP GET | — | `{ waiting: bool }` — true when the most recent meaningful JSONL record is a user message (`tool_result`-only records skipped). Mirror of the iframe `isWaitingForAssistant` helper. | agent pane iframe |
+| `/__session-turns` | HTTP GET | — | `[{ role, text, entries, images }, …]` — host-derived turn timeline. Mirror of the iframe `sessionTurns(jsonlText)` helper that walked the full JSONL per fanout. | agent pane iframe (Transcript tab) |
+| `/__tool-detail` | HTTP GET | `id=<toolId>` | `{ input, result }` or `null` for a single tool by id. Companion to `/__session-turns`; mirrors `getToolDetail(jsonlText, toolId)`. | agent pane iframe (Transcript tool-detail modal) |
 
 - Provider directories: `~/.claude/projects/<encoded-cwd>/` for Claude
   Code (`claude_sessions_dir` at `lib.rs:1942`),
@@ -343,15 +343,15 @@ The HTTP routes shell out to `git`; the IPC command shells out to
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__commits` | HTTP GET | — | `[{ sha, summary, body, author, time }, …]` (HEAD ↓) | agent-tools iframe |
-| `/__commits/search` | HTTP GET | `q=` | filtered commit list | agent-tools iframe |
-| `/__commit` | HTTP GET | `sha=` | `{ sha, summary, body, diff }` | agent-tools iframe |
-| `/__repo/origin` | HTTP GET | — | `{ remote, owner, name }` | agent-tools iframe |
-| `/__git-diff` | HTTP GET | `path=` | `git diff -- <path>`, `text/plain` | agent-tools iframe |
-| `/__file` | HTTP GET | `path=` | file body, `text/plain` | agent-tools iframe |
-| `/__git/status` | HTTP GET | — | `{ ahead, behind, dirty }`. Runs `git fetch origin` first so `behind` reflects current remote (without it the Pull button can be dimmed while origin has new commits). | agent-tools iframe (Commits tab Pull-button gating, Worklist tab dirty-tree banner) |
-| `/__git/pull-rebase` | HTTP POST | — | `{ ok: true }` on success / 500 plain text on error. Runs the equivalent of `git pull --rebase --autostash`. | agent-tools iframe (Commits tab Pull button) |
-| `/__diff/annotate` | HTTP POST | body `{ diff: "<unified-diff-text>" }` | `[{ kind: "context" \| "hunk" \| "fileheader" \| "add" \| "del", text, segments? }, …]`. `segments` is set on paired 1:1 (-,+) lines and carries per-segment `{ text, bg? }` runs from `similar::TextDiff::from_words` for intra-line word emphasis. `bg` is a theme-variable string (`$color-danger-200` / `$color-success-200`). Diffs over `DIFF_ANNOTATE_LINE_CAP` (1500 lines) skip word-diffing and return plain per-line rows. | agent-tools iframe (`<DiffView>` consumers: Workspace TO COMMIT, Transcript Edit modal, Commits per-file patch) |
+| `/__commits` | HTTP GET | — | `[{ sha, summary, body, author, time }, …]` (HEAD ↓) | agent pane iframe |
+| `/__commits/search` | HTTP GET | `q=` | filtered commit list | agent pane iframe |
+| `/__commit` | HTTP GET | `sha=` | `{ sha, summary, body, diff }` | agent pane iframe |
+| `/__repo/origin` | HTTP GET | — | `{ remote, owner, name }` | agent pane iframe |
+| `/__git-diff` | HTTP GET | `path=` | `git diff -- <path>`, `text/plain` | agent pane iframe |
+| `/__file` | HTTP GET | `path=` | file body, `text/plain` | agent pane iframe |
+| `/__git/status` | HTTP GET | — | `{ ahead, behind, dirty }`. Runs `git fetch origin` first so `behind` reflects current remote (without it the Pull button can be dimmed while origin has new commits). | agent pane iframe (Commits tab Pull-button gating, Worklist tab dirty-tree banner) |
+| `/__git/pull-rebase` | HTTP POST | — | `{ ok: true }` on success / 500 plain text on error. Runs the equivalent of `git pull --rebase --autostash`. | agent pane iframe (Commits tab Pull button) |
+| `/__diff/annotate` | HTTP POST | body `{ diff: "<unified-diff-text>" }` | `[{ kind: "context" \| "hunk" \| "fileheader" \| "add" \| "del", text, segments? }, …]`. `segments` is set on paired 1:1 (-,+) lines and carries per-segment `{ text, bg? }` runs from `similar::TextDiff::from_words` for intra-line word emphasis. `bg` is a theme-variable string (`$color-danger-200` / `$color-success-200`). Diffs over `DIFF_ANNOTATE_LINE_CAP` (1500 lines) skip word-diffing and return plain per-line rows. | agent pane iframe (`<DiffView>` consumers: Workspace TO COMMIT, Transcript Edit modal, Commits per-file patch) |
 | `git_push` | IPC | — | `Result<(), String>` | iframe helpers (direct) |
 
 ## 7. Issues
@@ -367,23 +367,23 @@ with a generated commit-URL comment; see the table note below. Issue
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__issues` | HTTP GET | — | `[{ number, title, state, … }, …]` | agent-tools iframe |
-| `/__issues/search` | HTTP GET | `q=` | filtered issue list | agent-tools iframe |
-| `/__issue` | HTTP GET | `n=<number>` | `{ number, title, body, state, comments: [...] }` | agent-tools iframe |
-| `/__issue/comment` | HTTP GET | `number=<n>&body=<urlencoded>` | `gh issue comment` JSON on success, 400 if `number` missing | agent-tools iframe |
-| `/__issue/close` | HTTP GET | plain: `number=<n>&comment=<urlencoded>`; close-on-commit: `number=<n>&commit=<sha>[&push=true]` | plain: `gh issue close` JSON. Close-on-commit: verifies the commit is visible on GitHub (pushing first when `push=true`), then closes with a generated commit-link comment that includes `Closed by https://github.com/<owner>/<repo>/commit/<full-sha>` and, when available, `Commit: <subject>`; on refusal returns `{ok:false,code,...}` where `code` ∈ `commit-not-visible` \| `focused-push-failed` \| `no-github-remote` \| `invalid-commit` \| `commit-visibility-check-failed`. 400 if `number` missing | agent-tools iframe |
+| `/__issues` | HTTP GET | — | `[{ number, title, state, … }, …]` | agent pane iframe |
+| `/__issues/search` | HTTP GET | `q=` | filtered issue list | agent pane iframe |
+| `/__issue` | HTTP GET | `n=<number>` | `{ number, title, body, state, comments: [...] }` | agent pane iframe |
+| `/__issue/comment` | HTTP GET | `number=<n>&body=<urlencoded>` | `gh issue comment` JSON on success, 400 if `number` missing | agent pane iframe |
+| `/__issue/close` | HTTP GET | plain: `number=<n>&comment=<urlencoded>`; close-on-commit: `number=<n>&commit=<sha>[&push=true]` | plain: `gh issue close` JSON. Close-on-commit: verifies the commit is visible on GitHub (pushing first when `push=true`), then closes with a generated commit-link comment that includes `Closed by https://github.com/<owner>/<repo>/commit/<full-sha>` and, when available, `Commit: <subject>`; on refusal returns `{ok:false,code,...}` where `code` ∈ `commit-not-visible` \| `focused-push-failed` \| `no-github-remote` \| `invalid-commit` \| `commit-visibility-check-failed`. 400 if `number` missing | agent pane iframe |
 
 ## 8. Context
 
 Per-provider catalog of agent-coordination files: `CLAUDE.md` / `AGENTS.md`
 import chain, agent-managed memory, hooks, and settings. Drives the
-Context tab in the agent-tools drawer.
+Context tab in the agent pane.
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__context/list` | HTTP GET | `provider=` | `{ provider, summary, sections: [{ key, label, items: [{ path, display, kind }] }] }` | agent-tools iframe |
-| `/__context/search` | HTTP GET | `provider=`, `q=` | `{ results: [{ path, display, category, hits: [{ line, snippet }] }] }` (≤ 50 hits) | agent-tools iframe |
-| `/__context/file` | HTTP GET | `path=` | file body, `text/plain` | agent-tools iframe |
+| `/__context/list` | HTTP GET | `provider=` | `{ provider, summary, sections: [{ key, label, items: [{ path, display, kind }] }] }` | agent pane iframe |
+| `/__context/search` | HTTP GET | `provider=`, `q=` | `{ results: [{ path, display, category, hits: [{ line, snippet }] }] }` (≤ 50 hits) | agent pane iframe |
+| `/__context/file` | HTTP GET | `path=` | file body, `text/plain` | agent pane iframe |
 
 ## 9. Voice / transcription
 
@@ -408,12 +408,12 @@ change.
 | --- | --- | --- | --- | --- |
 | `/__shell/<path>` | HTTP GET | — | file body, content-typed | both iframes |
 | `/__vendor/<path>` | HTTP GET | — | vendor JS/CSS, content-typed | both iframes |
-| `/__tools/<path>` | HTTP GET | — | agent-tools drawer XMLUI sources | agent-tools iframe |
-| `/resources/worklist.json` | HTTP GET | — | file body, or `{description:"", items:[]}` if missing | agent-tools iframe |
+| `/__tools/<path>` | HTTP GET | — | agent pane XMLUI sources | agent pane iframe |
+| `/resources/worklist.json` | HTTP GET | — | file body, or `{description:"", items:[]}` if missing | agent pane iframe |
 
 - `app/__shell/` and `app/vendor/` changes trigger reload in both
-  iframes; `app/tools/` changes reload only the agent-tools iframe; the
-  user's project directory triggers a right-pane reload only. The
+  iframes; `app/tools/` changes reload only the agent pane iframe; the
+  user's project directory triggers a target app reload only. The
   parent shell (`app/index.html`, `app/main.js`) is not hot-reloaded —
   changes there require `cargo build` and a restart.
 - `/resources/worklist.json` returns the empty-worklist JSON instead of
@@ -433,11 +433,11 @@ file / event reference.
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__inflight` | HTTP GET | — | sentinel JSON or `{}` if no claim | agent-tools iframe |
+| `/__inflight` | HTTP GET | — | sentinel JSON or `{}` if no claim | agent pane iframe |
 | `/__iterate/begin` | HTTP POST | body `{ ids: [...] }` | `{ ok: true }` / 400 `{ error: "…" }` | agent (curl) |
 | `/__iterate/end` | HTTP POST | body `{ ids: [...] }` | `{ ok: true }` / 400 `{ error: "…" }` | agent (curl) |
 | `resources/.inflight-claim.json` | file | — | `{ ids: [...], claimedAt: <ms>, kind: "approved" \| "drop" \| "iterate" }` or absent | host write, iframe via `/__inflight` |
-| `inflight-claim-changed` | Tauri event | — | empty payload | agent-tools iframe |
+| `inflight-claim-changed` | Tauri event | — | empty payload | agent pane iframe |
 
 - **File invariants.** Either absent or contains valid JSON with all
   three fields (`ids`, `claimedAt`, `kind`). Writes are atomic via

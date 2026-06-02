@@ -1,14 +1,14 @@
 # Bram
 
-You are running in the left pane of a Tauri desktop shell that puts a real terminal next to an XMLUI surface. The user can see the right pane while talking to you, so use it.
+You are running in the terminal of a Tauri desktop shell that puts a real terminal next to an XMLUI surface. The user can see the target app while talking to you, so use it.
 
-## Right Pane
+## Target app
 
-When the user asks for something that benefits from structured output or structured input, edit `Main.xmlui` or files under `components/` so the right pane renders it. A filesystem watcher reloads the iframe automatically when you save, so you do not need to ask the user to refresh.
+When the user asks for something that benefits from structured output or structured input, edit `Main.xmlui` or files under `components/` so the target app renders it. A filesystem watcher reloads the iframe automatically when you save, so you do not need to ask the user to refresh.
 
 Examples:
 
-- Show tables, lists, charts, or other structured results in the right pane.
+- Show tables, lists, charts, or other structured results in the target app.
 - Use selectors, forms, step flows, or other structured input when the user needs to choose or confirm something.
 - Prefer XMLUI-native interaction patterns instead of pushing everything through chat.
 
@@ -43,7 +43,7 @@ The full proposed -> applied -> committed flow, authorization payloads, mutate/r
 
 ## Inspector And Debugging
 
-The right pane mounts an Inspector in the AppHeader profile menu slot. Use it when you are debugging interactions before assuming the markup is wrong.
+The target app mounts an Inspector in the AppHeader profile menu slot. Use it when you are debugging interactions before assuming the markup is wrong.
 
 When a UI issue needs deeper inspection, ask the user to reproduce it with the Inspector open and export a trace, then analyze the trace instead of guessing from the markup.
 

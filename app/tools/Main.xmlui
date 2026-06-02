@@ -1,7 +1,7 @@
 <App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.recording="{false}" var.setupCompleteProvider="{''}"
   onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
-  <DataSource id="rpInfo" url="/__right-pane-info" />
+  <DataSource id="rpInfo" url="/__target app-info" />
   <DataSource id="appInfo" url="/__app-info" />
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
@@ -26,7 +26,7 @@
     </VStack>
   </ModalDialog>
 
-  <ModalDialog id="urlInfoDialog" title="Right-pane info">
+  <ModalDialog id="urlInfoDialog" title="Target app info">
     <VStack gap="$space-3">
       <VStack gap="$space-1">
         <Text fontWeight="bold">URL</Text>
@@ -135,7 +135,7 @@
           <Button
             label="ⓘ"
             variant="ghost"
-            tooltip="Show right-pane info"
+            tooltip="Show target app info"
             onClick="rpInfo.refetch(); urlInfoDialog.open()" />
         </Theme>
         <Button

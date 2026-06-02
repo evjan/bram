@@ -4,7 +4,7 @@ Bram is a **workspace for AI-assisted web app development** — it
 works with any project that serves a web UI (vanilla HTML/JS, a
 React or other Node app, a Python web app, an XMLUI app, etc.).
 The shell puts a real terminal alongside the app you're building,
-plus an "agent tools" drawer that includes a Worklist (pending
+plus an "agent tools" tabs that include a Worklist (pending
 items + commits), a Sessions browser, and a Context viewer
 (CLAUDE.md + memory + hooks + settings, searchable).
 
@@ -28,7 +28,7 @@ is XMLUI.
 
 `resources/worklist.json` is the canonical surface for multi-step
 coordination between you and the user. The Worklist tab in the agent
-tools drawer renders it as a checklist under "Worklist".
+agent pane renders it as a checklist under "Worklist".
 
 ### When to route through the worklist
 
@@ -410,7 +410,7 @@ fulsome.
 #### Use Markdown in item prose
 
 Worklist `before` / `after` prose and worklist-history entries
-render as Markdown in the agent-tools drawer. Use real syntax: `- `
+render as Markdown in the agent pane. Use real syntax: `- `
 per bullet (not inline `(a) ... (b) ...` enumerations that collapse
 to one paragraph), backticks for inline code, fenced blocks for
 multi-line snippets, blank lines between paragraphs, `**strong**`
@@ -746,7 +746,7 @@ After resolving and committing as usual:
 
 ## Bram shell mechanics
 
-### Right-pane helpers (opt-in)
+### Target app helpers (opt-in)
 
 Bram's own Worklist and Sessions tabs already use these helpers
 internally — the worklist Approve/Drop flow works with no extra
@@ -790,10 +790,10 @@ hot-reloads iframes when watched paths change:
 
 | path | reloads |
 |---|---|
-| `app/__shell/` | both iframes (right pane and agent-tools drawer) |
+| `app/__shell/` | both iframes (target app and agent pane) |
 | `app/vendor/` | both iframes |
-| `app/tools/` | the agent-tools drawer iframe only |
-| user's project directory | the right-pane iframe only |
+| `app/tools/` | the agent pane iframe only |
+| user's project directory | the target app iframe only |
 
 The **parent shell** (`app/index.html`, `app/main.js`,
 `app/styles.css`, anything loaded once at WebView startup) is **not**
@@ -842,7 +842,7 @@ tools.
 
 Don't read the raw JSON initially, it's huge, only grep as necessary.
 
-**Status tab** — curated dashboard in the agent tools drawer that
+**Status tab** — curated dashboard in the agent pane that
 surfaces signals derived from `bram-trace.log` (rotated history
 included) and from Inspector exports, alongside live process state.
 Sections include Startup Run, Worklist, Inflight Sentinel, Hooks,

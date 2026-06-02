@@ -76,7 +76,7 @@
             size="xs"
             variant="ghost"
             tooltip="About Minimize target app"
-            onClick="infoTitle = 'Minimize target app'; infoBody = 'Drives the agent-drawer splitter to give the agent tools maximum room. The target app stays mounted at the splitter’s minimum height — distinct from hiding it entirely.'; settingInfoDialog.open()" />
+            onClick="infoTitle = 'Minimize target app'; infoBody = 'Drives the agent pane splitter to give the agent tools maximum room. The target app stays mounted at the splitter’s minimum height — distinct from hiding it entirely.'; settingInfoDialog.open()" />
         </HStack>
         <Switch
           label="Minimize target app"

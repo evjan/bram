@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>right pane placeholder</title>
+    <title>target app placeholder</title>
     <style>
       html, body {
         margin: 0;
@@ -28,8 +28,8 @@
     </style>
   </head>
   <body>
-    <h1>right pane (placeholder)</h1>
-    <p>This pane will host an XMLUI app loaded from <code>xmlui-standalone.umd.js</code>. For now it's a stub that exercises the right-pane &rarr; Rust IPC channel.</p>
+    <h1>target app (placeholder)</h1>
+    <p>This pane will host an XMLUI app loaded from <code>xmlui-standalone.umd.js</code>. For now it's a stub that exercises the target app &rarr; Rust IPC channel.</p>
     <button id="ping">ping rust</button>
     <div class="log" id="log"></div>
     <script>
@@ -38,7 +38,7 @@
       document.getElementById("ping").addEventListener("click", () => {
         n += 1;
         const payload = { kind: "ping", n, at: new Date().toISOString() };
-        parent.postMessage({ type: "right-pane", payload }, "*");
+        parent.postMessage({ type: "target app", payload }, "*");
         log.textContent += `sent: ${JSON.stringify(payload)}\n`;
       });
     </script>

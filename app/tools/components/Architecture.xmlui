@@ -2,19 +2,19 @@
   <VStack padding="$space-4" gap="$space-4">
 
     <Card title="Bram"
-          subtitle="A Tauri shell with a real PTY on the left and two iframes on the right: the project under development plus an agent-tools drawer">
+          subtitle="A Tauri shell with a real PTY on the left and two iframes on the right: the project under development plus an agent pane">
       <Text>
         The Rust backend owns the PTY, a custom tauri:// URI scheme
-        handler that proxies the right pane to the project's HTTP server
+        handler that proxies the target app to the project's HTTP server
         and serves shell assets, and a filesystem watcher that triggers
         iframe reloads. The web parent (main.js) bridges xterm.js and
         both iframes.
       </Text>
       <Text>
         Two iframes load same-origin with the parent at tauri://localhost:
-        the **right pane** (the project under development — any web app:
+        the **target app** (the project under development — any web app:
         a React/Vue/Svelte SPA, a static site, an XMLUI app, etc.) and
-        the **agent-tools drawer** (Bram's own control surface,
+        the **agent pane** (Bram's own control surface,
         an XMLUI app built into the binary at app/tools/, providing the
         Transcript, Worklist, Commits, Issues, Sessions, Context, and
         README tabs). Because both share an origin with the parent,
@@ -45,21 +45,21 @@
             data: [
               { name: 'User',                 x: 420, y: 30,  itemStyle: { color: '#666' } },
               { name: 'Terminal (xterm.js)',  x: 150, y: 150, itemStyle: { color: '#0b6' } },
-              { name: 'Right pane + agent-tools iframes', x: 690, y: 150, symbolSize: [200, 56], itemStyle: { color: '#06b' } },
+              { name: 'Target app + agent pane iframes', x: 690, y: 150, symbolSize: [200, 56], itemStyle: { color: '#06b' } },
               { name: 'Parent shell main.js', x: 420, y: 280, itemStyle: { color: '#444' } },
               { name: 'Rust / Tauri backend', x: 420, y: 410, itemStyle: { color: '#a40' } },
               { name: 'Claude / Codex CLI',   x: 420, y: 540, itemStyle: { color: '#840' } }
             ],
             links: [
               { source: 'User',                 target: 'Terminal (xterm.js)',  value: 'keystrokes' },
-              { source: 'User',                 target: 'Right pane + agent-tools iframes',         value: 'clicks / sees' },
+              { source: 'User',                 target: 'Target app + agent pane iframes',         value: 'clicks / sees' },
               { source: 'Terminal (xterm.js)',  target: 'Parent shell main.js', value: 'term.onData' },
               { source: 'Parent shell main.js', target: 'Terminal (xterm.js)', value: 'term.write', lineStyle: { curveness: -0.2 } },
-              { source: 'Right pane + agent-tools iframes',         target: 'Rust / Tauri backend', value: 'invoke() via window.parent.__TAURI__' },
-              { source: 'Parent shell main.js', target: 'Right pane + agent-tools iframes',         value: 'iframe.src reload', lineStyle: { curveness: -0.2 } },
+              { source: 'Target app + agent pane iframes',         target: 'Rust / Tauri backend', value: 'invoke() via window.parent.__TAURI__' },
+              { source: 'Parent shell main.js', target: 'Target app + agent pane iframes',         value: 'iframe.src reload', lineStyle: { curveness: -0.2 } },
               { source: 'Parent shell main.js', target: 'Rust / Tauri backend', value: 'invoke()' },
               { source: 'Rust / Tauri backend', target: 'Parent shell main.js', value: 'Channel + emit', lineStyle: { curveness: -0.2 } },
-              { source: 'Rust / Tauri backend', target: 'Right pane + agent-tools iframes',         value: 'event.listen() (file watcher, etc.)', lineStyle: { curveness: 0.15 } },
+              { source: 'Rust / Tauri backend', target: 'Target app + agent pane iframes',         value: 'event.listen() (file watcher, etc.)', lineStyle: { curveness: 0.15 } },
               { source: 'Rust / Tauri backend', target: 'Claude / Codex CLI',   value: 'PTY stdin' },
               { source: 'Claude / Codex CLI',   target: 'Rust / Tauri backend', value: 'PTY stdout', lineStyle: { curveness: -0.2 } }
             ]
@@ -91,7 +91,7 @@
           <Card title="2. Parent shell (web)"
                 subtitle="app/index.html + app/main.js">
             <Text>
-              The window's host page. Mounts xterm.js into the left pane,
+              The window's host page. Mounts xterm.js into the terminal,
               mounts both iframes at tauri://localhost. Bridges terminal
               keystrokes → PTY and PTY output → terminal; owns the voice
               MediaRecorder pipeline. Re-assigns iframe.src in response to
@@ -100,7 +100,7 @@
               iframe-facing surface is intentionally small.
             </Text>
           </Card>
-          <Card title="3. Right pane — the app under development"
+          <Card title="3. Target app — the app under development"
                 subtitle="any web app served from the project root via /__project/*">
             <Text>
               Whatever's at the project root: a React/Vue/Svelte SPA, a
@@ -119,7 +119,7 @@
               getTauriInvoke() wrappers that call IPC commands directly.
             </Text>
           </Card>
-          <Card title="4. Agent-tools drawer — Bram's own control surface"
+          <Card title="4. Agent-agent pane — Bram's own control surface"
                 subtitle="app/tools/Main.xmlui + components, built into the binary">
             <Text>
               The second iframe (toggled from the toolbar) and the only
@@ -138,7 +138,7 @@
       <TabItem label="Rust IPC commands">
         <Table data="{[
           { name: 'pty_spawn',           purpose: 'Open a PTY, spawn the shell, stream output via Channel' },
-          { name: 'pty_write',           purpose: 'Write bytes to the PTY (typed input or right-pane injection)' },
+          { name: 'pty_write',           purpose: 'Write bytes to the PTY (typed input or target app injection)' },
           { name: 'pty_resize',          purpose: 'Resize the PTY when xterm reflows' },
           { name: 'log_from_right_pane', purpose: 'Forward iframe log payloads to cargo run stderr' },
           { name: 'open_devtools',       purpose: 'Open the webview devtools (debug builds)' },
@@ -153,7 +153,7 @@
       <TabItem label="Iframe → host IPC">
         <VStack gap="$space-3" padding="$space-3">
           <Text>
-            Iframe code (right pane and agent-tools drawer) calls Tauri
+            Iframe code (target app and agent pane) calls Tauri
             IPC directly through window.parent.__TAURI__.core.invoke.
             app/__shell/helpers.js wraps the common commands as window
             globals so XMLUI components can call them from event handlers:
@@ -196,7 +196,7 @@
               handler in lib.rs serves shell assets from app/ with the
               correct MIME types (including .xmlui and .xs as text/plain
               so they load), and proxies /__project/* to the project's
-              HTTP server so the right pane shares an origin with the
+              HTTP server so the target app shares an origin with the
               parent. It also sets Access-Control-Allow-Origin: *.
             </Text>
           </Card>
@@ -207,8 +207,8 @@
               but reassigning iframe.src with a ?t= cache-buster gives
               the file watcher cleaner control over which iframes reload
               on which path-prefix changes (app/__shell/ and app/vendor/
-              reload both, app/tools/ reloads the drawer only, the
-              project directory reloads the right pane only).
+              reload both, app/tools/ reloads the agent pane only, the
+              project directory reloads the target app only).
             </Text>
           </Card>
         </VStack>

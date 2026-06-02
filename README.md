@@ -19,13 +19,27 @@ Bram has opinions. It thinks versioning and collaboration are well-handled by gi
 
 ### Layout
 
-- **Left pane** - A terminal where you run an AI coding agent  (e.g. `claude` or `codex`).
+- **Terminal** — where you run an AI coding agent (e.g. `claude` or `codex`).
 
-- **Right pane top** — An app under development in a local repo.
+- **Target app** — your app under development, loaded in an iframe.
 
-- **Right pane bottom** - An embedded app that talks to the terminal. (In this case it *is* the app under development.)
+- **Agent pane** — where Bram guides the agent through the workflow (Worklist, Issues, Sessions, Status, etc.).
 
-As files in the project change, the right pane reloads automatically
+As files in the project change, the target app reloads automatically.
+
+### Glossary
+
+A small glossary of the terms used throughout this README, the conventions sidecar, and the UI. When the docs and the UI both use these terms consistently, agents echoing back to you stay consistent too.
+
+| Term | What it refers to |
+|---|---|
+| **main app** | the whole Bram desktop shell. |
+| **app toolbar** | the top button row in the main app (reload target app · devtools · agent tools · terminal · A− · A+ · voice). |
+| **terminal** | the xterm.js area where Claude / Codex runs. |
+| **target app** | the project iframe where the app you are building runs. |
+| **agent pane** | the area where Bram guides the agent through the workflow — the tabs UI (Workspace, Transcript, Sessions, Status, Issues, Architecture, Settings). |
+| **agent nav** | the vertical menu on the left of the agent pane (Worklist, Issues, Commits, Transcript, Sessions, History, Feedback, Context, Status, Settings). |
+| **agent toolbar** | controls associated with the agent pane (per-view action bars: Refresh, Approve, etc.). |
 
 ### Workflow
 
@@ -58,15 +72,15 @@ rules.
    your package manager if missing.
 
 3. **GitHub CLI (`gh`)**  - Powers the Issues tab in the
-   agent-tools drawer and the agent's issue create / close / comment
+   agent pane and the agent's issue create / close / comment
    operations. Install from <https://cli.github.com/> and run
    `gh auth login` once. Without it, the Issues tab shows an empty
    state.
 
-4. **XMLUI CLI - optional.** If you are developing an XMLUI app, or if you are developing `Bram` itself (the agent-tools UI is an embedded XMLUI app) you will want the XMLUI MCP server. Follow the steps [here](https://xmlui.org/get-started) to get it.
+4. **XMLUI CLI - optional.** If you are developing an XMLUI app, or if you are developing `Bram` itself (the agent pane UI is an embedded XMLUI app) you will want the XMLUI MCP server. Follow the steps [here](https://xmlui.org/get-started) to get it.
 
 5. **`whisper-server` — optional.** Powers the 🎤 voice button in the
-   parent-shell toolbar and the agent-tools drawer. Tested on macOS for
+   parent-shell toolbar and the agent pane. Tested on macOS for
    now; see [Voice input](#voice-input) below for install and per-platform
    status.
 
@@ -100,11 +114,11 @@ On some Windows 11 setups, Smart App Control may block the unsigned binary — m
 
 - **Worklist** — the `proposed → applied → committed` approval surface that coordinates multi-step agent work. Each item is a small, independently approvable diff with a `before → after` summary. Select one item at a time (radio); three ghost actions act on it — **Approve** (TO APPLY → on-disk edits, transitions to TO COMMIT; TO COMMIT → git commit), **Iterate** (refine in place — agent revises the proposed text or edits the on-disk files per your feedback, item keeps its state), **Drop** (remove the item; for TO COMMIT, disk edits stay until you ask the agent to revert). Each row's `+ feedback` link expands a per-item message-to-agent textarea that travels with whichever action you click. The agent never advances state unilaterally. Bram always writes local `resources/worklist-history/` snapshots for auditability, while committing that directory is an opt-in repo policy.
 
-- **Commits** — HSplitter list of recent commits on the left, selected commit on the right. Full-history search via `git log --grep` across subject, body, and author; matched commits expand to clickable hit-row snippets, and the right pane stacks `snippetAroundLine` previews for every hit. The right-pane header is an `ExpandableItem` revealing the full commit message body. Unpushed commits surface a "Push" button; it runs `git push origin`, and on a non-fast-forward rejection it fetches `origin` and rebases the branch on `origin/<branch>` before retrying (linear history, no merge commits).
+- **Commits** — HSplitter list of recent commits on the left, selected commit on the right. Full-history search via `git log --grep` across subject, body, and author; matched commits expand to clickable hit-row snippets, and the target app stacks `snippetAroundLine` previews for every hit. The target app header is an `ExpandableItem` revealing the full commit message body. Unpushed commits surface a "Push" button; it runs `git push origin`, and on a non-fast-forward rejection it fetches `origin` and rebases the branch on `origin/<branch>` before retrying (linear history, no merge commits).
 
-- **Issues** — HSplitter list of GitHub issues on the left (via `gh issue list`), selected issue on the right. Search runs `gh issue list --search` and tags hits per title/body line; clicking a hit filters the right-pane body to paragraphs containing the query. The expanded issue refetches every 30s so edits made via `gh` or github.com surface without collapse-and-reopen.
+- **Issues** — HSplitter list of GitHub issues on the left (via `gh issue list`), selected issue on the right. Search runs `gh issue list --search` and tags hits per title/body line; clicking a hit filters the target app body to paragraphs containing the query. The expanded issue refetches every 30s so edits made via `gh` or github.com surface without collapse-and-reopen.
 
-- **Sessions** — HSplitter list of local claude/codex JSONL sessions on the left, selected session's turns on the right. Search runs server-side across user and assistant text; hits filter the right pane to matching paragraphs. Each row has a ✕ delete (with confirm) and a ✎ rename: on Claude the rename appends a `custom-title` record to the session JSONL, on codex it appends a `{id,thread_name,updated_at}` entry to `~/.codex/session_index.jsonl`. After the action, the row dims and the buttons disable until the next agent restart picks up the change. Codex's `/resume` creates a forked session with a new id, so the `[current]` marker won't follow a renamed codex session — the rename modal documents that caveat inline.
+- **Sessions** — HSplitter list of local claude/codex JSONL sessions on the left, selected session's turns on the right. Search runs server-side across user and assistant text; hits filter the target app to matching paragraphs. Each row has a ✕ delete (with confirm) and a ✎ rename: on Claude the rename appends a `custom-title` record to the session JSONL, on codex it appends a `{id,thread_name,updated_at}` entry to `~/.codex/session_index.jsonl`. After the action, the row dims and the buttons disable until the next agent restart picks up the change. Codex's `/resume` creates a forked session with a new id, so the `[current]` marker won't follow a renamed codex session — the rename modal documents that caveat inline.
 
 - **History** — browse the `resources/worklist-history/` snapshots Bram writes on every worklist change: the `proposed → applied → committed` audit trail, grouped by item phase, with summarized item prose so the reasoning behind past items survives after they're committed or dropped. Backed by `/__worklist-history/list` plus `/__worklist-history/search` for substring filtering.
 
@@ -114,25 +128,25 @@ On some Windows 11 setups, Smart App Control may block the unsigned binary — m
 
 - **Status** — a coordination-health view of the host↔agent plumbing: port-file consistency, loopback HTTP responsiveness, the inflight spinner sentinel, and the latest worklist authorization records. Use it to diagnose a stuck spinner or a refused loopback connection.
 
-- **Settings** — bidirectional view of `.bram.json`. Surfaces the agent-command (`shell.agent`), the worklist's batch-commit-actions toggle, and the target-app-minimized switch (drives the right-column splitter to give the agent drawer maximum room while keeping the project iframe mounted). Edits persist to disk; hand-edits to `.bram.json` flow back through a `settings-changed` Tauri event without manual reload. Agent-command changes require a Bram restart to take effect (consumed at PTY spawn); the other settings apply live.
+- **Settings** — bidirectional view of `.bram.json`. Surfaces the agent-command (`shell.agent`), the worklist's batch-commit-actions toggle, and the target-app-minimized switch (drives the right-column splitter to give the agent pane maximum room while keeping the target app mounted). Edits persist to disk; hand-edits to `.bram.json` flow back through a `settings-changed` Tauri event without manual reload. Agent-command changes require a Bram restart to take effect (consumed at PTY spawn); the other settings apply live.
 
 The five search-capable tabs (Issues, Commits, Sessions, History, Feedback) all share a single `<SearchBox>` (250 ms debounce, ✕ to clear, inline spinner during fetch) and a single `<SearchHitModal>`. Clicking a hit opens the modal centered on the matched term within a 500-character window, with the match visibly highlighted. Diff renders across the Worklist TO COMMIT expander, the Transcript Edit/MultiEdit modal, and the Commits per-file patch are likewise unified through a single `<DiffView>` that goes through a backend `/__diff/annotate` route for word-level intra-line emphasis.
 
-The toolbar's `ⓘ` (top-right of the drawer's AppHeader) opens a right-pane info modal with the current URL, version, project-server config, and a `README on GitHub` link to this document.
+The toolbar's `ⓘ` (top-right of the agent pane's AppHeader) opens a target app info modal with the current URL, version, project-server config, and a `README on GitHub` link to this document.
 
 ### Toolbar
 
-- **↻ reload xmlui app** — force-reload the right-pane iframe (file watcher does this automatically, but useful after edits to the parent shell).
-- **🔍 browser devtools** — open the WebView devtools for debugging the right pane.
-- **🛠 agent tools** — toggle the agent-tools drawer above.
-- **▢ terminal** — toggle the terminal pane (hide it to give the web app full width). Window and splitter resizes preserve the terminal viewport instead of snapping scrollback to the top.
+- **↻ reload xmlui app** — force-reload the target app iframe (file watcher does this automatically, but useful after edits to the parent shell).
+- **🔍 browser devtools** — open the WebView devtools for debugging the target app.
+- **🛠 agent tools** — toggle the agent pane above.
+- **▢ terminal** — toggle the terminal (hide it to give the web app full width). Window and splitter resizes preserve the terminal viewport instead of snapping scrollback to the top.
 - **A− / A+** — decrease / increase the terminal font size (Cmd+− / Cmd+=).
 - **🎤 voice** — toggle local-Whisper voice dictation into the terminal (Cmd+Shift+D). See [Voice input](#voice-input).
 
-Pinned across the top of the agent-tools drawer (stays reachable from any tab):
+Pinned across the top of the agent pane (stays reachable from any tab):
 
-- **ⓘ info** — show a right-pane info modal (URL, project-server status, "Open in browser").
-- **A− / A+** — decrease / increase the right-pane / drawer iframe font size.
+- **ⓘ info** — show a target app info modal (URL, project-server status, "Open in browser").
+- **A− / A+** — decrease / increase the target app / agent pane iframe font size.
 - **1 / 2 / 3** — send numeric keystrokes to the active agent's terminal session.
 - **Yes / No** — send "yes" or "no" as a complete user turn (handy for the agent's conversational prompts).
 - **Esc** — send `Esc` to interrupt the agent mid-response.
@@ -140,7 +154,7 @@ Pinned across the top of the agent-tools drawer (stays reachable from any tab):
 - **🔍 Inspector** — open the XMLUI Inspector to reproduce a UI issue and export a trace JSON for analysis.
 ### Provider-aware setup
 
-Once you launch an agent through the wrapped terminal functions (`claude` or `codex`), the drawer checks what that provider still needs for the current repo and prompts only when setup is missing.
+Once you launch an agent through the wrapped terminal functions (`claude` or `codex`), the agent pane checks what that provider still needs for the current repo and prompts only when setup is missing.
 
 Current behavior:
 
@@ -198,7 +212,7 @@ Tauri docs: <https://tauri.app/develop/>, <https://tauri.app/distribute/>.
 
 ### Calling Bram from project code
 
-Because the right pane is same-origin with the parent shell
+Because the target app is same-origin with the parent shell
 (`tauri://localhost`), project code can reach the Tauri command bridge
 directly through `window.parent` — no `postMessage` shim needed:
 
@@ -207,7 +221,7 @@ const { invoke } = window.parent.__TAURI__.core;
 const url = await invoke("get_right_pane_url");
 ```
 
-Use this when an XMLUI app embedded in the right pane needs to read
+Use this when an XMLUI app embedded in the target app needs to read
 filesystem state, hit one of Bram's `__`-prefixed loopback
 endpoints, or invoke any of the Rust IPC commands. The `helpers.js`
 script loaded by the embedded XMLUI surfaces (`toShell`, `toTurn`,
@@ -220,9 +234,9 @@ the running agent.
 - `Main.xmlui`, `components/`, `resources/`, `Globals.xs`,
   `config.json`, `index.html` — the XMLUI app at the repo root.
 - `app/` — parent shell (Tauri webview entry, terminal wiring, vendor
-  scripts, and `__shell/helpers.js` that the right pane includes).
+  scripts, and `__shell/helpers.js` that the target app includes).
 - `src-tauri/` — Rust backend (PTY for the terminal, custom `tauri://`
-  URI scheme handler that proxies the right-pane iframe to the project's
+  URI scheme handler that proxies the target app iframe to the project's
   HTTP server, filesystem watcher, IPC handlers).
 - `scripts/` — auxiliary scripts.
 
@@ -230,7 +244,7 @@ the running agent.
 
 Bram supports two ways to dictate instead of type:
 
-- **🎤 Whisper buttons (recommended).** Local, low-latency dictation via [`whisper-server`](https://github.com/ggml-org/whisper.cpp/tree/master/examples/server). Click the 🎤 button in the parent-shell toolbar (or the agent-tools drawer) to start recording, click again to send; the transcript arrives in the terminal as a `voice: ...` line so it's distinguishable from typed input. This is the better experience — lower latency, your choice of model, good transcription quality — but it needs local setup and is **tested on macOS for now**, not yet proven on Linux or Windows.
+- **🎤 Whisper buttons (recommended).** Local, low-latency dictation via [`whisper-server`](https://github.com/ggml-org/whisper.cpp/tree/master/examples/server). Click the 🎤 button in the parent-shell toolbar (or the agent pane) to start recording, click again to send; the transcript arrives in the terminal as a `voice: ...` line so it's distinguishable from typed input. This is the better experience — lower latency, your choice of model, good transcription quality — but it needs local setup and is **tested on macOS for now**, not yet proven on Linux or Windows.
 - **The agent's native `/voice` command.** No local setup, but support varies by agent and platform. It's the zero-install fallback, and the working path where the Whisper button isn't proven yet.
 
 Bram spawns the local `whisper-server` on the first record click and kills it on app exit — you don't manage the process; you just need the binary, `ffmpeg`, and a model file installed.
@@ -271,7 +285,7 @@ or a PowerShell snippet on Windows), please open an issue.
 
 ### Startup
 
-You can specify how to launch the agent in the terminal pane.
+You can specify how to launch the agent in the terminal.
 
 ```
 {
@@ -285,16 +299,16 @@ You can specify how to launch the agent in the terminal pane.
 
 ### Working with a real backend
 
-`Bram` binds the right-pane HTTP server to
+`Bram` binds the target app HTTP server to
 `127.0.0.1:<random-port>` (it uses port `0` and lets the OS pick).
 That's fine for projects that talk only to public APIs or static
 files. It breaks when your project needs a **fixed origin** — OAuth
 callbacks, CORS allowlists, hardcoded API base URLs.
 
-> **Compatibility note.** The right pane is an iframe. Backends that
+> **Compatibility note.** The target app is an iframe. Backends that
 > send `X-Frame-Options: DENY` or `Content-Security-Policy:
 > frame-ancestors 'none'` (common for security-sensitive admin UIs)
-> cannot be loaded into the right pane regardless of port. Workarounds:
+> cannot be loaded into the target app regardless of port. Workarounds:
 > configure the backend's dev mode to relax those headers, or serve
 > the UI files via a permissive dev server (e.g. `npx http-server`)
 > while keeping the real backend running for API calls. Otherwise,
@@ -329,12 +343,12 @@ At startup, Bram:
   manually for log visibility);
 - otherwise spawns `command` in `cwd`, with stdout/stderr forwarded to
   Bram's own stderr (prefixed `[server]`);
-- waits up to 5s for the port to come up, then points the right-pane
+- waits up to 5s for the port to come up, then points the target app
   iframe at `http://localhost:<port><path>`. The iframe retries once on
   load error to absorb the case where the server takes a moment to bind;
 - on app exit, kills the spawned child.
 
-The agent-tools drawer continues to load from Bram's internal
+The agent pane continues to load from Bram's internal
 loopback server regardless of this setting.
 
 The app-under-test does not need to be an XMLUI app — `.bram.json`
@@ -380,7 +394,7 @@ pollute the project's HTML.
 
 #### Service workers don't register on macOS/Linux
 
-The right-pane iframe loads at `tauri://localhost`, and the WebKit
+The target app iframe loads at `tauri://localhost`, and the WebKit
 engines on macOS (WKWebView) and Linux (WebKitGTK) don't treat
 custom-scheme origins as secure contexts. Service-worker registration
 silently fails there, so project features that depend on a service
@@ -396,20 +410,20 @@ MSW or `apiInterceptor`, run your project in a regular browser tab at
 `localhost:8080` while keeping Bram pointed at the same
 server for the agent loop.
 
-#### Auth callbacks won't reach the right pane
+#### Auth callbacks won't reach the target app
 
-The right-pane webview has its own browser storage, isolated from
+The target app webview has its own browser storage, isolated from
 your system browser's storage at the same origin. That breaks any
 auth flow that hands off to the system browser and expects a session
 to come back into the webview:
 
 - **Magic links in email.** Clicking the link opens your default
   browser, completes auth there, and stores the session in the
-  *browser's* `localStorage`. The right pane never sees it.
+  *browser's* `localStorage`. The target app never sees it.
 - **OAuth provider redirects** that leave the webview have the same
   shape — the callback session lands in the wrong storage.
 
-Even when the redirect script above lines the right pane up on
+Even when the redirect script above lines the target app up on
 `localhost:8080`, that origin's storage in the Tauri webview is a
 different store from `localhost:8080` storage in Safari or Chrome.
 
@@ -438,7 +452,7 @@ implements this in `xmlui/components/SignInDialog.xmlui` and
 ### DevTools
 
 Tauri uses the platform's native webview, so the DevTools you get
-inside the right pane depend on the OS:
+inside the target app depend on the OS:
 
 | Platform | Webview | DevTools |
 |---|---|---|
@@ -446,12 +460,12 @@ inside the right pane depend on the OS:
 | Linux | WebKitGTK | Safari Web Inspector |
 | Windows | WebView2 (Chromium) | Chromium DevTools |
 
-To open them, **right-click inside the right pane → Inspect Element**
+To open them, **right-click inside the target app → Inspect Element**
 in dev/debug builds (`cargo run` or `cargo tauri dev`). Release
 builds disable DevTools by default. The execution context belongs to
-the right-pane document specifically. The shell window and the right
+the target app document specifically. The shell window and the right
 pane both load at `tauri://localhost` (the parent shell directly, the
-right pane via the scheme handler that proxies project content under
+target app via the scheme handler that proxies project content under
 `/__project/*`), so they share an origin and therefore a `localStorage`
 / `IndexedDB` partition — a console session in either reaches the
 same storage. A regular browser tab pointed at the project's own
@@ -482,6 +496,6 @@ DevTools in a few ways that bite when you're testing auth flows:
 If you'd rather use Chromium DevTools on macOS/Linux, you can run
 your project in a regular browser tab pointed at its `localhost:8080`
 origin — but remember that the tab's `localStorage` is a separate
-store from the right pane's (the right pane is at `tauri://localhost`,
+store from the target app's (the target app is at `tauri://localhost`,
 a different origin), so a session created there won't carry into
 Bram.

@@ -17,7 +17,7 @@ function snippetAroundLine(content, line, context) {
 
 // Reduce a (potentially huge) turn body to just the paragraphs that
 // contain the query (case-insensitive substring). Used by Sessions.xmlui
-// after a hit-snippet click so the right pane shows context around the
+// after a hit-snippet click so the target app shows context around the
 // match instead of the whole turn. Returns the joined paragraphs (still
 // valid Markdown for the Markdown component).
 function paragraphsContaining(text, query) {
@@ -53,7 +53,7 @@ function statusSectionSubhead(title) {
 
 function statusSignalDescription(signal) {
   const descriptions = {
-    'Payload maxima': 'Largest startup payloads seen during the first minute. Big tails, fanout bodies, or repeated resets point to sluggish drawers, excess JSONL parsing, or trace noise worth trimming.',
+    'Payload maxima': 'Largest startup payloads seen during the first minute. Big tails, fanout bodies, or repeated resets point to sluggish UI, excess JSONL parsing, or trace noise worth trimming.',
     'Renderer drift': 'Measures PTY volume and heartbeat delay during startup. High drift means the UI thread or terminal stream was busy enough to delay visible updates.',
     'Inspector export': 'Shows whether a recent XMLUI Inspector trace exists. A fresh export gives agents concrete interaction, API, and state-change evidence instead of guessing from markup.',
     'Current items': 'Counts active Worklist rows by lifecycle phase. It tells you whether Bram is waiting for apply approval, commit approval, or cleanup.',
@@ -63,7 +63,7 @@ function statusSignalDescription(signal) {
     'Trace pairs': 'Counts recent inflight sentinel writes and clears. Balanced pairs mean spinner state is being created and cleared through the expected host lifecycle.',
     'Turn completion': 'Reports the latest agent-turn-end decision. It helps explain why a spinner cleared, stayed up, or was skipped when no active claim existed.',
     'Port file': 'Checks Bram port metadata on disk. Stale or mismatched port files explain failed loopback calls and coordination requests that never reach the shell.',
-    'Loopback HTTP': 'Probes Bram HTTP on 127.0.0.1. If this fails, drawer routes, close helpers, or legacy loopback workflows may be unreachable.',
+    'Loopback HTTP': 'Probes Bram HTTP on 127.0.0.1. If this fails, agent pane routes, close helpers, or legacy loopback workflows may be unreachable.',
     'Python 3': 'Confirms Python is available for worklist guard hooks. Without it, Claude and Codex hooks may be installed but unable to enforce Bram edits.',
     'Claude hook': 'Shows whether Claude Code has Bram’s PreToolUse guard installed and registered. It protects repo files from unapproved direct edits.',
     'Codex hook': 'Shows whether Codex has Bram’s worklist guard installed and registered. It enforces the same proposal and approval gate for Codex file mutations.',

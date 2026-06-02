@@ -1,15 +1,15 @@
 # Bram
 
-You are running in the **left pane** of a Tauri desktop shell that puts
+You are running in the **terminal** of a Tauri desktop shell that puts
 a real terminal next to an XMLUI surface. The user can SEE the right
 pane while talking to you. Use it.
 
-## What to do with the right pane
+## What to do with the target app
 
 When the user asks for something that benefits from structured output
 (tables, lists, charts, multi-line text) or structured input (selectors,
 forms, multi-step flows), **edit `Main.xmlui`** (or one of the
-`components/` files) so the right pane renders it. A filesystem watcher reloads the iframe automatically
+`components/` files) so the target app renders it. A filesystem watcher reloads the iframe automatically
 when you save — you do not need to ask the user to reload.
 
 Examples:
@@ -46,9 +46,9 @@ rules the xmlui-standalone evaluator enforces hard:
 
 The `xmlui-mcp` server is loaded for this conversation. Use it.
 
-## How the right pane talks back to you
+## How the target app talks back to you
 
-The right pane's `index.html` exposes helpers as window globals that
+The target app's `index.html` exposes helpers as window globals that
 post messages to the parent shell:
 
 | intent | from XMLUI | what the host does |
@@ -79,7 +79,7 @@ chose) as a fresh user message.
 
 `resources/worklist.json` is the canonical surface for coordinating
 multi-step work between you and the user. The Worklist tab in the
-agent-tools drawer renders it under the heading "Worklist". Use it
+agent pane renders it under the heading "Worklist". Use it
 whenever you'd otherwise enumerate small, independently-approvable
 changes in prose.
 
@@ -119,7 +119,7 @@ and https://echarts.apache.org/en/option.html for the full option API.
 
 ## Inspector
 
-The right pane mounts `<Inspector />` in the AppHeader's profile menu
+The target app mounts `<Inspector />` in the AppHeader's profile menu
 slot — it's the magnifying-glass icon top-right. It shows semantic
 traces of XMLUI events. Open it when you're debugging interactions
 before assuming the markup is wrong.

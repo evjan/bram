@@ -243,20 +243,22 @@
       <Text fontSize="$fontSize-sm" color="$color-warn-800">
         Agent wants to use <Text fontFamily="$fontFamily-monospace" inline="true">{pendingMenu.tool}</Text>
       </Text>
-      <HStack
+      <VStack
         when="{pendingMenu.options &amp;&amp; pendingMenu.options.length > 0}"
-        gap="$space-2"
-        wrapContent="true">
-        <Items data="{pendingMenu.options}">
-          <Button
-            variant="outlined"
-            size="sm"
-            contentPosition="start"
-            onClick="sendKeys($item.key + '\r')">
-            <Text width="*" textAlign="left">{$item.key + '. ' + $item.label}</Text>
-          </Button>
-        </Items>
-      </HStack>
+        gap="$space-1">
+        <Theme paddingHorizontal-Button-sm="$space-3">
+          <Items data="{pendingMenu.options}">
+            <HStack gap="$space-2" verticalAlignment="center">
+              <Button
+                label="{$item.key}"
+                variant="outlined"
+                size="sm"
+                onClick="sendKeys($item.key + '\r')" />
+              <Text>{$item.label}</Text>
+            </HStack>
+          </Items>
+        </Theme>
+      </VStack>
       <HStack
         when="{!pendingMenu.options || pendingMenu.options.length === 0}"
         gap="$space-2"

@@ -1,8 +1,8 @@
 <Component
   name="Status"
   var.refreshTick="{0}"
-  var.sectionInfoTitle="{''}"
-  var.sectionInfoDescription="{''}">
+  var.rowInfoTitle="{''}"
+  var.rowInfoDescription="{''}">
 
   <DataSource id="status" url="/__coordination-status?t={refreshTick}" />
 
@@ -48,16 +48,19 @@
             fontSize="$fontSize-sm"
             color="$textColor-secondary"
             value="{'— ' + statusSectionSubhead($item.title)}" />
-          <Button
-            when="{statusSectionDescription($item.title)}"
-            icon="info"
-            size="xs"
-            variant="ghost"
-            tooltip="About this section"
-            onClick="sectionInfoTitle = $item.title; sectionInfoDescription = statusSectionDescription($item.title); sectionInfoDialog.open()" />
         </HStack>
         <Table data="{$item.rows}">
-          <Column header="signal" bindTo="signal" width="170px" />
+          <Column header="signal" width="190px">
+            <HStack gap="$space-1" verticalAlignment="center">
+              <Button
+                icon="info"
+                size="xs"
+                variant="ghost"
+                tooltip="About this signal"
+                onClick="rowInfoTitle = $item.signal; rowInfoDescription = statusSignalDescription($item.signal); rowInfoDialog.open()" />
+              <Text value="{$item.signal}" overflowMode="flow" breakMode="word" />
+            </HStack>
+          </Column>
           <Column header="level" width="80px">
             <Text
               fontWeight="$fontWeight-bold"
@@ -83,12 +86,12 @@
     </Items>
 
     <ModalDialog
-      id="sectionInfoDialog"
-      title="{sectionInfoTitle}">
+      id="rowInfoDialog"
+      title="{rowInfoTitle}">
       <VStack gap="$space-3" padding="$space-2">
-        <Text value="{sectionInfoDescription}" />
+        <Text value="{rowInfoDescription}" />
         <HStack>
-          <Button label="Got it" onClick="sectionInfoDialog.close()" />
+          <Button label="Got it" onClick="rowInfoDialog.close()" />
         </HStack>
       </VStack>
     </ModalDialog>

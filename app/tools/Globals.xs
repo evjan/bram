@@ -51,18 +51,40 @@ function statusSectionSubhead(title) {
   return descriptions[title] || '';
 }
 
-function statusSectionDescription(title) {
+function statusSignalDescription(signal) {
   const descriptions = {
-    'Startup Run': 'Signals captured during the first minute after Bram startup, including latest-tail payload size, PTY output volume, renderer drift, and Inspector export size.',
-    'Worklist': 'Current worklist item counts, recent lifecycle transitions, and whether applied items still match the working tree.',
-    'Inflight Sentinel': 'The host-managed claim that keeps Worklist spinners aligned with active approve, drop, or iterate work.',
-    'Hooks': 'Whether Bram setup installed and registered the Claude and Codex worklist guard hooks for this repo.',
-    'Agent Coordination': 'Per-file health for the files Bram Setup installs and refreshes: the conventions sidecar, marker blocks in CLAUDE.md / AGENTS.md, the project and user-global worklist-guard hooks, settings.json hook registration, and the Codex TOML blocks. Each row compares disk content against the bundle Setup would write; stale or legacy rows indicate Setup did not (or could not) bring the file up to date.',
-    'Authorization': 'The most recent structured approve, drop, or iterate record and whether Bram has consumed it.',
-    'Latest Tail And Fanout': 'Session-tail polling, shared JSONL cache fanout, subscriber count, reset activity, and cap trimming pressure.',
-    'Guards, Staleness, Interrupts, Traces': 'Recent guard blocks, stale approval rejections, interrupt handling, and exported Inspector trace availability.',
+    'Payload maxima': 'Largest startup payloads seen during the first minute. Big tails, fanout bodies, or repeated resets point to sluggish drawers, excess JSONL parsing, or trace noise worth trimming.',
+    'Renderer drift': 'Measures PTY volume and heartbeat delay during startup. High drift means the UI thread or terminal stream was busy enough to delay visible updates.',
+    'Inspector export': 'Shows whether a recent XMLUI Inspector trace exists. A fresh export gives agents concrete interaction, API, and state-change evidence instead of guessing from markup.',
+    'Current items': 'Counts active Worklist rows by lifecycle phase. It tells you whether Bram is waiting for apply approval, commit approval, or cleanup.',
+    'Recent transitions': 'Summarizes recent Worklist lifecycle snapshots. Use it to confirm approve, apply, commit, and drop actions are moving instead of leaving stale rows behind.',
+    'Applied integrity': 'Checks whether applied Worklist items still match the files they changed. A warning means the working tree drifted after apply, so commit approval may no longer describe reality.',
+    'Current claim': 'Shows the active host-managed spinner claim. If it is not idle, Bram believes an approve, drop, or iterate cycle is still in progress.',
+    'Trace pairs': 'Counts recent inflight sentinel writes and clears. Balanced pairs mean spinner state is being created and cleared through the expected host lifecycle.',
+    'Turn completion': 'Reports the latest agent-turn-end decision. It helps explain why a spinner cleared, stayed up, or was skipped when no active claim existed.',
+    'Port file': 'Checks Bram port metadata on disk. Stale or mismatched port files explain failed loopback calls and coordination requests that never reach the shell.',
+    'Loopback HTTP': 'Probes Bram HTTP on 127.0.0.1. If this fails, drawer routes, close helpers, or legacy loopback workflows may be unreachable.',
+    'Python 3': 'Confirms Python is available for worklist guard hooks. Without it, Claude and Codex hooks may be installed but unable to enforce Bram edits.',
+    'Claude hook': 'Shows whether Claude Code has Bram’s PreToolUse guard installed and registered. It protects repo files from unapproved direct edits.',
+    'Codex hook': 'Shows whether Codex has Bram’s worklist guard installed and registered. It enforces the same proposal and approval gate for Codex file mutations.',
+    'Latest record': 'Shows the newest structured authorization or close-helper record. It helps diagnose stale approvals, consumed payloads, and what the agent is currently allowed to do.',
+    'Record age': 'Reports how old the latest coordination record is. Old unconsumed records often explain stuck buttons, stale approvals, or surprising guard behavior.',
+    'latest-tail': 'Tracks session-tail polling work. Large or frequent tail reads can make Transcript and Worklist updates feel slow.',
+    'JSONL fanout': 'Shows shared JSONL broadcast activity and subscriber count. It helps identify whether session updates are efficiently shared or repeatedly reparsed.',
+    'Guard decisions': 'Counts recent guard blocks. Warnings here mean an agent tried to mutate files outside the approved Worklist path.',
+    'Stale approvals': 'Counts rejected stale approvals. These happen when Worklist content changed after the user clicked, so the agent must not apply that payload.',
+    'Interrupts': 'Shows recent interruption or silence-clear events. These explain why an agent cycle stopped, a spinner cleared, or an active turn ended unexpectedly.',
+    'Inspector exports': 'Reports recent Inspector trace availability. Traces give agents exact UI evidence when markup alone does not explain a bug.',
   };
-  return descriptions[title] || '';
+  if (descriptions[signal]) return descriptions[signal];
+  const s = signal || '';
+  if (s.indexOf('CLAUDE.md') >= 0) return 'Checks Bram guidance embedded for Claude. Missing, stale, or legacy marker blocks can leave Claude following old worklist rules.';
+  if (s.indexOf('AGENTS.md') >= 0) return 'Checks Bram guidance embedded for Codex. Missing, stale, or legacy marker blocks can leave Codex following old worklist rules.';
+  if (s.indexOf('settings.json') >= 0) return 'Checks Claude hook registration. The hook file can exist but still be ineffective if settings.json does not reference it.';
+  if (s.indexOf('config.toml') >= 0) return 'Checks Codex global configuration managed by Bram Setup. Stale hook blocks or developer instructions can strand Codex on old coordination behavior.';
+  if (s.indexOf('worklist-guard.py') >= 0) return 'Checks a Bram worklist guard script against the bundled version. Stale scripts can allow unsafe edits or block valid approved changes.';
+  if (s.indexOf('bram-conventions.md') >= 0) return 'Checks the shared Bram conventions sidecar. Stale guidance means agents may follow outdated approval, commit, or cleanup rules.';
+  return 'Reports one coordination signal from Bram Status. Use its level, state, detail, and timestamp to decide whether setup, worklist flow, or agent communication needs attention.';
 }
 
 function historyPhaseKind(phase) {

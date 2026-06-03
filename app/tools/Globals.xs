@@ -1251,6 +1251,15 @@ function submitWorklistMessageFast(text) {
   return { message, baseline, sentAtText: new Date().toLocaleTimeString() };
 }
 
+function recordWorklistFeedbackConversation(text) {
+  if (!text || !text.trim()) return false;
+  const message = text.trim();
+  const baseline = 0;
+  writeLocalStorage('bram.worklistSubmittedMessage', message);
+  writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline));
+  return { message, baseline, sentAtText: new Date().toLocaleTimeString() };
+}
+
 function clearWorklistAwaiting(clearDraft) {
   writeLocalStorage('bram.awaitingResponse', '');
   if (clearDraft) {
@@ -1300,6 +1309,9 @@ function worklistSubmittedAssistant(exchange, submittedMessage) {
   const submitted = worklistMessageKey(submittedMessage);
   if (!submitted || !exchange) return '';
   const userText = worklistMessageKey((exchange && exchange.userText) || '');
+  if (isWorklistActionPayloadText(userText)) {
+    return ((exchange && exchange.assistantText) || '').trim();
+  }
   if (userText !== submitted) return '';
   return ((exchange && exchange.assistantText) || '').trim();
 }
@@ -1391,6 +1403,11 @@ function worklistLatestUserText(turns) {
   return worklistTurnText(turns[idx]).trim();
 }
 
+function isWorklistActionPayloadText(text) {
+  const t = String(text || '').trim();
+  return t.startsWith('approved: ') || t.startsWith('iterate: ') || t.startsWith('drop: ');
+}
+
 function worklistLatestAgentEntries(turns) {
   return worklistAgentEntriesAfterUser(turns, worklistLatestUserIndex(turns));
 }
@@ -1428,12 +1445,18 @@ function worklistDisplayUserText(turns, submittedMessage, awaiting, baseline) {
   if (worklistShouldShowSubmitted(turns, submittedMessage, awaiting, baseline)) {
     return submittedMessage;
   }
-  return worklistLatestUserText(turns) || submittedMessage || '';
+  if (submittedMessage) return submittedMessage;
+  return worklistLatestUserText(turns) || '';
 }
 
 function worklistDisplayAgentEntries(turns, submittedMessage, awaiting, baseline) {
+  const submittedEntries = worklistSubmittedAgentEntries(turns, submittedMessage);
+  if (submittedEntries.length > 0) return submittedEntries;
+  if (submittedMessage && isWorklistActionPayloadText(worklistLatestUserText(turns))) {
+    return worklistLatestAgentEntries(turns);
+  }
   if (worklistShouldShowSubmitted(turns, submittedMessage, awaiting, baseline)) {
-    return worklistSubmittedAgentEntries(turns, submittedMessage);
+    return [];
   }
   return worklistLatestAgentEntries(turns);
 }

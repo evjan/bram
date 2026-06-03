@@ -128,7 +128,7 @@
     id="currentTurnEditsDS"
     url="/__current-turn-edits?t={lastAssistantTick}" />
 
-  <DataSource id="agentStatus" url="/__agent-status" />
+  <DataSource id="agentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" />
   <DataSource id="worklistTurnsDS" url="/__session-turns?t={lastAssistantTick}" />
   <DataSource

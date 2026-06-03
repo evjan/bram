@@ -133,13 +133,11 @@
 
   <DataSource id="agentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" />
-  <DataSource id="worklistTurnsDS" url="/__session-turns?t={worklistTurnsTick}" />
   <ChangeListener
-    listenTo="{((worklistTurnsDS.value || []).length || 0) + ':' + ((lastAssistantStableText || '').length) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').length)}"
+    listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').length + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').length + ':' + ((lastAssistantStableText || '').length) + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {
-      const entries = worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline);
-      const source = worklistConversationSource(entries, lastAssistantStableText, lastExchangeDS.value, submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline);
-      iframeTrace('conversation-sync', {source, entries: entries.length});
+      const assistant = awaitingResponse ? '' : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim());
+      iframeTrace('conversation-sync', {source: awaitingResponse ? 'awaiting' : (assistant ? 'last-exchange' : 'none'), entries: assistant ? 1 : 0});
     }" />
   <DataSource
     id="worklistToolDetailDS"
@@ -156,7 +154,7 @@
   <VStack
     padding="$space-6"
     gap="$space-6"
-    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); debounce(400, () => { iframeTrace('refetch-called', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; worklistTurnsTick = worklistTurnsTick + 1; }, Date.now()); });
+    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); debounce(400, () => { iframeTrace('refetch-called', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; }, Date.now()); });
     subscribeTauriEvent('__bramWorklistUnsub', 'worklist-changed', (e) => {
       const payload = (e &amp;&amp; e.payload) || {};
       iframeTrace('listener-fired', {paths: payload.paths || [], correlation_id: payload.id || ''});
@@ -173,7 +171,6 @@
         clearWorklistAwaiting(false);
         lastAssistantTickAt = Date.now();
         lastAssistantTick = lastAssistantTick + 1;
-        worklistTurnsTick = worklistTurnsTick + 1;
       }
     });
     subscribeTauriEvent('__bramWorkspaceAgentTurnKilledUnsub', 'agent-turn-killed', () => {
@@ -197,8 +194,8 @@
     <ModalDialog
       when="{!!openToolId}"
       onClose="openToolId = null"
-      title="{(findToolInTurns(worklistTurnsDS.value || [], openToolId) || {}).name || 'Tool'}"
-      var.openTool="{findToolInTurns(worklistTurnsDS.value || [], openToolId)}"
+      title="Tool"
+      var.openTool="{null}"
       var.openDetail="{worklistToolDetailDS.value}"
       var.modalInput="{openDetail &amp;&amp; openDetail.input}"
       var.modalResult="{openDetail &amp;&amp; openDetail.result}">
@@ -258,6 +255,13 @@
     </ModalDialog>
     </Theme>
 
+    <HSplitter
+      height="100%"
+      width="100%"
+      initialPrimarySize="50%"
+      minPrimarySize="320px"
+      maxPrimarySize="-320px">
+      <VStack gap="$space-3" paddingRight="$space-3" overflowY="auto">
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">
         <HStack gap="$space-3" verticalAlignment="center">
@@ -666,63 +670,34 @@
           color="$textColor-secondary"
           value="{'sent ' + messageSentAtText}" />
       </Form>
+      </VStack>
 
       <VStack
+        paddingLeft="$space-3"
         gap="$space-3"
-        when="{worklistDisplayUserText(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline)}">
-        <VStack gap="$space-1">
+        overflowY="auto"
+        var.conversationUserText="{awaitingResponse &amp;&amp; submittedWorklistMessage ? submittedWorklistMessage : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || submittedWorklistMessage || '').trim())}"
+        var.conversationAssistantText="{awaitingResponse ? '' : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim())}">
+        <VStack
+          gap="$space-1"
+          when="{conversationUserText}">
           <Text
             fontWeight="$fontWeight-bold"
             color="$color-primary-700"
             value="You" />
-          <Markdown content="{worklistDisplayUserText(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline)}" />
+          <Markdown content="{conversationUserText}" />
         </VStack>
         <VStack
           gap="$space-1"
-          when="{worklistAssistantFallbackText(worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline), lastAssistantStableText, lastExchangeDS.value, submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline) || worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline).length > 0}">
+          when="{conversationAssistantText}">
           <Text
             fontWeight="$fontWeight-bold"
             color="$color-success-700"
             value="Agent" />
-          <Items data="{worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline)}">
-            <Markdown
-              when="{$item.kind === 'text'}"
-              content="{$item.text}" />
-            <VStack
-              when="{$item.kind === 'tool'}"
-              gap="$space-1"
-              padding="$space-2"
-              borderRadius="$borderRadius"
-              border="1px solid $borderColor"
-              backgroundColor="$color-surface-100">
-              <Link onClick="openToolId = $item.id" noIndicator="true">
-                <HStack gap="$space-2" verticalAlignment="center">
-                  <Text
-                    fontFamily="$fontFamily-monospace"
-                    fontSize="$fontSize-xs"
-                    fontWeight="$fontWeight-bold"
-                    paddingHorizontal="$space-1_5"
-                    paddingVertical="$space-0_5"
-                    borderRadius="$borderRadius"
-                    backgroundColor="$color-surface-200"
-                    value="{$item.name}" />
-                  <Text fontSize="$fontSize-sm" value="{$item.summary}" />
-                  <SpaceFiller />
-                  <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-xs" color="$textColor-secondary" value="↗" />
-                </HStack>
-              </Link>
-              <Text
-                when="{$item.errored &amp;&amp; $item.errorText}"
-                color="$color-danger-700"
-                fontSize="$fontSize-sm"
-                value="{$item.errorText}" />
-            </VStack>
-          </Items>
-          <Markdown
-            when="{worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline).length === 0}"
-            content="{worklistAssistantFallbackText(worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline), lastAssistantStableText, lastExchangeDS.value, submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline)}" />
+          <Markdown content="{conversationAssistantText}" />
         </VStack>
       </VStack>
+    </HSplitter>
 
     <ModalDialog
       id="statusProposedHelpDialog"

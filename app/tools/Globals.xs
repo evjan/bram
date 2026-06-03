@@ -1215,12 +1215,19 @@ function restoreWorklistSubmittedMessage() {
   return readLocalStorage('bram.worklistSubmittedMessage', '');
 }
 
-function submitWorklistMessage(text) {
+function restoreWorklistSubmittedBaseline() {
+  const raw = readLocalStorage('bram.worklistSubmittedBaseline', '');
+  const n = parseInt(raw, 10);
+  return isNaN(n) ? 0 : n;
+}
+
+function submitWorklistMessage(text, baseline) {
   if (!text || !text.trim()) return false;
   const message = text.trim();
   writeLocalStorage('bram.awaitingResponse', '1');
   writeLocalStorage('bram.worklistMessageDraft', '');
   writeLocalStorage('bram.worklistSubmittedMessage', message);
+  writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
   toTurn(message);
   return message;
 }
@@ -1331,13 +1338,46 @@ function worklistLatestAgentEntries(turns) {
   return worklistAgentEntriesAfterUser(turns, worklistLatestUserIndex(turns));
 }
 
-function worklistDisplayUserText(turns, submittedMessage, awaiting) {
-  if (awaiting && submittedMessage) return submittedMessage;
+function worklistNormalizeForMatch(text) {
+  return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function worklistUserTurnCount(turns) {
+  if (!turns || !turns.length) return 0;
+  let n = 0;
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i];
+    if (turn && turn.role === 'user' && worklistTurnText(turn).trim() && !isCompactionSyntheticUserTurn(turn)) {
+      n++;
+    }
+  }
+  return n;
+}
+
+function worklistLatestMatchesSubmitted(turns, submittedMessage, baseline) {
+  const submitted = worklistNormalizeForMatch(submittedMessage);
+  if (!submitted) return false;
+  if (worklistUserTurnCount(turns) <= (baseline || 0)) return false;
+  const latest = worklistNormalizeForMatch(worklistLatestUserText(turns));
+  if (!latest) return false;
+  return latest.startsWith(submitted) || submitted.startsWith(latest);
+}
+
+function worklistShouldShowSubmitted(turns, submittedMessage, awaiting, baseline) {
+  if (!submittedMessage) return false;
+  if (awaiting) return true;
+  return !worklistLatestMatchesSubmitted(turns, submittedMessage, baseline);
+}
+
+function worklistDisplayUserText(turns, submittedMessage, awaiting, baseline) {
+  if (worklistShouldShowSubmitted(turns, submittedMessage, awaiting, baseline)) {
+    return submittedMessage;
+  }
   return worklistLatestUserText(turns) || submittedMessage || '';
 }
 
-function worklistDisplayAgentEntries(turns, submittedMessage, awaiting) {
-  if (awaiting && submittedMessage) {
+function worklistDisplayAgentEntries(turns, submittedMessage, awaiting, baseline) {
+  if (worklistShouldShowSubmitted(turns, submittedMessage, awaiting, baseline)) {
     return worklistSubmittedAgentEntries(turns, submittedMessage);
   }
   return worklistLatestAgentEntries(turns);

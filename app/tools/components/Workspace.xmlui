@@ -22,7 +22,8 @@
   var.lastAssistantTickAt="{0}"
   var.lastAssistantStableText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
-  var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}">
+  var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
+  var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}">
   <DataSource
     id="worklist"
     url="/__worklist"
@@ -627,7 +628,7 @@
         storageKey="bram.worklistMessageDraftForm"
         dataAfterSubmit="clear"
         onWillSubmit="(data) => { if (awaitingResponse || (waitingDS.value &amp;&amp; waitingDS.value.waiting) || (agentStatus.value &amp;&amp; agentStatus.value.state === 'working')) return false; if (!data.message || !data.message.trim()) return false; }"
-        onSubmit="(data) => { const message = submitWorklistMessage(data.message); if (message) { submittedWorklistMessage = message; awaitingResponse = true; } }">
+        onSubmit="(data) => { const baseline = worklistUserTurnCount(worklistTurnsDS.value || []); const message = submitWorklistMessage(data.message, baseline); if (message) { submittedWorklistMessage = message; submittedTurnsBaseline = baseline; awaitingResponse = true; } }">
         <property name="buttonRowTemplate"><Fragment/></property>
         <HStack gap="$space-2" verticalAlignment="end">
           <TextArea
@@ -645,22 +646,22 @@
 
       <VStack
         gap="$space-3"
-        when="{worklistDisplayUserText(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse)}">
+        when="{worklistDisplayUserText(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline)}">
         <VStack gap="$space-1">
           <Text
             fontWeight="$fontWeight-bold"
             color="$color-primary-700"
             value="You" />
-          <Markdown content="{worklistDisplayUserText(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse)}" />
+          <Markdown content="{worklistDisplayUserText(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline)}" />
         </VStack>
         <VStack
           gap="$space-1"
-          when="{worklistSubmittedAssistant(lastExchangeDS.value, submittedWorklistMessage) || worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse).length > 0}">
+          when="{worklistSubmittedAssistant(lastExchangeDS.value, submittedWorklistMessage) || worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline).length > 0}">
           <Text
             fontWeight="$fontWeight-bold"
             color="$color-success-700"
             value="Agent" />
-          <Items data="{worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse)}">
+          <Items data="{worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline)}">
             <Markdown
               when="{$item.kind === 'text'}"
               content="{$item.text}" />
@@ -695,7 +696,7 @@
             </VStack>
           </Items>
           <Markdown
-            when="{worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse).length === 0}"
+            when="{worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline).length === 0}"
             content="{worklistSubmittedAssistant(lastExchangeDS.value, submittedWorklistMessage)}" />
         </VStack>
       </VStack>

@@ -254,6 +254,26 @@
           if (hits.length > 0) messageExpander.expand(); else messageExpander.collapse();
         })()" />
       <VStack gap="$space-3">
+        <HStack
+          when="{selectedCommit}"
+          gap="$space-2"
+          verticalAlignment="center">
+          <Text value="{selectedSha &amp;&amp; selectedSha.slice(0, 7)}" variant="code" fontSize="$fontSize-sm" />
+          <Link
+            width="*"
+            noIndicator
+            onClick="(selectedCommit.html_url &amp;&amp; selectedCommit.pushed) ? openExternal(selectedCommit.html_url) : null">
+            <Text
+              value="{selectedCommit.commit.message.split('\n')[0]}"
+              fontWeight="$fontWeight-bold" />
+          </Link>
+          <Button
+            label="✕"
+            variant="ghost"
+            size="xs"
+            tooltip="Close detail pane"
+            onClick="selectedSha = null; selectedLine = null" />
+        </HStack>
         <ExpandableItem
           id="messageExpander"
           when="{commitMessageBody || commitHits.length > 0}"
@@ -261,24 +281,7 @@
           iconPosition="start"
           fullWidthSummary="true">
           <property name="summary">
-            <HStack gap="$space-2" verticalAlignment="center">
-              <Text value="{selectedSha &amp;&amp; selectedSha.slice(0, 7)}" variant="code" fontSize="$fontSize-sm" />
-              <Link
-                when="{selectedCommit}"
-                width="*"
-                noIndicator
-                onClick="(selectedCommit.html_url &amp;&amp; selectedCommit.pushed) ? openExternal(selectedCommit.html_url) : null">
-                <Text
-                  value="{selectedCommit.commit.message.split('\n')[0]}"
-                  fontWeight="$fontWeight-bold" />
-              </Link>
-              <Button
-                label="✕"
-                variant="ghost"
-                size="xs"
-                tooltip="Close detail pane"
-                onClick="selectedSha = null; selectedLine = null" />
-            </HStack>
+            <Text value="Full message" fontSize="$fontSize-sm" color="$textColor-secondary" />
           </property>
           <VStack
             when="{commitHits.length > 0 &amp;&amp; selectedCommit &amp;&amp; selectedCommit.body}"
@@ -325,27 +328,6 @@
             whiteSpace="pre-wrap"
             value="{commitMessageBody}" />
         </ExpandableItem>
-        <HStack
-          when="{!commitMessageBody &amp;&amp; commitHits.length === 0}"
-          gap="$space-2"
-          verticalAlignment="center">
-          <Text value="{selectedSha &amp;&amp; selectedSha.slice(0, 7)}" variant="code" fontSize="$fontSize-sm" />
-          <Link
-            when="{selectedCommit}"
-            width="*"
-            noIndicator
-            onClick="(selectedCommit.html_url &amp;&amp; selectedCommit.pushed) ? openExternal(selectedCommit.html_url) : null">
-            <Text
-              value="{selectedCommit.commit.message.split('\n')[0]}"
-              fontWeight="$fontWeight-bold" />
-          </Link>
-          <Button
-            label="✕"
-            variant="ghost"
-            size="xs"
-            tooltip="Close detail pane"
-            onClick="selectedSha = null; selectedLine = null" />
-        </HStack>
         <Text
           when="{selectedCommit}"
           fontSize="$fontSize-sm"

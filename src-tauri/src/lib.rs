@@ -1137,6 +1137,8 @@ fn agent_status_cell() -> &'static Mutex<AgentStatus> {
     AGENT_STATUS.get_or_init(|| Mutex::new(AgentStatus::idle()))
 }
 
+const CODEX_AGENT_STATUS_STALE_MS: i64 = 3_000;
+
 // Parsed snapshot of Claude's rotating status line. Drives the row's
 // verb, elapsed text, and substate ("thinking some more", "almost done
 // thinking"). Tokens dropped per user request — the live PTY count was
@@ -1946,6 +1948,45 @@ fn pty_chunk_has_turn_activity_glyph(chunk: &[u8]) -> bool {
     false
 }
 
+fn agent_status_set_codex_working<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    active_since: std::time::Instant,
+) {
+    if !matches!(hinted_session_provider(app), Some(SessionProvider::Codex)) {
+        return;
+    }
+    let elapsed_ms = std::time::Instant::now()
+        .saturating_duration_since(active_since)
+        .as_millis()
+        .min(i64::MAX as u128) as i64;
+    let next = AgentStatus {
+        provider: Some("codex".to_string()),
+        state: "working".to_string(),
+        verb: Some("working".to_string()),
+        elapsed_text: Some(format_elapsed_text(elapsed_ms)),
+        substate: None,
+        output_tokens_text: None,
+        updated_at_ms: unix_now_ms(),
+    };
+    let mut emit_payload: Option<AgentStatus> = None;
+    if let Ok(mut cur) = agent_status_cell().lock() {
+        let changed = cur.verb != next.verb
+            || cur.elapsed_text != next.elapsed_text
+            || cur.substate != next.substate
+            || cur.state != next.state
+            || cur.provider != next.provider;
+        if changed {
+            *cur = next.clone();
+            emit_payload = Some(next);
+        } else {
+            cur.updated_at_ms = next.updated_at_ms;
+        }
+    }
+    if let Some(payload) = emit_payload {
+        emit_replayable_payload(app, "agent-status-changed", &payload);
+    }
+}
+
 fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     let now = std::time::Instant::now();
     let has_spinner = pty_chunk_has_turn_activity_glyph(chunk);
@@ -1953,6 +1994,7 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     let mut spinner_started = false;
     let mut spinner_ended_duration_ms: Option<u128> = None;
     let mut turn_end_silence_ms: Option<u128> = None;
+    let mut codex_active_since: Option<std::time::Instant> = None;
     if let Ok(mut state) = agent_turn_state_cell().lock() {
         if has_spinner {
             if !state.is_active {
@@ -1963,6 +2005,7 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             }
             state.last_spinner_at = Some(now);
             state.is_active = true;
+            codex_active_since = state.active_since;
         } else if state.is_active {
             if let Some(last) = state.last_spinner_at {
                 let silence = now.saturating_duration_since(last).as_millis();
@@ -1989,6 +2032,9 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                 }
             }
         }
+    }
+    if let Some(active_since) = codex_active_since {
+        agent_status_set_codex_working(app, active_since);
     }
     if bram_trace_enabled() {
         if spinner_started {
@@ -14659,11 +14705,23 @@ fn route_request<R: tauri::Runtime>(
     }
 
     if path == "__agent-status" {
-        let body = if let Ok(cur) = agent_status_cell().lock() {
+        let mut emit_payload: Option<AgentStatus> = None;
+        let body = if let Ok(mut cur) = agent_status_cell().lock() {
+            let codex_stale = cur.provider.as_deref() == Some("codex")
+                && cur.state == "working"
+                && unix_now_ms().saturating_sub(cur.updated_at_ms) > CODEX_AGENT_STATUS_STALE_MS;
+            if codex_stale {
+                let next = AgentStatus::idle();
+                *cur = next.clone();
+                emit_payload = Some(next);
+            }
             serde_json::to_vec(&*cur).unwrap_or_default()
         } else {
             b"{}".to_vec()
         };
+        if let Some(payload) = emit_payload {
+            emit_replayable_payload(app, "agent-status-changed", &payload);
+        }
         return (200, "application/json; charset=utf-8", body);
     }
 

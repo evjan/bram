@@ -645,7 +645,6 @@
             onInit="setWorklistVoiceTarget('message-agent')"
             onClick="setWorklistVoiceTarget('message-agent')"
             onGotFocus="setWorklistVoiceTarget('message-agent')"
-            onDidChange="() => setWorklistVoiceTarget('message-agent')"
             enabled="{!feedbackExpanded}"
             readOnly="{false}"
             placeholder="Message agent — Enter sends, Shift+Enter newline"

@@ -189,6 +189,7 @@
     subscribeTauriEvent('__bramAgentStatusUnsub', 'agent-status-changed', () => {
       agentStatus.refetch();
     });">
+    <Theme maxWidth-ModalDialog="50vw">
     <ModalDialog
       when="{!!openToolId}"
       onClose="openToolId = null"
@@ -251,6 +252,7 @@
         </VStack>
       </VStack>
     </ModalDialog>
+    </Theme>
 
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">
@@ -748,6 +750,7 @@
       </VStack>
     </ModalDialog>
 
+    <Theme maxWidth-ModalDialog="50vw">
     <ModalDialog
       when="{closeIssuesDialog !== null}"
       title="Close referenced issue(s)?"
@@ -793,6 +796,7 @@
         </HStack>
       </VStack>
     </ModalDialog>
+    </Theme>
 
     <ModalDialog
       id="statusInvalidHelpDialog"
@@ -873,6 +877,7 @@ Iterate is the right move when the agent's first cut is *almost* what you want."
       </VStack>
     </ModalDialog>
 
+    <Theme maxWidth-ModalDialog="50vw">
     <ModalDialog
       when="{newItemHelp}"
       title="Add a worklist item"
@@ -933,6 +938,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
         </VStack>
       </VStack>
     </ModalDialog>
+    </Theme>
 
     <ModalDialog
       id="dropHelpDialog"

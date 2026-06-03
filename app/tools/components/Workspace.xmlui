@@ -265,7 +265,7 @@
           </Theme>
         </HStack>
         <HStack
-          when="{agentStatus.value &amp;&amp; agentStatus.value.provider === 'claude' &amp;&amp; agentStatus.value.state === 'working' &amp;&amp; !pendingMenu}"
+          when="{agentStatus.value &amp;&amp; agentStatus.value.state === 'working' &amp;&amp; !pendingMenu}"
           gap="$space-2"
           verticalAlignment="center"
           padding="$space-1">

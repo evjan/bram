@@ -151,8 +151,8 @@
         <Button
           label="{recording ? '⏹ stop' : '🎤 voice'}"
           variant="ghost"
-          tooltip="Voice input — click to start, click again to send"
-          onClick="recording ? (recording = false, voiceStop(t => { if (t) toTurn('voice: ' + t); })) : (voiceStart(), recording = true)" />
+          tooltip="Voice input — focused Worklist boxes receive text; otherwise sends to terminal"
+          onClick="recording = toggleVoiceForCurrentTarget(recording)" />
         <Button
           label="1"
           variant="ghost"

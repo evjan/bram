@@ -1225,12 +1225,30 @@ function restoreWorklistSubmittedBaseline() {
 function submitWorklistMessage(text, baseline) {
   if (!text || !text.trim()) return false;
   const message = text.trim();
+  const sentAt = Date.now();
+  iframeTrace('message-agent-submit', { stage: 'before-toTurn', chars: message.length, sentAt });
+  toTurn(message);
+  iframeTrace('message-agent-submit', { stage: 'after-toTurn', chars: message.length, sentAt });
   writeLocalStorage('bram.awaitingResponse', '');
   writeLocalStorage('bram.worklistMessageDraft', '');
   writeLocalStorage('bram.worklistSubmittedMessage', message);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
-  toTurn(message);
   return message;
+}
+
+function submitWorklistMessageFast(text) {
+  if (!text || !text.trim()) return false;
+  const message = text.trim();
+  const sentAt = Date.now();
+  iframeTrace('message-agent-submit', { stage: 'before-toTurn', chars: message.length, sentAt });
+  toTurn(message);
+  iframeTrace('message-agent-submit', { stage: 'after-toTurn', chars: message.length, sentAt });
+  const baseline = 0;
+  writeLocalStorage('bram.awaitingResponse', '');
+  writeLocalStorage('bram.worklistMessageDraft', '');
+  writeLocalStorage('bram.worklistSubmittedMessage', message);
+  writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
+  return { message, baseline, sentAtText: new Date().toLocaleTimeString() };
 }
 
 function clearWorklistAwaiting(clearDraft) {
@@ -1238,6 +1256,37 @@ function clearWorklistAwaiting(clearDraft) {
   if (clearDraft) {
     writeLocalStorage('bram.worklistMessageDraft', '');
   }
+}
+
+function setWorklistVoiceTarget(target, component) {
+  window.__bramWorklistVoiceTarget = { target, component };
+  iframeTrace('voice-input', { target, stage: 'focus' });
+}
+
+function appendVoiceTranscript(component, transcript) {
+  if (!component || !transcript) return false;
+  const current = String(component.value || '');
+  const spacer = current && !/\s$/.test(current) ? '\n' : '';
+  component.setValue(current + spacer + transcript);
+  if (component.focus) component.focus();
+  return true;
+}
+
+function toggleVoiceForCurrentTarget(recording) {
+  const active = window.__bramWorklistVoiceTarget || {};
+  if (recording) {
+    voiceStop(t => {
+      if (appendVoiceTranscript(active.component, t)) {
+        iframeTrace('voice-input', { target: active.target || 'message-agent', stage: 'stop' });
+      } else if (t) {
+        toTurn('voice: ' + t);
+      }
+    });
+    return false;
+  }
+  iframeTrace('voice-input', { target: active.target || 'terminal', stage: 'start' });
+  voiceStart();
+  return true;
 }
 
 function worklistSubmittedAssistant(exchange, submittedMessage) {

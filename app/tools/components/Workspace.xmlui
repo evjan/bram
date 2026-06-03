@@ -19,8 +19,10 @@
   var.openToolId="{null}"
   var.inflightTick="{0}"
   var.lastAssistantTick="{0}"
+  var.worklistTurnsTick="{0}"
   var.lastAssistantTickAt="{0}"
   var.lastAssistantStableText="{''}"
+  var.messageSentAtText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}">
@@ -131,20 +133,14 @@
 
   <DataSource id="agentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" />
-  <DataSource id="worklistTurnsDS" url="/__session-turns?t={lastAssistantTick}" />
+  <DataSource id="worklistTurnsDS" url="/__session-turns?t={worklistTurnsTick}" />
   <DataSource
     id="worklistToolDetailDS"
     url="/__tool-detail?id={openToolId || ''}"
     when="{!!openToolId}" />
-  <DataSource id="waitingDS" url="/__waiting-for-assistant?t={lastAssistantTick}" />
-  <!-- "composing" = user has text in the worklist input (writing) OR
-       the most recent user message in JSONL has no assistant response
-       yet (in-flight turn). Drives the disable gate on the message
-       textarea AND on worklist triage controls (New item, item radios,
-       action buttons). Uses lastExchangeDS (not agentStatus.state)
-       because state blips to 'idle' between tool calls during the
-       soft-clear race; the JSONL exchange signal is stable across the
-       whole turn. -->
+  <!-- Lightweight latest-state DataSources follow talk-session changes
+       during streaming. Full session turns are larger and refresh on
+       turn boundaries via worklistTurnsTick. -->
   <!-- The form clears on submit; the submitted text is shown below as
        the persisted "You" half of the local exchange. awaitingResponse
        is memory-only display state; it never locks typing and never
@@ -153,7 +149,7 @@
   <VStack
     padding="$space-6"
     gap="$space-6"
-    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; lastAssistantTextDS.refetch(); currentTurnEditsDS.refetch(); lastExchangeDS.refetch(); worklistTurnsDS.refetch(); waitingDS.refetch(); });
+    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); debounce(400, () => { iframeTrace('refetch-called', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; }, Date.now()); });
     subscribeTauriEvent('__bramWorklistUnsub', 'worklist-changed', (e) => {
       const payload = (e &amp;&amp; e.payload) || {};
       iframeTrace('listener-fired', {paths: payload.paths || [], correlation_id: payload.id || ''});
@@ -168,9 +164,9 @@
       if (awaitingResponse) {
         awaitingResponse = false;
         clearWorklistAwaiting(false);
-        lastExchangeDS.refetch();
-        worklistTurnsDS.refetch();
-        waitingDS.refetch();
+        lastAssistantTickAt = Date.now();
+        lastAssistantTick = lastAssistantTick + 1;
+        worklistTurnsTick = worklistTurnsTick + 1;
       }
     });
     subscribeTauriEvent('__bramWorkspaceAgentTurnKilledUnsub', 'agent-turn-killed', () => {
@@ -510,6 +506,7 @@
                     initialValue="{selectedFeedback}"
                     placeholder="Message to agent"
                     autoFocus="true"
+                    onGotFocus="setWorklistVoiceTarget('feedback', feedbackBox)"
                     resize="vertical"
                     minRows="2"
                     maxRows="16"
@@ -627,14 +624,15 @@
         persist="true"
         storageKey="bram.worklistMessageDraftForm"
         dataAfterSubmit="clear"
-        onWillSubmit="(data) => { if ((waitingDS.value &amp;&amp; waitingDS.value.waiting) || (agentStatus.value &amp;&amp; agentStatus.value.state === 'working')) return false; if (!data.message || !data.message.trim()) return false; }"
-        onSubmit="(data) => { const baseline = worklistUserTurnCount(worklistTurnsDS.value || []); const message = submitWorklistMessage(data.message, baseline); if (message) { submittedWorklistMessage = message; submittedTurnsBaseline = baseline; awaitingResponse = true; } }">
+        onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
+        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; } }">
         <property name="buttonRowTemplate"><Fragment/></property>
         <HStack gap="$space-2" verticalAlignment="end">
           <TextArea
             id="worklistInputBox"
             bindTo="message"
             enterSubmits="true"
+            onGotFocus="setWorklistVoiceTarget('message-agent', worklistInputBox)"
             readOnly="{false}"
             placeholder="Message agent — Enter sends, Shift+Enter newline"
             autoSize="true"
@@ -642,6 +640,11 @@
             maxRows="6"
             width="*" />
         </HStack>
+        <Text
+          when="{messageSentAtText}"
+          fontSize="$fontSize-xs"
+          color="$textColor-secondary"
+          value="{'sent ' + messageSentAtText}" />
       </Form>
 
       <VStack

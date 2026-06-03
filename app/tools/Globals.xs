@@ -1364,9 +1364,7 @@ function worklistLatestMatchesSubmitted(turns, submittedMessage, baseline) {
 }
 
 function worklistShouldShowSubmitted(turns, submittedMessage, awaiting, baseline) {
-  if (!submittedMessage) return false;
-  if (awaiting) return true;
-  return !worklistLatestMatchesSubmitted(turns, submittedMessage, baseline);
+  return !!(awaiting && submittedMessage);
 }
 
 function worklistDisplayUserText(turns, submittedMessage, awaiting, baseline) {

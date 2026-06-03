@@ -134,6 +134,13 @@
   <DataSource id="agentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" />
   <DataSource id="worklistTurnsDS" url="/__session-turns?t={worklistTurnsTick}" />
+  <ChangeListener
+    listenTo="{((worklistTurnsDS.value || []).length || 0) + ':' + ((lastAssistantStableText || '').length) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').length)}"
+    onDidChange="() => {
+      const entries = worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline);
+      const source = worklistConversationSource(entries, lastAssistantStableText, lastExchangeDS.value, submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline);
+      iframeTrace('conversation-sync', {source, entries: entries.length});
+    }" />
   <DataSource
     id="worklistToolDetailDS"
     url="/__tool-detail?id={openToolId || ''}"
@@ -149,7 +156,7 @@
   <VStack
     padding="$space-6"
     gap="$space-6"
-    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); debounce(400, () => { iframeTrace('refetch-called', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; }, Date.now()); });
+    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); debounce(400, () => { iframeTrace('refetch-called', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; worklistTurnsTick = worklistTurnsTick + 1; }, Date.now()); });
     subscribeTauriEvent('__bramWorklistUnsub', 'worklist-changed', (e) => {
       const payload = (e &amp;&amp; e.payload) || {};
       iframeTrace('listener-fired', {paths: payload.paths || [], correlation_id: payload.id || ''});
@@ -672,7 +679,7 @@
         </VStack>
         <VStack
           gap="$space-1"
-          when="{worklistSubmittedAssistant(lastExchangeDS.value, submittedWorklistMessage) || worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline).length > 0}">
+          when="{worklistAssistantFallbackText(worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline), lastAssistantStableText, lastExchangeDS.value, submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline) || worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline).length > 0}">
           <Text
             fontWeight="$fontWeight-bold"
             color="$color-success-700"
@@ -713,7 +720,7 @@
           </Items>
           <Markdown
             when="{worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline).length === 0}"
-            content="{worklistSubmittedAssistant(lastExchangeDS.value, submittedWorklistMessage)}" />
+            content="{worklistAssistantFallbackText(worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline), lastAssistantStableText, lastExchangeDS.value, submittedWorklistMessage, awaitingResponse, submittedTurnsBaseline)}" />
         </VStack>
       </VStack>
 

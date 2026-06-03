@@ -1309,11 +1309,24 @@ function worklistSubmittedAssistant(exchange, submittedMessage) {
   const submitted = worklistMessageKey(submittedMessage);
   if (!submitted || !exchange) return '';
   const userText = worklistMessageKey((exchange && exchange.userText) || '');
-  if (isWorklistActionPayloadText(userText)) {
-    return ((exchange && exchange.assistantText) || '').trim();
-  }
   if (userText !== submitted) return '';
   return ((exchange && exchange.assistantText) || '').trim();
+}
+
+function worklistConversationSource(turnEntries, latestAssistantText, exchange, submittedMessage, awaiting, baseline) {
+  if (turnEntries && turnEntries.length > 0) return 'session-turns';
+  if (worklistShouldShowSubmitted([], submittedMessage, awaiting, baseline)) return 'awaiting';
+  if (String(latestAssistantText || '').trim()) return 'last-assistant-text';
+  if (worklistSubmittedAssistant(exchange, submittedMessage)) return 'last-exchange';
+  return 'none';
+}
+
+function worklistAssistantFallbackText(turnEntries, latestAssistantText, exchange, submittedMessage, awaiting, baseline) {
+  if (turnEntries && turnEntries.length > 0) return '';
+  if (worklistShouldShowSubmitted([], submittedMessage, awaiting, baseline)) return '';
+  const latest = String(latestAssistantText || '').trim();
+  if (latest) return latest;
+  return worklistSubmittedAssistant(exchange, submittedMessage);
 }
 
 function worklistMessageKey(text) {

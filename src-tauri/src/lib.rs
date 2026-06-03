@@ -717,7 +717,10 @@ where
         append_bram_trace_line(
             app,
             "event-remember",
-            &format!("kind={} payload_size={} source=payload", event_name, payload_size),
+            &format!(
+                "kind={} payload_size={} source=payload",
+                event_name, payload_size
+            ),
         );
     }
     let _ = app.emit(event_name, payload);
@@ -1006,9 +1009,8 @@ fn parse_menu_options(text: &str) -> Vec<MenuOption> {
         // 1 because option 1's line had the menu header in front of it.
         // Refs #170.
         if let Some(cursor_idx) = trimmed.find('❯') {
-            trimmed = trimmed[cursor_idx..].trim_start_matches(|c: char| {
-                c == '❯' || c == '\u{a0}' || c.is_whitespace()
-            });
+            trimmed = trimmed[cursor_idx..]
+                .trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
         }
         if trimmed.is_empty() {
             // Blank line terminates after at least one option — the PTY emits
@@ -1150,6 +1152,30 @@ struct ParsedStatusLine {
     substate: Option<String>,
 }
 
+fn is_claude_status_verb_char(ch: char) -> bool {
+    ch.is_alphabetic() || ch == '\''
+}
+
+fn is_valid_claude_status_verb(verb: &str) -> bool {
+    if verb.is_empty() || verb.len() > 40 || verb.chars().count() < 4 {
+        return false;
+    }
+    let Some(first) = verb.chars().next() else {
+        return false;
+    };
+    if !first.is_uppercase() || !verb.chars().all(is_claude_status_verb_char) {
+        return false;
+    }
+    // Strict title-case: only the first char may be uppercase. Rejects
+    // glitches like "GScurriying" where a stray CSI-G column-position
+    // escape leaked a literal G into the walk-back. CC's verbs are
+    // simple gerunds (Hashing, Frying, Architecting) — always one cap.
+    if verb.chars().skip(1).any(|c| c.is_uppercase()) {
+        return false;
+    }
+    true
+}
+
 // Parse Claude's full status line from an ANSI-stripped PTY tail.
 // Anchors on the rightmost "… (" form. Inside the parens, splits on the
 // "·" separator: index 0 is elapsed (always present); remaining segments
@@ -1185,41 +1211,23 @@ fn parse_claude_status_line(stripped_tail: &[u8]) -> Option<ParsedStatusLine> {
     // with a token-count arrow ("↓" output, "↑" input — both come and
     // go on the status line and are skipped here).
     let is_token_seg = |seg: &str| seg.starts_with('↓') || seg.starts_with('↑');
-    let substate = segs
-        .iter()
-        .skip(1)
-        .find(|seg| !is_token_seg(seg))
-        .cloned();
+    let substate = segs.iter().skip(1).find(|seg| !is_token_seg(seg)).cloned();
 
     // Walk back from "…" to find the verb. Unicode-aware.
     let before = s[..anchor].trim_end();
     let mut verb_start_byte = 0usize;
     for (idx, ch) in before.char_indices().rev() {
-        if !ch.is_alphabetic() {
+        if !is_claude_status_verb_char(ch) {
             verb_start_byte = idx + ch.len_utf8();
             break;
         }
     }
     let verb = before[verb_start_byte..].to_string();
-    if verb.is_empty() || verb.len() > 40 {
-        return None;
-    }
     // Reject mid-paint partials. CC's gerund verbs are always 5+ chars
     // (Hashing, Frying, Undulating, Flibbertigibbeting…). A 2–3 char
     // capture is almost certainly the parser sampling the tail between
     // two repaints, catching only the leading bytes of the next verb.
-    if verb.chars().count() < 4 {
-        return None;
-    }
-    let first = verb.chars().next()?;
-    if !first.is_uppercase() || !verb.chars().all(|c| c.is_alphabetic()) {
-        return None;
-    }
-    // Strict title-case: only the first char may be uppercase. Rejects
-    // glitches like "GScurriying" where a stray CSI-G column-position
-    // escape leaked a literal G into the walk-back. CC's verbs are
-    // simple gerunds (Hashing, Frying, Architecting) — always one cap.
-    if verb.chars().skip(1).any(|c| c.is_uppercase()) {
+    if !is_valid_claude_status_verb(&verb) {
         return None;
     }
 
@@ -1253,26 +1261,13 @@ fn parse_claude_status_verb_only(stripped_tail: &[u8]) -> Option<String> {
         let before = s[..rel].trim_end();
         let mut verb_start_byte = 0usize;
         for (idx, ch) in before.char_indices().rev() {
-            if !ch.is_alphabetic() {
+            if !is_claude_status_verb_char(ch) {
                 verb_start_byte = idx + ch.len_utf8();
                 break;
             }
         }
         let verb = before[verb_start_byte..].to_string();
-        if verb.is_empty() || verb.len() > 40 || verb.chars().count() < 4 {
-            search_end = rel;
-            continue;
-        }
-        let Some(first) = verb.chars().next() else {
-            search_end = rel;
-            continue;
-        };
-        if !first.is_uppercase() || !verb.chars().all(|c| c.is_alphabetic()) {
-            search_end = rel;
-            continue;
-        }
-        // Strict title-case (see parse_claude_status_line).
-        if verb.chars().skip(1).any(|c| c.is_uppercase()) {
+        if !is_valid_claude_status_verb(&verb) {
             search_end = rel;
             continue;
         }
@@ -1405,7 +1400,12 @@ fn pty_tail_has_natural_end_banner(stripped: &[u8]) -> bool {
         }
         // Duration: first non-whitespace char after " for " must be a digit.
         let after = line[idx + " for ".len()..].trim_start();
-        if after.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if after
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
             return true;
         }
     }
@@ -1534,6 +1534,18 @@ fn last_pty_escape_ms_cell() -> &'static Mutex<i64> {
 }
 const POST_ESCAPE_NO_KILL_WINDOW_MS: i64 = 15_000;
 
+// user_ts_ms of the most recent turn whose start the natural-end banner
+// gate has observed. When pty_agent_status_update sees a fresh
+// stats.user_ts_ms (advance past this stamp), it drains pty_tail_cell so
+// the prior turn's "* <Verb>ed for X" banner — still sitting in the
+// rolling 8KB buffer — cannot falsely match
+// pty_tail_has_natural_end_banner and kill the status row mid-turn.
+// Refs #178.
+static LAST_BANNER_USER_TS_MS: OnceLock<Mutex<i64>> = OnceLock::new();
+fn last_banner_user_ts_ms_cell() -> &'static Mutex<i64> {
+    LAST_BANNER_USER_TS_MS.get_or_init(|| Mutex::new(0))
+}
+
 fn kill_current_claude_turn<R: tauri::Runtime>(app: &AppHandle<R>) {
     let current_ts = claude_turn_stats_cell()
         .lock()
@@ -1578,8 +1590,7 @@ fn start_claude_turn_stats_poll<R: tauri::Runtime>(app_handle: AppHandle<R>) {
             }
             continue;
         }
-        let next = match read_latest_session_tail(&app_handle, Some(SessionProvider::Claude), 300)
-        {
+        let next = match read_latest_session_tail(&app_handle, Some(SessionProvider::Claude), 300) {
             Ok(tail) => compute_claude_turn_stats(&tail),
             Err(_) => None,
         };
@@ -1663,7 +1674,13 @@ fn compute_claude_turn_stats(tail: &[u8]) -> Option<ClaudeTurnStats> {
 // for one parse call.
 fn parse_iso_to_ms(iso: &str) -> Option<i64> {
     let b = iso.as_bytes();
-    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+    if b.len() < 19
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+    {
         return None;
     }
     let year: i64 = iso.get(0..4)?.parse().ok()?;
@@ -1699,7 +1716,18 @@ fn parse_iso_to_ms(iso: &str) -> Option<i64> {
         days += if is_leap(y) { 366 } else { 365 };
     }
     let days_in_month: [i64; 12] = [
-        31, if is_leap(year) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        if is_leap(year) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     for m in 1..month as usize {
         days += days_in_month[m - 1];
@@ -1748,7 +1776,10 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
     // the user submits a new prompt — JSONL won't record an end_turn
     // for a canceled turn, so the cache-based working signal alone
     // can't tell the row to stay down.
-    let killed_ts = last_killed_user_ts_ms_cell().lock().map(|g| *g).unwrap_or(0);
+    let killed_ts = last_killed_user_ts_ms_cell()
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(0);
     if stats.user_ts_ms <= killed_ts {
         return;
     }
@@ -1757,6 +1788,19 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
     // natural-end banner ("* Worked for 1m 2s") in a chunk that arrived
     // before the silence detector / JSONL caught up. The banner is the
     // most authoritative end-of-turn signal — hard-kill immediately.
+    //
+    // Guard: on a fresh user_ts_ms, drain pty_tail_cell first so the
+    // prior turn's banner — still in the rolling 8KB buffer for ~7s
+    // after the turn end — cannot match here and kill the new turn's
+    // status row. Refs #178.
+    if let Ok(mut last) = last_banner_user_ts_ms_cell().lock() {
+        if stats.user_ts_ms > *last {
+            *last = stats.user_ts_ms;
+            if let Ok(mut tail) = pty_tail_cell().lock() {
+                tail.clear();
+            }
+        }
+    }
     let stripped = pty_tail_cell().lock().ok().map(|tail| strip_ansi(&tail));
     if stripped
         .as_ref()
@@ -1766,9 +1810,7 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
         kill_current_claude_turn(app);
         return;
     }
-    let full = stripped
-        .as_ref()
-        .and_then(|s| parse_claude_status_line(s));
+    let full = stripped.as_ref().and_then(|s| parse_claude_status_line(s));
     // Phrase scan for substate — runs regardless of full-form parse,
     // because CC paints the status line piecewise and the substate
     // word usually arrives in the tail even when "… (" doesn't.
@@ -1932,6 +1974,24 @@ const MIN_SILENCE_FOR_SENTINEL_CLEAR_MS: u128 = 3000;
 // gated.
 const AGENT_TURN_EMIT_COOLDOWN_MS: u128 = 5000;
 
+fn should_clear_status_on_turn_activity_stop(
+    silence_ms: Option<u128>,
+    menu_pending: bool,
+    post_escape: bool,
+) -> bool {
+    // The 800 ms turn-end event is intentionally eager for legacy
+    // listeners, but it is too eager for the status row: Claude and
+    // Codex both pause spinner/title repainting between tool/result
+    // bursts. Only clear the row on a conservative silence window and
+    // never while the permission panel or post-Esc recovery owns the UI.
+    const ROW_HARD_KILL_MIN_SILENCE_MS: u128 = 10_000;
+    silence_ms
+        .map(|s| s >= ROW_HARD_KILL_MIN_SILENCE_MS)
+        .unwrap_or(false)
+        && !menu_pending
+        && !post_escape
+}
+
 // Byte-level check for turn-activity glyphs without allocating a
 // String. Asterisk family is U+2700..U+277F (UTF-8 prefix 0xE2 0x9C);
 // braille patterns are U+2800..U+283F (prefix 0xE2 0xA0). In practice
@@ -2071,17 +2131,6 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // silence; hard-killing on that loses the row for the rest of
         // the turn once the user finally answers. The menu surface
         // shows "awaiting your input" via pendingMenu independently.
-        // 10 s threshold for the row's hard-kill (separate from the
-        // sentinel-clear 3 s threshold). CC's natural inter-burst
-        // pauses (waiting on API, thinking blocks, MCP roundtrips)
-        // routinely exceed 3 s — killing the row on those mis-fires
-        // and the row dies mid-turn. The natural-end banner detector
-        // in pty_agent_status_update catches real end-of-turn faster
-        // than silence alone, so we can be conservative here.
-        const ROW_HARD_KILL_MIN_SILENCE_MS: u128 = 10_000;
-        let silent_long_enough = turn_end_silence_ms
-            .map(|s| s >= ROW_HARD_KILL_MIN_SILENCE_MS)
-            .unwrap_or(true);
         let menu_pending = pty_menu_cell()
             .lock()
             .ok()
@@ -2092,12 +2141,24 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // 15s after an Esc so the row survives think pauses. Double-Esc
         // still hard-kills via the pty-escape handler.
         let last_escape = last_pty_escape_ms_cell().lock().map(|g| *g).unwrap_or(0);
-        let post_escape = last_escape > 0
-            && unix_now_ms() - last_escape < POST_ESCAPE_NO_KILL_WINDOW_MS;
-        if silent_long_enough && !menu_pending && !post_escape {
+        let post_escape =
+            last_escape > 0 && unix_now_ms() - last_escape < POST_ESCAPE_NO_KILL_WINDOW_MS;
+        if should_clear_status_on_turn_activity_stop(turn_end_silence_ms, menu_pending, post_escape)
+        {
             kill_current_claude_turn(app);
         } else {
-            agent_status_clear_to_idle(app);
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    app,
+                    "agent-status",
+                    &format!(
+                        "op=skip-clear source=pty-turn-activity-stop silence_ms={} menu_pending={} post_escape={}",
+                        turn_end_silence_ms.unwrap_or(0),
+                        menu_pending,
+                        post_escape
+                    ),
+                );
+            }
         }
 
         // Host-side guarantee: clear any active inflight sentinel when
@@ -2806,8 +2867,7 @@ fn pty_codex_action_required_pos(tail: &[u8]) -> Option<usize> {
         let prefix = &tail[prefix_start..pos];
         let suffix_end = (pos + title.len() + 32).min(tail.len());
         let suffix = &tail[pos + title.len()..suffix_end];
-        if prefix.windows(4).any(|w| w == b"\x1b]0;")
-            && suffix.windows(7).any(|w| w == b" | bram")
+        if prefix.windows(4).any(|w| w == b"\x1b]0;") && suffix.windows(7).any(|w| w == b" | bram")
         {
             return Some(pos);
         }
@@ -7465,11 +7525,7 @@ fn extract_pending_tool_call_from_jsonl(text: &str) -> Option<PendingToolCall> {
             let id = c.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let name = c.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if recent_tool_use_ids.len() < 6 {
-                recent_tool_use_ids.push((
-                    id.to_string(),
-                    name.to_string(),
-                    resolved.contains(id),
-                ));
+                recent_tool_use_ids.push((id.to_string(), name.to_string(), resolved.contains(id)));
             }
             if id.is_empty() || resolved.contains(id) {
                 continue;
@@ -12250,9 +12306,8 @@ fn agent_coordination_rows<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<serde_j
                     "{}\n@{}\n{}",
                     ENHANCE_MARKER_START, ENHANCE_SIDECAR_REL, ENHANCE_MARKER_END
                 );
-                let block =
-                    extract_marker_block(&disk, ENHANCE_MARKER_START, ENHANCE_MARKER_END)
-                        .unwrap_or("");
+                let block = extract_marker_block(&disk, ENHANCE_MARKER_START, ENHANCE_MARKER_END)
+                    .unwrap_or("");
                 let matches = block == expected;
                 rows.push(json!({
                     "signal": "CLAUDE.md (marker block)",
@@ -13076,6 +13131,69 @@ impl IfEmpty for String {
         } else {
             self
         }
+    }
+}
+
+#[cfg(test)]
+mod agent_status_tests {
+    use super::{
+        parse_claude_status_line, parse_claude_status_verb_only,
+        should_clear_status_on_turn_activity_stop,
+    };
+
+    #[test]
+    fn parses_apostrophe_claude_status_verb_full_line() {
+        let parsed = parse_claude_status_line("Beboppin'… (12s · thinking more)".as_bytes())
+            .expect("status line should parse");
+
+        assert_eq!(parsed.verb, "Beboppin'");
+        assert_eq!(parsed.elapsed_text, "12s");
+        assert_eq!(parsed.substate.as_deref(), Some("thinking more"));
+    }
+
+    #[test]
+    fn parses_apostrophe_claude_status_verb_standalone() {
+        let verb = parse_claude_status_verb_only("Beboppin'…".as_bytes())
+            .expect("standalone status verb should parse");
+
+        assert_eq!(verb, "Beboppin'");
+    }
+
+    #[test]
+    fn short_turn_activity_silence_does_not_clear_status_row() {
+        assert!(!should_clear_status_on_turn_activity_stop(
+            Some(900),
+            false,
+            false
+        ));
+        assert!(!should_clear_status_on_turn_activity_stop(
+            Some(3_000),
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn long_turn_activity_silence_can_clear_status_row() {
+        assert!(should_clear_status_on_turn_activity_stop(
+            Some(10_000),
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn menu_or_post_escape_suppresses_status_clear() {
+        assert!(!should_clear_status_on_turn_activity_stop(
+            Some(20_000),
+            true,
+            false
+        ));
+        assert!(!should_clear_status_on_turn_activity_stop(
+            Some(20_000),
+            false,
+            true
+        ));
     }
 }
 

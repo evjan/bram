@@ -2160,6 +2160,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         let drop = tail.len() - 8192;
         tail.drain(..drop);
     }
+    let codex_action_required_title = pty_codex_action_required_pos(&tail).is_some();
     let mut detected = pty_menu_detect(&tail);
     drop(tail);
 
@@ -2218,6 +2219,20 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
 
     if let Ok(mut menu) = pty_menu_cell().lock() {
         let prev_menu = menu.as_ref().cloned();
+
+        // Codex keeps a permission prompt alive by refreshing the raw
+        // terminal title (`Action Required | bram`) even when no new
+        // option text is emitted. The numbered choices can therefore
+        // scroll out of PTY_TAIL while the prompt is still on screen.
+        // Keep the last shown menu until user input clears it or the
+        // title heartbeat stops.
+        if detected.is_none() && codex_action_required_title {
+            if let Some(prev) = prev_menu.as_ref() {
+                if prev.tool != PENDING_TOOL {
+                    detected = Some(prev.clone());
+                }
+            }
+        }
 
         // Sticky-against-eviction guard. If detection returned None but
         // a menu was previously shown, defer the dismiss emit for up
@@ -2740,6 +2755,100 @@ fn pty_menu_anchor_pos(tail: &[u8]) -> Option<usize> {
     None
 }
 
+fn pty_numbered_menu_anchor_pos(tail: &[u8]) -> Option<usize> {
+    let mut end = tail.len();
+    while let Some(rel) = tail[..end].windows(2).rposition(|w| w == b"1.") {
+        let line_start = tail[..rel]
+            .iter()
+            .rposition(|&b| b == b'\n' || b == b'\r')
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        if tail[line_start..rel]
+            .iter()
+            .all(|&b| b == b' ' || b == b'\t')
+        {
+            return Some(rel);
+        }
+        end = rel;
+    }
+    None
+}
+
+fn pty_any_numbered_menu_anchor_pos(tail: &[u8]) -> Option<usize> {
+    tail.windows(2).rposition(|w| w == b"1.")
+}
+
+fn pty_text_looks_like_permission_menu(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("do you want")
+        || lower.contains("action required")
+        || lower.contains("codex to run")
+        || lower.contains("approve")
+        || lower.contains("approval")
+        || lower.contains("permission")
+        || lower.contains("sandbox")
+        || (lower.contains("allow") && lower.contains("deny"))
+}
+
+fn pty_text_looks_like_stale_worklist_menu_false_positive(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("diff --git")
+        || lower.contains("worklist")
+        || lower.contains("resources/worklist")
+        || lower.contains("src-tauri/src/lib.rs")
+}
+
+fn pty_codex_action_required_pos(tail: &[u8]) -> Option<usize> {
+    let title = b"Action Required";
+    let mut end = tail.len();
+    while let Some(pos) = tail[..end].windows(title.len()).rposition(|w| w == title) {
+        let prefix_start = pos.saturating_sub(16);
+        let prefix = &tail[prefix_start..pos];
+        let suffix_end = (pos + title.len() + 32).min(tail.len());
+        let suffix = &tail[pos + title.len()..suffix_end];
+        if prefix.windows(4).any(|w| w == b"\x1b]0;")
+            && suffix.windows(7).any(|w| w == b" | bram")
+        {
+            return Some(pos);
+        }
+        end = pos;
+    }
+    None
+}
+
+fn codex_fragmented_menu_options(text: &str) -> Vec<MenuOption> {
+    let parsed = parse_menu_options(text);
+    if !parsed.is_empty() {
+        return parsed;
+    }
+
+    let mut keys: Vec<String> = Vec::new();
+    for raw in text.lines() {
+        let trimmed =
+            raw.trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
+        let Some((digits, rest)) = trimmed.split_once('.') else {
+            continue;
+        };
+        if digits.is_empty()
+            || !digits.chars().all(|c| c.is_ascii_digit())
+            || !rest.trim().is_empty()
+        {
+            continue;
+        }
+        let key = digits.to_string();
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+
+    keys.into_iter()
+        .map(|key| MenuOption {
+            label: format!("Option {key}"),
+            key,
+        })
+        .collect()
+}
+
 // Look for claude's permission menu in the rolling tail. Pattern:
 // "1. Yes" appears, followed by "2. " within ~512 bytes (the menu's
 // options are tightly grouped). Tool name is best-effort guessed
@@ -2747,19 +2856,25 @@ fn pty_menu_anchor_pos(tail: &[u8]) -> Option<usize> {
 // bytes contain escape sequences interleaved within the visible menu
 // text, which would fragment the literal needle match.
 fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
+    let raw_codex_action = pty_codex_action_required_pos(tail).is_some();
     let stripped = strip_ansi(tail);
     let tail = stripped.as_slice();
-    // Anchor on the menu's selection-cursor (❯, U+276F) followed by an
-    // optional run of spaces / NBSP, then "1." — appears only on the
-    // first option of a live permission menu. The gap between cursor
-    // and option number has been rendered both as cursor-positioning
-    // escapes (collapsing to "❯1." after strip_ansi) and, in newer
-    // Claude Code builds, as a literal space and/or NBSP ("❯ 1.").
-    // pty_menu_anchor_pos tolerates all three. See diagnostic captures
-    // in /tmp/pty-menu-snapshot.txt. Refs #36.
+    // Prefer Claude's selection-cursor anchor (❯, U+276F) followed by an
+    // optional run of spaces / NBSP, then "1.". Codex prompts can render
+    // as a plain numbered approval menu, but only trust that shape when
+    // the raw PTY title says Action Required. Plain numbered prose in the
+    // transcript/worklist stream is otherwise too easy to mistake for a
+    // permission menu.
     let needle2: &[u8] = b"2.";
     let header: &[u8] = b"Do you want";
-    let pos1_opt = pty_menu_anchor_pos(tail);
+    let pos1_from_cursor = pty_menu_anchor_pos(tail);
+    let pos1_opt = pos1_from_cursor.or_else(|| {
+        if raw_codex_action {
+            pty_numbered_menu_anchor_pos(tail).or_else(|| pty_any_numbered_menu_anchor_pos(tail))
+        } else {
+            None
+        }
+    });
     let pos_header = tail.windows(header.len()).rposition(|w| w == header);
 
     let result = (|| -> Option<PtyMenu> {
@@ -2773,6 +2888,18 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
         let start = pos1.saturating_sub(200);
         let end = (pos2 + 200).min(tail.len());
         let text = String::from_utf8_lossy(&tail[start..end]).into_owned();
+        if pos1_from_cursor.is_none()
+            && !raw_codex_action
+            && !pty_text_looks_like_permission_menu(&text)
+        {
+            return None;
+        }
+        if pos1_from_cursor.is_none()
+            && !raw_codex_action
+            && pty_text_looks_like_stale_worklist_menu_false_positive(&text)
+        {
+            return None;
+        }
         // Prefer parsing the tool name from the menu's own
         // "Do you want to use X?" header (which lives inside `text`).
         // Falls back to the pre-menu context grep when the header is
@@ -2786,6 +2913,17 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
         let tool = match pty_menu_tool_from_header(&text) {
             Some(t) => t,
             None => {
+                if raw_codex_action {
+                    let options = codex_fragmented_menu_options(&text);
+                    return Some(PtyMenu {
+                        tool: "Bash".to_string(),
+                        text,
+                        options,
+                        tool_call_signature: None,
+                        tool_call_diff: None,
+                        signature_source: None,
+                    });
+                }
                 // Header text hasn't landed in this cycle's tail. If
                 // the previous cycle was already pending, we've waited
                 // a full cycle and the header still isn't here — fall
@@ -2806,7 +2944,11 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
                 }
             }
         };
-        let options = parse_menu_options(&text);
+        let options = if raw_codex_action {
+            codex_fragmented_menu_options(&text)
+        } else {
+            parse_menu_options(&text)
+        };
         // PTY-preferred signature. Scan the full ANSI-stripped tail for
         // `⏺ <Tool>(...)`. When found, override the menu's tool name with
         // the PTY-derived one — `pty_menu_tool_from_header` /
@@ -12941,7 +13083,7 @@ impl IfEmpty for String {
 mod pty_menu_tests {
     use super::{
         extract_pending_tool_call_from_jsonl, format_pending_tool_call, parse_menu_options,
-        pty_menu_input_clears_inflight, pty_output_clears_inflight,
+        pty_menu_detect, pty_menu_input_clears_inflight, pty_output_clears_inflight,
     };
     use serde_json::json;
 
@@ -13016,6 +13158,101 @@ mod pty_menu_tests {
         assert_eq!(opts.len(), 2);
         assert_eq!(opts[0].label, "Allow");
         assert_eq!(opts[1].label, "Deny");
+    }
+
+    #[test]
+    fn ignores_numbered_permission_text_without_codex_action_required_title() {
+        let text = "Permission request\nRun command: cargo test\n\n  1. Allow\n  2. Deny\n\n";
+
+        assert!(pty_menu_detect(text.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn detects_codex_action_required_menu_with_fragmented_options() {
+        let text = "\x1b]0;[ ! ] Action Required | bram\x07\
+\nrm -f /Users/jonudell/Desktop/foo.bar\n\
+1.\n\
+2.\n\
+3.\n";
+        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
+
+        assert_eq!(menu.tool, "Bash");
+        assert_eq!(menu.options.len(), 3);
+        assert_eq!(menu.options[0].key, "1");
+        assert_eq!(menu.options[0].label, "Option 1");
+        assert_eq!(menu.options[1].key, "2");
+        assert_eq!(menu.options[1].label, "Option 2");
+        assert_eq!(menu.options[2].key, "3");
+        assert_eq!(menu.options[2].label, "Option 3");
+    }
+
+    #[test]
+    fn detects_codex_action_required_menu_when_title_arrives_after_options() {
+        let text = "\nrm -f /Users/jonudell/Desktop/foo.bar\n\
+1.\n\
+2.\n\
+3.\n\
+\x1b]0;[ ! ] Action Required | bram\x07";
+        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
+
+        assert_eq!(menu.tool, "Bash");
+        assert_eq!(menu.options.len(), 3);
+        assert_eq!(menu.options[2].label, "Option 3");
+    }
+
+    #[test]
+    fn codex_fragmented_two_option_menu_does_not_invent_third_choice() {
+        let text = "\x1b]0;[ ! ] Action Required | bram\x07\
+\ncat /Users/jonudell/Desktop/foo.bar\n\
+1.\n\
+2.\n";
+        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
+
+        assert_eq!(menu.options.len(), 2);
+        assert_eq!(menu.options[0].key, "1");
+        assert_eq!(menu.options[0].label, "Option 1");
+        assert_eq!(menu.options[1].key, "2");
+        assert_eq!(menu.options[1].label, "Option 2");
+    }
+
+    #[test]
+    fn codex_parsed_menu_preserves_cancel_label() {
+        let text = "\x1b]0;[ ! ] Action Required | bram\x07\
+\n❯ 1. Yes, proceed\n\
+  2. No, and tell Codex what to do differently\n\n";
+        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
+
+        assert_eq!(menu.options.len(), 2);
+        assert_eq!(menu.options[1].key, "2");
+        assert_eq!(
+            menu.options[1].label,
+            "No, and tell Codex what to do differently"
+        );
+    }
+
+    #[test]
+    fn ignores_visible_action_required_prose_without_osc_title() {
+        let text = "The detector should notice Action Required when 1. and 2. are present.\n";
+
+        assert!(pty_menu_detect(text.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn ignores_stale_worklist_diff_numbered_text() {
+        let text = "resources/worklist-drafts/issue.md\n\
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs\n\
+The Worklist permission panel proposal:\n\
+1. Extend pty_menu_detect\n\
+2. Reuse parse_menu_options\n";
+
+        assert!(pty_menu_detect(text.as_bytes()).is_none());
+    }
+
+    #[test]
+    fn ignores_plain_numbered_terminal_output() {
+        let text = "Next steps:\n  1. Open the file\n  2. Edit the code\n\n";
+
+        assert!(pty_menu_detect(text.as_bytes()).is_none());
     }
 
     #[test]

@@ -1301,11 +1301,22 @@ function worklistAgentEntriesAfterUser(turns, userIndex) {
   return entries;
 }
 
+const COMPACTION_SUMMARY_PREFIX =
+  'This session is being continued from a previous conversation that ran out of context.';
+
+function isCompactionSyntheticUserTurn(turn) {
+  if (!turn || turn.role !== 'user') return false;
+  return worklistTurnText(turn).trim().startsWith(COMPACTION_SUMMARY_PREFIX);
+}
+
 function worklistLatestUserIndex(turns) {
   if (!turns || !turns.length) return -1;
   for (let i = turns.length - 1; i >= 0; i--) {
     const turn = turns[i];
-    if (turn && turn.role === 'user' && worklistTurnText(turn).trim()) return i;
+    if (turn && turn.role === 'user' && worklistTurnText(turn).trim()) {
+      if (isCompactionSyntheticUserTurn(turn)) return -1;
+      return i;
+    }
   }
   return -1;
 }

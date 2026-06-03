@@ -1208,7 +1208,8 @@ function restoreWorklistDraft() {
 }
 
 function restoreWorklistAwaiting() {
-  return readLocalStorage('bram.awaitingResponse', '') === '1';
+  writeLocalStorage('bram.awaitingResponse', '');
+  return false;
 }
 
 function restoreWorklistSubmittedMessage() {
@@ -1224,7 +1225,7 @@ function restoreWorklistSubmittedBaseline() {
 function submitWorklistMessage(text, baseline) {
   if (!text || !text.trim()) return false;
   const message = text.trim();
-  writeLocalStorage('bram.awaitingResponse', '1');
+  writeLocalStorage('bram.awaitingResponse', '');
   writeLocalStorage('bram.worklistMessageDraft', '');
   writeLocalStorage('bram.worklistSubmittedMessage', message);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));

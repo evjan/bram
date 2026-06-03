@@ -1092,6 +1092,792 @@ fn pty_tail_cell() -> &'static Mutex<Vec<u8>> {
     PTY_TAIL.get_or_init(|| Mutex::new(Vec::with_capacity(8192)))
 }
 
+// Cached snapshot of the Claude PTY's rotating status line ("Meandering…
+// (1m 53s · ↓ 5.8k tokens)"). Surfaced via /__agent-status and the
+// `agent-status-changed` Tauri event so the Worklist tab can render a
+// live status row without the user having to look at the terminal.
+// Refs the worklist item `claude-status-row-in-worklist`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+struct AgentStatus {
+    provider: Option<String>,
+    state: String,
+    verb: Option<String>,
+    #[serde(rename = "elapsedText")]
+    elapsed_text: Option<String>,
+    // Sub-state phrase parsed from inside the status-line parens
+    // (e.g. "thinking some more", "almost done thinking"). Optional.
+    substate: Option<String>,
+    // Retained in the struct so older callers / consumers don't break,
+    // but no longer populated — we dropped the token column from the
+    // row per user request after live-testing showed JSONL token counts
+    // lagged Claude's live status display by tens of seconds when
+    // assistant deltas hadn't been flushed yet.
+    #[serde(rename = "outputTokensText", skip_serializing_if = "Option::is_none")]
+    output_tokens_text: Option<String>,
+    #[serde(rename = "updatedAtMs")]
+    updated_at_ms: i64,
+}
+
+impl AgentStatus {
+    fn idle() -> Self {
+        AgentStatus {
+            provider: None,
+            state: "idle".to_string(),
+            verb: None,
+            elapsed_text: None,
+            substate: None,
+            output_tokens_text: None,
+            updated_at_ms: 0,
+        }
+    }
+}
+
+static AGENT_STATUS: OnceLock<Mutex<AgentStatus>> = OnceLock::new();
+fn agent_status_cell() -> &'static Mutex<AgentStatus> {
+    AGENT_STATUS.get_or_init(|| Mutex::new(AgentStatus::idle()))
+}
+
+// Parsed snapshot of Claude's rotating status line. Drives the row's
+// verb, elapsed text, and substate ("thinking some more", "almost done
+// thinking"). Tokens dropped per user request — the live PTY count was
+// fine but the JSONL fallback lagged by tens of seconds, and the
+// resulting mismatch was worse than showing nothing.
+struct ParsedStatusLine {
+    verb: String,
+    elapsed_text: String,
+    substate: Option<String>,
+}
+
+// Parse Claude's full status line from an ANSI-stripped PTY tail.
+// Anchors on the rightmost "… (" form. Inside the parens, splits on the
+// "·" separator: index 0 is elapsed (always present); remaining segments
+// are either "↓ N tokens" (skipped) or substate phrases. Returns None
+// when the anchor is missing — typically when heavy output has evicted
+// the status line from the 8 KB rolling tail. Unicode-aware to accept
+// accented verbs ("Flambéing").
+fn parse_claude_status_line(stripped_tail: &[u8]) -> Option<ParsedStatusLine> {
+    let s = std::str::from_utf8(stripped_tail).ok()?;
+    let anchor = s.rfind("… (")?;
+    let after_open = anchor + "… (".len();
+    let rel_close = s[after_open..].find(')')?;
+    let inside = &s[after_open..after_open + rel_close];
+
+    // Split inside-parens on "·"; trim each segment.
+    let segs: Vec<String> = inside
+        .split('·')
+        .map(|seg| seg.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if segs.is_empty() {
+        return None;
+    }
+    let elapsed_text = segs[0].clone();
+    // Elapsed sanity: must contain a digit and a time unit.
+    if !elapsed_text.chars().any(|c| c.is_ascii_digit())
+        || !elapsed_text.chars().any(|c| matches!(c, 'h' | 'm' | 's'))
+    {
+        return None;
+    }
+
+    // Substate is the first segment after elapsed that doesn't start
+    // with a token-count arrow ("↓" output, "↑" input — both come and
+    // go on the status line and are skipped here).
+    let is_token_seg = |seg: &str| seg.starts_with('↓') || seg.starts_with('↑');
+    let substate = segs
+        .iter()
+        .skip(1)
+        .find(|seg| !is_token_seg(seg))
+        .cloned();
+
+    // Walk back from "…" to find the verb. Unicode-aware.
+    let before = s[..anchor].trim_end();
+    let mut verb_start_byte = 0usize;
+    for (idx, ch) in before.char_indices().rev() {
+        if !ch.is_alphabetic() {
+            verb_start_byte = idx + ch.len_utf8();
+            break;
+        }
+    }
+    let verb = before[verb_start_byte..].to_string();
+    if verb.is_empty() || verb.len() > 40 {
+        return None;
+    }
+    // Reject mid-paint partials. CC's gerund verbs are always 5+ chars
+    // (Hashing, Frying, Undulating, Flibbertigibbeting…). A 2–3 char
+    // capture is almost certainly the parser sampling the tail between
+    // two repaints, catching only the leading bytes of the next verb.
+    if verb.chars().count() < 4 {
+        return None;
+    }
+    let first = verb.chars().next()?;
+    if !first.is_uppercase() || !verb.chars().all(|c| c.is_alphabetic()) {
+        return None;
+    }
+    // Strict title-case: only the first char may be uppercase. Rejects
+    // glitches like "GScurriying" where a stray CSI-G column-position
+    // escape leaked a literal G into the walk-back. CC's verbs are
+    // simple gerunds (Hashing, Frying, Architecting) — always one cap.
+    if verb.chars().skip(1).any(|c| c.is_uppercase()) {
+        return None;
+    }
+
+    Some(ParsedStatusLine {
+        verb,
+        elapsed_text,
+        substate,
+    })
+}
+
+// Verb-only fallback: handles the standalone form CC writes briefly at
+// turn start (just "Verb…" with no elapsed parens) and during rapid
+// repaints where the trailing "(...)" group hasn't landed in the tail
+// yet. Anchors on the rightmost lone "…" and walks back for the verb.
+// Unicode-aware. Skips matches that are immediately followed by " ("
+// since those are the full-form case already handled by
+// parse_claude_status_line.
+fn parse_claude_status_verb_only(stripped_tail: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(stripped_tail).ok()?;
+    // Walk from the rightmost "…" and try each; pick the first one that
+    // yields a valid verb and isn't part of the full-form "… (".
+    let mut search_end = s.len();
+    while let Some(rel) = s[..search_end].rfind('…') {
+        let after = &s[rel + '…'.len_utf8()..];
+        // Skip full-form occurrences (parse_claude_status_line handles those).
+        let is_full_form = after.starts_with(' ') && after.trim_start().starts_with('(');
+        if is_full_form {
+            search_end = rel;
+            continue;
+        }
+        let before = s[..rel].trim_end();
+        let mut verb_start_byte = 0usize;
+        for (idx, ch) in before.char_indices().rev() {
+            if !ch.is_alphabetic() {
+                verb_start_byte = idx + ch.len_utf8();
+                break;
+            }
+        }
+        let verb = before[verb_start_byte..].to_string();
+        if verb.is_empty() || verb.len() > 40 || verb.chars().count() < 4 {
+            search_end = rel;
+            continue;
+        }
+        let Some(first) = verb.chars().next() else {
+            search_end = rel;
+            continue;
+        };
+        if !first.is_uppercase() || !verb.chars().all(|c| c.is_alphabetic()) {
+            search_end = rel;
+            continue;
+        }
+        // Strict title-case (see parse_claude_status_line).
+        if verb.chars().skip(1).any(|c| c.is_uppercase()) {
+            search_end = rel;
+            continue;
+        }
+        return Some(verb);
+    }
+    None
+}
+
+// Sticky-verb cache. Holds the most recently parsed verb so that when
+// the status line gets evicted from the PTY tail for a few seconds, the
+// row keeps showing "Hashing…" instead of flickering to generic
+// "working…" and back. STICKY_VERB_TTL_MS bounds how long we'll keep
+// showing a stale verb — long enough to ride through typical eviction
+// bursts (single Read of a big file), short enough that a turn that
+// genuinely moved on doesn't keep showing the old verb forever.
+const STICKY_VERB_TTL_MS: i64 = 15_000;
+
+struct StickyVerb {
+    verb: String,
+    captured_at_ms: i64,
+}
+
+static STICKY_VERB_CELL: OnceLock<Mutex<Option<StickyVerb>>> = OnceLock::new();
+fn sticky_verb_cell() -> &'static Mutex<Option<StickyVerb>> {
+    STICKY_VERB_CELL.get_or_init(|| Mutex::new(None))
+}
+
+fn sticky_verb_remember(verb: &str) {
+    if let Ok(mut guard) = sticky_verb_cell().lock() {
+        *guard = Some(StickyVerb {
+            verb: verb.to_string(),
+            captured_at_ms: unix_now_ms(),
+        });
+    }
+}
+
+fn sticky_verb_recall() -> Option<String> {
+    let now = unix_now_ms();
+    sticky_verb_cell().lock().ok().and_then(|guard| {
+        guard
+            .as_ref()
+            .filter(|s| now - s.captured_at_ms <= STICKY_VERB_TTL_MS)
+            .map(|s| s.verb.clone())
+    })
+}
+
+fn sticky_verb_clear() {
+    if let Ok(mut guard) = sticky_verb_cell().lock() {
+        *guard = None;
+    }
+}
+
+// Sticky substate cache. Same shape as sticky_verb but shorter TTL —
+// substate ("thinking some more", "almost done thinking") shifts faster
+// than the verb, so a 5 s window covers brief PTY-tail evictions while
+// not pinning a phrase that's actually become stale.
+const STICKY_SUBSTATE_TTL_MS: i64 = 5_000;
+
+struct StickySubstate {
+    substate: String,
+    captured_at_ms: i64,
+}
+
+static STICKY_SUBSTATE_CELL: OnceLock<Mutex<Option<StickySubstate>>> = OnceLock::new();
+fn sticky_substate_cell() -> &'static Mutex<Option<StickySubstate>> {
+    STICKY_SUBSTATE_CELL.get_or_init(|| Mutex::new(None))
+}
+
+fn sticky_substate_remember(s: &str) {
+    if let Ok(mut guard) = sticky_substate_cell().lock() {
+        *guard = Some(StickySubstate {
+            substate: s.to_string(),
+            captured_at_ms: unix_now_ms(),
+        });
+    }
+}
+
+fn sticky_substate_recall() -> Option<String> {
+    let now = unix_now_ms();
+    sticky_substate_cell().lock().ok().and_then(|guard| {
+        guard
+            .as_ref()
+            .filter(|s| now - s.captured_at_ms <= STICKY_SUBSTATE_TTL_MS)
+            .map(|s| s.substate.clone())
+    })
+}
+
+fn sticky_substate_clear() {
+    if let Ok(mut guard) = sticky_substate_cell().lock() {
+        *guard = None;
+    }
+}
+
+// Detect CC's natural-end banner in the stripped PTY tail. Format:
+// "* <PastTenseVerb> for <duration>" (e.g. "* Worked for 1m 2s",
+// "* Brewed for 12s", "* Sautéed for 45s"). When present, this is the
+// most authoritative "turn just ended" signal — stronger than silence,
+// independent of menu / escape state. pty_agent_status_update uses it
+// to hard-kill the row even within the post-escape suppression window.
+fn pty_tail_has_natural_end_banner(stripped: &[u8]) -> bool {
+    let s = std::str::from_utf8(stripped).unwrap_or("");
+    // CC's banner prefix glyph varies (`*`, `✻`, `✶`, `✳`, …) and the
+    // exact whitespace differs (strip_ansi inserts spaces in place of
+    // CSI G column-position escapes). Skip the prefix concern entirely:
+    // scan each line for the substring " for " and check that the
+    // word just before is a single capitalized past-tense-looking verb
+    // and the word just after is a duration.
+    for line in s.lines() {
+        let Some(idx) = line.find(" for ") else {
+            continue;
+        };
+        // Verb: walk back from idx over alphabetic chars; reject if no
+        // verb or not Capitalized-then-lowercase.
+        let before = &line[..idx];
+        let verb_start = before
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| c.is_alphabetic())
+            .last()
+            .map(|(i, _)| i);
+        let Some(vstart) = verb_start else { continue };
+        let verb = &before[vstart..];
+        if verb.chars().count() < 4 {
+            continue;
+        }
+        let mut cs = verb.chars();
+        let Some(first) = cs.next() else { continue };
+        if !first.is_uppercase() || !cs.all(|c| c.is_lowercase()) {
+            continue;
+        }
+        // Duration: first non-whitespace char after " for " must be a digit.
+        let after = line[idx + " for ".len()..].trim_start();
+        if after.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            return true;
+        }
+    }
+    false
+}
+
+// Scan the stripped PTY tail for known CC thinking-phase phrases. CC's
+// TUI paints the status line piecewise with column-positioning ANSI
+// escapes, so the full "(elapsed · ↓ tokens · substate)" group rarely
+// arrives contiguously in our 8 KB tail; the substate phrase itself
+// almost always does. Order matters: try the longer / more specific
+// phrases first, and on ties pick the rightmost (most recent) match
+// by comparing the END position of each match. Word-boundary check
+// rejects substring matches like "rethinking" or "extended-thinking".
+fn parse_substate_phrase_scan(stripped: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(stripped).ok()?;
+    const PHRASES: &[&str] = &[
+        "almost done thinking",
+        "thinking some more",
+        "thinking even more",
+        "thinking more",
+        "still thinking",
+        "thinking",
+    ];
+    let bytes = s.as_bytes();
+    let mut best: Option<(usize, &str)> = None;
+    for &p in PHRASES {
+        if let Some(pos) = s.rfind(p) {
+            // Left word boundary: start of string, whitespace, or "·".
+            let left_ok = pos == 0 || {
+                let prev = bytes[pos - 1];
+                prev.is_ascii_whitespace() || prev == b'\xb7' // U+00B7 ·
+            };
+            if !left_ok {
+                continue;
+            }
+            // Right word boundary: end of string, whitespace, ")", or
+            // start of digit (e.g. "thought for 3s" — accept digit).
+            let end = pos + p.len();
+            let right_ok = end >= bytes.len() || {
+                let next = bytes[end];
+                next.is_ascii_whitespace() || next == b')' || next.is_ascii_digit()
+            };
+            if !right_ok {
+                continue;
+            }
+            // Pick the match whose END is rightmost — covers the case
+            // where "thinking" appears inside "almost done thinking" and
+            // we want the longer phrase.
+            if best.map(|(b_end, _)| end > b_end).unwrap_or(true) {
+                best = Some((end, p));
+            }
+        }
+    }
+    let (_end, phrase) = best?;
+    Some(phrase.to_string())
+}
+
+// Format elapsed milliseconds as "1m 53s" / "23s" / "1h 5m" matching
+// the Claude Code TUI status line cosmetic.
+fn format_elapsed_text(ms: i64) -> String {
+    let total_s = (ms / 1000).max(0);
+    let h = total_s / 3600;
+    let m = (total_s % 3600) / 60;
+    let s = total_s % 60;
+    if h > 0 {
+        format!("{}h {}m", h, m)
+    } else if m > 0 {
+        format!("{}m {}s", m, s)
+    } else {
+        format!("{}s", s)
+    }
+}
+
+// Stats for the current Claude turn, derived from the session JSONL tail
+// by a background poller (see start_claude_turn_stats_poll). Cached so
+// the PTY reader thread can read them without touching the filesystem
+// or doing JSON parsing — keeping that thread fast is what keeps CC's
+// startup terminal-capability queries from timing out and triggering
+// verbose-resume mode (the "transcript replay on launch" regression).
+//
+// `user_ts_ms` is the timestamp of the most recent real user message;
+// elapsed = now - user_ts_ms is computed at read time so the row's
+// elapsed display advances continuously between poll cycles.
+#[derive(Clone)]
+struct ClaudeTurnStats {
+    user_ts_ms: i64,
+    is_working: bool,
+}
+
+static CLAUDE_TURN_STATS_CACHE: OnceLock<Mutex<Option<ClaudeTurnStats>>> = OnceLock::new();
+fn claude_turn_stats_cell() -> &'static Mutex<Option<ClaudeTurnStats>> {
+    CLAUDE_TURN_STATS_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+// Timestamp of the most recent agent-status clear-to-idle. The PTY tail
+// still contains the just-ended turn's status line for a beat after the
+// clear, so subsequent PTY chunks would re-emit "working" by parsing
+// that stale line. pty_agent_status_update gates on user_ts_ms >
+// last_cleared_at to refuse stale resurrection until JSONL records a
+// fresh user-turn boundary.
+static LAST_CLEARED_AT_MS: OnceLock<Mutex<i64>> = OnceLock::new();
+fn last_cleared_at_cell() -> &'static Mutex<i64> {
+    LAST_CLEARED_AT_MS.get_or_init(|| Mutex::new(0))
+}
+
+// `user_ts_ms` of the most recent turn killed by an explicit user cancel
+// (Esc / pty-escape). Distinct from `last_cleared_at_ms` because cancel
+// is a hard signal: JSONL never records `end_turn` for a canceled turn,
+// so cache.is_working stays true forever and the 500ms soft-clear gate
+// can't tell the row to stay down. The kill stamp keeps the row
+// suppressed for the exact turn that was canceled; the next real user
+// message lands a new user_ts_ms that bypasses the gate.
+static LAST_KILLED_USER_TS_MS: OnceLock<Mutex<i64>> = OnceLock::new();
+fn last_killed_user_ts_ms_cell() -> &'static Mutex<i64> {
+    LAST_KILLED_USER_TS_MS.get_or_init(|| Mutex::new(0))
+}
+
+// Timestamp of the most recent pty-escape. Used to suppress the
+// silence-based hard kill for a window after Esc — after Esc the user
+// is in control and may pause to think before continuing; silence in
+// that window doesn't mean the turn ended.
+static LAST_PTY_ESCAPE_MS: OnceLock<Mutex<i64>> = OnceLock::new();
+fn last_pty_escape_ms_cell() -> &'static Mutex<i64> {
+    LAST_PTY_ESCAPE_MS.get_or_init(|| Mutex::new(0))
+}
+const POST_ESCAPE_NO_KILL_WINDOW_MS: i64 = 15_000;
+
+fn kill_current_claude_turn<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let current_ts = claude_turn_stats_cell()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|s| s.user_ts_ms))
+        .unwrap_or_else(unix_now_ms);
+    if let Ok(mut g) = last_killed_user_ts_ms_cell().lock() {
+        *g = current_ts;
+    }
+    agent_status_clear_to_idle(app);
+    // Dedicated "real end-of-turn" signal — distinct from the eager
+    // `agent-turn-end` event which fires on any 800 ms silence. The
+    // worklist's awaitingResponse gate keys on this; agent-turn-end
+    // would clear it on every inter-burst pause.
+    trace_emit_signal(app, "agent-turn-killed");
+    let _ = app.emit("agent-turn-killed", ());
+}
+
+// Background poller: re-reads the latest Claude session JSONL every
+// 300 ms and refreshes the cache. Started once at app setup; runs for
+// the process lifetime. Skips work when the active provider isn't
+// Claude — cheap branch, no file I/O.
+fn start_claude_turn_stats_poll<R: tauri::Runtime>(app_handle: AppHandle<R>) {
+    // Stamp the kill cursor at launch so any in-progress turn that
+    // didn't naturally end before bram restarted (last assistant !=
+    // end_turn) doesn't surface a stale "working… 2m 18s" row on the
+    // very first poll. Only user_ts_ms values from messages submitted
+    // in this bram session will exceed the stamp and light the row.
+    if let Ok(mut g) = last_killed_user_ts_ms_cell().lock() {
+        *g = unix_now_ms();
+    }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        if !matches!(
+            hinted_session_provider(&app_handle),
+            Some(SessionProvider::Claude)
+        ) {
+            // Clear cache when Claude isn't active so the row doesn't
+            // surface stale data after a provider switch.
+            if let Ok(mut guard) = claude_turn_stats_cell().lock() {
+                *guard = None;
+            }
+            continue;
+        }
+        let next = match read_latest_session_tail(&app_handle, Some(SessionProvider::Claude), 300)
+        {
+            Ok(tail) => compute_claude_turn_stats(&tail),
+            Err(_) => None,
+        };
+        if let Ok(mut guard) = claude_turn_stats_cell().lock() {
+            *guard = next;
+        }
+    });
+}
+
+// Walk the latest session JSONL tail backwards to find the most recent
+// real user message (NOT a tool_result), then sum output_tokens across
+// all assistant messages after that boundary. Marks the turn as
+// "working" unless the most recent assistant record after the boundary
+// reports stop_reason "end_turn".
+//
+// Returns None when no real user message is found in the tail (e.g.
+// session not yet started, or tail too short to contain one).
+fn compute_claude_turn_stats(tail: &[u8]) -> Option<ClaudeTurnStats> {
+    // Parse JSONL lines newest-first. Looking for: the most recent real
+    // user message (turn boundary), stop_reason of latest assistant
+    // (decides is_working).
+    let text = std::str::from_utf8(tail).ok()?;
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut user_ts_ms: Option<i64> = None;
+    let mut latest_assistant_stop: Option<String> = None;
+    let mut saw_assistant_after_user = false;
+    for line in lines.iter().rev() {
+        let Ok(rec) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let kind = rec.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        match kind {
+            "user" => {
+                let is_tool_result = rec
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|first| first.get("type"))
+                    .and_then(|t| t.as_str())
+                    .map(|t| t == "tool_result")
+                    .unwrap_or(false);
+                if is_tool_result {
+                    continue;
+                }
+                let ts = rec
+                    .get("timestamp")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_iso_to_ms);
+                user_ts_ms = ts;
+                break;
+            }
+            "assistant" => {
+                if latest_assistant_stop.is_none() {
+                    latest_assistant_stop = rec
+                        .get("message")
+                        .and_then(|m| m.get("stop_reason"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                }
+                saw_assistant_after_user = true;
+            }
+            _ => {} // sidecar metadata: ignore
+        }
+    }
+    let user_ts_ms = user_ts_ms?;
+    // "working" unless the most recent assistant record explicitly
+    // ended the turn. If no assistant has spoken yet, also working
+    // (turn started, agent hasn't yielded).
+    let ended = latest_assistant_stop.as_deref() == Some("end_turn");
+    let is_working = !ended || !saw_assistant_after_user;
+    Some(ClaudeTurnStats {
+        user_ts_ms,
+        is_working,
+    })
+}
+
+// Minimal ISO-8601 to unix-ms parser for Claude session timestamps
+// (e.g. "2026-06-02T22:53:42.123Z"). Returns None on parse failure.
+// Hand-rolled rather than pulled from chrono so we don't add a dep
+// for one parse call.
+fn parse_iso_to_ms(iso: &str) -> Option<i64> {
+    let b = iso.as_bytes();
+    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    let year: i64 = iso.get(0..4)?.parse().ok()?;
+    let month: u32 = iso.get(5..7)?.parse().ok()?;
+    let day: u32 = iso.get(8..10)?.parse().ok()?;
+    let hour: u32 = iso.get(11..13)?.parse().ok()?;
+    let min: u32 = iso.get(14..16)?.parse().ok()?;
+    let sec: u32 = iso.get(17..19)?.parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let mut ms_frac: i64 = 0;
+    if iso.len() > 19 && b[19] == b'.' {
+        let frac_end = iso[20..]
+            .find(|c: char| !c.is_ascii_digit())
+            .map(|i| 20 + i)
+            .unwrap_or(iso.len());
+        let frac_str = &iso[20..frac_end];
+        if !frac_str.is_empty() {
+            let take = frac_str.len().min(3);
+            ms_frac = frac_str[..take].parse().unwrap_or(0);
+            for _ in take..3 {
+                ms_frac *= 10;
+            }
+        }
+    }
+    fn is_leap(y: i64) -> bool {
+        (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+    }
+    let mut days: i64 = 0;
+    let start_year = if year >= 1970 { 1970 } else { return None };
+    for y in start_year..year {
+        days += if is_leap(y) { 366 } else { 365 };
+    }
+    let days_in_month: [i64; 12] = [
+        31, if is_leap(year) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    for m in 1..month as usize {
+        days += days_in_month[m - 1];
+    }
+    days += day as i64 - 1;
+    let total_sec = days * 86400 + (hour as i64) * 3600 + (min as i64) * 60 + sec as i64;
+    Some(total_sec * 1000 + ms_frac)
+}
+
+// Update the agent-status cache from a fresh PTY chunk. Gated on the
+// active provider being Claude (Codex has a different TUI shape and is
+// out of scope for v1). Re-uses the rolling pty_tail_cell so we don't
+// need a second buffer. Emits `agent-status-changed` only when the
+// snapshot actually changes (including the working→idle transition
+// driven by agent_status_clear_to_idle below).
+fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let active_provider = hinted_session_provider(app);
+    if !matches!(active_provider, Some(SessionProvider::Claude)) {
+        return;
+    }
+    // Cache (JSONL) is authoritative for "is a turn active". PTY parse
+    // is cosmetic only — it can fill in verb / elapsed / substate but
+    // cannot revive a row that JSONL says is done. Otherwise the stale
+    // status line still in the PTY tail after agent-turn-end clears the
+    // row would immediately re-emit "working".
+    let stats = match claude_turn_stats_cell().lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => None,
+    };
+    let Some(stats) = stats else { return };
+    if !stats.is_working {
+        return;
+    }
+    let cleared_at = last_cleared_at_cell().lock().map(|g| *g).unwrap_or(0);
+    let since_clear = unix_now_ms() - cleared_at;
+    // Suppress only during the brief race window after a clear-to-idle
+    // (poller hasn't yet refreshed the cache from JSONL). After the
+    // window, trust the cache: if it still says is_working=true, the
+    // clear was spurious (e.g. permission-menu pause misread by the
+    // turn-end silence detector) and the row should reappear.
+    const CLEARED_AT_RACE_WINDOW_MS: i64 = 500;
+    if stats.user_ts_ms <= cleared_at && since_clear < CLEARED_AT_RACE_WINDOW_MS {
+        return;
+    }
+    // Hard kill from a user cancel (pty-escape). Stays in effect until
+    // the user submits a new prompt — JSONL won't record an end_turn
+    // for a canceled turn, so the cache-based working signal alone
+    // can't tell the row to stay down.
+    let killed_ts = last_killed_user_ts_ms_cell().lock().map(|g| *g).unwrap_or(0);
+    if stats.user_ts_ms <= killed_ts {
+        return;
+    }
+
+    // Turn is active per JSONL / cache, but CC may have just printed its
+    // natural-end banner ("* Worked for 1m 2s") in a chunk that arrived
+    // before the silence detector / JSONL caught up. The banner is the
+    // most authoritative end-of-turn signal — hard-kill immediately.
+    let stripped = pty_tail_cell().lock().ok().map(|tail| strip_ansi(&tail));
+    if stripped
+        .as_ref()
+        .map(|s| pty_tail_has_natural_end_banner(s))
+        .unwrap_or(false)
+    {
+        kill_current_claude_turn(app);
+        return;
+    }
+    let full = stripped
+        .as_ref()
+        .and_then(|s| parse_claude_status_line(s));
+    // Phrase scan for substate — runs regardless of full-form parse,
+    // because CC paints the status line piecewise and the substate
+    // word usually arrives in the tail even when "… (" doesn't.
+    let scanned_substate = stripped
+        .as_ref()
+        .and_then(|s| parse_substate_phrase_scan(s));
+    if let Some(ref s) = scanned_substate {
+        sticky_substate_remember(s);
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "status-substate",
+                &format!("source=scan phrase={:?}", s),
+            );
+        }
+    }
+
+    let next = if let Some(p) = full {
+        sticky_verb_remember(&p.verb);
+        if let Some(ref s) = p.substate {
+            sticky_substate_remember(s);
+        }
+        // Prefer parsed substate from the full-form (most precise),
+        // then phrase-scan result, then sticky.
+        let substate = p
+            .substate
+            .clone()
+            .or_else(|| scanned_substate.clone())
+            .or_else(sticky_substate_recall);
+        AgentStatus {
+            provider: Some("claude".to_string()),
+            state: "working".to_string(),
+            verb: Some(p.verb),
+            elapsed_text: Some(p.elapsed_text),
+            substate,
+            // Tokens dropped per user request — distracting. The JSONL
+            // sum and PTY parse still populate cache/parsed fields, but
+            // we deliberately don't surface them on the row.
+            output_tokens_text: None,
+            updated_at_ms: unix_now_ms(),
+        }
+    } else {
+        // Full-form parse missed. Try the standalone "Verb…" form
+        // (early in turn, between repaints), then fall back to sticky.
+        let verb_only = pty_tail_cell()
+            .lock()
+            .ok()
+            .map(|tail| strip_ansi(&tail))
+            .and_then(|stripped| parse_claude_status_verb_only(&stripped));
+        if let Some(ref v) = verb_only {
+            sticky_verb_remember(v);
+        }
+        let elapsed_ms = (unix_now_ms() - stats.user_ts_ms).max(0);
+        AgentStatus {
+            provider: Some("claude".to_string()),
+            state: "working".to_string(),
+            verb: verb_only.or_else(sticky_verb_recall),
+            elapsed_text: Some(format_elapsed_text(elapsed_ms)),
+            substate: scanned_substate.or_else(sticky_substate_recall),
+            output_tokens_text: None,
+            updated_at_ms: unix_now_ms(),
+        }
+    };
+
+    let mut emit_payload: Option<AgentStatus> = None;
+    if let Ok(mut cur) = agent_status_cell().lock() {
+        let changed = cur.verb != next.verb
+            || cur.elapsed_text != next.elapsed_text
+            || cur.substate != next.substate
+            || cur.state != next.state
+            || cur.provider != next.provider;
+        if changed {
+            *cur = next.clone();
+            emit_payload = Some(next);
+        } else {
+            cur.updated_at_ms = next.updated_at_ms;
+        }
+    }
+    if let Some(payload) = emit_payload {
+        emit_replayable_payload(app, "agent-status-changed", &payload);
+    }
+}
+
+// Force the agent-status cache to idle and emit. Called from the
+// agent-turn-end emitter so the Worklist status row clears as soon as
+// the turn ends instead of waiting for the parser to stop finding the
+// status line in the tail.
+fn agent_status_clear_to_idle<R: tauri::Runtime>(app: &AppHandle<R>) {
+    // Turn ended — discard any sticky verb / substate so the next turn
+    // doesn't briefly inherit the prior turn's phrases on first miss.
+    sticky_verb_clear();
+    sticky_substate_clear();
+    // Stamp the clear time so pty_agent_status_update refuses to
+    // re-emit "working" from the stale status line still in the PTY
+    // tail until JSONL records a new user-turn boundary.
+    if let Ok(mut guard) = last_cleared_at_cell().lock() {
+        *guard = unix_now_ms();
+    }
+    let mut emit_payload: Option<AgentStatus> = None;
+    if let Ok(mut cur) = agent_status_cell().lock() {
+        if cur.state != "idle" {
+            let next = AgentStatus::idle();
+            *cur = next.clone();
+            emit_payload = Some(next);
+        }
+    }
+    if let Some(payload) = emit_payload {
+        emit_replayable_payload(app, "agent-status-changed", &payload);
+    }
+}
+
 // PTY agent-turn state machine (issue #70, later extended for Codex
 // parity in #74). Detects end-of-turn from spinner/activity glyphs in
 // the PTY stream: while the agent is running, the terminal redraws
@@ -1233,6 +2019,40 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         }
         trace_emit_signal(app, "agent-turn-end");
         let _ = app.emit("agent-turn-end", ());
+        // Hard-kill only when (a) silence exceeds the sentinel-clear
+        // threshold (>= 3 s = real end-of-turn) AND (b) no permission
+        // menu is up. A slow menu answer trivially exceeds 3 s of
+        // silence; hard-killing on that loses the row for the rest of
+        // the turn once the user finally answers. The menu surface
+        // shows "awaiting your input" via pendingMenu independently.
+        // 10 s threshold for the row's hard-kill (separate from the
+        // sentinel-clear 3 s threshold). CC's natural inter-burst
+        // pauses (waiting on API, thinking blocks, MCP roundtrips)
+        // routinely exceed 3 s — killing the row on those mis-fires
+        // and the row dies mid-turn. The natural-end banner detector
+        // in pty_agent_status_update catches real end-of-turn faster
+        // than silence alone, so we can be conservative here.
+        const ROW_HARD_KILL_MIN_SILENCE_MS: u128 = 10_000;
+        let silent_long_enough = turn_end_silence_ms
+            .map(|s| s >= ROW_HARD_KILL_MIN_SILENCE_MS)
+            .unwrap_or(true);
+        let menu_pending = pty_menu_cell()
+            .lock()
+            .ok()
+            .map(|g| g.is_some())
+            .unwrap_or(false);
+        // Recently after Esc the user is in control — silence is them
+        // thinking, not the turn ending. Suppress the hard kill for
+        // 15s after an Esc so the row survives think pauses. Double-Esc
+        // still hard-kills via the pty-escape handler.
+        let last_escape = last_pty_escape_ms_cell().lock().map(|g| *g).unwrap_or(0);
+        let post_escape = last_escape > 0
+            && unix_now_ms() - last_escape < POST_ESCAPE_NO_KILL_WINDOW_MS;
+        if silent_long_enough && !menu_pending && !post_escape {
+            kill_current_claude_turn(app);
+        } else {
+            agent_status_clear_to_idle(app);
+        }
 
         // Host-side guarantee: clear any active inflight sentinel when
         // the agent's turn truly ends. Gated on a higher silence
@@ -2116,6 +2936,19 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
         emit_replayable_payload(app, "pty-menu-changed", Option::<PtyMenu>::None);
     } else if input == "\x1b" {
         clear_active_sentinel_with_reason(app, "pty-escape");
+        // Single Esc usually just interrupts the current tool call; CC
+        // continues the same turn. But a rapid SECOND Esc (within ~1 s)
+        // is CC's universal "cancel everything" gesture — treat that as
+        // an explicit user-cancel and hard-kill the row.
+        let now = unix_now_ms();
+        let prev = last_pty_escape_ms_cell().lock().map(|g| *g).unwrap_or(0);
+        if let Ok(mut g) = last_pty_escape_ms_cell().lock() {
+            *g = now;
+        }
+        const ESC_DOUBLE_TAP_WINDOW_MS: i64 = 1000;
+        if now - prev < ESC_DOUBLE_TAP_WINDOW_MS && prev > 0 {
+            kill_current_claude_turn(app);
+        }
     }
 }
 
@@ -3666,6 +4499,7 @@ fn pty_spawn(
                     }
                     pty_menu_update(&app_for_thread, &buf[..n]);
                     pty_agent_turn_update(&app_for_thread, &buf[..n]);
+                    pty_agent_status_update(&app_for_thread);
                     if pty_output_clears_inflight(&buf[..n]) {
                         clear_active_sentinel_with_reason(
                             &app_for_thread,
@@ -14118,6 +14952,16 @@ fn route_request<R: tauri::Runtime>(
         };
     }
 
+    if path == "__last-exchange" {
+        return match read_last_exchange(app, None) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__last-exchange] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
     // Companion to /__last-assistant-text: per-file edit aggregates for
     // the current turn. Same architecture (host parses 64 KB tail once
     // per request, iframe binds via DataSource), replaces the iframe's
@@ -16481,6 +17325,7 @@ pub fn run() {
             }
             let app_handle = app.handle().clone();
             start_codex_session_poll_fallback(app_handle.clone());
+            start_claude_turn_stats_poll(app_handle.clone());
             std::thread::spawn(move || {
                 use notify::{recommended_watcher, Event, EventKind, RecursiveMode, Watcher};
                 use std::sync::mpsc::channel;

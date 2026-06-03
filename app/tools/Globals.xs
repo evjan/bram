@@ -1258,9 +1258,13 @@ function clearWorklistAwaiting(clearDraft) {
   }
 }
 
-function setWorklistVoiceTarget(target, component) {
-  window.__bramWorklistVoiceTarget = { target, component };
-  iframeTrace('voice-input', { target, stage: 'focus' });
+var worklistVoiceTarget = '';
+var worklistVoiceText = '';
+var worklistVoiceSeq = 0;
+
+function setWorklistVoiceTarget(target) {
+  worklistVoiceTarget = target || '';
+  iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'target' });
 }
 
 function appendVoiceTranscript(component, transcript) {
@@ -1273,18 +1277,21 @@ function appendVoiceTranscript(component, transcript) {
 }
 
 function toggleVoiceForCurrentTarget(recording) {
-  const active = window.__bramWorklistVoiceTarget || {};
   if (recording) {
     voiceStop(t => {
-      if (appendVoiceTranscript(active.component, t)) {
-        iframeTrace('voice-input', { target: active.target || 'message-agent', stage: 'stop' });
-      } else if (t) {
+      if (!t) return;
+      if (worklistVoiceTarget === 'message-agent' || worklistVoiceTarget === 'feedback') {
+        worklistVoiceText = t;
+        worklistVoiceSeq = worklistVoiceSeq + 1;
+        iframeTrace('voice-input', { target: worklistVoiceTarget || 'message-agent', stage: 'stop' });
+      } else {
+        iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'fallback-terminal' });
         toTurn('voice: ' + t);
       }
     });
     return false;
   }
-  iframeTrace('voice-input', { target: active.target || 'terminal', stage: 'start' });
+  iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'start' });
   voiceStart();
   return true;
 }

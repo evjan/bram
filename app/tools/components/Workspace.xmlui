@@ -506,19 +506,26 @@
                     initialValue="{selectedFeedback}"
                     placeholder="Message to agent"
                     autoFocus="true"
-                    onGotFocus="setWorklistVoiceTarget('feedback', feedbackBox)"
+                    onInit="setWorklistVoiceTarget('feedback')"
+                    onCleanup="setWorklistVoiceTarget('message-agent')"
+                    onClick="setWorklistVoiceTarget('feedback')"
+                    onGotFocus="setWorklistVoiceTarget('feedback')"
+                    onDidChange="() => setWorklistVoiceTarget('feedback')"
                     resize="vertical"
                     minRows="2"
                     maxRows="16"
                     width="*"
                     fontSize="$fontSize-sm"
                     enabled="{!submitting}" />
+                  <ChangeListener
+                    listenTo="{worklistVoiceSeq}"
+                    onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'feedback') appendVoiceTranscript(feedbackBox, worklistVoiceText); }" />
                   <Button
                     label="×"
                     variant="ghost"
                     size="xs"
                     tooltip="Collapse feedback"
-                    onClick="feedbackExpanded = false; expandedItemId = null; selectedFeedback = ''" />
+                    onClick="feedbackExpanded = false; expandedItemId = null; selectedFeedback = ''; setWorklistVoiceTarget('message-agent')" />
                 </HStack>
                 <HStack
                   when="{selected === $item.id}"
@@ -617,6 +624,9 @@
     </VStack>
 
       <!-- Form.persist restores unsent text across iframe reloads; TextArea.enterSubmits lets Enter submit the parent Form. -->
+      <ChangeListener
+        listenTo="{worklistVoiceSeq}"
+        onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'message-agent') appendVoiceTranscript(worklistInputBox, worklistVoiceText); }" />
       <Form
         id="worklistMessageForm"
         width="*"
@@ -632,7 +642,11 @@
             id="worklistInputBox"
             bindTo="message"
             enterSubmits="true"
-            onGotFocus="setWorklistVoiceTarget('message-agent', worklistInputBox)"
+            onInit="setWorklistVoiceTarget('message-agent')"
+            onClick="setWorklistVoiceTarget('message-agent')"
+            onGotFocus="setWorklistVoiceTarget('message-agent')"
+            onDidChange="() => setWorklistVoiceTarget('message-agent')"
+            enabled="{!feedbackExpanded}"
             readOnly="{false}"
             placeholder="Message agent — Enter sends, Shift+Enter newline"
             autoSize="true"

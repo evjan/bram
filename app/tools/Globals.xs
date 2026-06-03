@@ -1199,3 +1199,151 @@ function searchHitBestBody(query, candidates) {
   }
   return '';
 }
+
+// ---- Worklist "message agent" box: persistence + lifecycle helpers ----
+// Kept here so Workspace.xmlui can stay markup-only per xmlui_rules #9.
+
+function restoreWorklistDraft() {
+  return readLocalStorage('bram.worklistMessageDraft', '');
+}
+
+function restoreWorklistAwaiting() {
+  return readLocalStorage('bram.awaitingResponse', '') === '1';
+}
+
+function restoreWorklistSubmittedMessage() {
+  return readLocalStorage('bram.worklistSubmittedMessage', '');
+}
+
+function submitWorklistMessage(text) {
+  if (!text || !text.trim()) return false;
+  const message = text.trim();
+  writeLocalStorage('bram.awaitingResponse', '1');
+  writeLocalStorage('bram.worklistMessageDraft', '');
+  writeLocalStorage('bram.worklistSubmittedMessage', message);
+  toTurn(message);
+  return message;
+}
+
+function clearWorklistAwaiting(clearDraft) {
+  writeLocalStorage('bram.awaitingResponse', '');
+  if (clearDraft) {
+    writeLocalStorage('bram.worklistMessageDraft', '');
+  }
+}
+
+function worklistSubmittedAssistant(exchange, submittedMessage) {
+  const submitted = worklistMessageKey(submittedMessage);
+  if (!submitted || !exchange) return '';
+  const userText = worklistMessageKey((exchange && exchange.userText) || '');
+  if (userText !== submitted) return '';
+  return ((exchange && exchange.assistantText) || '').trim();
+}
+
+function worklistMessageKey(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function worklistTurnText(turn) {
+  if (!turn) return '';
+  const entries = turn.entries || [];
+  const parts = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry && entry.kind === 'text' && entry.text) {
+      parts.push(entry.text);
+    }
+  }
+  return parts.join('\n');
+}
+
+function worklistSubmittedAgentEntries(turns, submittedMessage) {
+  const submitted = worklistMessageKey(submittedMessage);
+  if (!submitted || !turns || !turns.length) return [];
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (!turn || turn.role !== 'user') continue;
+    if (worklistMessageKey(worklistTurnText(turn)) !== submitted) continue;
+    return worklistAgentEntriesAfterUser(turns, i);
+  }
+  return [];
+}
+
+function worklistAgentEntriesAfterUser(turns, userIndex) {
+  const entries = [];
+  const seenToolIds = {};
+  let lastTextKey = '';
+  if (!turns || userIndex < 0) return entries;
+  for (let i = userIndex + 1; i < turns.length; i++) {
+    const turn = turns[i];
+    if (!turn) continue;
+    if (turn.role === 'user') break;
+    if (turn.role !== 'assistant') continue;
+    const turnEntries = turn.entries || [];
+    for (let j = 0; j < turnEntries.length; j++) {
+      const entry = turnEntries[j];
+      if (!entry) continue;
+      if (entry.kind === 'text') {
+        const textKey = worklistMessageKey(entry.text || '');
+        if (!textKey || textKey === lastTextKey) continue;
+        lastTextKey = textKey;
+        entries.push(entry);
+        continue;
+      }
+      lastTextKey = '';
+      if (entry.kind === 'tool' && entry.id) {
+        if (seenToolIds[entry.id]) continue;
+        seenToolIds[entry.id] = true;
+      }
+      entries.push(entry);
+    }
+  }
+  return entries;
+}
+
+function worklistLatestUserIndex(turns) {
+  if (!turns || !turns.length) return -1;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (turn && turn.role === 'user' && worklistTurnText(turn).trim()) return i;
+  }
+  return -1;
+}
+
+function worklistLatestUserText(turns) {
+  const idx = worklistLatestUserIndex(turns);
+  if (idx < 0) return '';
+  return worklistTurnText(turns[idx]).trim();
+}
+
+function worklistLatestAgentEntries(turns) {
+  return worklistAgentEntriesAfterUser(turns, worklistLatestUserIndex(turns));
+}
+
+function worklistDisplayUserText(turns, submittedMessage, awaiting) {
+  if (awaiting && submittedMessage) return submittedMessage;
+  return worklistLatestUserText(turns) || submittedMessage || '';
+}
+
+function worklistDisplayAgentEntries(turns, submittedMessage, awaiting) {
+  if (awaiting && submittedMessage) {
+    return worklistSubmittedAgentEntries(turns, submittedMessage);
+  }
+  return worklistLatestAgentEntries(turns);
+}
+
+// Build the payload object for the pty-menu-changed iframeTrace.
+// Inline ternaries inside object literals trip XMLUI's expression
+// parser ("Unclosed expression"), so this is split out per rule #9.
+function ptyMenuTracePayload(menu) {
+  const tool = (menu && menu.tool) || '';
+  const hasSig = !!(menu && menu.toolCallSignature);
+  const sigChars = hasSig ? menu.toolCallSignature.length : 0;
+  return {
+    context: 'pty-menu-changed',
+    surface: 'worklist',
+    tool: tool,
+    hasSignature: hasSig,
+    signatureChars: sigChars,
+  };
+}

@@ -16,10 +16,13 @@
   var.newItemTurnEnded="{false}"
   var.newItemIssue="{null}"
   var.pendingMenu="{null}"
+  var.openToolId="{null}"
   var.inflightTick="{0}"
   var.lastAssistantTick="{0}"
   var.lastAssistantTickAt="{0}"
-  var.lastAssistantStableText="{''}">
+  var.lastAssistantStableText="{''}"
+  var.awaitingResponse="{restoreWorklistAwaiting()}"
+  var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}">
   <DataSource
     id="worklist"
     url="/__worklist"
@@ -125,10 +128,31 @@
     id="currentTurnEditsDS"
     url="/__current-turn-edits?t={lastAssistantTick}" />
 
+  <DataSource id="agentStatus" url="/__agent-status" />
+  <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" />
+  <DataSource id="worklistTurnsDS" url="/__session-turns?t={lastAssistantTick}" />
+  <DataSource
+    id="worklistToolDetailDS"
+    url="/__tool-detail?id={openToolId || ''}"
+    when="{!!openToolId}" />
+  <DataSource id="waitingDS" url="/__waiting-for-assistant?t={lastAssistantTick}" />
+  <!-- "composing" = user has text in the worklist input (writing) OR
+       the most recent user message in JSONL has no assistant response
+       yet (in-flight turn). Drives the disable gate on the message
+       textarea AND on worklist triage controls (New item, item radios,
+       action buttons). Uses lastExchangeDS (not agentStatus.state)
+       because state blips to 'idle' between tool calls during the
+       soft-clear race; the JSONL exchange signal is stable across the
+       whole turn. -->
+  <!-- The form clears on submit; the submitted text is shown below as
+       the persisted "You" half of the local exchange. awaitingResponse
+       clears on agent-turn-end, not /__waiting-for-assistant: Codex can
+       emit interim assistant text before its tool cycle has finished. -->
+
   <VStack
     padding="$space-6"
     gap="$space-6"
-    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; lastAssistantTextDS.refetch(); currentTurnEditsDS.refetch(); });
+    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; lastAssistantTextDS.refetch(); currentTurnEditsDS.refetch(); lastExchangeDS.refetch(); worklistTurnsDS.refetch(); waitingDS.refetch(); });
     subscribeTauriEvent('__bramWorklistUnsub', 'worklist-changed', (e) => {
       const payload = (e &amp;&amp; e.payload) || {};
       iframeTrace('listener-fired', {paths: payload.paths || [], correlation_id: payload.id || ''});
@@ -140,6 +164,19 @@
         newItemTurnEnded = true;
         worklist.refetch();
       }
+      if (awaitingResponse) {
+        awaitingResponse = false;
+        clearWorklistAwaiting(false);
+        lastExchangeDS.refetch();
+        worklistTurnsDS.refetch();
+        waitingDS.refetch();
+      }
+    });
+    subscribeTauriEvent('__bramWorkspaceAgentTurnKilledUnsub', 'agent-turn-killed', () => {
+      if (awaitingResponse) {
+        awaitingResponse = false;
+        writeLocalStorage('bram.awaitingResponse', '');
+      }
     });
     subscribeTauriEvent('__bramInflightClaimUnsub', 'inflight-claim-changed', () => {
       iframeTrace('listener-fired', {context: 'inflight-claim-changed'});
@@ -147,8 +184,74 @@
     });
     subscribeTauriEvent('__bramPtyMenuUnsub', 'pty-menu-changed', (e) => {
       pendingMenu = e &amp;&amp; e.payload ? e.payload : null;
-      iframeTrace('listener-fired', {context: 'pty-menu-changed', surface: 'worklist', tool: (pendingMenu &amp;&amp; pendingMenu.tool) || '', hasSignature: !!(pendingMenu &amp;&amp; pendingMenu.toolCallSignature), signatureChars: pendingMenu &amp;&amp; pendingMenu.toolCallSignature ? pendingMenu.toolCallSignature.length : 0});
+      iframeTrace('listener-fired', ptyMenuTracePayload(pendingMenu));
+    });
+    subscribeTauriEvent('__bramAgentStatusUnsub', 'agent-status-changed', () => {
+      agentStatus.refetch();
     });">
+    <ModalDialog
+      when="{!!openToolId}"
+      onClose="openToolId = null"
+      title="{(findToolInTurns(worklistTurnsDS.value || [], openToolId) || {}).name || 'Tool'}"
+      var.openTool="{findToolInTurns(worklistTurnsDS.value || [], openToolId)}"
+      var.openDetail="{worklistToolDetailDS.value}"
+      var.modalInput="{openDetail &amp;&amp; openDetail.input}"
+      var.modalResult="{openDetail &amp;&amp; openDetail.result}">
+      <VStack gap="$space-2">
+        <Text
+          when="{openTool &amp;&amp; openTool.summary}"
+          fontFamily="$fontFamily-monospace"
+          fontSize="$fontSize-sm"
+          color="$textColor-secondary"
+          value="{openTool.summary}" />
+        <VStack gap="{0}" var.inputBody="{toolInputJsonLines(modalInput, 200)}">
+          <Text
+            fontSize="$fontSize-xs"
+            fontWeight="$fontWeight-bold"
+            color="$textColor-secondary"
+            paddingHorizontal="$space-2"
+            value="Input" />
+          <Items data="{inputBody.lines}">
+            <Text
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-sm"
+              whiteSpace="pre-wrap"
+              paddingHorizontal="$space-2"
+              value="{$item}" />
+          </Items>
+          <Text
+            when="{inputBody.remaining > 0}"
+            fontSize="$fontSize-xs"
+            color="$textColor-secondary"
+            paddingHorizontal="$space-2"
+            value="{inputBody.remaining + ' more line' + (inputBody.remaining === 1 ? '' : 's') + '…'}" />
+        </VStack>
+        <VStack when="{modalResult &amp;&amp; modalResult.lines.length > 0}" gap="{0}" marginTop="$space-2">
+          <Text
+            fontSize="$fontSize-xs"
+            fontWeight="$fontWeight-bold"
+            color="$textColor-secondary"
+            paddingHorizontal="$space-2"
+            value="Result" />
+          <Items data="{modalResult.lines}">
+            <Text
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-sm"
+              whiteSpace="pre-wrap"
+              paddingHorizontal="$space-2"
+              color="{openTool &amp;&amp; openTool.errored ? '$color-danger-700' : ''}"
+              value="{$item}" />
+          </Items>
+          <Text
+            when="{modalResult.remaining > 0}"
+            fontSize="$fontSize-xs"
+            color="$textColor-secondary"
+            paddingHorizontal="$space-2"
+            value="{modalResult.remaining + ' more line' + (modalResult.remaining === 1 ? '' : 's') + '…'}" />
+        </VStack>
+      </VStack>
+    </ModalDialog>
+
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">
         <HStack gap="$space-3" verticalAlignment="center">
@@ -156,11 +259,37 @@
           <Button
             label="+ New item"
             size="xs"
-            enabled="{!newItemSubmitting}"
+            enabled="{!newItemSubmitting &amp;&amp; !awaitingResponse}"
             onClick="newItemHelp = true" />
           <Theme size-Spinner="1em">
             <Spinner when="{newItemSubmitting}" />
           </Theme>
+        </HStack>
+        <HStack
+          when="{agentStatus.value &amp;&amp; agentStatus.value.provider === 'claude' &amp;&amp; agentStatus.value.state === 'working' &amp;&amp; !pendingMenu}"
+          gap="$space-2"
+          verticalAlignment="center"
+          padding="$space-1">
+          <Theme size-Spinner="1em">
+            <Spinner />
+          </Theme>
+          <Text
+            fontStyle="italic"
+            overflowMode="none"
+            value="{(agentStatus.value.verb || 'working') + '…'}" />
+          <Text
+            when="{!pendingMenu}"
+            fontSize="$fontSize-sm"
+            overflowMode="none"
+            color="$textColor-secondary"
+            value="{agentStatus.value.elapsedText || ''}" />
+          <Text
+            when="{agentStatus.value.substate &amp;&amp; !pendingMenu}"
+            fontSize="$fontSize-sm"
+            fontStyle="italic"
+            overflowMode="none"
+            color="$textColor-secondary"
+            value="· {agentStatus.value.substate}" />
         </HStack>
         <VStack
           when="{pendingMenu}"
@@ -266,13 +395,13 @@
           <Button
             label="{'Approve all (' + countByStatus(worklist.value.items, 'applied') + ')'}"
             size="xs"
-            enabled="{!submitting}"
+            enabled="{!submitting &amp;&amp; !awaitingResponse}"
             onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'approve-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; submittedItemId = ids.length > 0 ? ids[0].id : null; iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'approve-all'}); toTurn('approved: ' + buildBatchApprovePayload(worklist.value.items, '')); })()" />
           <Button
             label="{'Drop all (' + countByStatus(worklist.value.items, 'applied') + ')'}"
             size="xs"
             variant="outlined"
-            enabled="{!submitting}"
+            enabled="{!submitting &amp;&amp; !awaitingResponse}"
             onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'drop-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; submittedItemId = ids.length > 0 ? ids[0].id : null; iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'drop-all'}); toTurn('drop: ' + buildBatchDropPayload(worklist.value.items, '')); })()" />
           <Button
             label="ⓘ"
@@ -288,7 +417,7 @@
                 label="{selected === $item.id ? '●' : '○'}"
                 variant="ghost"
                 size="xs"
-                enabled="{!submitting}"
+                enabled="{!submitting &amp;&amp; !awaitingResponse}"
                 tooltip="Select this item"
                 onClick="selected = (selected === $item.id ? null : $item.id); selectedFeedback = ''; feedbackExpanded = false" />
               <VStack gap="$space-1" width="*">
@@ -383,7 +512,7 @@
                     maxRows="16"
                     width="*"
                     fontSize="$fontSize-sm"
-                    enabled="{!submitting}" />
+                    enabled="{!submitting &amp;&amp; !awaitingResponse}" />
                   <Button
                     label="×"
                     variant="ghost"
@@ -399,7 +528,7 @@
                     <Button
                       label="Approve"
                       size="xs"
-                      enabled="{!submitting && !!selected && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed')}"
+                      enabled="{!submitting && !awaitingResponse && !!selected && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed')}"
                       onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || '')); })()" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
@@ -414,7 +543,7 @@
                     <Button
                       label="Iterate"
                       size="xs"
-                      enabled="{!submitting && !!selected && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed') && ((feedbackBox &amp;&amp; feedbackBox.value) || '').trim().length > 0}"
+                      enabled="{!submitting && !awaitingResponse && !!selected && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed') && ((feedbackBox &amp;&amp; feedbackBox.value) || '').trim().length > 0}"
                       onClick="iframeTrace('click', {target: 'iterate', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); sendIterateWithFeedbackDraft(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || '')" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
@@ -429,7 +558,7 @@
                     <Button
                       label="Drop"
                       size="xs"
-                      enabled="{!submitting && !!selected}"
+                      enabled="{!submitting && !awaitingResponse && !!selected}"
                       onClick="iframeTrace('click', {target: 'drop', item: selected}); submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, (feedbackBox &amp;&amp; feedbackBox.value) || ''))" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
@@ -487,9 +616,86 @@
 
     </VStack>
 
-      <VStack gap="$space-1" when="{worklist.value && worklist.value.items && worklist.value.items.length > 0 && lastAssistantStableText}">
-        <Heading level="h4">Last agent response</Heading>
-        <Markdown content="{lastAssistantStableText}" />
+      <!-- Form.persist restores unsent text across iframe reloads; TextArea.enterSubmits lets Enter submit the parent Form. -->
+      <Form
+        id="worklistMessageForm"
+        width="*"
+        data="{{ message: restoreWorklistDraft() }}"
+        persist="true"
+        storageKey="bram.worklistMessageDraftForm"
+        dataAfterSubmit="clear"
+        onWillSubmit="(data) => { if (awaitingResponse || (waitingDS.value &amp;&amp; waitingDS.value.waiting) || (agentStatus.value &amp;&amp; agentStatus.value.state === 'working')) return false; if (!data.message || !data.message.trim()) return false; }"
+        onSubmit="(data) => { const message = submitWorklistMessage(data.message); if (message) { submittedWorklistMessage = message; awaitingResponse = true; } }">
+        <property name="buttonRowTemplate"><Fragment/></property>
+        <HStack gap="$space-2" verticalAlignment="end">
+          <TextArea
+            id="worklistInputBox"
+            bindTo="message"
+            enterSubmits="true"
+            readOnly="{awaitingResponse || (waitingDS.value &amp;&amp; waitingDS.value.waiting) || (agentStatus.value &amp;&amp; agentStatus.value.state === 'working')}"
+            placeholder="Message agent — Enter sends, Shift+Enter newline"
+            autoSize="true"
+            minRows="1"
+            maxRows="6"
+            width="*" />
+        </HStack>
+      </Form>
+
+      <VStack
+        gap="$space-3"
+        when="{worklistDisplayUserText(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse)}">
+        <VStack gap="$space-1">
+          <Text
+            fontWeight="$fontWeight-bold"
+            color="$color-primary-700"
+            value="You" />
+          <Markdown content="{worklistDisplayUserText(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse)}" />
+        </VStack>
+        <VStack
+          gap="$space-1"
+          when="{worklistSubmittedAssistant(lastExchangeDS.value, submittedWorklistMessage) || worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse).length > 0}">
+          <Text
+            fontWeight="$fontWeight-bold"
+            color="$color-success-700"
+            value="Agent" />
+          <Items data="{worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse)}">
+            <Markdown
+              when="{$item.kind === 'text'}"
+              content="{$item.text}" />
+            <VStack
+              when="{$item.kind === 'tool'}"
+              gap="$space-1"
+              padding="$space-2"
+              borderRadius="$borderRadius"
+              border="1px solid $borderColor"
+              backgroundColor="$color-surface-100">
+              <Link onClick="openToolId = $item.id" noIndicator="true">
+                <HStack gap="$space-2" verticalAlignment="center">
+                  <Text
+                    fontFamily="$fontFamily-monospace"
+                    fontSize="$fontSize-xs"
+                    fontWeight="$fontWeight-bold"
+                    paddingHorizontal="$space-1_5"
+                    paddingVertical="$space-0_5"
+                    borderRadius="$borderRadius"
+                    backgroundColor="$color-surface-200"
+                    value="{$item.name}" />
+                  <Text fontSize="$fontSize-sm" value="{$item.summary}" />
+                  <SpaceFiller />
+                  <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-xs" color="$textColor-secondary" value="↗" />
+                </HStack>
+              </Link>
+              <Text
+                when="{$item.errored &amp;&amp; $item.errorText}"
+                color="$color-danger-700"
+                fontSize="$fontSize-sm"
+                value="{$item.errorText}" />
+            </VStack>
+          </Items>
+          <Markdown
+            when="{worklistDisplayAgentEntries(worklistTurnsDS.value || [], submittedWorklistMessage, awaitingResponse).length === 0}"
+            content="{worklistSubmittedAssistant(lastExchangeDS.value, submittedWorklistMessage)}" />
+        </VStack>
       </VStack>
 
     <ModalDialog

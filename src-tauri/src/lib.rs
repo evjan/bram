@@ -4828,7 +4828,12 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
         std::thread::sleep(std::time::Duration::from_millis(200));
         pty_write_internal(app, state, "\r", "pty-intent-toTurn-windows-submit")
     } else {
-        let wrapped = format!("\x15\x1b[200~{}\x1b[201~\r", data);
+        // Ctrl-U for traditional readline shells; \x1b (Escape) for CC's
+        // Ink/React-based input which ignores Ctrl-U but treats Escape
+        // as "discard current input." Belt and suspenders so partial
+        // text typed into CC's input doesn't get concatenated with our
+        // bracketed paste.
+        let wrapped = format!("\x1b\x15\x1b[200~{}\x1b[201~\r", data);
         pty_write_internal(app, state, &wrapped, "pty-intent-toTurn")
     }
 }
@@ -7504,6 +7509,66 @@ fn read_last_assistant_text<R: tauri::Runtime>(
         "source": "session-turns",
         "path": path.to_string_lossy().to_string(),
         "mtime": modified_ms,
+    });
+    serde_json::to_vec(&body).map_err(|e| e.to_string())
+}
+
+// Companion to read_last_assistant_text: returns the most recent USER
+// message text plus the most recent ASSISTANT message text (which may be
+// empty if the assistant hasn't responded yet) plus the active provider
+// label. Used by the Worklist tab's "You said" / "Claude said" panel.
+fn read_last_exchange<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> Result<Vec<u8>, String> {
+    let provider = preferred.or_else(|| hinted_session_provider(app));
+    let provider_str = match provider {
+        Some(SessionProvider::Claude) => "claude",
+        Some(SessionProvider::Codex) => "codex",
+        None => "",
+    };
+    let Some(path) = latest_session_path(app, preferred)? else {
+        let body = serde_json::json!({
+            "userText": "",
+            "assistantText": "",
+            "provider": provider_str,
+        });
+        return serde_json::to_vec(&body).map_err(|e| e.to_string());
+    };
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let turns = st_parse_lines_to_turns(&text);
+    let mut user_text = String::new();
+    let mut assistant_text = String::new();
+    // Walk backward: most recent assistant first, then most recent user
+    // *before* that assistant (so they're a pair). If no assistant yet,
+    // user_text is the most recent user.
+    let mut assistant_idx: Option<usize> = None;
+    for (i, turn) in turns.iter().enumerate().rev() {
+        if turn.get("role").and_then(|v| v.as_str()) == Some("assistant") {
+            if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
+                if !t.trim().is_empty() {
+                    assistant_text = t.to_string();
+                    assistant_idx = Some(i);
+                    break;
+                }
+            }
+        }
+    }
+    let user_search_end = assistant_idx.unwrap_or(turns.len());
+    for turn in turns.iter().take(user_search_end).rev() {
+        if turn.get("role").and_then(|v| v.as_str()) == Some("user") {
+            if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
+                if !t.trim().is_empty() {
+                    user_text = t.to_string();
+                    break;
+                }
+            }
+        }
+    }
+    let body = serde_json::json!({
+        "userText": user_text,
+        "assistantText": assistant_text,
+        "provider": provider_str,
     });
     serde_json::to_vec(&body).map_err(|e| e.to_string())
 }
@@ -14590,6 +14655,15 @@ fn route_request<R: tauri::Runtime>(
     if path == "__app-info" {
         let info = get_app_info();
         let body = serde_json::to_vec(&info).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    if path == "__agent-status" {
+        let body = if let Ok(cur) = agent_status_cell().lock() {
+            serde_json::to_vec(&*cur).unwrap_or_default()
+        } else {
+            b"{}".to_vec()
+        };
         return (200, "application/json; charset=utf-8", body);
     }
 

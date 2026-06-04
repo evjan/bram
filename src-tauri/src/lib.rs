@@ -2023,7 +2023,6 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
-
 // PTY agent-turn state machine (issue #70, later extended for Codex
 // parity in #74). Detects end-of-turn from spinner/activity glyphs in
 // the PTY stream: while the agent is running, the terminal redraws
@@ -9201,6 +9200,134 @@ static SESSION_TURNS_CACHE: std::sync::Mutex<
 > = std::sync::Mutex::new(None);
 
 // Read the freshest session JSONL and produce the structured turn array.
+// Session-size thresholds. Calibrated from observation: at ~21 MB the
+// agent pane became unusable; at ~5 MB earlier in the same session
+// everything was responsive. The middle band is a guess and worth
+// tightening once we have more data.
+const SESSION_SIZE_GREEN_MAX_BYTES: u64 = 5 * 1024 * 1024;
+const SESSION_SIZE_AMBER_MAX_BYTES: u64 = 15 * 1024 * 1024;
+
+fn format_bytes_human(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+fn read_session_size<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+    let Some(path) = freshest_session_path(app)? else {
+        return Ok(b"{}".to_vec());
+    };
+    let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let human_bytes = format_bytes_human(bytes);
+    let state = if bytes <= SESSION_SIZE_GREEN_MAX_BYTES {
+        "green"
+    } else if bytes <= SESSION_SIZE_AMBER_MAX_BYTES {
+        "amber"
+    } else {
+        "red"
+    };
+    let provider_label = match hinted_session_provider(app) {
+        Some(SessionProvider::Codex) => "codex",
+        Some(SessionProvider::Claude) => "claude",
+        None => "unknown",
+    };
+    // Per-agent reset guidance. Both Claude and Codex re-attach to the
+    // current session JSONL by default when the wrapper script
+    // remembers a session id; the user-facing fix is the same shape
+    // for both — exit the current agent process and re-launch without
+    // the resume flag — but the exact command differs by agent. Keep
+    // the wording calm and the command copy-pasteable.
+    let (reset_command, guidance) = match (provider_label, state) {
+        ("claude", "amber") => (
+            "claude",
+            format!(
+                "Session is {} (warming up). Approaching iframe slowdown — \
+                 consider starting fresh: exit the agent (Ctrl-C twice) and \
+                 run `claude` in the terminal.",
+                human_bytes
+            ),
+        ),
+        ("claude", "red") => (
+            "claude",
+            format!(
+                "Session is {} (over 15 MB). Recommend starting fresh: exit \
+                 the agent (Ctrl-C twice) and run `claude` in the terminal.",
+                human_bytes
+            ),
+        ),
+        ("codex", "amber") => (
+            "codex",
+            format!(
+                "Session is {} (warming up). Approaching iframe slowdown — \
+                 consider starting fresh: exit the agent (Ctrl-C twice) and \
+                 run `codex` in the terminal.",
+                human_bytes
+            ),
+        ),
+        ("codex", "red") => (
+            "codex",
+            format!(
+                "Session is {} (over 15 MB). Recommend starting fresh: exit \
+                 the agent (Ctrl-C twice) and run `codex` in the terminal.",
+                human_bytes
+            ),
+        ),
+        _ => ("", String::new()),
+    };
+    let body = serde_json::json!({
+        "bytes": bytes,
+        "humanBytes": human_bytes,
+        "state": state,
+        "provider": provider_label,
+        "resetCommand": reset_command,
+        "guidance": guidance,
+        "thresholds": {
+            "greenMaxBytes": SESSION_SIZE_GREEN_MAX_BYTES,
+            "amberMaxBytes": SESSION_SIZE_AMBER_MAX_BYTES,
+        }
+    });
+    serde_json::to_vec(&body).map_err(|e| e.to_string())
+}
+
+fn session_size_status_row<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json::Value {
+    let body = read_session_size(app)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let state = body
+        .get("state")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let human_bytes = body
+        .get("humanBytes")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let provider = body
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let guidance = body.get("guidance").and_then(|v| v.as_str()).unwrap_or("");
+    serde_json::json!({
+        "signal": "Session size",
+        "level": match state {
+            "red" | "amber" => "warn",
+            "green" => "ok",
+            _ => "neutral",
+        },
+        "state": format!("{} {}", human_bytes, state),
+        "detail": if guidance.is_empty() {
+            format!("Active {} session is {}", provider, human_bytes)
+        } else {
+            guidance.to_string()
+        },
+        "seen": format_iso_utc_ms(unix_now_ms()),
+    })
+}
+
 fn read_session_turns<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     let Some(path) = freshest_session_path(app)? else {
         return Ok(b"[]".to_vec());
@@ -11594,8 +11721,10 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
     // row shows generic "Finished". Refs #179.
     let active_matches = matches!(
         (hinted_session_provider(app), provider),
-        (Some(SessionProvider::Claude), JsonlCompletionProvider::Claude)
-            | (Some(SessionProvider::Codex), JsonlCompletionProvider::Codex)
+        (
+            Some(SessionProvider::Claude),
+            JsonlCompletionProvider::Claude
+        ) | (Some(SessionProvider::Codex), JsonlCompletionProvider::Codex)
     );
     if decision.detected && active_matches {
         match provider {
@@ -13330,6 +13459,12 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
         },
         "sections": [
             {
+                "title": "Session",
+                "rows": [
+                    session_size_status_row(app)
+                ]
+            },
+            {
                 "title": "Startup Run",
                 "rows": [
                     {
@@ -13507,8 +13642,8 @@ impl IfEmpty for String {
 #[cfg(test)]
 mod agent_status_tests {
     use super::{
-        parse_claude_natural_end_banner, parse_claude_status_line,
-        parse_claude_status_verb_only, should_clear_status_on_turn_activity_stop,
+        parse_claude_natural_end_banner, parse_claude_status_line, parse_claude_status_verb_only,
+        should_clear_status_on_turn_activity_stop,
     };
 
     #[test]
@@ -13531,8 +13666,8 @@ mod agent_status_tests {
 
     #[test]
     fn parses_brewed_claude_status_verb_full_line() {
-        let parsed = parse_claude_status_line("Brewed… (15s)".as_bytes())
-            .expect("status line should parse");
+        let parsed =
+            parse_claude_status_line("Brewed… (15s)".as_bytes()).expect("status line should parse");
 
         assert_eq!(parsed.verb, "Brewed");
         assert_eq!(parsed.elapsed_text, "15s");
@@ -13541,8 +13676,8 @@ mod agent_status_tests {
 
     #[test]
     fn parses_brewed_natural_end_banner() {
-        let banner = parse_claude_natural_end_banner(b"* Brewed for 30s")
-            .expect("banner should parse");
+        let banner =
+            parse_claude_natural_end_banner(b"* Brewed for 30s").expect("banner should parse");
 
         assert_eq!(banner.verb, "Brewed");
         assert_eq!(banner.duration_text, "30s");
@@ -13550,8 +13685,8 @@ mod agent_status_tests {
 
     #[test]
     fn parses_compound_duration_natural_end_banner() {
-        let banner = parse_claude_natural_end_banner(b"* Worked for 1m 2s")
-            .expect("banner should parse");
+        let banner =
+            parse_claude_natural_end_banner(b"* Worked for 1m 2s").expect("banner should parse");
 
         assert_eq!(banner.verb, "Worked");
         assert_eq!(banner.duration_text, "1m 2s");
@@ -13578,9 +13713,7 @@ mod agent_status_tests {
         // CC streams tool descriptions like
         // "Searched for 1 pattern, read 1 file" mid-turn. The "for 1"
         // chunk would otherwise look like a banner with duration "1".
-        assert!(
-            parse_claude_natural_end_banner(b"Searched for 1 pattern, read 1 file").is_none()
-        );
+        assert!(parse_claude_natural_end_banner(b"Searched for 1 pattern, read 1 file").is_none());
         assert!(parse_claude_natural_end_banner(b"Listed for 5 minutes").is_none());
         assert!(parse_claude_natural_end_banner(b"Brewed for 30 cups").is_none());
     }
@@ -16000,6 +16133,14 @@ fn route_request<R: tauri::Runtime>(
                 (500, "text/plain; charset=utf-8", e.into_bytes())
             }
         };
+    }
+
+    // Size of the active session JSONL plus a green/amber/red state and
+    // per-agent reset guidance. Polled by the Status tab so the user
+    // gets a calm warning before the iframe-slowdown threshold is hit.
+    if path == "__session-size" {
+        let body = read_session_size(app).unwrap_or_else(|_| b"{}".to_vec());
+        return (200, "application/json; charset=utf-8", body);
     }
 
     // Host-derived turn timeline. Mirrors the iframe sessionTurns(jsonlText)

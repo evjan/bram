@@ -5,6 +5,7 @@
   var.rowInfoDescription="{''}">
 
   <DataSource id="status" url="/__coordination-status?t={refreshTick}" />
+  <DataSource id="sessionSize" url="/__session-size?t={refreshTick}" pollIntervalInSeconds="30" />
 
   <VStack padding="$space-6" gap="$space-4">
     <HStack gap="$space-3" verticalAlignment="center">
@@ -18,8 +19,29 @@
       <Button
         label="Refresh"
         size="sm"
-        onClick="refreshTick = refreshTick + 1; status.refetch();" />
+        onClick="refreshTick = refreshTick + 1; status.refetch(); sessionSize.refetch();" />
     </HStack>
+
+    <VStack when="{sessionSize.value &amp;&amp; sessionSize.value.humanBytes}" gap="$space-2">
+      <Heading level="h3">Session size</Heading>
+      <HStack gap="$space-3" verticalAlignment="center">
+        <Text fontWeight="$fontWeight-bold" value="{sessionSize.value.humanBytes}" />
+        <Text
+          fontWeight="$fontWeight-bold"
+          color="{sessionSize.value.state === 'red' ? '$color-danger-700' : (sessionSize.value.state === 'amber' ? '$color-warn-700' : '$color-success-700')}"
+          value="{sessionSize.value.state}" />
+        <Text
+          when="{sessionSize.value.provider}"
+          fontSize="$fontSize-sm"
+          color="$textColor-secondary"
+          value="{'(' + sessionSize.value.provider + ')'}" />
+      </HStack>
+      <Text
+        when="{sessionSize.value.guidance}"
+        fontSize="$fontSize-sm"
+        color="$textColor-secondary"
+        value="{sessionSize.value.guidance}" />
+    </VStack>
 
     <Text
       when="{status.inProgress}"

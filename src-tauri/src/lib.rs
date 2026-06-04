@@ -7815,7 +7815,11 @@ fn read_last_exchange<R: tauri::Runtime>(
     }
     if let Some(start_idx) = user_idx {
         let end_idx = assistant_idx.unwrap_or(turns.len().saturating_sub(1));
-        for turn in turns.iter().take(end_idx.saturating_add(1)).skip(start_idx + 1) {
+        for turn in turns
+            .iter()
+            .take(end_idx.saturating_add(1))
+            .skip(start_idx + 1)
+        {
             let Some(entries) = turn.get("entries").and_then(|v| v.as_array()) else {
                 continue;
             };
@@ -7825,6 +7829,10 @@ fn read_last_exchange<R: tauri::Runtime>(
                 }
             }
         }
+    }
+    if tool_entries.len() > 5 {
+        let keep_from = tool_entries.len() - 5;
+        tool_entries.drain(0..keep_from);
     }
     let body = serde_json::json!({
         "userText": user_text,

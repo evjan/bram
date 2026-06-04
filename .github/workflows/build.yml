@@ -162,6 +162,24 @@ jobs:
         with:
           path: repo
 
+      - name: Pin install scripts to release tag
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          # install.sh / install.ps1 default to VERSION=latest, which on
+          # GitHub points at the latest *stable* release and skips
+          # pre-releases. A user copying the install one-liner from a
+          # specific release page expects that release's binaries, not
+          # whatever happens to be the latest stable. Bake the tag in.
+          sed -i "s|:-latest}}|:-${TAG}}}|" repo/install.sh
+          sed -i "s|else { \"latest\" }|else { \"${TAG}\" }|" repo/install.ps1
+          echo "::group::install.sh VERSION line"
+          grep '^VERSION=' repo/install.sh
+          echo "::endgroup::"
+          echo "::group::install.ps1 Version fallback line"
+          grep '"latest"\|"v' repo/install.ps1 | head -3
+          echo "::endgroup::"
+
       - name: Append installer script hashes to SHA256SUMS
         run: |
           shasum -a 256 repo/install.sh | sed 's| repo/| |' >> artifacts/SHA256SUMS

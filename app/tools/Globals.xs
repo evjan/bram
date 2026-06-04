@@ -1276,12 +1276,43 @@ function setWorklistVoiceTarget(target) {
   iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'target' });
 }
 
+function restoreTextSelection(control, selection, currentLength, appendedLength) {
+  if (!control || !selection) return false;
+  const atEnd = selection.start === currentLength && selection.end === currentLength;
+  const start = atEnd ? selection.start + appendedLength : selection.start;
+  const end = atEnd ? selection.end + appendedLength : selection.end;
+  control.setSelectionRange(start, end, selection.direction || 'none');
+  return true;
+}
+
 function appendVoiceTranscript(component, transcript) {
   if (!component || !transcript) return false;
   const current = String(component.value || '');
   const spacer = current && !/\s$/.test(current) ? '\n' : '';
-  component.setValue(current + spacer + transcript);
-  if (component.focus) component.focus();
+  const selection = typeof component.selectionStart === 'number'
+    ? {
+        start: component.selectionStart,
+        end: typeof component.selectionEnd === 'number' ? component.selectionEnd : component.selectionStart,
+        direction: component.selectionDirection || 'none'
+      }
+    : null;
+  const appended = spacer + transcript;
+  component.setValue(current + appended);
+  const restore = () => {
+    let restored = false;
+    if (selection && typeof component.setSelectionRange === 'function') {
+      restored = restoreTextSelection(component, selection, current.length, appended.length);
+    }
+    iframeTrace('voice-input', {
+      target: worklistVoiceTarget || 'message-agent',
+      stage: 'append',
+      chars: transcript.length,
+      hadSelection: !!selection,
+      restored
+    });
+  };
+  delay(0);
+  restore();
   return true;
 }
 

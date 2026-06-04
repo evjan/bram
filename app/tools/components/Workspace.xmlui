@@ -704,36 +704,6 @@
             value="You" />
           <Markdown content="{conversationUserText}" />
         </VStack>
-        <Items data="{conversationTools}">
-          <VStack
-            gap="$space-1"
-            padding="$space-2"
-            borderRadius="$borderRadius"
-            border="1px solid $borderColor"
-            backgroundColor="$color-surface-100">
-            <Link onClick="openToolId = $item.id" noIndicator="true">
-              <HStack gap="$space-2" verticalAlignment="center">
-                <Text
-                  fontFamily="$fontFamily-monospace"
-                  fontSize="$fontSize-xs"
-                  fontWeight="$fontWeight-bold"
-                  paddingHorizontal="$space-1_5"
-                  paddingVertical="$space-0_5"
-                  borderRadius="$borderRadius"
-                  backgroundColor="$color-surface-200"
-                  value="{$item.name || 'Tool'}" />
-                <Text fontSize="$fontSize-sm" value="{$item.summary || ''}" />
-                <SpaceFiller />
-                <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-xs" color="$textColor-secondary" value="↗" />
-              </HStack>
-            </Link>
-            <Text
-              when="{$item.errored &amp;&amp; $item.errorText}"
-              color="$color-danger-700"
-              fontSize="$fontSize-sm"
-              value="{$item.errorText}" />
-          </VStack>
-        </Items>
         <VStack
           gap="$space-1"
           when="{conversationAssistantText}">
@@ -741,6 +711,36 @@
             fontWeight="$fontWeight-bold"
             color="$color-success-700"
             value="Agent" />
+          <Items data="{conversationTools}">
+            <VStack
+              gap="$space-1"
+              padding="$space-2"
+              borderRadius="$borderRadius"
+              border="1px solid $borderColor"
+              backgroundColor="$color-surface-100">
+              <Link onClick="openToolId = $item.id" noIndicator="true">
+                <HStack gap="$space-2" verticalAlignment="center">
+                  <Text
+                    fontFamily="$fontFamily-monospace"
+                    fontSize="$fontSize-xs"
+                    fontWeight="$fontWeight-bold"
+                    paddingHorizontal="$space-1_5"
+                    paddingVertical="$space-0_5"
+                    borderRadius="$borderRadius"
+                    backgroundColor="$color-surface-200"
+                    value="{$item.name || 'Tool'}" />
+                  <Text fontSize="$fontSize-sm" value="{$item.summary || ''}" />
+                  <SpaceFiller />
+                  <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-xs" color="$textColor-secondary" value="↗" />
+                </HStack>
+              </Link>
+              <Text
+                when="{$item.errored &amp;&amp; $item.errorText}"
+                color="$color-danger-700"
+                fontSize="$fontSize-sm"
+                value="{$item.errorText}" />
+            </VStack>
+          </Items>
           <Markdown content="{conversationAssistantText}" />
         </VStack>
       </VStack>

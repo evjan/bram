@@ -1883,7 +1883,9 @@ fn parse_iso_to_ms(iso: &str) -> Option<i64> {
 // out of scope for v1). Re-uses the rolling pty_tail_cell so we don't
 // need a second buffer. Emits `agent-status-changed` only when the
 // snapshot actually changes; the working→finished transition is
-// driven by agent_status_emit_finished via kill_current_claude_turn.
+// driven from the JSONL boundary detector — see
+// emit_claude_finished_from_jsonl_boundary. This function only emits
+// working-state updates (verb / elapsed / substate). Refs #179.
 fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
     let active_provider = hinted_session_provider(app);
     if !matches!(active_provider, Some(SessionProvider::Claude)) {
@@ -1894,19 +1896,6 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
         Err(_) => None,
     };
     let Some(stats) = stats else { return };
-    // Note: the !stats.is_working early-return lives *below* the banner
-    // block. Cache (JSONL) is authoritative w.r.t. the status-line /
-    // working emit; without the gate the stale status line still in
-    // the PTY tail after end_turn would re-emit "working". But the
-    // natural-end banner is the most authoritative *end-of-turn*
-    // signal and must be able to fire even after JSONL records
-    // end_turn — otherwise the iframe's "finished" cue freezes on the
-    // previous turn's verb whenever the JSONL poller flips
-    // is_working=false in the same ~300 ms window that the banner
-    // chunk arrives in. The cleared_at and killed_ts guards below
-    // still gate the banner (a canceled turn should not surface a
-    // finished cue, and a same-turn re-emit after a clear should not
-    // race the cache).
     let cleared_at = last_cleared_at_cell().lock().map(|g| *g).unwrap_or(0);
     let since_clear = unix_now_ms() - cleared_at;
     // Suppress only during the brief race window after a clear-to-idle
@@ -1929,16 +1918,10 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
     if stats.user_ts_ms <= killed_ts {
         return;
     }
-
-    // Turn is active per JSONL / cache, but CC may have just printed its
-    // natural-end banner ("* Worked for 1m 2s") in a chunk that arrived
-    // before the silence detector / JSONL caught up. The banner is the
-    // most authoritative end-of-turn signal — hard-kill immediately.
-    //
-    // Guard: on a fresh user_ts_ms, drain pty_tail_cell first so the
-    // prior turn's banner — still in the rolling 8KB buffer for ~7s
-    // after the turn end — cannot match here and kill the new turn's
-    // status row. Refs #178.
+    // On fresh user_ts_ms, drain pty_tail_cell so the prior turn's
+    // status-line text still in the rolling 8KB buffer can't surface
+    // as the new turn's working verb before genuine new PTY chunks
+    // overwrite it. Refs #178.
     if let Ok(mut last) = last_banner_user_ts_ms_cell().lock() {
         if stats.user_ts_ms > *last {
             *last = stats.user_ts_ms;
@@ -1948,20 +1931,11 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
         }
     }
     let stripped = pty_tail_cell().lock().ok().map(|tail| strip_ansi(&tail));
-    if let Some(banner) = stripped
-        .as_ref()
-        .and_then(|s| parse_claude_natural_end_banner(s))
-    {
-        kill_current_claude_turn_with_finished(
-            app,
-            Some(banner.verb),
-            Some(banner.duration_text),
-        );
-        return;
-    }
-    // No banner. The status-line / working emit below runs only while
-    // JSONL still says the turn is active; otherwise it would re-emit
-    // "working" from the stale status line still in the PTY tail.
+    // Working emit runs only while JSONL says the turn is active;
+    // otherwise the stale status line still in the PTY tail would
+    // re-emit "working". The finished transition is owned by the
+    // JSONL boundary detector (emit_claude_finished_from_jsonl_boundary),
+    // not by anything in this function.
     if !stats.is_working {
         return;
     }
@@ -11610,6 +11584,56 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
         );
     }
 
+    // Provider-agnostic finished-cue emit on detection. Anchors the
+    // row's working→finished transition on the authoritative JSONL
+    // boundary, independent of inflight-claim coordination below
+    // (which only manages the spinner sentinel). For Claude, scrape
+    // the current PTY tail for the natural-end banner — if present,
+    // it supplies the finished cue's verb + duration; if absent
+    // (resize artifact, banner not yet painted, partial chunk), the
+    // row shows generic "Finished". Refs #179.
+    let active_matches = matches!(
+        (hinted_session_provider(app), provider),
+        (Some(SessionProvider::Claude), JsonlCompletionProvider::Claude)
+            | (Some(SessionProvider::Codex), JsonlCompletionProvider::Codex)
+    );
+    if decision.detected && active_matches {
+        match provider {
+            JsonlCompletionProvider::Claude => {
+                let (verb, elapsed) = pty_tail_cell()
+                    .lock()
+                    .ok()
+                    .map(|tail| strip_ansi(&tail))
+                    .as_ref()
+                    .and_then(|s| parse_claude_natural_end_banner(s))
+                    .map(|b| (Some(b.verb), Some(b.duration_text)))
+                    .unwrap_or((None, None));
+                if bram_trace_enabled() {
+                    append_bram_trace_line(
+                        app,
+                        "finished-cue",
+                        &format!(
+                            "source=jsonl provider=claude verb={} elapsed={}",
+                            verb.as_deref().unwrap_or("(none)"),
+                            elapsed.as_deref().unwrap_or("(none)"),
+                        ),
+                    );
+                }
+                kill_current_claude_turn_with_finished(app, verb, elapsed);
+            }
+            JsonlCompletionProvider::Codex => {
+                if bram_trace_enabled() {
+                    append_bram_trace_line(
+                        app,
+                        "finished-cue",
+                        "source=jsonl provider=codex verb=(none) elapsed=(none)",
+                    );
+                }
+                agent_status_emit_finished(app, provider_label, None, None);
+            }
+        }
+    }
+
     let Some((claimed_ids, claimed_at)) = inflight_claim_ids_and_claimed_at(app) else {
         if bram_trace_enabled() {
             append_bram_trace_line(
@@ -11732,9 +11756,10 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
         claimed_after,
     );
 
-    if provider == JsonlCompletionProvider::Codex {
-        agent_status_emit_finished(app, provider_label, None, None);
-    }
+    // Note: agent_status_emit_finished for both providers fires from
+    // the boundary-detected block earlier (above the inflight-claim
+    // gate), so the row transitions on every real JSONL boundary
+    // regardless of inflight coordination. Refs #179.
     clear_inflight_claim_sentinel(app, &claimed_ids);
 }
 

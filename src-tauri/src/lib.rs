@@ -1361,13 +1361,25 @@ fn sticky_substate_clear() {
     }
 }
 
+// Parsed CC natural-end banner ("* Brewed for 30s", "* Worked for 1m
+// 2s"). Carries the past-tense verb and the duration text so the
+// status row can briefly show "Brewed · 30s" as a finished cue
+// instead of just disappearing when the turn ends.
+struct ParsedEndBanner {
+    verb: String,
+    duration_text: String,
+}
+
 // Detect CC's natural-end banner in the stripped PTY tail. Format:
 // "* <PastTenseVerb> for <duration>" (e.g. "* Worked for 1m 2s",
 // "* Brewed for 12s", "* Sautéed for 45s"). When present, this is the
 // most authoritative "turn just ended" signal — stronger than silence,
 // independent of menu / escape state. pty_agent_status_update uses it
-// to hard-kill the row even within the post-escape suppression window.
-fn pty_tail_has_natural_end_banner(stripped: &[u8]) -> bool {
+// to end the turn even within the post-escape suppression window.
+//
+// Returns the parsed verb + duration so callers can surface them as a
+// "finished" cue. Last (rightmost-in-tail) match wins.
+fn parse_claude_natural_end_banner(stripped: &[u8]) -> Option<ParsedEndBanner> {
     let s = std::str::from_utf8(stripped).unwrap_or("");
     // CC's banner prefix glyph varies (`*`, `✻`, `✶`, `✳`, …) and the
     // exact whitespace differs (strip_ansi inserts spaces in place of
@@ -1375,6 +1387,7 @@ fn pty_tail_has_natural_end_banner(stripped: &[u8]) -> bool {
     // scan each line for the substring " for " and check that the
     // word just before is a single capitalized past-tense-looking verb
     // and the word just after is a duration.
+    let mut best: Option<ParsedEndBanner> = None;
     for line in s.lines() {
         let Some(idx) = line.find(" for ") else {
             continue;
@@ -1398,18 +1411,79 @@ fn pty_tail_has_natural_end_banner(stripped: &[u8]) -> bool {
         if !first.is_uppercase() || !cs.all(|c| c.is_lowercase()) {
             continue;
         }
-        // Duration: first non-whitespace char after " for " must be a digit.
+        // Duration: first non-whitespace char after " for " must be a
+        // digit. Accept a run of digits / 'h' / 'm' / 's' / spaces;
+        // stop at anything else (e.g. " · 5 messages" trailing the
+        // duration on some CC builds).
         let after = line[idx + " for ".len()..].trim_start();
-        if after
+        if !after
             .chars()
             .next()
             .map(|c| c.is_ascii_digit())
             .unwrap_or(false)
         {
-            return true;
+            continue;
         }
+        let mut end = 0usize;
+        for (i, c) in after.char_indices() {
+            if c.is_ascii_digit() || matches!(c, 'h' | 'm' | 's') || c == ' ' {
+                end = i + c.len_utf8();
+            } else {
+                break;
+            }
+        }
+        // If extraction stopped mid-word (next char is alphabetic),
+        // we grabbed only the leading digit + an incidental h/m/s
+        // letter from prose like "Listed for 5 minutes" or
+        // "30 cups". Reject — real banner durations are followed by
+        // whitespace, punctuation (·), or end-of-line.
+        if after[end..]
+            .chars()
+            .next()
+            .map(|c| c.is_alphabetic())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let candidate = after[..end].trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        // strip_ansi inserts a single space for each CSI G column-
+        // positioning escape. CC's TUI paints multi-unit durations
+        // like "1m 22s" piecewise — e.g. "1m 2\x1b[19Gs" — which
+        // arrives here as "1m 2 s". Strip internal whitespace and
+        // re-tokenize as (\d+)([hms])+. Lossy for the split-unit
+        // case ("1m 22s" reconstructs as "1m 2s" because the second
+        // "2" lived in the prior screen state we can't recover) but
+        // good enough that the row shows the verb instead of
+        // freezing on the previous turn's cue.
+        let compact: String = candidate.chars().filter(|c| !c.is_whitespace()).collect();
+        let mut tokens: Vec<String> = Vec::new();
+        let mut current_digits = String::new();
+        let mut valid = true;
+        for c in compact.chars() {
+            if c.is_ascii_digit() {
+                current_digits.push(c);
+            } else if matches!(c, 'h' | 'm' | 's') && !current_digits.is_empty() {
+                let mut token = std::mem::take(&mut current_digits);
+                token.push(c);
+                tokens.push(token);
+            } else {
+                valid = false;
+                break;
+            }
+        }
+        if !valid || !current_digits.is_empty() || tokens.is_empty() {
+            continue;
+        }
+        let duration_text = tokens.join(" ");
+        best = Some(ParsedEndBanner {
+            verb: verb.to_string(),
+            duration_text,
+        });
     }
-    false
+    best
 }
 
 // Scan the stripped PTY tail for known CC thinking-phase phrases. CC's
@@ -1539,7 +1613,7 @@ const POST_ESCAPE_NO_KILL_WINDOW_MS: i64 = 15_000;
 // stats.user_ts_ms (advance past this stamp), it drains pty_tail_cell so
 // the prior turn's "* <Verb>ed for X" banner — still sitting in the
 // rolling 8KB buffer — cannot falsely match
-// pty_tail_has_natural_end_banner and kill the status row mid-turn.
+// parse_claude_natural_end_banner and kill the status row mid-turn.
 // Refs #178.
 static LAST_BANNER_USER_TS_MS: OnceLock<Mutex<i64>> = OnceLock::new();
 fn last_banner_user_ts_ms_cell() -> &'static Mutex<i64> {
@@ -1547,6 +1621,20 @@ fn last_banner_user_ts_ms_cell() -> &'static Mutex<i64> {
 }
 
 fn kill_current_claude_turn<R: tauri::Runtime>(app: &AppHandle<R>) {
+    kill_current_claude_turn_with_finished(app, None, None);
+}
+
+// End the current turn. The row briefly displays a "finished" cue
+// (verb + duration when known, generic otherwise) before fading to
+// idle, so the GUI signals turn completion explicitly rather than
+// silently removing the row. Callers that have a parsed end-banner
+// pass its verb/duration; silence-detected and user-cancel paths
+// pass None.
+fn kill_current_claude_turn_with_finished<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    verb: Option<String>,
+    elapsed_text: Option<String>,
+) {
     let current_ts = claude_turn_stats_cell()
         .lock()
         .ok()
@@ -1555,13 +1643,66 @@ fn kill_current_claude_turn<R: tauri::Runtime>(app: &AppHandle<R>) {
     if let Ok(mut g) = last_killed_user_ts_ms_cell().lock() {
         *g = current_ts;
     }
-    agent_status_clear_to_idle(app);
+    let provider = match hinted_session_provider(app) {
+        Some(SessionProvider::Codex) => "codex",
+        _ => "claude",
+    };
+    agent_status_emit_finished(app, provider, verb, elapsed_text);
     // Dedicated "real end-of-turn" signal — distinct from the eager
     // `agent-turn-end` event which fires on any 800 ms silence. The
     // worklist's awaitingResponse gate keys on this; agent-turn-end
     // would clear it on every inter-burst pause.
     trace_emit_signal(app, "agent-turn-killed");
     let _ = app.emit("agent-turn-killed", ());
+}
+
+// Emit a "finished" agent-status payload. Stamps the cleared-at cursor
+// and drops sticky verb/substate so a stale PTY tail can't re-emit
+// "working" after the turn has ended.
+fn agent_status_emit_finished<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: &str,
+    verb: Option<String>,
+    elapsed_text: Option<String>,
+) {
+    let next = AgentStatus {
+        provider: Some(provider.to_string()),
+        state: "finished".to_string(),
+        verb,
+        elapsed_text,
+        substate: None,
+        output_tokens_text: None,
+        updated_at_ms: unix_now_ms(),
+    };
+    // Idempotency: if the cached state already matches the proposed
+    // finished payload, skip the side effects. Without this, the same
+    // banner still sitting in the PTY tail re-fires on every PTY chunk
+    // during the race between the user submitting a new turn and the
+    // JSONL poller updating stats.user_ts_ms. Each re-fire re-stamped
+    // cleared_at, which then made the cleared_at race-window check at
+    // the top of pty_agent_status_update suppress the next turn's
+    // working emit. Net effect: the finished cue (e.g. "Cogitated ·
+    // 30s") got stuck for the duration of multiple subsequent turns.
+    let changed = if let Ok(cur) = agent_status_cell().lock() {
+        cur.state != next.state
+            || cur.provider != next.provider
+            || cur.verb != next.verb
+            || cur.elapsed_text != next.elapsed_text
+    } else {
+        true
+    };
+    if !changed {
+        return;
+    }
+    if let Ok(mut g) = last_cleared_at_cell().lock() {
+        *g = unix_now_ms();
+    }
+    sticky_verb_clear();
+    sticky_substate_clear();
+    if let Ok(mut cur) = agent_status_cell().lock() {
+        *cur = next.clone();
+    }
+    emit_replayable_payload(app, "agent-status-changed", &next);
 }
 
 // Background poller: re-reads the latest Claude session JSONL every
@@ -1741,26 +1882,31 @@ fn parse_iso_to_ms(iso: &str) -> Option<i64> {
 // active provider being Claude (Codex has a different TUI shape and is
 // out of scope for v1). Re-uses the rolling pty_tail_cell so we don't
 // need a second buffer. Emits `agent-status-changed` only when the
-// snapshot actually changes (including the working→idle transition
-// driven by agent_status_clear_to_idle below).
+// snapshot actually changes; the working→finished transition is
+// driven by agent_status_emit_finished via kill_current_claude_turn.
 fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
     let active_provider = hinted_session_provider(app);
     if !matches!(active_provider, Some(SessionProvider::Claude)) {
         return;
     }
-    // Cache (JSONL) is authoritative for "is a turn active". PTY parse
-    // is cosmetic only — it can fill in verb / elapsed / substate but
-    // cannot revive a row that JSONL says is done. Otherwise the stale
-    // status line still in the PTY tail after agent-turn-end clears the
-    // row would immediately re-emit "working".
     let stats = match claude_turn_stats_cell().lock() {
         Ok(guard) => guard.clone(),
         Err(_) => None,
     };
     let Some(stats) = stats else { return };
-    if !stats.is_working {
-        return;
-    }
+    // Note: the !stats.is_working early-return lives *below* the banner
+    // block. Cache (JSONL) is authoritative w.r.t. the status-line /
+    // working emit; without the gate the stale status line still in
+    // the PTY tail after end_turn would re-emit "working". But the
+    // natural-end banner is the most authoritative *end-of-turn*
+    // signal and must be able to fire even after JSONL records
+    // end_turn — otherwise the iframe's "finished" cue freezes on the
+    // previous turn's verb whenever the JSONL poller flips
+    // is_working=false in the same ~300 ms window that the banner
+    // chunk arrives in. The cleared_at and killed_ts guards below
+    // still gate the banner (a canceled turn should not surface a
+    // finished cue, and a same-turn re-emit after a clear should not
+    // race the cache).
     let cleared_at = last_cleared_at_cell().lock().map(|g| *g).unwrap_or(0);
     let since_clear = unix_now_ms() - cleared_at;
     // Suppress only during the brief race window after a clear-to-idle
@@ -1802,12 +1948,21 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
         }
     }
     let stripped = pty_tail_cell().lock().ok().map(|tail| strip_ansi(&tail));
-    if stripped
+    if let Some(banner) = stripped
         .as_ref()
-        .map(|s| pty_tail_has_natural_end_banner(s))
-        .unwrap_or(false)
+        .and_then(|s| parse_claude_natural_end_banner(s))
     {
-        kill_current_claude_turn(app);
+        kill_current_claude_turn_with_finished(
+            app,
+            Some(banner.verb),
+            Some(banner.duration_text),
+        );
+        return;
+    }
+    // No banner. The status-line / working emit below runs only while
+    // JSONL still says the turn is active; otherwise it would re-emit
+    // "working" from the stale status line still in the PTY tail.
+    if !stats.is_working {
         return;
     }
     let full = stripped.as_ref().and_then(|s| parse_claude_status_line(s));
@@ -1894,33 +2049,6 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
 }
 
-// Force the agent-status cache to idle and emit. Called from the
-// agent-turn-end emitter so the Worklist status row clears as soon as
-// the turn ends instead of waiting for the parser to stop finding the
-// status line in the tail.
-fn agent_status_clear_to_idle<R: tauri::Runtime>(app: &AppHandle<R>) {
-    // Turn ended — discard any sticky verb / substate so the next turn
-    // doesn't briefly inherit the prior turn's phrases on first miss.
-    sticky_verb_clear();
-    sticky_substate_clear();
-    // Stamp the clear time so pty_agent_status_update refuses to
-    // re-emit "working" from the stale status line still in the PTY
-    // tail until JSONL records a new user-turn boundary.
-    if let Ok(mut guard) = last_cleared_at_cell().lock() {
-        *guard = unix_now_ms();
-    }
-    let mut emit_payload: Option<AgentStatus> = None;
-    if let Ok(mut cur) = agent_status_cell().lock() {
-        if cur.state != "idle" {
-            let next = AgentStatus::idle();
-            *cur = next.clone();
-            emit_payload = Some(next);
-        }
-    }
-    if let Some(payload) = emit_payload {
-        emit_replayable_payload(app, "agent-status-changed", &payload);
-    }
-}
 
 // PTY agent-turn state machine (issue #70, later extended for Codex
 // parity in #74). Detects end-of-turn from spinner/activity glyphs in
@@ -2220,6 +2348,20 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     if tail.len() > 8192 {
         let drop = tail.len() - 8192;
         tail.drain(..drop);
+        // After a mid-buffer trim, advance to the next newline so the
+        // tail does not start mid-escape. strip_ansi reads only
+        // complete CSI/OSC escapes; partial leading escape bytes
+        // (e.g. "5Gthought" left after dropping the first 3 bytes of
+        // "\x1b[35Gthought") would survive as literal text and corrupt
+        // downstream parsers — notably parse_claude_natural_end_banner,
+        // which would then walk back across "Gthought" and treat the
+        // leading "G" as a capitalized verb prefix, falsely matching
+        // "Gthought for 4s" and emitting it as a finished verb.
+        // Newlines never appear inside ANSI escapes, so they are a
+        // safe resync boundary.
+        if let Some(nl_pos) = tail.iter().position(|&b| b == b'\n') {
+            tail.drain(..=nl_pos);
+        }
     }
     let codex_action_required_title = pty_codex_action_required_pos(&tail).is_some();
     let mut detected = pty_menu_detect(&tail);
@@ -11590,6 +11732,9 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
         claimed_after,
     );
 
+    if provider == JsonlCompletionProvider::Codex {
+        agent_status_emit_finished(app, provider_label, None, None);
+    }
     clear_inflight_claim_sentinel(app, &claimed_ids);
 }
 
@@ -13337,8 +13482,8 @@ impl IfEmpty for String {
 #[cfg(test)]
 mod agent_status_tests {
     use super::{
-        parse_claude_status_line, parse_claude_status_verb_only,
-        should_clear_status_on_turn_activity_stop,
+        parse_claude_natural_end_banner, parse_claude_status_line,
+        parse_claude_status_verb_only, should_clear_status_on_turn_activity_stop,
     };
 
     #[test]
@@ -13357,6 +13502,79 @@ mod agent_status_tests {
             .expect("standalone status verb should parse");
 
         assert_eq!(verb, "Beboppin'");
+    }
+
+    #[test]
+    fn parses_brewed_claude_status_verb_full_line() {
+        let parsed = parse_claude_status_line("Brewed… (15s)".as_bytes())
+            .expect("status line should parse");
+
+        assert_eq!(parsed.verb, "Brewed");
+        assert_eq!(parsed.elapsed_text, "15s");
+        assert!(parsed.substate.is_none());
+    }
+
+    #[test]
+    fn parses_brewed_natural_end_banner() {
+        let banner = parse_claude_natural_end_banner(b"* Brewed for 30s")
+            .expect("banner should parse");
+
+        assert_eq!(banner.verb, "Brewed");
+        assert_eq!(banner.duration_text, "30s");
+    }
+
+    #[test]
+    fn parses_compound_duration_natural_end_banner() {
+        let banner = parse_claude_natural_end_banner(b"* Worked for 1m 2s")
+            .expect("banner should parse");
+
+        assert_eq!(banner.verb, "Worked");
+        assert_eq!(banner.duration_text, "1m 2s");
+    }
+
+    #[test]
+    fn natural_end_banner_takes_rightmost_match() {
+        // Older line first, newer second — the newer banner wins.
+        let tail = b"* Worked for 5s\n\n* Brewed for 30s\n";
+        let banner = parse_claude_natural_end_banner(tail).expect("banner should parse");
+
+        assert_eq!(banner.verb, "Brewed");
+        assert_eq!(banner.duration_text, "30s");
+    }
+
+    #[test]
+    fn natural_end_banner_ignores_prose_for() {
+        assert!(parse_claude_natural_end_banner(b"working for the weekend").is_none());
+        assert!(parse_claude_natural_end_banner(b"file for review").is_none());
+    }
+
+    #[test]
+    fn natural_end_banner_ignores_tool_descriptions_with_digit_for() {
+        // CC streams tool descriptions like
+        // "Searched for 1 pattern, read 1 file" mid-turn. The "for 1"
+        // chunk would otherwise look like a banner with duration "1".
+        assert!(
+            parse_claude_natural_end_banner(b"Searched for 1 pattern, read 1 file").is_none()
+        );
+        assert!(parse_claude_natural_end_banner(b"Listed for 5 minutes").is_none());
+        assert!(parse_claude_natural_end_banner(b"Brewed for 30 cups").is_none());
+    }
+
+    #[test]
+    fn parses_duration_with_internal_whitespace_from_csi_g_split() {
+        // CC's TUI paints multi-unit durations piecewise:
+        // "1m 22s" arrives as "1m 2\x1b[19Gs", and strip_ansi turns
+        // the CSI G into a single space, leaving "1m 2 s". The
+        // detector should still recognize this as a banner so the
+        // row doesn't stay frozen on the prior turn's verb. The
+        // reconstructed duration is lossy ("1m 2s" instead of
+        // "1m 22s") because the missing "2" lived in the prior
+        // screen state we can't recover from the chunk alone.
+        let banner = parse_claude_natural_end_banner(b"* Brewed for 1m 2 s")
+            .expect("banner should parse despite the strip_ansi-induced split");
+
+        assert_eq!(banner.verb, "Brewed");
+        assert_eq!(banner.duration_text, "1m 2s");
     }
 
     #[test]
@@ -15336,23 +15554,28 @@ fn route_request<R: tauri::Runtime>(
     }
 
     if path == "__agent-status" {
-        let mut emit_payload: Option<AgentStatus> = None;
-        let body = if let Ok(mut cur) = agent_status_cell().lock() {
-            let codex_stale = cur.provider.as_deref() == Some("codex")
+        // Codex doesn't paint a rotating verb line and its silence
+        // between turns is often shorter than the silence-clear gate
+        // (10 s) used by pty_agent_turn_update — so without this
+        // route-side check a stale "working" row would linger until
+        // the next spinner glyph. Instead of clearing to idle, leave
+        // Codex in "finished" until the next turn starts so the GUI
+        // keeps an explicit completion cue.
+        let codex_stale = if let Ok(cur) = agent_status_cell().lock() {
+            cur.provider.as_deref() == Some("codex")
                 && cur.state == "working"
-                && unix_now_ms().saturating_sub(cur.updated_at_ms) > CODEX_AGENT_STATUS_STALE_MS;
-            if codex_stale {
-                let next = AgentStatus::idle();
-                *cur = next.clone();
-                emit_payload = Some(next);
-            }
+                && unix_now_ms().saturating_sub(cur.updated_at_ms) > CODEX_AGENT_STATUS_STALE_MS
+        } else {
+            false
+        };
+        if codex_stale {
+            agent_status_emit_finished(app, "codex", None, None);
+        }
+        let body = if let Ok(cur) = agent_status_cell().lock() {
             serde_json::to_vec(&*cur).unwrap_or_default()
         } else {
             b"{}".to_vec()
         };
-        if let Some(payload) = emit_payload {
-            emit_replayable_payload(app, "agent-status-changed", &payload);
-        }
         return (200, "application/json; charset=utf-8", body);
     }
 

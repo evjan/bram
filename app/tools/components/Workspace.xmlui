@@ -316,6 +316,17 @@
             color="$textColor-secondary"
             value="· {agentStatus.value.substate}" />
         </HStack>
+        <HStack
+          when="{agentStatus.value &amp;&amp; agentStatus.value.state === 'finished' &amp;&amp; !pendingMenu}"
+          gap="$space-2"
+          verticalAlignment="center"
+          padding="$space-1">
+          <Text
+            fontStyle="italic"
+            overflowMode="none"
+            color="$textColor-secondary"
+            value="{(agentStatus.value.verb || 'Finished') + (agentStatus.value.elapsedText ? ' · ' + agentStatus.value.elapsedText : '')}" />
+        </HStack>
         <VStack
           when="{pendingMenu}"
           gap="$space-2"

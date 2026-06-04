@@ -2909,6 +2909,160 @@ fn codex_fragmented_menu_options(text: &str) -> Vec<MenuOption> {
         .collect()
 }
 
+fn codex_menu_line_is_numbered_option(line: &str) -> bool {
+    let trimmed = line.trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
+    let Some((digits, _rest)) = trimmed.split_once('.') else {
+        return false;
+    };
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+fn codex_menu_line_is_command_candidate(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.contains("action required")
+        || lower.contains("codex to run")
+        || lower.contains("approve")
+        || lower.contains("approval")
+        || lower.contains("permission")
+        || lower.contains("sandbox")
+        || lower.contains("allow")
+        || lower.contains("deny")
+        || lower.starts_with("esc to cancel")
+        || codex_menu_line_is_numbered_option(trimmed)
+    {
+        return false;
+    }
+    true
+}
+
+fn codex_command_end(candidate: &str) -> usize {
+    for (idx, ch) in candidate.char_indices() {
+        if ch == '\n' || ch == '\r' || ch == '❯' || ch == '›' {
+            return idx;
+        }
+    }
+    candidate.len()
+}
+
+fn extract_codex_dollar_prompt_command(text: &str) -> Option<String> {
+    for (idx, _) in text.match_indices('$').rev() {
+        let candidate = text[idx + 1..].trim_start();
+        let end = codex_command_end(candidate);
+        let command = candidate[..end].trim();
+        if !command.is_empty() {
+            return Some(command.to_string());
+        }
+    }
+    None
+}
+
+fn codex_prompt_field_value(text: &str, marker: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    let idx = lower.find(marker)?;
+    let mut value = String::new();
+    let mut started = false;
+    for ch in text[idx + marker.len()..].chars() {
+        if !started {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '/' || ch == '.' {
+                started = true;
+                value.push(ch);
+            }
+            continue;
+        }
+        if ch == '"'
+            || ch == '\''
+            || ch == '\\'
+            || ch == ','
+            || ch == '}'
+            || ch == '>'
+            || ch == '›'
+            || ch == '❯'
+            || ch == '\n'
+            || ch == '\r'
+            || ch.is_whitespace()
+        {
+            break;
+        }
+        value.push(ch);
+    }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn codex_path_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric()
+        || matches!(
+            ch,
+            '/' | '.' | '-' | '_' | '+' | '~' | '@' | ':' | '=' | '%'
+        )
+}
+
+fn extract_longest_absolute_path(text: &str) -> Option<String> {
+    let mut best = String::new();
+    for (idx, _) in text.match_indices('/') {
+        let mut candidate = String::new();
+        for ch in text[idx..].chars() {
+            if codex_path_char(ch) {
+                candidate.push(ch);
+            } else {
+                break;
+            }
+        }
+        if candidate.len() > best.len() {
+            best = candidate;
+        }
+    }
+    if best.is_empty() {
+        None
+    } else {
+        Some(best)
+    }
+}
+
+fn extract_codex_mcp_signature(text: &str) -> Option<(String, String)> {
+    let lower = text.to_ascii_lowercase();
+    if !lower.contains("mcp") {
+        return None;
+    }
+    let tool = codex_prompt_field_value(text, "tool")?;
+    let path =
+        extract_longest_absolute_path(text).or_else(|| codex_prompt_field_value(text, "path:"))?;
+    Some((tool.clone(), format!("filesystem:{}({})", tool, path)))
+}
+
+fn extract_codex_command_signature(text: &str) -> Option<(String, String)> {
+    if let Some(sig) = extract_codex_mcp_signature(text) {
+        return Some(sig);
+    }
+    if let Some(command) = extract_codex_dollar_prompt_command(text) {
+        return Some(("Bash".to_string(), format!("Bash({})", command)));
+    }
+
+    let mut candidates: Vec<String> = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if codex_menu_line_is_numbered_option(line) {
+            break;
+        }
+        if codex_menu_line_is_command_candidate(line) {
+            candidates.push(line.trim_start_matches("$ ").to_string());
+        }
+    }
+    let command = candidates.last()?.trim();
+    if command.is_empty() {
+        None
+    } else {
+        Some(("Bash".to_string(), format!("Bash({})", command)))
+    }
+}
+
 // Look for claude's permission menu in the rolling tail. Pattern:
 // "1. Yes" appears, followed by "2. " within ~512 bytes (the menu's
 // options are tightly grouped). Tool name is best-effort guessed
@@ -2975,13 +3129,24 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
             None => {
                 if raw_codex_action {
                     let options = codex_fragmented_menu_options(&text);
+                    let extracted = extract_codex_command_signature(&text);
+                    let tool = extracted
+                        .as_ref()
+                        .map(|(tool, _)| tool.clone())
+                        .unwrap_or_else(|| "Bash".to_string());
+                    let signature = extracted.map(|(_, signature)| signature);
+                    let signature_source = if signature.is_some() {
+                        Some("pty")
+                    } else {
+                        None
+                    };
                     return Some(PtyMenu {
-                        tool: "Bash".to_string(),
+                        tool,
                         text,
                         options,
-                        tool_call_signature: None,
+                        tool_call_signature: signature,
                         tool_call_diff: None,
-                        signature_source: None,
+                        signature_source,
                     });
                 }
                 // Header text hasn't landed in this cycle's tail. If
@@ -3016,8 +3181,17 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
         // header for a Bash gh issue comment, and again for a Write). The
         // PTY scan finds the actual tool call. Refs #170 follow-up.
         let pty_call = extract_pty_tool_call(tail);
+        let codex_signature = if raw_codex_action {
+            extract_codex_command_signature(&text)
+        } else {
+            None
+        };
         let (final_tool, signature, signature_source) = match pty_call {
             Some((name, signature)) => (name, Some(signature), Some("pty")),
+            None if codex_signature.is_some() => {
+                let (tool, signature) = codex_signature.unwrap();
+                (tool, Some(signature), Some("pty"))
+            }
             None => (tool, None, None),
         };
         Some(PtyMenu {
@@ -13226,8 +13400,9 @@ mod agent_status_tests {
 #[cfg(test)]
 mod pty_menu_tests {
     use super::{
-        extract_pending_tool_call_from_jsonl, format_pending_tool_call, parse_menu_options,
-        pty_menu_detect, pty_menu_input_clears_inflight, pty_output_clears_inflight,
+        extract_codex_command_signature, extract_pending_tool_call_from_jsonl,
+        format_pending_tool_call, parse_menu_options, pty_menu_detect,
+        pty_menu_input_clears_inflight, pty_output_clears_inflight,
     };
     use serde_json::json;
 
@@ -13321,6 +13496,10 @@ mod pty_menu_tests {
         let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
 
         assert_eq!(menu.tool, "Bash");
+        assert_eq!(
+            menu.tool_call_signature.as_deref(),
+            Some("Bash(rm -f /Users/jonudell/Desktop/foo.bar)")
+        );
         assert_eq!(menu.options.len(), 3);
         assert_eq!(menu.options[0].key, "1");
         assert_eq!(menu.options[0].label, "Option 1");
@@ -13340,6 +13519,10 @@ mod pty_menu_tests {
         let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
 
         assert_eq!(menu.tool, "Bash");
+        assert_eq!(
+            menu.tool_call_signature.as_deref(),
+            Some("Bash(rm -f /Users/jonudell/Desktop/foo.bar)")
+        );
         assert_eq!(menu.options.len(), 3);
         assert_eq!(menu.options[2].label, "Option 3");
     }
@@ -13352,6 +13535,10 @@ mod pty_menu_tests {
 2.\n";
         let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
 
+        assert_eq!(
+            menu.tool_call_signature.as_deref(),
+            Some("Bash(cat /Users/jonudell/Desktop/foo.bar)")
+        );
         assert_eq!(menu.options.len(), 2);
         assert_eq!(menu.options[0].key, "1");
         assert_eq!(menu.options[0].label, "Option 1");
@@ -13367,10 +13554,73 @@ mod pty_menu_tests {
         let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
 
         assert_eq!(menu.options.len(), 2);
+        assert_eq!(menu.tool_call_signature, None);
         assert_eq!(menu.options[1].key, "2");
         assert_eq!(
             menu.options[1].label,
             "No, and tell Codex what to do differently"
+        );
+    }
+
+    #[test]
+    fn codex_command_signature_ignores_prompt_prose_and_options() {
+        let text = "Codex wants to run this command:\n\
+$ cargo test --manifest-path src-tauri/Cargo.toml\n\
+1.\n\
+2.\n";
+
+        assert_eq!(
+            extract_codex_command_signature(text)
+                .as_ref()
+                .map(|(_, sig)| sig.as_str()),
+            Some("Bash(cargo test --manifest-path src-tauri/Cargo.toml)")
+        );
+    }
+
+    #[test]
+    fn codex_command_signature_prefers_dollar_prompt_in_mashed_text() {
+        let text = "Running rm -f /Users/jonudell/Desktop/foo.barWould you like \
+to run the following command?Reason:Remove the file.$rm -f \
+/Users/jonudell/Desktop/foo.bar› 1. Yes, proceed";
+
+        assert_eq!(
+            extract_codex_command_signature(text)
+                .as_ref()
+                .map(|(_, sig)| sig.as_str()),
+            Some("Bash(rm -f /Users/jonudell/Desktop/foo.bar)")
+        );
+    }
+
+    #[test]
+    fn codex_command_signature_extracts_mcp_tool_and_path_from_mashed_text() {
+        let text = "AllowthefilesystemMCPservertoruntool\\\"write_file\\\"?content:{\
+\\\"nonce\\\":\\\"codex-pending-command-prune-20260604-001\\\",\
+\\\"rout...path:/Users/jonudell/bram/resources/.worklist-intent.json> 1. Allow";
+
+        assert_eq!(
+            extract_codex_command_signature(text)
+                .as_ref()
+                .map(|(tool, sig)| (tool.as_str(), sig.as_str())),
+            Some((
+                "write_file",
+                "filesystem:write_file(/Users/jonudell/bram/resources/.worklist-intent.json)"
+            ))
+        );
+    }
+
+    #[test]
+    fn codex_command_signature_uses_longest_mcp_path() {
+        let text = "filesystem MCP server to run tool \"write_file\"? content: \
+path:/Users/ noisy path:/Users/jonudell/Desktop/foo.bar> 1. Yes";
+
+        assert_eq!(
+            extract_codex_command_signature(text)
+                .as_ref()
+                .map(|(tool, sig)| (tool.as_str(), sig.as_str())),
+            Some((
+                "write_file",
+                "filesystem:write_file(/Users/jonudell/Desktop/foo.bar)"
+            ))
         );
     }
 

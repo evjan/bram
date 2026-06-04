@@ -344,6 +344,19 @@
               text="{(pendingMenu.toolCallDiff || '').slice(0, 20000)}" />
           </VStack>
           <VStack
+            when="{!pendingMenu.toolCallSignature &amp;&amp; pendingMenu.text}"
+            maxHeight="12em"
+            overflowY="auto"
+            padding="$space-2"
+            borderRadius="$borderRadius"
+            backgroundColor="$color-surface-100">
+            <Text
+              value="{pendingMenu.text}"
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-xs"
+              preserveLinebreaks="true" />
+          </VStack>
+          <VStack
             when="{pendingMenu.options &amp;&amp; pendingMenu.options.length > 0}"
             gap="$space-1">
             <Theme paddingHorizontal-Button-sm="$space-3">

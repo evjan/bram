@@ -22,6 +22,7 @@
   var.worklistTurnsTick="{0}"
   var.lastAssistantTickAt="{0}"
   var.lastAssistantStableText="{''}"
+  var.lastConversationSig="{''}"
   var.messageSentAtText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
@@ -134,10 +135,26 @@
   <DataSource id="agentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" />
   <ChangeListener
-    listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').length + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').length + ':' + ((lastAssistantStableText || '').length) + ':' + (awaitingResponse ? '1' : '0')}"
+    listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {
-      const assistant = awaitingResponse ? '' : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim());
-      iframeTrace('conversation-sync', {source: awaitingResponse ? 'awaiting' : (assistant ? 'last-exchange' : 'none'), entries: assistant ? 1 : 0});
+      const submitted = (submittedWorklistMessage || '').trim();
+      const exchangeUser = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').trim();
+      const exchangeAssistant = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').trim();
+      const exchangeTools = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []);
+      const exchangeMatchesSubmitted = submitted &amp;&amp; exchangeUser === submitted;
+      const user = awaitingResponse &amp;&amp; submitted ? submitted : (exchangeUser || submitted);
+      const assistant = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? '' : (exchangeAssistant || lastAssistantStableText || '').trim();
+      const source = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? 'awaiting' : (exchangeAssistant ? 'last-exchange' : (assistant ? 'last-assistant-text' : 'none'));
+      const toolsSig = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? '' : exchangeTools.map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|');
+      const sig = user + '\n---\n' + toolsSig + '\n---\n' + assistant;
+      if (sig !== lastConversationSig) {
+        lastConversationSig = sig;
+        iframeTrace('conversation-sync', {source, entries: (assistant ? 1 : 0) + (toolsSig ? exchangeTools.length : 0)});
+      }
+      if (awaitingResponse &amp;&amp; exchangeMatchesSubmitted &amp;&amp; assistant) {
+        awaitingResponse = false;
+        clearWorklistAwaiting(false);
+      }
     }" />
   <DataSource
     id="worklistToolDetailDS"
@@ -167,8 +184,6 @@
         worklist.refetch();
       }
       if (awaitingResponse) {
-        awaitingResponse = false;
-        clearWorklistAwaiting(false);
         lastAssistantTickAt = Date.now();
         lastAssistantTick = lastAssistantTick + 1;
       }
@@ -677,7 +692,9 @@
         gap="$space-3"
         overflowY="auto"
         var.conversationUserText="{awaitingResponse &amp;&amp; submittedWorklistMessage ? submittedWorklistMessage : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || submittedWorklistMessage || '').trim())}"
-        var.conversationAssistantText="{awaitingResponse ? '' : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim())}">
+        var.conversationExchangeMatchesSubmitted="{submittedWorklistMessage &amp;&amp; lastExchangeDS.value &amp;&amp; ((lastExchangeDS.value.userText || '').trim() === (submittedWorklistMessage || '').trim())}"
+        var.conversationTools="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || [])}"
+        var.conversationAssistantText="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? '' : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim())}">
         <VStack
           gap="$space-1"
           when="{conversationUserText}">
@@ -687,6 +704,36 @@
             value="You" />
           <Markdown content="{conversationUserText}" />
         </VStack>
+        <Items data="{conversationTools}">
+          <VStack
+            gap="$space-1"
+            padding="$space-2"
+            borderRadius="$borderRadius"
+            border="1px solid $borderColor"
+            backgroundColor="$color-surface-100">
+            <Link onClick="openToolId = $item.id" noIndicator="true">
+              <HStack gap="$space-2" verticalAlignment="center">
+                <Text
+                  fontFamily="$fontFamily-monospace"
+                  fontSize="$fontSize-xs"
+                  fontWeight="$fontWeight-bold"
+                  paddingHorizontal="$space-1_5"
+                  paddingVertical="$space-0_5"
+                  borderRadius="$borderRadius"
+                  backgroundColor="$color-surface-200"
+                  value="{$item.name || 'Tool'}" />
+                <Text fontSize="$fontSize-sm" value="{$item.summary || ''}" />
+                <SpaceFiller />
+                <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-xs" color="$textColor-secondary" value="↗" />
+              </HStack>
+            </Link>
+            <Text
+              when="{$item.errored &amp;&amp; $item.errorText}"
+              color="$color-danger-700"
+              fontSize="$fontSize-sm"
+              value="{$item.errorText}" />
+          </VStack>
+        </Items>
         <VStack
           gap="$space-1"
           when="{conversationAssistantText}">

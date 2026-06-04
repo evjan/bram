@@ -7775,6 +7775,7 @@ fn read_last_exchange<R: tauri::Runtime>(
         let body = serde_json::json!({
             "userText": "",
             "assistantText": "",
+            "tools": [],
             "provider": provider_str,
         });
         return serde_json::to_vec(&body).map_err(|e| e.to_string());
@@ -7783,6 +7784,7 @@ fn read_last_exchange<R: tauri::Runtime>(
     let turns = st_parse_lines_to_turns(&text);
     let mut user_text = String::new();
     let mut assistant_text = String::new();
+    let mut tool_entries: Vec<serde_json::Value> = Vec::new();
     // Walk backward: most recent assistant first, then most recent user
     // *before* that assistant (so they're a pair). If no assistant yet,
     // user_text is the most recent user.
@@ -7799,12 +7801,27 @@ fn read_last_exchange<R: tauri::Runtime>(
         }
     }
     let user_search_end = assistant_idx.unwrap_or(turns.len());
-    for turn in turns.iter().take(user_search_end).rev() {
+    let mut user_idx: Option<usize> = None;
+    for (i, turn) in turns.iter().enumerate().take(user_search_end).rev() {
         if turn.get("role").and_then(|v| v.as_str()) == Some("user") {
             if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
                 if !t.trim().is_empty() {
                     user_text = t.to_string();
+                    user_idx = Some(i);
                     break;
+                }
+            }
+        }
+    }
+    if let Some(start_idx) = user_idx {
+        let end_idx = assistant_idx.unwrap_or(turns.len().saturating_sub(1));
+        for turn in turns.iter().take(end_idx.saturating_add(1)).skip(start_idx + 1) {
+            let Some(entries) = turn.get("entries").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for entry in entries {
+                if entry.get("kind").and_then(|v| v.as_str()) == Some("tool") {
+                    tool_entries.push(entry.clone());
                 }
             }
         }
@@ -7812,6 +7829,7 @@ fn read_last_exchange<R: tauri::Runtime>(
     let body = serde_json::json!({
         "userText": user_text,
         "assistantText": assistant_text,
+        "tools": tool_entries,
         "provider": provider_str,
     });
     serde_json::to_vec(&body).map_err(|e| e.to_string())

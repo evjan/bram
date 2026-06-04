@@ -17,7 +17,7 @@ Now continue with the steps here.
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://github.com/judell/bram/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/judell/bram/releases/download/${TAG}/install.sh | bash
 ```
 
 The script detects your platform, verifies the archive's SHA256 against the published `SHA256SUMS`, extracts the binary, and copies it to `/usr/local/bin` (if writable) or `~/.local/bin`. On macOS it also clears the `com.apple.quarantine` xattr. No `sudo` required.
@@ -31,7 +31,7 @@ bram --help
 ### Windows
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/judell/bram/releases/latest/download/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/judell/bram/releases/download/${TAG}/install.ps1 | iex"
 ```
 
 Downloads `bram-windows-amd64.zip`, verifies its SHA256, extracts `bram.exe` to `~/bin`, and adds `~/bin` to your user `PATH`.

@@ -205,7 +205,16 @@
     subscribeTauriEvent('__bramAgentStatusUnsub', 'agent-status-changed', () => {
       agentStatus.refetch();
     });">
-    <Theme maxWidth-ModalDialog="50vw">
+    <Theme
+      maxWidth-ModalDialog="50vw"
+      backgroundColor-ModalDialog="$color-surface-50"
+      backgroundColor-overlay-ModalDialog="rgba(15, 23, 42, 0.42)"
+      borderRadius-ModalDialog="$borderRadius-lg"
+      padding-ModalDialog="$space-6"
+      fontSize-title-ModalDialog="$fontSize-xl"
+      fontWeight-title-ModalDialog="$fontWeight-bold"
+      textColor-title-ModalDialog="$color-primary-700"
+      marginBottom-title-ModalDialog="$space-4">
     <ModalDialog
       when="{!!openToolId}"
       onClose="openToolId = null"
@@ -221,7 +230,13 @@
           fontSize="$fontSize-sm"
           color="$textColor-secondary"
           value="{openTool.summary}" />
-        <VStack gap="{0}" var.inputBody="{toolInputJsonLines(modalInput, 200)}">
+        <VStack
+          gap="{0}"
+          padding="$space-3"
+          border="1px solid $color-surface-200"
+          borderRadius="$borderRadius"
+          backgroundColor="$backgroundColor-primary"
+          var.inputBody="{toolInputJsonLines(modalInput, 200)}">
           <Text
             fontSize="$fontSize-xs"
             fontWeight="$fontWeight-bold"
@@ -243,7 +258,13 @@
             paddingHorizontal="$space-2"
             value="{inputBody.remaining + ' more line' + (inputBody.remaining === 1 ? '' : 's') + '…'}" />
         </VStack>
-        <VStack when="{modalResult &amp;&amp; modalResult.lines.length > 0}" gap="{0}" marginTop="$space-2">
+        <VStack
+          when="{modalResult &amp;&amp; modalResult.lines.length > 0}"
+          gap="{0}"
+          padding="$space-3"
+          border="1px solid $color-surface-200"
+          borderRadius="$borderRadius"
+          backgroundColor="$backgroundColor-primary">
           <Text
             fontSize="$fontSize-xs"
             fontWeight="$fontWeight-bold"
@@ -820,7 +841,16 @@
       </VStack>
     </ModalDialog>
 
-    <Theme maxWidth-ModalDialog="50vw">
+    <Theme
+      maxWidth-ModalDialog="50vw"
+      backgroundColor-ModalDialog="$color-surface-50"
+      backgroundColor-overlay-ModalDialog="rgba(15, 23, 42, 0.42)"
+      borderRadius-ModalDialog="$borderRadius-lg"
+      padding-ModalDialog="$space-6"
+      fontSize-title-ModalDialog="$fontSize-xl"
+      fontWeight-title-ModalDialog="$fontWeight-bold"
+      textColor-title-ModalDialog="$color-primary-700"
+      marginBottom-title-ModalDialog="$space-4">
     <ModalDialog
       when="{closeIssuesDialog !== null}"
       title="Close referenced issue(s)?"
@@ -833,8 +863,10 @@
         <Items data="{closeIssuesItemRef ? closeIssuesItemRef.closesIssues : []}">
           <VStack
             gap="$space-2"
-            paddingTop="$space-3"
-            borderTop="1px solid $borderColor"
+            padding="$space-3"
+            border="1px solid $color-surface-200"
+            borderRadius="$borderRadius"
+            backgroundColor="$backgroundColor-primary"
             var.issue="{normalizeCloseIssue($item)}">
             <HStack gap="$space-2" verticalAlignment="start">
               <Text fontWeight="$fontWeight-bold" width="*" overflowMode="wrap">
@@ -850,7 +882,7 @@
               onDidChange="(v) => closeIssuesState = setCloseIssueComment(closeIssuesState, issue.number, v)" />
           </VStack>
         </Items>
-        <HStack gap="$space-2" paddingTop="$space-2">
+        <HStack gap="$space-2" paddingTop="$space-3" borderTop="1px solid $borderColor">
           <Button
             label="Confirm"
             tooltip="Commit, push this commit through the verified close helper, then close"
@@ -947,7 +979,16 @@ Iterate is the right move when the agent's first cut is *almost* what you want."
       </VStack>
     </ModalDialog>
 
-    <Theme maxWidth-ModalDialog="50vw">
+    <Theme
+      maxWidth-ModalDialog="50vw"
+      backgroundColor-ModalDialog="$color-surface-50"
+      backgroundColor-overlay-ModalDialog="rgba(15, 23, 42, 0.42)"
+      borderRadius-ModalDialog="$borderRadius-lg"
+      padding-ModalDialog="$space-6"
+      fontSize-title-ModalDialog="$fontSize-xl"
+      fontWeight-title-ModalDialog="$fontWeight-bold"
+      textColor-title-ModalDialog="$color-primary-700"
+      marginBottom-title-ModalDialog="$space-4">
     <ModalDialog
       when="{newItemHelp}"
       title="Add a worklist item"
@@ -967,7 +1008,12 @@ Iterate is the right move when the agent's first cut is *almost* what you want."
 
 Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal. Before you `Approve` a `TO-COMMIT` item you can `Iterate` to test and revise the implementation.
 " />
-        <VStack gap="$space-2" paddingTop="$space-2" borderTop="1px solid $borderColor">
+        <VStack
+          gap="$space-2"
+          padding="$space-3"
+          border="1px solid $color-surface-200"
+          borderRadius="$borderRadius"
+          backgroundColor="$backgroundColor-primary">
           <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="Ask the agent to propose an item" />
           <Select
             placeholder="Optional: cite an open issue"

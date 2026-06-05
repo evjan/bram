@@ -1278,6 +1278,42 @@ function worklistSubmittedMatches(exchangeUserText, submitted) {
   return norm(exchangeUserText) === norm(submitted);
 }
 
+// Per-tab splitter persistence. XMLUI's HSplitter `onResize` actually
+// delivers `[primary, secondary]` as a two-element array (the docs at
+// https://docs.xmlui.org/components/Splitter claim `primarySize:
+// number`, but the trace at restore-window-and-splitter-state showed
+// an array). The unit is inconsistent: the first event of a drag
+// arrives in pixels (e.g. `[491, 491]` for a 982 px container) and
+// subsequent events arrive in percentages summing to 100. Normalize
+// both forms to `primary / (primary + secondary) * 100` percent.
+// Store as a percent string so `initialPrimarySize` can rehydrate via
+// `'<n>%'`. Note: `writeLocalStorage('bram.splitter.<key>', v)` does
+// persist to native localStorage, but XMLUI nests dotted keys under
+// the top-level — value lands at `localStorage.bram.splitter.<key>`
+// inside the JSON blob at `localStorage['bram']`, not as a flat
+// `localStorage['bram.splitter.<key>']` entry. A flat-key sqlite
+// probe will miss it; check the `bram` top-level instead.
+// Keys: `bram.splitter.<key>` (worklist, sessions, commits, context,
+// issues). The outer-shell `bram.splitter.shell` key is owned by
+// app/main.js and uses native localStorage flat keys.
+function restoreSplitterSize(key, fallback) {
+  const raw = readLocalStorage('bram.splitter.' + key, '');
+  const n = parseFloat(raw);
+  const result = (!isNaN(n) && n > 0 && n < 100) ? (n + '%') : fallback;
+  iframeTrace('splitter-restore', { key, raw, result });
+  return result;
+}
+function saveSplitterSize(key, sizes) {
+  const a = Array.isArray(sizes) ? sizes[0] : sizes;
+  const b = Array.isArray(sizes) ? sizes[1] : 0;
+  const total = a + b;
+  const pct = total > 0 ? (a / total) * 100 : a;
+  iframeTrace('splitter-save', { key, sizes, pct });
+  if (pct > 0 && pct < 100) {
+    writeLocalStorage('bram.splitter.' + key, String(Math.round(pct * 10) / 10));
+  }
+}
+
 var worklistVoiceTarget = '';
 var worklistVoiceText = '';
 var worklistVoiceSeq = 0;

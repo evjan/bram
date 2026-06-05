@@ -294,9 +294,10 @@
     <HSplitter
       height="100%"
       width="100%"
-      initialPrimarySize="50%"
+      initialPrimarySize="{restoreSplitterSize('worklist', '50%')}"
       minPrimarySize="320px"
-      maxPrimarySize="-320px">
+      maxPrimarySize="-320px"
+      onResize="(px) => saveSplitterSize('worklist', px)">
       <VStack gap="$space-3" paddingRight="$space-3" overflowY="auto">
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">

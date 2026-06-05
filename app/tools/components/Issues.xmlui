@@ -135,8 +135,9 @@
 
   <HSplitter
     height="100%"
-    initialPrimarySize="40%"
-    onInit="subscribeTauriEvent('__bramIssuesAgentTurnEndUnsub', 'agent-turn-end', () => { if (newIssueSubmitting) { newIssueTurnEnded = true; issues.refetch(); } });">
+    initialPrimarySize="{restoreSplitterSize('issues', '40%')}"
+    onInit="subscribeTauriEvent('__bramIssuesAgentTurnEndUnsub', 'agent-turn-end', () => { if (newIssueSubmitting) { newIssueTurnEnded = true; issues.refetch(); } });"
+    onResize="(px) => saveSplitterSize('issues', px)">
 
     <VStack padding="$space-4" gap="$space-4" overflowY="auto">
       <HStack gap="$space-3" verticalAlignment="center">

@@ -334,6 +334,20 @@ document
   });
 })();
 
+// Vertical splitter between terminal (left pane) and right column.
+// Persists the chosen flexBasis pixel width to localStorage as
+// `bram.splitter.left` and rehydrates it on startup. Pixels (not
+// percentage) match how the drag handler writes flexBasis.
+const LEFT_SPLITTER_KEY = "bram.splitter.left";
+(() => {
+  const left = document.querySelector(".pane-left");
+  if (!left) return;
+  const raw = localStorage.getItem(LEFT_SPLITTER_KEY);
+  const px = parseFloat(raw);
+  if (!isNaN(px) && px > 0) {
+    left.style.flexBasis = px + "px";
+  }
+})();
 (() => {
   const splitter = document.getElementById("splitter");
   const left = document.querySelector(".pane-left");
@@ -348,12 +362,14 @@ document
     splitter.classList.add("dragging");
     document.body.classList.add("splitter-dragging");
 
+    let lastX = null;
     const onMove = (ev) => {
       const rect = split.getBoundingClientRect();
       let x = ev.clientX - rect.left;
       const max = rect.width - MIN_PX - splitter.offsetWidth;
       if (x < MIN_PX) x = MIN_PX;
       if (x > max) x = max;
+      lastX = x;
       left.style.flexBasis = x + "px";
       scheduleTerminalFit();
     };
@@ -363,6 +379,11 @@ document
       document.body.classList.remove("splitter-dragging");
       splitter.removeEventListener("pointermove", onMove);
       splitter.removeEventListener("pointerup", onUp);
+      if (lastX !== null && lastX > 0) {
+        const val = String(Math.round(lastX));
+        localStorage.setItem(LEFT_SPLITTER_KEY, val);
+        console.log("[splitter-save]", LEFT_SPLITTER_KEY, val);
+      }
       runTerminalFit();
     };
     splitter.addEventListener("pointermove", onMove);
@@ -372,6 +393,18 @@ document
 
 // Horizontal splitter resizes the tools drawer (only operative when drawer
 // is open; the splitter is `display: none` when the .hidden class is set).
+// Persists the chosen flexBasis percentage to localStorage as
+// `bram.splitter.shell` and rehydrates it on startup.
+const SHELL_SPLITTER_KEY = "bram.splitter.shell";
+(() => {
+  const tools = document.getElementById("tools-pane");
+  if (!tools) return;
+  const raw = localStorage.getItem(SHELL_SPLITTER_KEY);
+  const pct = parseFloat(raw);
+  if (!isNaN(pct) && pct > 0 && pct < 100) {
+    tools.style.flexBasis = pct + "%";
+  }
+})();
 (() => {
   const hSplitter = document.getElementById("h-splitter");
   const column = document.querySelector(".right-column");
@@ -391,6 +424,7 @@ document
     hSplitter.classList.add("dragging");
     document.body.classList.add("splitter-dragging");
 
+    let lastPct = null;
     const onMove = (ev) => {
       const rect = column.getBoundingClientRect();
       // Drawer height = distance from pointer to bottom of column.
@@ -402,7 +436,8 @@ document
       // preserve the user's chosen proportion. Absolute pixels (h +
       // "px") locked the drawer to a fixed height and left a gap or
       // overshoot when the Tauri window grew or shrank.
-      tools.style.flexBasis = ((h / rect.height) * 100) + "%";
+      lastPct = (h / rect.height) * 100;
+      tools.style.flexBasis = lastPct + "%";
     };
     const onUp = (ev) => {
       hSplitter.releasePointerCapture(ev.pointerId);
@@ -410,6 +445,11 @@ document
       document.body.classList.remove("splitter-dragging");
       hSplitter.removeEventListener("pointermove", onMove);
       hSplitter.removeEventListener("pointerup", onUp);
+      if (lastPct !== null && lastPct > 0 && lastPct < 100) {
+        const val = String(Math.round(lastPct * 10) / 10);
+        localStorage.setItem(SHELL_SPLITTER_KEY, val);
+        console.log("[splitter-save]", SHELL_SPLITTER_KEY, val);
+      }
     };
     hSplitter.addEventListener("pointermove", onMove);
     hSplitter.addEventListener("pointerup", onUp);

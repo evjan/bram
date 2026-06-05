@@ -23,6 +23,18 @@ XMLUI MCP server to be available, read the xmlui_rules,
 and follow them. The same holds if the app under development
 is XMLUI.
 
+### XMLUI lookup order
+
+When you are figuring out how to do a thing in XMLUI, ask the XMLUI
+MCP server for how-to documents first (`xmlui_search_howto`). The
+how-to corpus usually carries the complete pattern and tradeoffs.
+After that, use `xmlui_component_docs` for exact component props,
+events, and exposed methods. Use examples as a fallback or to confirm
+local style, not as the first source of truth.
+
+When a non-obvious markup choice depends on documentation, cite the
+relevant how-to or component URL in the response.
+
 
 ## Coordinate via worklist.json
 

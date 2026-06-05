@@ -171,7 +171,7 @@
   <VStack
     padding="$space-6"
     gap="$space-6"
-    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', () => { iframeTrace('listener-fired', {context: 'talk-session-changed'}); debounce(400, () => { iframeTrace('refetch-called', {context: 'talk-session-changed'}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; }, Date.now()); });
+    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', (correlationId) => { iframeTrace('listener-fired', {context: 'talk-session-changed', correlation_id: correlationId || ''}); debounce(400, () => { iframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: correlationId || ''}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; }, Date.now()); });
     subscribeTauriEvent('__bramWorklistUnsub', 'worklist-changed', (e) => {
       const payload = (e &amp;&amp; e.payload) || {};
       iframeTrace('listener-fired', {paths: payload.paths || [], correlation_id: payload.id || ''});

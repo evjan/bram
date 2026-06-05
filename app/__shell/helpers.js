@@ -483,9 +483,29 @@ window.subscribeTalkSessionChange = function (key, fn) {
     return function () {};
   }
   __talkSessionSubscribers.push(fn);
+  // Subscriber-lifecycle trace for the talk-session event-drop
+  // investigation (#tsc-drop): a sub/resub churn pattern would explain
+  // some of the 175→83 delivery gap if the parent listen() were
+  // racing the iframe's swap window.
+  try {
+    iframeTrace("subscriber-changed", {
+      context: "talk-session-changed",
+      op: "subscribe",
+      key: key,
+      count: __talkSessionSubscribers.length,
+    });
+  } catch (e) {}
   window[key] = function () {
     var idx = __talkSessionSubscribers.indexOf(fn);
     if (idx >= 0) __talkSessionSubscribers.splice(idx, 1);
+    try {
+      iframeTrace("subscriber-changed", {
+        context: "talk-session-changed",
+        op: "unsubscribe",
+        key: key,
+        count: __talkSessionSubscribers.length,
+      });
+    } catch (e) {}
     window[key] = null;
   };
   return window[key];
@@ -515,11 +535,23 @@ function __tscBatchTick(elapsedMs) {
 }
 try {
   if (window.parent && window.parent.__TAURI__ && window.parent.__TAURI__.event) {
-    window.parent.__TAURI__.event.listen("talk-session-changed", function () {
+    window.parent.__TAURI__.event.listen("talk-session-changed", function (event) {
       var t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+      // Per-emit correlation id from the host (see Rust
+      // emit_talk_session_changed). Logged here so the trace records
+      // the parent→iframe hand-off independently of any subscriber's
+      // own listener-fired trace.
+      var correlationId = (event && event.payload && event.payload.correlation_id) || "";
+      try {
+        iframeTrace("event-received", {
+          context: "talk-session-changed",
+          correlation_id: correlationId,
+          subscribers: __talkSessionSubscribers.length,
+        });
+      } catch (e) {}
       var n = __talkSessionSubscribers.length;
       for (var i = 0; i < n; i++) {
-        try { __talkSessionSubscribers[i](); } catch (e) {}
+        try { __talkSessionSubscribers[i](correlationId); } catch (e) {}
       }
       var t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
       __tscBatchTick(t1 - t0);

@@ -702,6 +702,29 @@ fn emit_replayable_signal<R: tauri::Runtime>(app: &AppHandle<R>, event_name: &st
     let _ = app.emit(event_name, ());
 }
 
+// Per-emit correlation id for `talk-session-changed`. Issued at the
+// host emit site, surfaced in the trace and on the event payload so an
+// iframe-side `listener-fired` / `refetch-called` trace can be matched
+// back to the emit it came from (or its absence flagged). Diagnosing
+// the 175 → 83 → 37 drop seen at investigate-talk-session-event-drop.
+static TALK_SESSION_SEQ: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn next_talk_session_correlation_id() -> String {
+    let seq = TALK_SESSION_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    format!("tsc-{}-{}", now_ms, seq)
+}
+
+fn emit_talk_session_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let correlation_id = next_talk_session_correlation_id();
+    let payload = serde_json::json!({ "correlation_id": correlation_id });
+    emit_replayable_payload(app, "talk-session-changed", payload);
+}
+
 fn emit_replayable_payload<R, P>(app: &AppHandle<R>, event_name: &str, payload: P)
 where
     R: tauri::Runtime,
@@ -7369,7 +7392,7 @@ fn start_codex_session_poll_fallback<R: tauri::Runtime>(app_handle: AppHandle<R>
             );
             trace_jsonl_detector_handoff(&app_handle, "codex-poll", &path, mtime_ms);
             check_jsonl_for_turn_end(&app_handle, &path);
-            emit_replayable_signal(&app_handle, "talk-session-changed");
+            emit_talk_session_changed(&app_handle);
         }
     });
 }
@@ -18672,7 +18695,7 @@ pub fn run() {
                         // next user activity. XMLUI dedupes refetches
                         // via structural sharing, so burst-emitting per
                         // event is fine.
-                        emit_replayable_signal(&app_handle, "talk-session-changed");
+                        emit_talk_session_changed(&app_handle);
                         continue;
                     }
 

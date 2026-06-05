@@ -188,6 +188,8 @@ struct ProjectConfig {
     worklist: Option<WorklistConfig>,
     #[serde(default)]
     ui: Option<UiConfig>,
+    #[serde(default)]
+    traces: Option<TracesConfig>,
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -221,6 +223,12 @@ struct WorklistConfig {
 struct UiConfig {
     #[serde(default, rename = "targetAppMinimized")]
     target_app_minimized: Option<bool>,
+}
+
+#[derive(Default, Clone, serde::Deserialize)]
+struct TracesConfig {
+    #[serde(default, rename = "inspectorTap")]
+    inspector_tap: Option<bool>,
 }
 
 fn default_server_path() -> String {
@@ -5455,20 +5463,22 @@ fn project_config_batch_commit_actions(config: Option<ProjectConfig>) -> bool {
 // so the consumer never sees nulls; out-of-scope blocks like `server`
 // stay invisible — they're project infrastructure, not Settings knobs.
 fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value {
-    let (agent, batch, minimized) = match config {
+    let (agent, batch, minimized, inspector_tap) = match config {
         Some(c) => (
             c.shell.and_then(|s| s.agent).unwrap_or_default(),
             c.worklist
                 .and_then(|w| w.batch_commit_actions)
                 .unwrap_or(false),
             c.ui.and_then(|u| u.target_app_minimized).unwrap_or(false),
+            c.traces.and_then(|t| t.inspector_tap).unwrap_or(false),
         ),
-        None => (String::new(), false, false),
+        None => (String::new(), false, false, false),
     };
     serde_json::json!({
         "shell": { "agent": agent },
         "worklist": { "batchCommitActions": batch },
         "ui": { "targetAppMinimized": minimized },
+        "traces": { "inspectorTap": inspector_tap },
     })
 }
 

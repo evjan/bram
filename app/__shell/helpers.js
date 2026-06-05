@@ -1117,6 +1117,101 @@ window.addEventListener("message", async (event) => {
   }
 });
 
+// Inspector trace tap (#181). When enabled via the Settings-tab switch
+// (traces.inspectorTap in .bram.json), forwards new entries from the
+// XMLUI Inspector's window._xsLogs into bram-trace.log as
+// [iframe] subkind=inspector-event so they interleave with host traces
+// live. Polls at 200 ms with a per-tick cap; overflow emits
+// subkind=inspector-overflow. Forwards verbatim — selectivity (filter
+// by category, drop per-keystroke noise, etc.) is a follow-up; until
+// then the stream carries everything XMLUI logs.
+var __inspectorTap = {
+  intervalId: null,
+  highWater: 0,
+  perTickCap: 50,
+};
+function __inspectorTrace(subkind, fields) {
+  try {
+    if (typeof window.logToHost !== "function") return;
+    var payload = {
+      kind: "iframe-trace",
+      subkind: subkind,
+      at: new Date().toISOString(),
+    };
+    if (fields && typeof fields === "object") {
+      for (var k in fields) {
+        if (Object.prototype.hasOwnProperty.call(fields, k)) {
+          payload[k] = fields[k];
+        }
+      }
+    }
+    window.logToHost(payload);
+  } catch (e) {}
+}
+function __inspectorTapTick() {
+  try {
+    var logs = window._xsLogs;
+    if (!logs || typeof logs.length !== "number") return;
+    var total = logs.length;
+    if (total <= __inspectorTap.highWater) return;
+    var available = total - __inspectorTap.highWater;
+    var toSend = Math.min(available, __inspectorTap.perTickCap);
+    for (var i = 0; i < toSend; i++) {
+      __inspectorTrace("inspector-event", {
+        entry: logs[__inspectorTap.highWater + i],
+      });
+    }
+    if (available > toSend) {
+      __inspectorTrace("inspector-overflow", {
+        dropped: available - toSend,
+        totalSeen: total,
+      });
+      __inspectorTap.highWater = total;
+    } else {
+      __inspectorTap.highWater += toSend;
+    }
+  } catch (e) {}
+}
+function __startInspectorTap() {
+  if (__inspectorTap.intervalId !== null) return;
+  try {
+    var logs = window._xsLogs;
+    __inspectorTap.highWater =
+      logs && typeof logs.length === "number" ? logs.length : 0;
+  } catch (e) {
+    __inspectorTap.highWater = 0;
+  }
+  __inspectorTap.intervalId = setInterval(__inspectorTapTick, 200);
+}
+function __stopInspectorTap() {
+  if (__inspectorTap.intervalId === null) return;
+  clearInterval(__inspectorTap.intervalId);
+  __inspectorTap.intervalId = null;
+}
+function __applyInspectorTapSetting(enabled) {
+  if (enabled) __startInspectorTap();
+  else __stopInspectorTap();
+}
+function __loadInspectorTapSetting() {
+  if (typeof window.fetch !== "function") return;
+  window
+    .fetch("/__settings", { cache: "no-store" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (s) {
+      var enabled = !!(s && s.traces && s.traces.inspectorTap);
+      __applyInspectorTapSetting(enabled);
+    })
+    .catch(function () {});
+}
+__loadInspectorTapSetting();
+try {
+  window.subscribeTauriEvent(
+    "__bramInspectorTapSettingsUnsub",
+    "settings-changed",
+    function () { __loadInspectorTapSetting(); }
+  );
+} catch (e) {}
+
 // Adjustable root font-size for the XMLUI surface (mirrors the terminal-side
 // pattern in app/main.js). Buttons in AppHeader call setAppFontSize /
 // getAppFontSize. The right pane and the agent tools drawer share origin

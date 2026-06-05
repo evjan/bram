@@ -84,6 +84,22 @@
           onDidChange="(v) => saveSettings.execute({ ui: { targetAppMinimized: v } })" />
       </VStack>
 
+      <VStack gap="$space-2">
+        <HStack gap="$space-2" verticalAlignment="center">
+          <Heading level="h3">Traces</Heading>
+          <Button
+            icon="info"
+            size="xs"
+            variant="ghost"
+            tooltip="About Inspector trace tap"
+            onClick="infoTitle = 'Inspector trace tap'; infoBody = 'Forwards XMLUI Inspector events (window._xsLogs) from the agent pane into bram-trace.log as [iframe] subkind=inspector-event, so they interleave with host traces live — no Inspector export needed. Capped at 50 entries per 200ms tick; overflow emits subkind=inspector-overflow. Inspector traces are intentionally complete and noisy (one per keystroke, etc.); future work will add per-category filters.'; settingInfoDialog.open()" />
+        </HStack>
+        <Switch
+          label="Inspector trace tap"
+          initialValue="{settingsInspectorTap(settingsConfig.value)}"
+          onDidChange="(v) => saveSettings.execute({ traces: { inspectorTap: v } })" />
+      </VStack>
+
     </VStack>
 
     <Text

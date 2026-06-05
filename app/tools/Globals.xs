@@ -1054,6 +1054,9 @@ function settingsBatch(s) {
 function settingsMinimized(s) {
   return !!(s && s.ui && s.ui.targetAppMinimized);
 }
+function settingsInspectorTap(s) {
+  return !!(s && s.traces && s.traces.inspectorTap);
+}
 
 // Diff rendering — used by the DiffView component, which all three
 // diff sites (Transcript, Workspace, Commits) share. Per-line

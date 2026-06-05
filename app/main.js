@@ -1089,6 +1089,28 @@ const { listen } = window.__TAURI__.event;
       startRecording({ source: ev.source, requestId: d.requestId });
     } else if (d.kind === "voice-stop") {
       voiceLog("iframe-voice-stop", { requestId: d.requestId });
+      if (
+        !active ||
+        active === "toolbar" ||
+        !d.requestId ||
+        !ev.source ||
+        active.source !== ev.source ||
+        active.requestId !== d.requestId
+      ) {
+        voiceLog("iframe-voice-stop-ignored", {
+          requestId: d.requestId,
+          activeWas:
+            active === null ? null : active === "toolbar" ? "toolbar" : "iframe",
+        });
+        try {
+          ev.source &&
+            ev.source.postMessage(
+              { type: "voice-into-result", requestId: d.requestId, transcript: "" },
+              "*",
+            );
+        } catch (_) {}
+        return;
+      }
       stopRecording();
     }
   });

@@ -15,6 +15,7 @@
   var.newItemStartSig="{''}"
   var.newItemTurnEnded="{false}"
   var.newItemIssue="{null}"
+  var.newItemVoiceRecording="{false}"
   var.pendingMenu="{null}"
   var.openToolId="{null}"
   var.inflightTick="{0}"
@@ -993,7 +994,7 @@ Iterate is the right move when the agent's first cut is *almost* what you want."
     <ModalDialog
       when="{newItemHelp}"
       title="Add a worklist item"
-      onClose="newItemHelp = false; newItemIssue = null; newItemBox.setValue('')">
+      onClose="newItemHelp = false; newItemIssue = null; newItemVoiceRecording = false; setWorklistVoiceTarget('message-agent'); newItemBox.setValue('')">
       <VStack gap="$space-3" padding="$space-2">
         <Text>
           The worklist is how you and the agent coordinate multi-step work.
@@ -1016,19 +1017,32 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
           borderRadius="$borderRadius"
           backgroundColor="$backgroundColor-primary">
           <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="Ask the agent to propose an item" />
+          <ChangeListener
+            listenTo="{worklistVoiceSeq}"
+            onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'new-item') appendVoiceTranscript(newItemBox, worklistVoiceText); newItemVoiceRecording = false; }" />
           <Select
             placeholder="Optional: cite an open issue"
             data="{((openIssues.value) || []).filter(i => i.state === 'OPEN').map(i => ({value: i.number, label: '#' + i.number + ' ' + i.title}))}"
             initialValue="{newItemIssue}"
             onDidChange="(v) => newItemIssue = v" />
-          <TextArea
-            id="newItemBox"
-            placeholder="Describe what the item should change"
-            autoFocus="true"
-            resize="vertical"
-            minRows="4"
-            maxRows="16"
-            width="*" />
+          <HStack gap="$space-2" verticalAlignment="start">
+            <TextArea
+              id="newItemBox"
+              placeholder="Describe what the item should change"
+              autoFocus="true"
+              resize="vertical"
+              minRows="4"
+              maxRows="16"
+              width="*"
+              onInit="setWorklistVoiceTarget('new-item')"
+              onClick="setWorklistVoiceTarget('new-item')"
+              onGotFocus="setWorklistVoiceTarget('new-item')"
+              onDidChange="() => setWorklistVoiceTarget('new-item')" />
+            <Button
+              label="{newItemVoiceRecording ? '⏹ stop' : '🎤 voice'}"
+              variant="{newItemVoiceRecording ? 'solid' : 'outlined'}"
+              onClick="setWorklistVoiceTarget('new-item'); newItemVoiceRecording = toggleVoiceForCurrentTarget(newItemVoiceRecording)" />
+          </HStack>
           <HStack gap="$space-2">
             <Button
               label="Send"
@@ -1045,12 +1059,12 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
                 newItemTurnEnded = false;
                 newItemSubmitting = true;
                 toTurn(msg);
-                newItemHelp = false; newItemIssue = null; newItemBox.setValue('');
+                newItemHelp = false; newItemIssue = null; newItemVoiceRecording = false; setWorklistVoiceTarget('message-agent'); newItemBox.setValue('');
               })()" />
             <Button
               label="Cancel"
               variant="ghost"
-              onClick="newItemHelp = false; newItemIssue = null; newItemBox.setValue('')" />
+              onClick="newItemHelp = false; newItemIssue = null; newItemVoiceRecording = false; setWorklistVoiceTarget('message-agent'); newItemBox.setValue('')" />
           </HStack>
         </VStack>
       </VStack>

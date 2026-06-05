@@ -1318,6 +1318,15 @@ var worklistVoiceTarget = '';
 var worklistVoiceText = '';
 var worklistVoiceSeq = 0;
 
+function isWorklistTextVoiceTarget(target) {
+  return [
+    'message-agent',
+    'feedback',
+    'new-item',
+    'new-issue'
+  ].includes(target || '');
+}
+
 function setWorklistVoiceTarget(target) {
   worklistVoiceTarget = target || '';
   iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'target' });
@@ -1367,7 +1376,7 @@ function toggleVoiceForCurrentTarget(recording) {
   if (recording) {
     voiceStop(t => {
       if (!t) return;
-      if (worklistVoiceTarget === 'message-agent' || worklistVoiceTarget === 'feedback') {
+      if (isWorklistTextVoiceTarget(worklistVoiceTarget)) {
         worklistVoiceText = t;
         worklistVoiceSeq = worklistVoiceSeq + 1;
         iframeTrace('voice-input', { target: worklistVoiceTarget || 'message-agent', stage: 'stop' });

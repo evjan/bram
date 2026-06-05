@@ -141,7 +141,7 @@
       const exchangeUser = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').trim();
       const exchangeAssistant = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').trim();
       const exchangeTools = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-5);
-      const exchangeMatchesSubmitted = submitted &amp;&amp; exchangeUser === submitted;
+      const exchangeMatchesSubmitted = worklistSubmittedMatches(exchangeUser, submitted);
       const user = awaitingResponse &amp;&amp; submitted ? submitted : (exchangeUser || submitted);
       const assistant = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? '' : (exchangeAssistant || lastAssistantStableText || '').trim();
       const source = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? 'awaiting' : (exchangeAssistant ? 'last-exchange' : (assistant ? 'last-assistant-text' : 'none'));
@@ -737,7 +737,7 @@
         gap="$space-3"
         overflowY="auto"
         var.conversationUserText="{awaitingResponse &amp;&amp; submittedWorklistMessage ? submittedWorklistMessage : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || submittedWorklistMessage || '').trim())}"
-        var.conversationExchangeMatchesSubmitted="{submittedWorklistMessage &amp;&amp; lastExchangeDS.value &amp;&amp; ((lastExchangeDS.value.userText || '').trim() === (submittedWorklistMessage || '').trim())}"
+        var.conversationExchangeMatchesSubmitted="{worklistSubmittedMatches(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage)}"
         var.conversationTools="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-5)}"
         var.conversationAssistantText="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? '' : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim())}">
         <VStack

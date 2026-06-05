@@ -1267,6 +1267,17 @@ function clearWorklistAwaiting(clearDraft) {
   }
 }
 
+// Mirrors toTurn's `s.replace(/\s+/g, ' ').trim()` collapse in
+// app/__shell/helpers.js so the JSONL-recorded user text (post-collapse)
+// can be matched against the locally-stored submittedWorklistMessage
+// (pre-collapse). Strict === would fail whenever the submitted text
+// contained any internal whitespace runs.
+function worklistSubmittedMatches(exchangeUserText, submitted) {
+  if (!submitted) return false;
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  return norm(exchangeUserText) === norm(submitted);
+}
+
 var worklistVoiceTarget = '';
 var worklistVoiceText = '';
 var worklistVoiceSeq = 0;

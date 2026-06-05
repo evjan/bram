@@ -54,7 +54,9 @@
          the dragging cursor — those want to suppress accidental
          selection). */
       p, h1, h2, h3, h4, h5, h6, li, code, pre, blockquote,
-      td, th, dt, dd, figcaption {
+      td, th, dt, dd, figcaption,
+      [class*="_text_"], [class*="_paragraph_"], [class*="_markdown_"],
+      [class*="_heading_"] {
         user-select: text;
         -webkit-user-select: text;
       }

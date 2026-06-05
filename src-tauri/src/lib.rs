@@ -8097,24 +8097,22 @@ fn read_last_exchange<R: tauri::Runtime>(
     let mut user_text = String::new();
     let mut assistant_text = String::new();
     let mut tool_entries: Vec<serde_json::Value> = Vec::new();
-    // Walk backward: most recent assistant first, then most recent user
-    // *before* that assistant (so they're a pair). If no assistant yet,
-    // user_text is the most recent user.
-    let mut assistant_idx: Option<usize> = None;
-    for (i, turn) in turns.iter().enumerate().rev() {
-        if turn.get("role").and_then(|v| v.as_str()) == Some("assistant") {
-            if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
-                if !t.trim().is_empty() {
-                    assistant_text = t.to_string();
-                    assistant_idx = Some(i);
-                    break;
-                }
-            }
-        }
-    }
-    let user_search_end = assistant_idx.unwrap_or(turns.len());
+    // Walk forward from the most recent user. Anchoring on the user
+    // (not the most recent assistant with non-empty text) is what makes
+    // an in-progress turn visible: Claude's mid-turn assistant records
+    // carry only `[tool_use]` or `[thinking]` content, so their parsed
+    // `text` is empty until the final `[text] stop_reason=end_turn`
+    // line lands. The pre-walk-forward shape skipped every such turn
+    // and jumped back to the *previous* completed exchange, leaving
+    // the Worklist conversation panel stale until end-of-turn. With
+    // user-anchored forward walk, every assistant entry since the
+    // user message is in scope; the latest non-empty assistant text
+    // wins (or stays empty if none yet), and tool entries accumulate
+    // as they arrive. Codex worked under the old shape because its
+    // `event_msg agent_message` records carry incremental text; this
+    // change keeps Codex parity and adds Claude in-progress visibility.
     let mut user_idx: Option<usize> = None;
-    for (i, turn) in turns.iter().enumerate().take(user_search_end).rev() {
+    for (i, turn) in turns.iter().enumerate().rev() {
         if turn.get("role").and_then(|v| v.as_str()) == Some("user") {
             if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
                 if !t.trim().is_empty() {
@@ -8126,18 +8124,20 @@ fn read_last_exchange<R: tauri::Runtime>(
         }
     }
     if let Some(start_idx) = user_idx {
-        let end_idx = assistant_idx.unwrap_or(turns.len().saturating_sub(1));
-        for turn in turns
-            .iter()
-            .take(end_idx.saturating_add(1))
-            .skip(start_idx + 1)
-        {
-            let Some(entries) = turn.get("entries").and_then(|v| v.as_array()) else {
+        for turn in turns.iter().skip(start_idx + 1) {
+            if turn.get("role").and_then(|v| v.as_str()) != Some("assistant") {
                 continue;
-            };
-            for entry in entries {
-                if entry.get("kind").and_then(|v| v.as_str()) == Some("tool") {
-                    tool_entries.push(entry.clone());
+            }
+            if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
+                if !t.trim().is_empty() {
+                    assistant_text = t.to_string();
+                }
+            }
+            if let Some(entries) = turn.get("entries").and_then(|v| v.as_array()) {
+                for entry in entries {
+                    if entry.get("kind").and_then(|v| v.as_str()) == Some("tool") {
+                        tool_entries.push(entry.clone());
+                    }
                 }
             }
         }

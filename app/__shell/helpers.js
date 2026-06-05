@@ -540,18 +540,24 @@ try {
       // Per-emit correlation id from the host (see Rust
       // emit_talk_session_changed). Logged here so the trace records
       // the parent→iframe hand-off independently of any subscriber's
-      // own listener-fired trace.
+      // own listener-fired trace. at_host_ms lets each iframe-side
+      // trace report delta_to_emit_ms — host emit → this point and,
+      // via subscriber forwarding, host emit → listener-fired and
+      // host emit → refetch-called.
       var correlationId = (event && event.payload && event.payload.correlation_id) || "";
+      var atHostMs = (event && event.payload && typeof event.payload.at_host_ms === "number") ? event.payload.at_host_ms : 0;
       try {
         iframeTrace("event-received", {
           context: "talk-session-changed",
           correlation_id: correlationId,
           subscribers: __talkSessionSubscribers.length,
+          at_host_ms: atHostMs,
+          delta_to_emit_ms: atHostMs ? (Date.now() - atHostMs) : -1,
         });
       } catch (e) {}
       var n = __talkSessionSubscribers.length;
       for (var i = 0; i < n; i++) {
-        try { __talkSessionSubscribers[i](correlationId); } catch (e) {}
+        try { __talkSessionSubscribers[i](correlationId, atHostMs); } catch (e) {}
       }
       var t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
       __tscBatchTick(t1 - t0);
@@ -1156,6 +1162,7 @@ function __inspectorTapTick() {
     if (total <= __inspectorTap.highWater) return;
     var available = total - __inspectorTap.highWater;
     var toSend = Math.min(available, __inspectorTap.perTickCap);
+    var t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
     for (var i = 0; i < toSend; i++) {
       __inspectorTrace("inspector-event", {
         entry: logs[__inspectorTap.highWater + i],
@@ -1170,6 +1177,12 @@ function __inspectorTapTick() {
     } else {
       __inspectorTap.highWater += toSend;
     }
+    var t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+    __inspectorTrace("inspector-tap-tick", {
+      batch: toSend,
+      available: available,
+      ms: Math.round((t1 - t0) * 10) / 10,
+    });
   } catch (e) {}
 }
 function __startInspectorTap() {

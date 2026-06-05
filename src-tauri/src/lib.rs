@@ -668,12 +668,17 @@ fn trace_emit_payload<R: tauri::Runtime, S: serde::Serialize>(
         .get("correlation_id")
         .and_then(|v| v.as_str())
         .unwrap_or("");
+    let at_host_ms = value
+        .get("at_host_ms")
+        .and_then(|v| v.as_i64())
+        .map(|v| v.to_string())
+        .unwrap_or_default();
     append_bram_trace_line(
         app,
         "emit",
         &format!(
-            "kind={} payload_size={} correlation_id={}",
-            kind, size, correlation_id
+            "kind={} payload_size={} correlation_id={} at_host_ms={}",
+            kind, size, correlation_id, at_host_ms
         ),
     );
 }
@@ -737,7 +742,11 @@ fn next_talk_session_correlation_id() -> String {
 
 fn emit_talk_session_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
     let correlation_id = next_talk_session_correlation_id();
-    let payload = serde_json::json!({ "correlation_id": correlation_id });
+    let at_host_ms = unix_now_ms();
+    let payload = serde_json::json!({
+        "correlation_id": correlation_id,
+        "at_host_ms": at_host_ms,
+    });
     emit_replayable_payload(app, "talk-session-changed", payload);
 }
 

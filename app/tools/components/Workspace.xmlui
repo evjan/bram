@@ -52,10 +52,12 @@
         feedbackExpanded = false; expandedItemId = null;
       }
       if (newItemSubmitting && newItemStartSig && currentSig !== newItemStartSig) {
+        iframeTrace('new-item-clear', {via: 'sig-change', prevSig: newItemStartSig, currentSig: currentSig});
         newItemSubmitting = false;
         newItemStartSig = '';
         newItemTurnEnded = false;
       } else if (newItemSubmitting && newItemTurnEnded) {
+        iframeTrace('new-item-clear', {via: 'turn-end', prevSig: newItemStartSig, currentSig: currentSig});
         newItemSubmitting = false;
         newItemStartSig = '';
         newItemTurnEnded = false;
@@ -172,7 +174,7 @@
   <VStack
     padding="$space-6"
     gap="$space-6"
-    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', (correlationId) => { iframeTrace('listener-fired', {context: 'talk-session-changed', correlation_id: correlationId || ''}); debounce(400, () => { iframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: correlationId || ''}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; }, Date.now()); });
+    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', (correlationId) => { iframeTrace('listener-fired', {context: 'talk-session-changed', correlation_id: correlationId || ''}); debounce(400, (id) => { iframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: id || ''}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; }, correlationId); });
     subscribeTauriEvent('__bramWorklistUnsub', 'worklist-changed', (e) => {
       const payload = (e &amp;&amp; e.payload) || {};
       iframeTrace('listener-fired', {paths: payload.paths || [], correlation_id: payload.id || ''});

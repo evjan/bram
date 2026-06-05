@@ -654,11 +654,19 @@ fn trace_emit_payload<R: tauri::Runtime, S: serde::Serialize>(
     if !bram_trace_enabled() {
         return;
     }
-    let size = serde_json::to_vec(payload).map(|v| v.len()).unwrap_or(0);
+    let value = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
+    let size = serde_json::to_vec(&value).map(|v| v.len()).unwrap_or(0);
+    let correlation_id = value
+        .get("correlation_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     append_bram_trace_line(
         app,
         "emit",
-        &format!("kind={} payload_size={} correlation_id=", kind, size),
+        &format!(
+            "kind={} payload_size={} correlation_id={}",
+            kind, size, correlation_id
+        ),
     );
 }
 

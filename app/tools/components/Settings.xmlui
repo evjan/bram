@@ -91,9 +91,13 @@
             icon="info"
             size="xs"
             variant="ghost"
-            tooltip="About Inspector trace tap"
-            onClick="infoTitle = 'Inspector trace tap'; infoBody = 'Forwards XMLUI Inspector events (window._xsLogs) from the agent pane into bram-trace.log as [iframe] subkind=inspector-event, so they interleave with host traces live — no Inspector export needed. Capped at 50 entries per 200ms tick; overflow emits subkind=inspector-overflow. Inspector traces are intentionally complete and noisy (one per keystroke, etc.); future work will add per-category filters.'; settingInfoDialog.open()" />
+            tooltip="About Traces"
+            onClick="infoTitle = 'Traces'; infoBody = 'Tracing enabled — master switch for writes to resources/bram-traces/bram-trace.log. When off, every [emit] / [iframe] / [route] line is a no-op regardless of the Inspector trace tap below. If BRAM_TRACE is set in the environment at launch (e.g. BRAM_TRACE=1 cargo run), it wins and this switch is ignored — so CI / shell wrappers keep behaving the same.&#10;&#10;Inspector trace tap — forwards XMLUI Inspector events (window._xsLogs) from the agent pane into bram-trace.log as [iframe] subkind=inspector-event, so they interleave with host traces live (no Inspector export needed). Capped at 50 entries per 200ms tick; overflow emits subkind=inspector-overflow. Inspector traces are intentionally complete and noisy (one per keystroke, etc.); future work will add per-category filters. Requires Tracing enabled above.&#10;&#10;Both persist in .bram.json under traces.*.'; settingInfoDialog.open()" />
         </HStack>
+        <Switch
+          label="Tracing enabled"
+          initialValue="{settingsTracingEnabled(settingsConfig.value)}"
+          onDidChange="(v) => saveSettings.execute({ traces: { enabled: v } })" />
         <Switch
           label="Inspector trace tap"
           initialValue="{settingsInspectorTap(settingsConfig.value)}"

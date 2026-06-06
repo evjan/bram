@@ -227,6 +227,8 @@ struct UiConfig {
 
 #[derive(Default, Clone, serde::Deserialize)]
 struct TracesConfig {
+    #[serde(default)]
+    enabled: Option<bool>,
     #[serde(default, rename = "inspectorTap")]
     inspector_tap: Option<bool>,
 }
@@ -376,19 +378,32 @@ fn bram_trace_enabled() -> bool {
     BRAM_TRACE_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+fn bram_trace_env_override() -> Option<bool> {
+    std::env::var("BRAM_TRACE").ok().map(|v| {
+        let s = v.trim();
+        s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
+    })
+}
+
 fn init_bram_trace_from_env() {
-    let on = std::env::var("BRAM_TRACE")
-        .map(|v| {
-            let s = v.trim();
-            s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("yes")
-        })
-        .unwrap_or(false);
+    let on = bram_trace_env_override().unwrap_or(false);
     BRAM_TRACE_ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
     if on {
         eprintln!(
             "[bram-trace] enabled (BRAM_TRACE=1); live trace destination: <project_root>/resources/bram-traces/bram-trace.log; previous runs archived at startup as <project_root>/resources/bram-traces/bram-trace-YYYY-MM-DD*.log"
         );
     }
+}
+
+// Apply the `traces.enabled` setting from .bram.json. Env var wins
+// when set so CI / shell wrappers that pass BRAM_TRACE=1 keep
+// behaving the same. Called both at startup (after project config is
+// loaded) and on every settings POST that touches traces.enabled.
+fn apply_bram_trace_from_config(enabled: bool) {
+    if bram_trace_env_override().is_some() {
+        return;
+    }
+    BRAM_TRACE_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[allow(dead_code)]
@@ -5472,22 +5487,26 @@ fn project_config_batch_commit_actions(config: Option<ProjectConfig>) -> bool {
 // so the consumer never sees nulls; out-of-scope blocks like `server`
 // stay invisible — they're project infrastructure, not Settings knobs.
 fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value {
-    let (agent, batch, minimized, inspector_tap) = match config {
-        Some(c) => (
-            c.shell.and_then(|s| s.agent).unwrap_or_default(),
-            c.worklist
-                .and_then(|w| w.batch_commit_actions)
-                .unwrap_or(false),
-            c.ui.and_then(|u| u.target_app_minimized).unwrap_or(false),
-            c.traces.and_then(|t| t.inspector_tap).unwrap_or(false),
-        ),
-        None => (String::new(), false, false, false),
+    let (agent, batch, minimized, tracing_enabled, inspector_tap) = match config {
+        Some(c) => {
+            let traces = c.traces;
+            (
+                c.shell.and_then(|s| s.agent).unwrap_or_default(),
+                c.worklist
+                    .and_then(|w| w.batch_commit_actions)
+                    .unwrap_or(false),
+                c.ui.and_then(|u| u.target_app_minimized).unwrap_or(false),
+                traces.as_ref().and_then(|t| t.enabled).unwrap_or(false),
+                traces.and_then(|t| t.inspector_tap).unwrap_or(false),
+            )
+        }
+        None => (String::new(), false, false, false, false),
     };
     serde_json::json!({
         "shell": { "agent": agent },
         "worklist": { "batchCommitActions": batch },
         "ui": { "targetAppMinimized": minimized },
-        "traces": { "inspectorTap": inspector_tap },
+        "traces": { "enabled": tracing_enabled, "inspectorTap": inspector_tap },
     })
 }
 
@@ -6434,6 +6453,13 @@ fn handle_settings_post<R: tauri::Runtime>(
     // the form sees the same shape it gets from GET. The filesystem watcher
     // will also emit `settings-changed`; the duplicate refresh is harmless.
     let config = load_project_config(&root);
+    if let Some(enabled) = config
+        .as_ref()
+        .and_then(|c| c.traces.as_ref())
+        .and_then(|t| t.enabled)
+    {
+        apply_bram_trace_from_config(enabled);
+    }
     let body = settings_view_from_config(config).to_string().into_bytes();
     (200, "application/json; charset=utf-8", body)
 }
@@ -18232,6 +18258,11 @@ pub fn run() {
     init_bram_trace_from_env();
     let initial_proj = determine_project_root();
     eprintln!("[bram] project root: {}", initial_proj.display());
+    if let Some(cfg) = load_project_config(&initial_proj) {
+        if let Some(enabled) = cfg.traces.and_then(|t| t.enabled) {
+            apply_bram_trace_from_config(enabled);
+        }
+    }
     if !initial_proj.join("index.html").exists() {
         eprintln!(
             "[bram] WARNING: no index.html at project root; the right pane will fail to load. Run with `bram /path/to/project` or cd into the project before launching."

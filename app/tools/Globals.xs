@@ -1057,6 +1057,9 @@ function settingsMinimized(s) {
 function settingsInspectorTap(s) {
   return !!(s && s.traces && s.traces.inspectorTap);
 }
+function settingsTracingEnabled(s) {
+  return !!(s && s.traces && s.traces.enabled);
+}
 
 // Diff rendering — used by the DiffView component, which all three
 // diff sites (Transcript, Workspace, Commits) share. Per-line

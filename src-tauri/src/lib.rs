@@ -8227,6 +8227,8 @@ fn read_last_exchange<R: tauri::Runtime>(
     let turns = st_parse_lines_to_turns(&text);
     let mut user_text = String::new();
     let mut assistant_text = String::new();
+    let mut user_images: Vec<String> = Vec::new();
+    let mut assistant_images: Vec<String> = Vec::new();
     let mut tool_entries: Vec<serde_json::Value> = Vec::new();
     // Walk forward from the most recent user. Anchoring on the user
     // (not the most recent assistant with non-empty text) is what makes
@@ -8248,6 +8250,13 @@ fn read_last_exchange<R: tauri::Runtime>(
             if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
                 if !t.trim().is_empty() {
                     user_text = t.to_string();
+                    if let Some(imgs) = turn.get("images").and_then(|v| v.as_array()) {
+                        for img in imgs {
+                            if let Some(s) = img.as_str() {
+                                user_images.push(s.to_string());
+                            }
+                        }
+                    }
                     user_idx = Some(i);
                     break;
                 }
@@ -8262,6 +8271,14 @@ fn read_last_exchange<R: tauri::Runtime>(
             if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
                 if !t.trim().is_empty() {
                     assistant_text = t.to_string();
+                    assistant_images.clear();
+                    if let Some(imgs) = turn.get("images").and_then(|v| v.as_array()) {
+                        for img in imgs {
+                            if let Some(s) = img.as_str() {
+                                assistant_images.push(s.to_string());
+                            }
+                        }
+                    }
                 }
             }
             if let Some(entries) = turn.get("entries").and_then(|v| v.as_array()) {
@@ -8280,6 +8297,8 @@ fn read_last_exchange<R: tauri::Runtime>(
     let body = serde_json::json!({
         "userText": user_text,
         "assistantText": assistant_text,
+        "userImages": user_images,
+        "assistantImages": assistant_images,
         "tools": tool_entries,
         "provider": provider_str,
     });

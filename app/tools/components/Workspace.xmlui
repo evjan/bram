@@ -28,6 +28,7 @@
   var.messageSentAtText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
   var.awaitingResponseSetAt="{restoreWorklistAwaitingSetAt()}"
+  var.fullscreenImage="{null}"
   var.conversationOpen="{readLocalStorage('bram.conversationOpen', '1') !== '0'}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}">
@@ -319,6 +320,17 @@
       </VStack>
     </ModalDialog>
     </Theme>
+
+    <ModalDialog
+      when="{!!fullscreenImage}"
+      fullScreen="true"
+      onClose="fullscreenImage = null">
+      <Image
+        src="{(fullscreenImage || '').startsWith('data:') || (fullscreenImage || '').startsWith('http') ? fullscreenImage : '/__file?path=' + encodeURIComponent(fullscreenImage || '')}"
+        fit="contain"
+        width="100%"
+        height="100%" />
+    </ModalDialog>
 
     <HSplitter
       height="100%"
@@ -784,7 +796,9 @@
         var.conversationUserText="{awaitingResponse &amp;&amp; submittedWorklistMessage ? submittedWorklistMessage : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || submittedWorklistMessage || '').trim())}"
         var.conversationExchangeMatchesSubmitted="{worklistSubmittedMatches(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage)}"
         var.conversationTools="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-5)}"
-        var.conversationAssistantText="{awaitingResponse ? (conversationExchangeMatchesSubmitted ? ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').trim() : '') : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim())}">
+        var.conversationAssistantText="{awaitingResponse ? (conversationExchangeMatchesSubmitted ? ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').trim() : '') : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim())}"
+        var.conversationUserImages="{awaitingResponse &amp;&amp; submittedWorklistMessage &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || [])}"
+        var.conversationAssistantImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []}">
         <ChangeListener
           listenTo="{conversationAssistantText}"
           onDidChange="() => iframeTrace('conv-pane-assistant', {
@@ -797,16 +811,26 @@
           })" />
         <VStack
           gap="$space-1"
-          when="{conversationUserText}">
+          when="{conversationUserText || (conversationUserImages &amp;&amp; conversationUserImages.length > 0)}">
           <Text
             fontWeight="$fontWeight-bold"
             color="$color-primary-700"
             value="You" />
-          <Markdown content="{conversationUserText}" />
+          <Markdown content="{stripImagePaths(conversationUserText)}" />
+          <VStack gap="$space-2" when="{conversationUserImages &amp;&amp; conversationUserImages.length > 0}">
+            <Items data="{conversationUserImages}">
+              <Link onClick="fullscreenImage = $item" noIndicator="true">
+                <Image
+                  src="{$item.startsWith('data:') || $item.startsWith('http') ? $item : '/__file?path=' + encodeURIComponent($item)}"
+                  maxHeight="200px"
+                  fit="contain" />
+              </Link>
+            </Items>
+          </VStack>
         </VStack>
         <VStack
           gap="$space-1"
-          when="{conversationAssistantText}">
+          when="{conversationAssistantText || (conversationAssistantImages &amp;&amp; conversationAssistantImages.length > 0)}">
           <Text
             fontWeight="$fontWeight-bold"
             color="$color-success-700"
@@ -841,7 +865,17 @@
                 value="{$item.errorText}" />
             </VStack>
           </Items>
-          <Markdown content="{conversationAssistantText}" />
+          <Markdown content="{stripImagePaths(conversationAssistantText)}" />
+          <VStack gap="$space-2" when="{conversationAssistantImages &amp;&amp; conversationAssistantImages.length > 0}">
+            <Items data="{conversationAssistantImages}">
+              <Link onClick="fullscreenImage = $item" noIndicator="true">
+                <Image
+                  src="{$item.startsWith('data:') || $item.startsWith('http') ? $item : '/__file?path=' + encodeURIComponent($item)}"
+                  maxHeight="200px"
+                  fit="contain" />
+              </Link>
+            </Items>
+          </VStack>
         </VStack>
       </VStack>
     </HSplitter>

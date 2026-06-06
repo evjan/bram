@@ -1213,9 +1213,38 @@ function restoreWorklistDraft() {
   return readLocalStorage('bram.worklistMessageDraft', '');
 }
 
+// Recency-gated restore of the awaiting gate so hot-reloading the
+// iframe in the middle of a real turn doesn't drop the user back to
+// the stale prior agent text. Window deliberately generous (5 min)
+// to cover long agent turns; out-of-window entries get cleared so
+// a long-dead Bram session can't sticky-lock the gate.
 function restoreWorklistAwaiting() {
+  const flag = readLocalStorage('bram.awaitingResponse', '');
+  const setAtRaw = readLocalStorage('bram.awaitingResponseSetAt', '');
+  const setAt = parseInt(setAtRaw, 10);
+  if (flag === '1' && !isNaN(setAt) && (Date.now() - setAt) < 300000) {
+    return true;
+  }
   writeLocalStorage('bram.awaitingResponse', '');
+  writeLocalStorage('bram.awaitingResponseSetAt', '');
   return false;
+}
+
+function restoreWorklistAwaitingSetAt() {
+  const setAtRaw = readLocalStorage('bram.awaitingResponseSetAt', '');
+  const setAt = parseInt(setAtRaw, 10);
+  return isNaN(setAt) ? 0 : setAt;
+}
+
+// Write the awaiting-started state to localStorage so a hot-reload
+// can re-hydrate it within the recency window. Returns the timestamp
+// it wrote so call sites can sync the in-memory awaitingResponseSetAt
+// var to the persisted value.
+function markAwaitingStarted() {
+  const now = Date.now();
+  writeLocalStorage('bram.awaitingResponse', '1');
+  writeLocalStorage('bram.awaitingResponseSetAt', String(now));
+  return now;
 }
 
 function restoreWorklistSubmittedMessage() {
@@ -1250,7 +1279,6 @@ function submitWorklistMessageFast(text) {
   toTurn(message);
   iframeTrace('message-agent-submit', { stage: 'after-toTurn', chars: message.length, sentAt });
   const baseline = 0;
-  writeLocalStorage('bram.awaitingResponse', '');
   writeLocalStorage('bram.worklistMessageDraft', '');
   writeLocalStorage('bram.worklistSubmittedMessage', message);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
@@ -1268,6 +1296,7 @@ function recordWorklistFeedbackConversation(text) {
 
 function clearWorklistAwaiting(clearDraft) {
   writeLocalStorage('bram.awaitingResponse', '');
+  writeLocalStorage('bram.awaitingResponseSetAt', '');
   if (clearDraft) {
     writeLocalStorage('bram.worklistMessageDraft', '');
   }

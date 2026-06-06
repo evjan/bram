@@ -18309,8 +18309,33 @@ pub fn run() {
 
             // Bind the right-pane HTTP server before anything else so the
             // URL is available the moment the parent shell asks for it.
-            let server = tiny_http::Server::http("127.0.0.1:0")
-                .map_err(|e| format!("failed to bind right-pane http server: {}", e))?;
+            // Try the previous run's port first — when free, the Claude
+            // permission allowlist (which matches literal port numbers,
+            // not variables) keeps working without re-prompts. Fall back
+            // to ephemeral when the previous port is held by anything
+            // else, including a second Bram instance.
+            let startup_project_root = project_root(Some(app.handle()));
+            let previous_port = startup_project_root
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p.join("resources/.bram-port")).ok())
+                .and_then(|s| s.trim().parse::<u16>().ok())
+                .filter(|&p| (49152..=65535).contains(&p));
+            let (server, sticky) = match previous_port {
+                Some(prev) => match tiny_http::Server::http(format!("127.0.0.1:{}", prev)) {
+                    Ok(s) => (s, true),
+                    Err(_) => (
+                        tiny_http::Server::http("127.0.0.1:0").map_err(|e| {
+                            format!("failed to bind right-pane http server: {}", e)
+                        })?,
+                        false,
+                    ),
+                },
+                None => (
+                    tiny_http::Server::http("127.0.0.1:0")
+                        .map_err(|e| format!("failed to bind right-pane http server: {}", e))?,
+                    false,
+                ),
+            };
             let port = server
                 .server_addr()
                 .to_ip()
@@ -18319,7 +18344,7 @@ pub fn run() {
             let _ = LOOPBACK_PORT.set(port);
             let started_at_ms = unix_now_ms();
             let _ = LOOPBACK_STARTED_MS.set(started_at_ms);
-            let startup_project_root = project_root(Some(app.handle()));
+            eprintln!("[bram] loopback port={} sticky={}", port, sticky);
             if let Some(proj) = startup_project_root.as_ref() {
                 remove_bram_port_files(proj);
             }

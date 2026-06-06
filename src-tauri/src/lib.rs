@@ -1061,6 +1061,20 @@ struct PtyMenu {
     signature_source: Option<&'static str>,
 }
 
+// Trim the "Do you want to proceed?" footer + numbered options off the
+// captured menu text before it ships to the iframe. The options are
+// already parsed separately into `PtyMenu.options` and rendered as
+// proper buttons, so leaving them in `text` made them appear twice
+// (once as plain text bleeding into the tool-use preview, once as
+// buttons). Refs menu-bleed-into-tool-use-preview screenshot.
+fn trim_menu_text_for_preview(text: &str) -> String {
+    if let Some(idx) = text.find("Do you want to proceed?") {
+        text[..idx].trim_end().to_string()
+    } else {
+        text.to_string()
+    }
+}
+
 // Parse `1. Foo` / `❯1. Foo` / `❯ 2. Bar` lines out of the captured menu
 // text. Cursor marker `❯` (U+276F) may or may not lead the first option;
 // subsequent options have a numeric prefix only. Stops at the first non-
@@ -3360,7 +3374,7 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
                     };
                     return Some(PtyMenu {
                         tool,
-                        text,
+                        text: trim_menu_text_for_preview(&text),
                         options,
                         tool_call_signature: signature,
                         tool_call_diff: None,
@@ -3415,7 +3429,7 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
         };
         Some(PtyMenu {
             tool: final_tool,
-            text,
+            text: trim_menu_text_for_preview(&text),
             options,
             tool_call_signature: signature,
             tool_call_diff: None,

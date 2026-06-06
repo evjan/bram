@@ -128,6 +128,14 @@
       if (text && text !== lastAssistantStableText) {
         lastAssistantStableText = text;
         if (awaitingResponse) {
+          iframeTrace('clear-awaiting', {
+            via: 'last-assistant-text',
+            sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1,
+            stableLen: (lastAssistantStableText || '').length,
+            exchangeUserLen: ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').length,
+            exchangeAssistantLen: ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').length,
+            submittedLen: (submittedWorklistMessage || '').length
+          });
           awaitingResponse = false;
           clearWorklistAwaiting(false);
         }
@@ -167,6 +175,14 @@
         iframeTrace('conversation-sync', {source, entries: (assistant ? 1 : 0) + (toolsSig ? exchangeTools.length : 0)});
       }
       if (awaitingResponse &amp;&amp; exchangeMatchesSubmitted &amp;&amp; assistant) {
+        iframeTrace('clear-awaiting', {
+          via: 'exchange-match',
+          sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1,
+          stableLen: (lastAssistantStableText || '').length,
+          exchangeUserLen: exchangeUser.length,
+          exchangeAssistantLen: exchangeAssistant.length,
+          submittedLen: submitted.length
+        });
         awaitingResponse = false;
         clearWorklistAwaiting(false);
       }
@@ -205,6 +221,14 @@
     });
     subscribeTauriEvent('__bramWorkspaceAgentTurnKilledUnsub', 'agent-turn-killed', () => {
       if (awaitingResponse &amp;&amp; shouldClearOnAgentTurnKilled(awaitingResponseSetAt)) {
+        iframeTrace('clear-awaiting', {
+          via: 'agent-turn-killed',
+          sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1,
+          stableLen: (lastAssistantStableText || '').length,
+          exchangeUserLen: ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').length,
+          exchangeAssistantLen: ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').length,
+          submittedLen: (submittedWorklistMessage || '').length
+        });
         awaitingResponse = false;
         clearWorklistAwaiting(false);
       }

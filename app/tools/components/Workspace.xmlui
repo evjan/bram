@@ -154,11 +154,13 @@
   <DataSource id="agentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" when="{conversationOpen}" />
   <ChangeListener
-    listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (awaitingResponse ? '1' : '0')}"
+    listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {
       const submitted = (submittedWorklistMessage || '').trim();
       const exchangeUser = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').trim();
       const exchangeAssistant = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').trim();
+      const exchangeUserImages = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []);
+      const exchangeAssistantImages = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []);
       const exchangeTools = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-5);
       const exchangeMatchesSubmitted = worklistSubmittedMatches(exchangeUser, submitted);
       const user = awaitingResponse &amp;&amp; submitted ? submitted : (exchangeUser || submitted);
@@ -169,10 +171,11 @@
         ? (exchangeMatchesSubmitted ? (exchangeAssistant ? 'last-exchange' : 'awaiting') : 'awaiting')
         : (exchangeAssistant ? 'last-exchange' : (assistant ? 'last-assistant-text' : 'none'));
       const toolsSig = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? '' : exchangeTools.map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|');
-      const sig = user + '\n---\n' + toolsSig + '\n---\n' + assistant;
+      const imageSig = exchangeUserImages.join('|') + '\n---\n' + exchangeAssistantImages.join('|');
+      const sig = user + '\n---\n' + toolsSig + '\n---\n' + assistant + '\n---\n' + imageSig;
       if (sig !== lastConversationSig) {
         lastConversationSig = sig;
-        iframeTrace('conversation-sync', {source, entries: (assistant ? 1 : 0) + (toolsSig ? exchangeTools.length : 0)});
+        iframeTrace('conversation-sync', {source, entries: (assistant ? 1 : 0) + (toolsSig ? exchangeTools.length : 0), userImages: exchangeUserImages.length, assistantImages: exchangeAssistantImages.length});
       }
       if (awaitingResponse &amp;&amp; exchangeMatchesSubmitted &amp;&amp; assistant) {
         iframeTrace('clear-awaiting', {
@@ -350,7 +353,7 @@
       fullScreen="true"
       onClose="fullscreenImage = null">
       <Image
-        src="{(fullscreenImage || '').startsWith('data:') || (fullscreenImage || '').startsWith('http') ? fullscreenImage : '/__file?path=' + encodeURIComponent(fullscreenImage || '')}"
+        src="{(fullscreenImage || '').startsWith('data:') || (fullscreenImage || '').startsWith('http') ? fullscreenImage : '/__file?path=' + encodeURIComponent((fullscreenImage || '').startsWith('file://') ? (fullscreenImage || '').replace(/^file:\/\/(localhost)?/, '') : (fullscreenImage || ''))}"
         fit="contain"
         width="100%"
         height="100%" />
@@ -845,7 +848,7 @@
             <Items data="{conversationUserImages}">
               <Link onClick="fullscreenImage = $item" noIndicator="true">
                 <Image
-                  src="{$item.startsWith('data:') || $item.startsWith('http') ? $item : '/__file?path=' + encodeURIComponent($item)}"
+                  src="{$item.startsWith('data:') || $item.startsWith('http') ? $item : '/__file?path=' + encodeURIComponent($item.startsWith('file://') ? $item.replace(/^file:\/\/(localhost)?/, '') : $item)}"
                   maxHeight="200px"
                   fit="contain" />
               </Link>
@@ -894,7 +897,7 @@
             <Items data="{conversationAssistantImages}">
               <Link onClick="fullscreenImage = $item" noIndicator="true">
                 <Image
-                  src="{$item.startsWith('data:') || $item.startsWith('http') ? $item : '/__file?path=' + encodeURIComponent($item)}"
+                  src="{$item.startsWith('data:') || $item.startsWith('http') ? $item : '/__file?path=' + encodeURIComponent($item.startsWith('file://') ? $item.replace(/^file:\/\/(localhost)?/, '') : $item)}"
                   maxHeight="200px"
                   fit="contain" />
               </Link>

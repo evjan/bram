@@ -743,8 +743,7 @@ fn emit_replayable_signal<R: tauri::Runtime>(app: &AppHandle<R>, event_name: &st
 // iframe-side `listener-fired` / `refetch-called` trace can be matched
 // back to the emit it came from (or its absence flagged). Diagnosing
 // the 175 → 83 → 37 drop seen at investigate-talk-session-event-drop.
-static TALK_SESSION_SEQ: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static TALK_SESSION_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn next_talk_session_correlation_id() -> String {
     let seq = TALK_SESSION_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2640,15 +2639,13 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             // (200ms, 800ms) and emits an updated payload when the
             // signature arrives. Refs #170.
             if let Some(m) = menu.as_ref() {
-                let needs_signature =
-                    m.tool != PENDING_TOOL && m.tool_call_signature.is_none();
+                let needs_signature = m.tool != PENDING_TOOL && m.tool_call_signature.is_none();
                 // Write produces a `Write(<path>)` signature via PTY-scrape,
                 // so the signature-missing branch above does not fire — but
                 // the markdown content lives only in JSONL `input.content`,
                 // which the same race can delay. Trigger the recheck loop
                 // so `tool_call_content` gets filled in on the next pass.
-                let needs_write_content =
-                    m.tool == "Write" && m.tool_call_content.is_none();
+                let needs_write_content = m.tool == "Write" && m.tool_call_content.is_none();
                 if needs_signature || needs_write_content {
                     recheck_target = Some(m.tool.clone());
                 }
@@ -2766,8 +2763,7 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                         .map(|m| {
                             m.tool == target_tool
                                 && (m.tool_call_signature.is_none()
-                                    || (m.tool == "Write"
-                                        && m.tool_call_content.is_none()))
+                                    || (m.tool == "Write" && m.tool_call_content.is_none()))
                         })
                         .unwrap_or(false)
                 } else {
@@ -8247,19 +8243,20 @@ fn read_last_exchange<R: tauri::Runtime>(
     let mut user_idx: Option<usize> = None;
     for (i, turn) in turns.iter().enumerate().rev() {
         if turn.get("role").and_then(|v| v.as_str()) == Some("user") {
-            if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
-                if !t.trim().is_empty() {
-                    user_text = t.to_string();
-                    if let Some(imgs) = turn.get("images").and_then(|v| v.as_array()) {
-                        for img in imgs {
-                            if let Some(s) = img.as_str() {
-                                user_images.push(s.to_string());
-                            }
-                        }
+            let t = turn.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let mut images = Vec::new();
+            if let Some(imgs) = turn.get("images").and_then(|v| v.as_array()) {
+                for img in imgs {
+                    if let Some(s) = img.as_str() {
+                        images.push(s.to_string());
                     }
-                    user_idx = Some(i);
-                    break;
                 }
+            }
+            if !t.trim().is_empty() || !images.is_empty() {
+                user_text = t.to_string();
+                user_images = images;
+                user_idx = Some(i);
+                break;
             }
         }
     }
@@ -8268,18 +8265,20 @@ fn read_last_exchange<R: tauri::Runtime>(
             if turn.get("role").and_then(|v| v.as_str()) != Some("assistant") {
                 continue;
             }
-            if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
-                if !t.trim().is_empty() {
-                    assistant_text = t.to_string();
-                    assistant_images.clear();
-                    if let Some(imgs) = turn.get("images").and_then(|v| v.as_array()) {
-                        for img in imgs {
-                            if let Some(s) = img.as_str() {
-                                assistant_images.push(s.to_string());
-                            }
-                        }
+            let t = turn.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let mut images = Vec::new();
+            if let Some(imgs) = turn.get("images").and_then(|v| v.as_array()) {
+                for img in imgs {
+                    if let Some(s) = img.as_str() {
+                        images.push(s.to_string());
                     }
                 }
+            }
+            if !t.trim().is_empty() || !images.is_empty() {
+                if !t.trim().is_empty() {
+                    assistant_text = t.to_string();
+                }
+                assistant_images = images;
             }
             if let Some(entries) = turn.get("entries").and_then(|v| v.as_array()) {
                 for entry in entries {
@@ -8782,6 +8781,94 @@ fn st_extract_image_paths(text: &str) -> Vec<String> {
     paths
 }
 
+fn st_codex_content_image(c: &serde_json::Value) -> Option<String> {
+    let c_typ = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if c_typ != "input_image" && c_typ != "output_image" && c_typ != "image" {
+        return None;
+    }
+
+    st_codex_image_value(c)
+}
+
+fn st_codex_image_value(v: &serde_json::Value) -> Option<String> {
+    if let Some(s) = v.as_str() {
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
+
+    v.as_object()?;
+
+    if let Some(url) = v
+        .get("image_url")
+        .or_else(|| v.get("url"))
+        .or_else(|| v.get("image"))
+        .and_then(|v| v.as_str())
+    {
+        if !url.is_empty() {
+            return Some(url.to_string());
+        }
+    }
+
+    if let Some(path) = v
+        .get("file_path")
+        .or_else(|| v.get("path"))
+        .and_then(|v| v.as_str())
+    {
+        if !path.is_empty() {
+            return Some(path.to_string());
+        }
+    }
+
+    if let Some(source) = v.get("source").and_then(|v| v.as_object()) {
+        if source.get("type").and_then(|v| v.as_str()) == Some("base64") {
+            if let Some(data) = source.get("data").and_then(|v| v.as_str()) {
+                let mt = source
+                    .get("media_type")
+                    .or_else(|| source.get("mime_type"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("image/png");
+                return Some(format!("data:{};base64,{}", mt, data));
+            }
+        }
+    }
+
+    None
+}
+
+fn st_collect_codex_images_from_array(
+    value: Option<&serde_json::Value>,
+    out: &mut Vec<String>,
+    allow_untyped: bool,
+) {
+    let Some(arr) = value.and_then(|v| v.as_array()) else {
+        return;
+    };
+    for item in arr {
+        if let Some(image) = st_codex_content_image(item) {
+            out.push(image);
+        } else if allow_untyped {
+            if let Some(image) = st_codex_image_value(item) {
+                out.push(image);
+            }
+        }
+    }
+}
+
+fn st_collect_codex_images_from_text_elements(
+    value: Option<&serde_json::Value>,
+    out: &mut Vec<String>,
+) {
+    let Some(arr) = value.and_then(|v| v.as_array()) else {
+        return;
+    };
+    for item in arr {
+        if let Some(image) = st_codex_content_image(item) {
+            out.push(image);
+        }
+    }
+}
+
 fn st_rewrite_xmlui_doc_urls(text: &str) -> String {
     text.replace(
         "https://docs.xmlui.org/components/",
@@ -9193,6 +9280,12 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                         entries.push(serde_json::json!({ "kind": "text", "text": msg }));
                     }
                 }
+                st_collect_codex_images_from_array(p.get("images"), &mut inline_images, true);
+                st_collect_codex_images_from_array(p.get("local_images"), &mut inline_images, true);
+                st_collect_codex_images_from_text_elements(
+                    p.get("text_elements"),
+                    &mut inline_images,
+                );
             }
         } else if typ == "response_item" {
             if let Some(p) = r.get("payload") {
@@ -9213,6 +9306,8 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                                             .push(serde_json::json!({ "kind": "text", "text": t }));
                                     }
                                 }
+                            } else if let Some(image) = st_codex_content_image(c) {
+                                inline_images.push(image);
                             }
                         }
                     }
@@ -14364,6 +14459,55 @@ mod turn_completion_tests {
         ))
         .is_some());
         assert!(jsonl_completion_provider_for_path(Path::new("/tmp/session.jsonl")).is_none());
+    }
+}
+
+#[cfg(test)]
+mod session_turn_tests {
+    use super::st_parse_lines_to_turns;
+
+    #[test]
+    fn codex_message_input_image_becomes_turn_image() {
+        let content = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"look at this"},{"type":"input_image","image_url":"file:///tmp/example.png"}]}}"#;
+        let turns = st_parse_lines_to_turns(content);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0]["role"], "user");
+        assert_eq!(turns[0]["text"], "look at this");
+        assert_eq!(turns[0]["images"][0], "file:///tmp/example.png");
+    }
+
+    #[test]
+    fn codex_message_input_image_base64_becomes_data_url() {
+        let content = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_image","source":{"type":"base64","media_type":"image/jpeg","data":"abc123"}}]}}"#;
+        let turns = st_parse_lines_to_turns(content);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0]["images"][0], "data:image/jpeg;base64,abc123");
+    }
+
+    #[test]
+    fn codex_event_user_local_images_become_turn_images() {
+        let content = r#"{"type":"event_msg","payload":{"type":"user_message","message":"look","images":[],"local_images":["/tmp/codex-image.png"],"text_elements":[]}}"#;
+        let turns = st_parse_lines_to_turns(content);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0]["role"], "user");
+        assert_eq!(turns[0]["text"], "look");
+        assert_eq!(turns[0]["images"][0], "/tmp/codex-image.png");
+    }
+
+    #[test]
+    fn codex_event_user_image_objects_become_turn_images() {
+        let content = r#"{"type":"event_msg","payload":{"type":"user_message","message":"look","images":[{"path":"/tmp/object-image.webp"}],"local_images":[],"text_elements":[]}}"#;
+        let turns = st_parse_lines_to_turns(content);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0]["images"][0], "/tmp/object-image.webp");
+    }
+
+    #[test]
+    fn codex_event_text_element_strings_are_not_images() {
+        let content = r#"{"type":"event_msg","payload":{"type":"user_message","message":"look","images":[],"local_images":[],"text_elements":["plain text"]}}"#;
+        let turns = st_parse_lines_to_turns(content);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0]["images"].as_array().unwrap().len(), 0);
     }
 }
 

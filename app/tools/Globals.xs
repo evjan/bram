@@ -1320,12 +1320,17 @@ function worklistSubmittedMatches(exchangeUserText, submitted) {
 // payload "kills" the prior idle turn, which would otherwise flip
 // awaitingResponse off and reveal the stale prior agent text via the
 // fallback chain. Legitimate user-triggered kills come much later.
-function shouldClearOnAgentTurnKilled(awaitingResponseSetAt) {
+function shouldClearOnAgentTurnKilled(awaitingResponseSetAt, exchangeUserText, submittedText) {
+  const submitted = (submittedText || '').trim();
+  if (submitted && !worklistSubmittedMatches(exchangeUserText, submitted)) {
+    iframeTrace('awaiting-kill-suppressed', { reason: 'exchange-stale' });
+    return false;
+  }
   const sinceSet = Date.now() - (awaitingResponseSetAt || 0);
   if (sinceSet > 750) {
     return true;
   }
-  iframeTrace('awaiting-kill-suppressed', { sinceSet });
+  iframeTrace('awaiting-kill-suppressed', { reason: 'within-window', sinceSet });
   return false;
 }
 

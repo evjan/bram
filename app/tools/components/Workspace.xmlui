@@ -220,7 +220,7 @@
       }
     });
     subscribeTauriEvent('__bramWorkspaceAgentTurnKilledUnsub', 'agent-turn-killed', () => {
-      if (awaitingResponse &amp;&amp; shouldClearOnAgentTurnKilled(awaitingResponseSetAt)) {
+      if (awaitingResponse &amp;&amp; shouldClearOnAgentTurnKilled(awaitingResponseSetAt, (lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '', submittedWorklistMessage)) {
         iframeTrace('clear-awaiting', {
           via: 'agent-turn-killed',
           sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1,

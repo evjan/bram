@@ -26,6 +26,7 @@
   var.lastConversationSig="{''}"
   var.messageSentAtText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
+  var.conversationOpen="{readLocalStorage('bram.conversationOpen', '1') !== '0'}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}">
   <DataSource
@@ -136,7 +137,7 @@
     url="/__current-turn-edits?t={lastAssistantTick}" />
 
   <DataSource id="agentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
-  <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" />
+  <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" when="{conversationOpen}" />
   <ChangeListener
     listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {
@@ -314,6 +315,12 @@
           <Theme size-Spinner="1em">
             <Spinner when="{newItemSubmitting}" />
           </Theme>
+          <SpaceFiller />
+          <Button
+            label="{conversationOpen ? 'Hide conversation' : 'Show conversation'}"
+            variant="ghost"
+            size="xs"
+            onClick="conversationOpen = !conversationOpen; writeLocalStorage('bram.conversationOpen', conversationOpen ? '1' : '0')" />
         </HStack>
         <HStack
           when="{agentStatus.value &amp;&amp; agentStatus.value.state === 'working' &amp;&amp; !pendingMenu}"
@@ -737,6 +744,7 @@
       </VStack>
 
       <VStack
+        when="{conversationOpen}"
         paddingLeft="$space-3"
         gap="$space-3"
         overflowY="auto"

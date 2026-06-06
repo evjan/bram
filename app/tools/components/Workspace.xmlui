@@ -592,7 +592,6 @@
                     onCleanup="setWorklistVoiceTarget('message-agent')"
                     onClick="setWorklistVoiceTarget('feedback')"
                     onGotFocus="setWorklistVoiceTarget('feedback')"
-                    onDidChange="() => setWorklistVoiceTarget('feedback')"
                     resize="vertical"
                     minRows="2"
                     maxRows="16"
@@ -1046,8 +1045,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
               width="*"
               onInit="setWorklistVoiceTarget('new-item')"
               onClick="setWorklistVoiceTarget('new-item')"
-              onGotFocus="setWorklistVoiceTarget('new-item')"
-              onDidChange="() => setWorklistVoiceTarget('new-item')" />
+              onGotFocus="setWorklistVoiceTarget('new-item')" />
             <Button
               label="{newItemVoiceRecording ? '⏹ stop' : '🎤 voice'}"
               variant="{newItemVoiceRecording ? 'solid' : 'outlined'}"

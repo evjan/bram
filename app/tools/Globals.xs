@@ -1334,7 +1334,9 @@ function isWorklistTextVoiceTarget(target) {
 }
 
 function setWorklistVoiceTarget(target) {
-  worklistVoiceTarget = target || '';
+  const next = target || '';
+  if (worklistVoiceTarget === next) return;
+  worklistVoiceTarget = next;
   iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'target' });
 }
 

@@ -1284,6 +1284,22 @@ function worklistSubmittedMatches(exchangeUserText, submitted) {
   return norm(exchangeUserText) === norm(submitted);
 }
 
+// Returns true when the agent-turn-killed event should actually clear
+// awaitingResponse. Returns false (and emits the suppression trace) when
+// the kill arrived within the grace window — the host emits `agent-turn-
+// killed` immediately when a structured iterate/approve/drop/new-item
+// payload "kills" the prior idle turn, which would otherwise flip
+// awaitingResponse off and reveal the stale prior agent text via the
+// fallback chain. Legitimate user-triggered kills come much later.
+function shouldClearOnAgentTurnKilled(awaitingResponseSetAt) {
+  const sinceSet = Date.now() - (awaitingResponseSetAt || 0);
+  if (sinceSet > 750) {
+    return true;
+  }
+  iframeTrace('awaiting-kill-suppressed', { sinceSet });
+  return false;
+}
+
 // Per-tab splitter persistence. XMLUI's HSplitter `onResize` actually
 // delivers `[primary, secondary]` as a two-element array (the docs at
 // https://docs.xmlui.org/components/Splitter claim `primarySize:

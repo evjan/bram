@@ -27,6 +27,7 @@
   var.lastConversationSig="{''}"
   var.messageSentAtText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
+  var.awaitingResponseSetAt="{0}"
   var.conversationOpen="{readLocalStorage('bram.conversationOpen', '1') !== '0'}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}">
@@ -125,6 +126,10 @@
       const text = data && data.text;
       if (text && text !== lastAssistantStableText) {
         lastAssistantStableText = text;
+        if (awaitingResponse) {
+          awaitingResponse = false;
+          clearWorklistAwaiting(false);
+        }
       }
     }" />
   <!-- Same derive-at-the-boundary shape as lastAssistantTextDS: replaces
@@ -148,8 +153,12 @@
       const exchangeTools = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-5);
       const exchangeMatchesSubmitted = worklistSubmittedMatches(exchangeUser, submitted);
       const user = awaitingResponse &amp;&amp; submitted ? submitted : (exchangeUser || submitted);
-      const assistant = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? '' : (exchangeAssistant || lastAssistantStableText || '').trim();
-      const source = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? 'awaiting' : (exchangeAssistant ? 'last-exchange' : (assistant ? 'last-assistant-text' : 'none'));
+      const assistant = awaitingResponse
+        ? (exchangeMatchesSubmitted ? exchangeAssistant : '')
+        : (exchangeAssistant || lastAssistantStableText || '').trim();
+      const source = awaitingResponse
+        ? (exchangeMatchesSubmitted ? (exchangeAssistant ? 'last-exchange' : 'awaiting') : 'awaiting')
+        : (exchangeAssistant ? 'last-exchange' : (assistant ? 'last-assistant-text' : 'none'));
       const toolsSig = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? '' : exchangeTools.map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|');
       const sig = user + '\n---\n' + toolsSig + '\n---\n' + assistant;
       if (sig !== lastConversationSig) {
@@ -194,7 +203,7 @@
       }
     });
     subscribeTauriEvent('__bramWorkspaceAgentTurnKilledUnsub', 'agent-turn-killed', () => {
-      if (awaitingResponse) {
+      if (awaitingResponse &amp;&amp; shouldClearOnAgentTurnKilled(awaitingResponseSetAt)) {
         awaitingResponse = false;
         writeLocalStorage('bram.awaitingResponse', '');
       }
@@ -642,7 +651,7 @@
                       label="Approve"
                       size="xs"
                       enabled="{!submitting && !!selected && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed')}"
-                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, feedback)); })()" />
+                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = Date.now(); } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, feedback)); })()" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -657,7 +666,7 @@
                       label="Iterate"
                       size="xs"
                       enabled="{!submitting && !!selected && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed') && ((feedbackBox &amp;&amp; feedbackBox.value) || '').trim().length > 0}"
-                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); sendIterateWithFeedbackDraft(worklist.value.items, selected, feedback)" />
+                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = Date.now(); } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); sendIterateWithFeedbackDraft(worklist.value.items, selected, feedback)" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -672,7 +681,7 @@
                       label="Drop"
                       size="xs"
                       enabled="{!submitting && !!selected}"
-                      onClick="iframeTrace('click', {target: 'drop', item: selected}); const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, feedback))" />
+                      onClick="iframeTrace('click', {target: 'drop', item: selected}); const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = Date.now(); } submittedItemId = selected; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, feedback))" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -741,7 +750,7 @@
         storageKey="bram.worklistMessageDraftForm"
         dataAfterSubmit="clear"
         onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
-        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; } }">
+        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = Date.now(); } }">
         <property name="buttonRowTemplate"><Fragment/></property>
         <HStack gap="$space-2" verticalAlignment="end">
           <TextArea
@@ -775,7 +784,17 @@
         var.conversationUserText="{awaitingResponse &amp;&amp; submittedWorklistMessage ? submittedWorklistMessage : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || submittedWorklistMessage || '').trim())}"
         var.conversationExchangeMatchesSubmitted="{worklistSubmittedMatches(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage)}"
         var.conversationTools="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-5)}"
-        var.conversationAssistantText="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? '' : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim())}">
+        var.conversationAssistantText="{awaitingResponse ? (conversationExchangeMatchesSubmitted ? ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').trim() : '') : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim())}">
+        <ChangeListener
+          listenTo="{conversationAssistantText}"
+          onDidChange="() => iframeTrace('conv-pane-assistant', {
+            awaiting: awaitingResponse ? 1 : 0,
+            matches: conversationExchangeMatchesSubmitted ? 1 : 0,
+            len: (conversationAssistantText || '').length,
+            preview: (conversationAssistantText || '').slice(0, 60),
+            exchAssistantLen: ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').length,
+            stableLen: (lastAssistantStableText || '').length
+          })" />
         <VStack
           gap="$space-1"
           when="{conversationUserText}">
@@ -922,11 +941,11 @@
           <Button
             label="Confirm"
             tooltip="Commit, push this commit through the verified close helper, then close"
-            onClick="const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const display = recordWorklistFeedbackConversation(feedback); if (display) { submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; } submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines(feedback, buildCloseIssueLines(closeIssuesState), true))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const display = recordWorklistFeedbackConversation(feedback); if (display) { submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; awaitingResponseSetAt = Date.now(); } submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines(feedback, buildCloseIssueLines(closeIssuesState), true))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Approve without closing"
             variant="outlined"
-            onClick="const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const display = recordWorklistFeedbackConversation(feedback); if (display) { submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; } submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, feedback)); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const display = recordWorklistFeedbackConversation(feedback); if (display) { submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; awaitingResponseSetAt = Date.now(); } submittedItemId = closeIssuesItemRef.id; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, feedback)); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Cancel"
             variant="ghost"
@@ -1091,6 +1110,10 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
                 newItemStartSig = lastWorklistSig;
                 newItemTurnEnded = false;
                 newItemSubmitting = true;
+                submittedWorklistMessage = msg;
+                messageSentAtText = new Date().toLocaleTimeString();
+                awaitingResponse = true;
+                awaitingResponseSetAt = Date.now();
                 toTurn(msg);
                 newItemHelp = false; newItemIssue = null; newItemVoiceRecording = false; setWorklistVoiceTarget('message-agent'); newItemBox.setValue('');
               })()" />

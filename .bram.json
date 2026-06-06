@@ -1,6 +1,10 @@
 {
   "shell": {
-    "agent": "agent --continue"
+    "agent": "claude --continue"
+  },
+  "traces": {
+    "enabled": true,
+    "inspectorTap": false
   },
   "ui": {
     "targetAppMinimized": true

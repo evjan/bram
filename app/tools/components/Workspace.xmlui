@@ -18,6 +18,7 @@
   var.newItemVoiceRecording="{false}"
   var.pendingMenu="{null}"
   var.openToolId="{null}"
+  var.openTool="{null}"
   var.inflightTick="{0}"
   var.lastAssistantTick="{0}"
   var.worklistTurnsTick="{0}"
@@ -221,9 +222,8 @@
       marginBottom-title-ModalDialog="$space-4">
     <ModalDialog
       when="{!!openToolId}"
-      onClose="openToolId = null"
+      onClose="openTool = null; openToolId = null"
       title="Tool"
-      var.openTool="{null}"
       var.openDetail="{worklistToolDetailDS.value}"
       var.modalInput="{openDetail &amp;&amp; openDetail.input}"
       var.modalResult="{openDetail &amp;&amp; openDetail.result}">
@@ -235,6 +235,22 @@
           color="$textColor-secondary"
           value="{openTool.summary}" />
         <VStack
+          when="{openTool &amp;&amp; openTool.name === 'Write' &amp;&amp; modalInput &amp;&amp; modalInput.content}"
+          gap="{0}"
+          padding="$space-3"
+          border="1px solid $color-surface-200"
+          borderRadius="$borderRadius"
+          backgroundColor="$backgroundColor-primary">
+          <Text
+            fontSize="$fontSize-xs"
+            fontWeight="$fontWeight-bold"
+            color="$textColor-secondary"
+            paddingHorizontal="$space-2"
+            value="{modalInput.file_path || 'Content'}" />
+          <Markdown content="{modalInput.content}" />
+        </VStack>
+        <VStack
+          when="{!(openTool &amp;&amp; openTool.name === 'Write' &amp;&amp; modalInput &amp;&amp; modalInput.content)}"
           gap="{0}"
           padding="$space-3"
           border="1px solid $color-surface-200"
@@ -385,6 +401,15 @@
             <DiffView
               when="{pendingMenu.toolCallDiff}"
               text="{(pendingMenu.toolCallDiff || '').slice(0, 20000)}" />
+          </VStack>
+          <VStack
+            when="{pendingMenu.toolCallContent}"
+            maxHeight="20em"
+            overflowY="auto"
+            padding="$space-2"
+            borderRadius="$borderRadius"
+            backgroundColor="$color-surface-100">
+            <Markdown content="{pendingMenu.toolCallContent}" />
           </VStack>
           <VStack
             when="{!pendingMenu.toolCallSignature &amp;&amp; pendingMenu.text}"
@@ -774,7 +799,7 @@
               borderRadius="$borderRadius"
               border="1px solid $borderColor"
               backgroundColor="$color-surface-100">
-              <Link onClick="openToolId = $item.id" noIndicator="true">
+              <Link onClick="openTool = $item; openToolId = $item.id" noIndicator="true">
                 <HStack gap="$space-2" verticalAlignment="center">
                   <Text
                     fontFamily="$fontFamily-monospace"

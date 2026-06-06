@@ -1039,6 +1039,15 @@ struct PtyMenu {
     tool_call_signature: Option<String>,
     #[serde(rename = "toolCallDiff", skip_serializing_if = "Option::is_none")]
     tool_call_diff: Option<String>,
+    // Raw markdown-rendering content for tools that produce file
+    // content the user benefits from previewing in-place — `Write`
+    // is the only case today. Surfaced as `<Markdown>` in the
+    // pendingMenu render so the user sees what's about to be
+    // written without opening a separate modal. Populated from
+    // `lookup_pending_tool_call`'s JSONL `input.content` for the
+    // Write tool only; other tools leave this `None`.
+    #[serde(rename = "toolCallContent", skip_serializing_if = "Option::is_none")]
+    tool_call_content: Option<String>,
     // Origin of the current `tool_call_signature` for trace introspection.
     // Not serialized to the iframe — purely a host-side bookkeeping field
     // surfaced via the [pty-menu] state=... trace lines.
@@ -1138,6 +1147,7 @@ impl PartialEq for PtyMenu {
             && self.options.len() == other.options.len()
             && self.tool_call_signature.is_some() == other.tool_call_signature.is_some()
             && self.tool_call_diff.is_some() == other.tool_call_diff.is_some()
+            && self.tool_call_content.is_some() == other.tool_call_content.is_some()
     }
 }
 impl Eq for PtyMenu {}
@@ -2428,6 +2438,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             }
         }
         menu.tool_call_diff = lookup.diff;
+        menu.tool_call_content = lookup.content;
     }
 
     // Post-click suppression: if the user just dismissed a menu for
@@ -2615,7 +2626,16 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             // (200ms, 800ms) and emits an updated payload when the
             // signature arrives. Refs #170.
             if let Some(m) = menu.as_ref() {
-                if m.tool != PENDING_TOOL && m.tool_call_signature.is_none() {
+                let needs_signature =
+                    m.tool != PENDING_TOOL && m.tool_call_signature.is_none();
+                // Write produces a `Write(<path>)` signature via PTY-scrape,
+                // so the signature-missing branch above does not fire — but
+                // the markdown content lives only in JSONL `input.content`,
+                // which the same race can delay. Trigger the recheck loop
+                // so `tool_call_content` gets filled in on the next pass.
+                let needs_write_content =
+                    m.tool == "Write" && m.tool_call_content.is_none();
+                if needs_signature || needs_write_content {
                     recheck_target = Some(m.tool.clone());
                 }
             }
@@ -2729,7 +2749,12 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
             let still_needs = {
                 if let Ok(menu) = pty_menu_cell().lock() {
                     menu.as_ref()
-                        .map(|m| m.tool == target_tool && m.tool_call_signature.is_none())
+                        .map(|m| {
+                            m.tool == target_tool
+                                && (m.tool_call_signature.is_none()
+                                    || (m.tool == "Write"
+                                        && m.tool_call_content.is_none()))
+                        })
                         .unwrap_or(false)
                 } else {
                     false
@@ -2755,20 +2780,35 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                     ),
                 );
             }
-            if lookup.signature.is_none() {
+            if lookup.signature.is_none() && lookup.content.is_none() {
                 continue;
             }
             // Update under the lock, re-checking the conditions in case
             // the cached menu shifted between the unlocked lookup and
-            // the locked write.
+            // the locked write. Any of signature / diff / content can be
+            // the newly-arrived field that triggers the re-emit, so each
+            // is filled in independently when it was previously missing.
             let mut emit_payload: Option<Option<PtyMenu>> = None;
             if let Ok(mut menu) = pty_menu_cell().lock() {
                 if let Some(m) = menu.as_mut() {
-                    if m.tool == target_tool && m.tool_call_signature.is_none() {
-                        m.tool_call_signature = lookup.signature.clone();
-                        m.tool_call_diff = lookup.diff.clone();
-                        m.signature_source = Some("jsonl");
-                        emit_payload = Some(menu.clone());
+                    if m.tool == target_tool {
+                        let mut changed = false;
+                        if m.tool_call_signature.is_none() && lookup.signature.is_some() {
+                            m.tool_call_signature = lookup.signature.clone();
+                            m.signature_source = Some("jsonl");
+                            changed = true;
+                        }
+                        if m.tool_call_diff.is_none() && lookup.diff.is_some() {
+                            m.tool_call_diff = lookup.diff.clone();
+                            changed = true;
+                        }
+                        if m.tool_call_content.is_none() && lookup.content.is_some() {
+                            m.tool_call_content = lookup.content.clone();
+                            changed = true;
+                        }
+                        if changed {
+                            emit_payload = Some(menu.clone());
+                        }
                     }
                 }
             }
@@ -3324,6 +3364,7 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
                         options,
                         tool_call_signature: signature,
                         tool_call_diff: None,
+                        tool_call_content: None,
                         signature_source,
                     });
                 }
@@ -3378,6 +3419,7 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
             options,
             tool_call_signature: signature,
             tool_call_diff: None,
+            tool_call_content: None,
             signature_source,
         })
     })();
@@ -7660,6 +7702,11 @@ struct PendingToolCall {
 struct PendingToolCallLookup {
     signature: Option<String>,
     diff: Option<String>,
+    // Raw markdown-rendering content (currently Write `input.content`
+    // only) passed through to `PtyMenu.tool_call_content` so the
+    // iframe can render it as `<Markdown>` in the pendingMenu
+    // approval surface.
+    content: Option<String>,
     reason: &'static str,
     tail_bytes: usize,
 }
@@ -7977,6 +8024,7 @@ fn lookup_pending_tool_call<R: tauri::Runtime>(app: &AppHandle<R>) -> PendingToo
         return PendingToolCallLookup {
             signature: None,
             diff: None,
+            content: None,
             reason: "no-session-path",
             tail_bytes: 0,
         };
@@ -7985,6 +8033,7 @@ fn lookup_pending_tool_call<R: tauri::Runtime>(app: &AppHandle<R>) -> PendingToo
         return PendingToolCallLookup {
             signature: None,
             diff: None,
+            content: None,
             reason: "open-failed",
             tail_bytes: 0,
         };
@@ -7993,6 +8042,7 @@ fn lookup_pending_tool_call<R: tauri::Runtime>(app: &AppHandle<R>) -> PendingToo
         return PendingToolCallLookup {
             signature: None,
             diff: None,
+            content: None,
             reason: "metadata-failed",
             tail_bytes: 0,
         };
@@ -8013,6 +8063,7 @@ fn lookup_pending_tool_call<R: tauri::Runtime>(app: &AppHandle<R>) -> PendingToo
         return PendingToolCallLookup {
             signature: None,
             diff: None,
+            content: None,
             reason: "seek-failed",
             tail_bytes: 0,
         };
@@ -8022,6 +8073,7 @@ fn lookup_pending_tool_call<R: tauri::Runtime>(app: &AppHandle<R>) -> PendingToo
         return PendingToolCallLookup {
             signature: None,
             diff: None,
+            content: None,
             reason: "read-failed",
             tail_bytes: 0,
         };
@@ -8047,15 +8099,27 @@ fn lookup_pending_tool_call<R: tauri::Runtime>(app: &AppHandle<R>) -> PendingToo
             .and_then(|mut f| std::io::Write::write_all(&mut f, snapshot.as_bytes()));
     }
     match result {
-        Some(call) => PendingToolCallLookup {
-            signature: Some(format_pending_tool_call(&call)),
-            diff: pending_tool_call_diff(&call, app),
-            reason: "found",
-            tail_bytes,
-        },
+        Some(call) => {
+            let content = if call.name == "Write" {
+                call.input
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            } else {
+                None
+            };
+            PendingToolCallLookup {
+                signature: Some(format_pending_tool_call(&call)),
+                diff: pending_tool_call_diff(&call, app),
+                content,
+                reason: "found",
+                tail_bytes,
+            }
+        }
         None => PendingToolCallLookup {
             signature: None,
             diff: None,
+            content: None,
             reason: "no-unmatched-tool-use",
             tail_bytes,
         },
@@ -13909,6 +13973,7 @@ mod pty_menu_tests {
             }],
             tool_call_signature: None,
             tool_call_diff: None,
+            tool_call_content: None,
             signature_source: None,
         };
         let after = super::PtyMenu {

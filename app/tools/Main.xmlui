@@ -133,6 +133,13 @@
     <Theme fontSize-Button="$fontSize-md">
       <HStack gap="$space-0_5" verticalAlignment="center" width="100%">
         <HStack width="14rem" minWidth="14rem" verticalAlignment="center" paddingHorizontal="$space-2">
+          <Text
+            when="{(mainAgentStatus.value || enhanceStatus.value) &amp;&amp; !(mainAgentStatus.value &amp;&amp; (mainAgentStatus.value.state === 'working' || mainAgentStatus.value.state === 'finished')) &amp;&amp; ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider))}"
+            fontSize="$fontSize-sm"
+            fontStyle="italic"
+            color="$textColor-secondary"
+            overflowMode="none"
+            value="{(((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider)) === 'claude' ? 'claude code' : ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''))}" />
           <HStack
             when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'working'}"
             gap="$space-1"
@@ -144,7 +151,7 @@
               fontSize="$fontSize-sm"
               fontStyle="italic"
               overflowMode="none"
-              value="{(mainAgentStatus.value.verb || 'working') + '…'}" />
+              value="{(mainAgentStatus.value.provider === 'claude' ? 'claude code' : (mainAgentStatus.value.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.value.verb || 'working') + '…'}" />
             <Text
               fontSize="$fontSize-sm"
               color="$textColor-secondary"
@@ -160,7 +167,7 @@
               fontStyle="italic"
               color="$textColor-secondary"
               overflowMode="none"
-              value="{(mainAgentStatus.value.verb || 'Finished') + (mainAgentStatus.value.elapsedText ? ' · ' + mainAgentStatus.value.elapsedText : '')}" />
+              value="{(mainAgentStatus.value.provider === 'claude' ? 'claude code' : (mainAgentStatus.value.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.value.verb || 'Finished') + (mainAgentStatus.value.elapsedText ? ' · ' + mainAgentStatus.value.elapsedText : '')}" />
           </HStack>
         </HStack>
         <Stack width="1rem" minWidth="1rem" />

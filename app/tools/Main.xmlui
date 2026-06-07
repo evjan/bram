@@ -1,8 +1,9 @@
 <App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.recording="{false}" var.setupCompleteProvider="{''}"
-  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
+  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); subscribeTauriEvent('__bramMainAgentStatusUnsub', 'agent-status-changed', () => { mainAgentStatus.refetch(); }); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
   <DataSource id="appInfo" url="/__app-info" />
+  <DataSource id="mainAgentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
     onDidChange="(c) => { if (c.newValue) { if ($pathname !== '/') navigate('/'); window.scrollAllToTop(); } }" />
@@ -130,7 +131,39 @@
 
   <AppHeader>
     <Theme fontSize-Button="$fontSize-md">
-      <HStack gap="$space-0_5" verticalAlignment="center">
+      <HStack gap="$space-0_5" verticalAlignment="center" width="100%">
+        <HStack width="14rem" minWidth="14rem" verticalAlignment="center" paddingHorizontal="$space-2">
+          <HStack
+            when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'working'}"
+            gap="$space-1"
+            verticalAlignment="center">
+            <Theme size-Spinner="0.85em">
+              <Spinner />
+            </Theme>
+            <Text
+              fontSize="$fontSize-sm"
+              fontStyle="italic"
+              overflowMode="none"
+              value="{(mainAgentStatus.value.verb || 'working') + '…'}" />
+            <Text
+              fontSize="$fontSize-sm"
+              color="$textColor-secondary"
+              overflowMode="none"
+              value="{mainAgentStatus.value.elapsedText || ''}" />
+          </HStack>
+          <HStack
+            when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'finished'}"
+            gap="$space-1"
+            verticalAlignment="center">
+            <Text
+              fontSize="$fontSize-sm"
+              fontStyle="italic"
+              color="$textColor-secondary"
+              overflowMode="none"
+              value="{(mainAgentStatus.value.verb || 'Finished') + (mainAgentStatus.value.elapsedText ? ' · ' + mainAgentStatus.value.elapsedText : '')}" />
+          </HStack>
+        </HStack>
+        <Stack width="1rem" minWidth="1rem" />
         <Theme fontSize-Button="$fontSize-lg">
           <Button
             label="ⓘ"
@@ -184,6 +217,7 @@
           tooltip="Send Esc to interrupt"
           onClick="sendKeys('\x1b')" />
         <Inspector src="{'/__vendor/xs-diff.html?v=' + window.APP_VERSION}" />
+        <SpaceFiller />
       </HStack>
     </Theme>
   </AppHeader>

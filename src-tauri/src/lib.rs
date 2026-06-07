@@ -18896,6 +18896,40 @@ pub fn run() {
                         p.components()
                             .any(|c| igs.iter().any(|ig| c.as_os_str() == *ig))
                     };
+                    let trace_rel_path = |p: &std::path::Path| {
+                        let rel = p
+                            .strip_prefix(&proj_root_path)
+                            .ok()
+                            .map(|r| r.to_string_lossy().replace('\\', "/"))
+                            .unwrap_or_else(|| {
+                                p.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("")
+                                    .to_string()
+                            });
+                        if rel == "resources/bram-traces/bram-trace.log"
+                            || is_bram_trace_archive_rel(&rel)
+                        {
+                            None
+                        } else {
+                            Some(rel)
+                        }
+                    };
+                    let dispatch_trace_path =
+                        || event.paths.iter().find_map(|p| trace_rel_path(p));
+                    let trace_dispatch = |dispatch: &str, fields: &[(&str, String)]| {
+                        if !bram_trace_enabled() {
+                            return;
+                        }
+                        let Some(path) = dispatch_trace_path() else {
+                            return;
+                        };
+                        let mut parts = vec![format!("dispatch={}", dispatch), format!("path={}", path)];
+                        for (key, value) in fields {
+                            parts.push(format!("{}={}", key, value));
+                        }
+                        append_bram_trace_line(&app_handle, "watcher", &parts.join(" "));
+                    };
 
                     // [watcher] trace: one record per path per notify
                     // event, before any dispatch. Logs project-relative
@@ -18949,6 +18983,7 @@ pub fn run() {
                                 || codex_sessions_dir.as_ref().map_or(false, |sd| p.starts_with(sd)))
                     });
                     if is_session_event {
+                        trace_dispatch("session-jsonl", &[]);
                         // [jsonl] trace: ground-truth signal that the
                         // agent is producing structured output. Lets
                         // #78 analysis tell a premature `[turn-end]`
@@ -19048,6 +19083,7 @@ pub fn run() {
                             || in_bram_dir
                     });
                     if is_enhance_event {
+                        trace_dispatch("enhance-status", &[]);
                         emit_replayable_signal(&app_handle, "enhance-status-changed");
                     }
 
@@ -19065,6 +19101,7 @@ pub fn run() {
                                 .map_or(false, |sd| p.starts_with(sd))
                     });
                     if is_sessions_list_event {
+                        trace_dispatch("sessions-list", &[]);
                         emit_replayable_signal(&app_handle, "sessions-list-changed");
                     }
 
@@ -19083,6 +19120,7 @@ pub fn run() {
                         in_resources && (file == "worklist.json" || in_history || in_drafts)
                     });
                     if is_worklist_change {
+                        trace_dispatch("skip", &[("reason", "worklist-event".to_string())]);
                         // Defer the emit; pending_worklist_since either
                         // starts a fresh 200 ms window or rolls forward
                         // on a continuing burst. The loop's wake check
@@ -19100,6 +19138,7 @@ pub fn run() {
                             && p.components().any(|c| c.as_os_str() == "resources")
                     });
                     if is_feedback_history_change {
+                        trace_dispatch("feedback-history", &[]);
                         emit_replayable_signal(&app_handle, "feedback-history-changed");
                     }
 
@@ -19116,6 +19155,7 @@ pub fn run() {
                     if is_intent_event
                         && matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_))
                     {
+                        trace_dispatch("intent-drain", &[]);
                         drain_worklist_intent(&app_handle);
                     }
 
@@ -19127,6 +19167,7 @@ pub fn run() {
                         p.starts_with(&proj_root_path) && !in_ignored_dir(p)
                     });
                     if is_git_status_event {
+                        trace_dispatch("git-status", &[]);
                         emit_replayable_signal(&app_handle, "git-status-changed");
                     }
 
@@ -19140,9 +19181,11 @@ pub fn run() {
                     });
                     if is_config_event {
                         if last_config_emit.elapsed() < Duration::from_millis(300) {
+                            trace_dispatch("skip", &[("reason", "config-debounce-300ms".to_string())]);
                             continue;
                         }
                         last_config_emit = Instant::now();
+                        trace_dispatch("config-reload", &[]);
                         eprintln!("[project-config] change detected");
                         handle_project_config_reload(&app_handle, &proj_root_path);
                         continue;
@@ -19152,6 +19195,7 @@ pub fn run() {
                         event.kind,
                         EventKind::Modify(_) | EventKind::Create(_)
                     ) {
+                        trace_dispatch("skip", &[("reason", "event-kind".to_string())]);
                         continue;
                     }
                     // Worklist history capture. Worklist writes are otherwise
@@ -19175,10 +19219,12 @@ pub fn run() {
                     if event.paths.iter().all(|p| {
                         p.starts_with(&proj_root_path) && in_ignored_dir(p)
                     }) {
+                        trace_dispatch("skip", &[("reason", "ignored-dir".to_string())]);
                         continue;
                     }
                     // Editors often write twice (atomic save). Debounce 100ms.
                     if last_emit.elapsed() < Duration::from_millis(100) {
+                        trace_dispatch("skip", &[("reason", "debounce-100ms".to_string())]);
                         continue;
                     }
                     last_emit = Instant::now();
@@ -19192,10 +19238,15 @@ pub fn run() {
                         !is_doc && tools_pane_paths.iter().any(|tp| p.starts_with(tp))
                     });
                     if is_tools_event {
+                        trace_dispatch(
+                            "tools-pane",
+                            &[("deferred", pending_tools_since.is_some().to_string())],
+                        );
                         // Defer the emit; pending_tools_since either starts
                         // the debounce window or resets it on burst writes.
                         pending_tools_since = Some(Instant::now());
                     } else {
+                        trace_dispatch("right-pane", &[]);
                         eprintln!("[watcher] change detected, emitting right-pane-reload");
                         trace_emit_signal(&app_handle, "right-pane-reload");
                         let _ = app_handle.emit("right-pane-reload", ());

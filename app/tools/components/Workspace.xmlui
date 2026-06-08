@@ -820,7 +820,7 @@
         paddingLeft="$space-3"
         gap="$space-3"
         overflowY="auto"
-        var.conversationUserText="{awaitingResponse &amp;&amp; submittedWorklistMessage ? submittedWorklistMessage : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || submittedWorklistMessage || '').trim())}"
+        var.conversationUserText="{worklistConversationUserText(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage, awaitingResponse, submittedItemId)}"
         var.conversationExchangeMatchesSubmitted="{worklistSubmittedMatches(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage)}"
         var.conversationKey="{(submittedWorklistMessage || submittedItemId || ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '')).trim()}"
         var.conversationRawTools="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-3)}"

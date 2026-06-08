@@ -444,22 +444,24 @@ function _traceHelperTiming(name, t0, extra) {
 
 // Clean a user turn for transcript display: strip protocol prefixes
 // (`voice: `, `talk: `) so spoken / typed content reads as plain text;
-// summarize structured `approved:` / `drop:` payloads to a one-line
+// summarize structured Worklist lifecycle payloads to a one-line
 // glyph + count instead of dumping JSON. Anything else passes through.
 function formatUserTurnForTranscript(text) {
   if (!text) return '';
   const stripped = text.replace(/^(voice|talk):\s*/, '');
   if (stripped !== text) return stripped;
-  const m = text.match(/^(approved|drop):\s*(.*)$/s);
+  const m = text.match(/^(approved|drop|iterate):\s*(.*)$/s);
   if (m) {
     const kind = m[1];
     try {
       const data = JSON.parse(m[2]);
+      const n = ((data.items || data.ids || [])).length;
       if (kind === 'approved') {
-        const n = (data.items || []).length;
         return '✓ Approved ' + n + ' item' + (n === 1 ? '' : 's');
       }
-      const n = (data.ids || []).length;
+      if (kind === 'iterate') {
+        return 'Iterated ' + n + ' item' + (n === 1 ? '' : 's');
+      }
       return '✕ Dropped ' + n + ' item' + (n === 1 ? '' : 's');
     } catch (e) {
       return text;
@@ -1344,6 +1346,17 @@ function worklistSubmittedMatches(exchangeUserText, submitted) {
   if (!submitted) return false;
   const norm = s => (s || '').replace(/\s+/g, ' ').trim();
   return norm(exchangeUserText) === norm(submitted);
+}
+
+function worklistConversationUserText(exchangeUserText, submitted, awaiting, submittedItemId) {
+  const exchange = String(exchangeUserText || '').trim();
+  const display = String(submitted || '').trim();
+  if (awaiting && display) return display;
+  if (isWorklistActionPayloadText(exchange)) {
+    if (display && submittedItemId) return display;
+    return formatUserTurnForTranscript(exchange);
+  }
+  return (exchange || display).trim();
 }
 
 // Returns true when the agent-turn-killed event should actually clear

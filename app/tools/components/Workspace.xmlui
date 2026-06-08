@@ -17,6 +17,7 @@
   var.newItemIssue="{null}"
   var.newItemVoiceRecording="{false}"
   var.pendingMenu="{null}"
+  var.agentIsWorking="{false}"
   var.openToolId="{null}"
   var.openTool="{null}"
   var.inflightTick="{0}"
@@ -242,6 +243,10 @@
     subscribeTauriEvent('__bramPtyMenuUnsub', 'pty-menu-changed', (e) => {
       pendingMenu = e &amp;&amp; e.payload ? e.payload : null;
       iframeTrace('listener-fired', ptyMenuTracePayload(pendingMenu));
+    });
+    subscribeTauriEvent('__bramConvPaneAgentStatusUnsub', 'agent-status-changed', (e) => {
+      const p = e &amp;&amp; e.payload;
+      agentIsWorking = !!(p &amp;&amp; p.state === 'working');
     });
 ">
     <Theme
@@ -816,6 +821,7 @@
             </Items>
           </VStack>
         </VStack>
+        <VStack gap="$space-3" opacity="{agentIsWorking ? 0.5 : 1.0}">
         <VStack
           gap="$space-1"
           when="{conversationTools &amp;&amp; conversationTools.length > 0}">
@@ -877,6 +883,7 @@
               </Link>
             </Items>
           </VStack>
+        </VStack>
         </VStack>
       </VStack>
     </HSplitter>

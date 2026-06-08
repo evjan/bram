@@ -301,6 +301,22 @@ def bash_writes(command):
     return False
 
 
+# Issue #176: detect the `gh ... --body @<...>` antipattern. `gh`'s --body
+# takes a literal string, but `@-` and `@path` look like stdin/file refs
+# (curl convention) and silently stash the literal text — comments render
+# as a placeholder smiley. Deny before the malformed command runs.
+_GH_BODY_AT_RX = re.compile(
+    r"(?:^|\s|;|&&|\|\||\|)gh\s.*?--body\s+@\S",
+    re.MULTILINE,
+)
+
+
+def is_gh_body_at_antipattern(command):
+    if not isinstance(command, str):
+        return False
+    return bool(_GH_BODY_AT_RX.search(command))
+
+
 # MCP tool naming convention is `mcp__<server>__<tool>` (verified in
 # codex-rs/core/tests/suite/hooks_mcp.rs). We treat MCP tools as mutation
 # candidates only when the tool-name suffix contains a recognized mutation
@@ -891,6 +907,25 @@ def main():
 
     if tool_name == "Bash":
         cmd = tool_input.get("command") if isinstance(tool_input, dict) else ""
+        # Issue #176: gh --body @ antipattern check runs before bash_writes,
+        # so it catches read-only-looking gh commands that would silently
+        # mangle a comment.
+        if is_gh_body_at_antipattern(cmd):
+            m = _GH_BODY_AT_RX.search(cmd or "")
+            matched = m.group(0).strip() if m else ""
+            _trace_hook(
+                "PreToolUse",
+                "Bash",
+                (cmd or "")[:200],
+                "deny",
+                "gh-body-at-antipattern",
+                cwd,
+            )
+            deny(
+                "gh --body takes a literal string, not stdin or a file reference.\n"
+                "Use --body-file - (stdin) or --body-file <path> instead.\n"
+                f"Detected: {matched}"
+            )
         if not bash_writes(cmd):
             allow()
         if "resources/worklist-drafts/" in (cmd or ""):

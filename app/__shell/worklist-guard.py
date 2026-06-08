@@ -35,6 +35,22 @@ AUTH_REL = "resources/.worklist-authorization.json"
 BYPASS_TTL_SECONDS = 60 * 60  # direct-edit auth records are fresh for 1h
 
 
+# Issue #176: detect the `gh ... --body @<...>` antipattern. `gh`'s --body
+# takes a literal string, but `@-` and `@path` look like stdin/file refs
+# (curl convention) and silently stash the literal text — comments render
+# as a placeholder smiley. Deny before the malformed command runs.
+_GH_BODY_AT_RX = re.compile(
+    r"(?:^|\s|;|&&|\|\||\|)gh\s.*?--body\s+@\S",
+    re.MULTILINE,
+)
+
+
+def is_gh_body_at_antipattern(command):
+    if not isinstance(command, str):
+        return False
+    return bool(_GH_BODY_AT_RX.search(command))
+
+
 def _trace_hook(event, tool, target, decision, reason, cwd=None):
     """Issue #49 [hook] trace + issue #95 phantom-write diagnostic.
 
@@ -367,6 +383,33 @@ def deny_mechanical_worklist_change(removed, status_changed):
 def main():
     payload = json.load(sys.stdin)
     tool_name = payload.get("tool_name", "")
+
+    # Issue #176: gh --body @ antipattern check fires on any Bash call.
+    # Bash is otherwise out of scope for this hook (worklist coverage on
+    # Bash is #109/#118 territory) — we exit 0 after the check either way.
+    if tool_name == "Bash":
+        ti = payload.get("tool_input", {})
+        command = ti.get("command", "") if isinstance(ti, dict) else ""
+        if is_gh_body_at_antipattern(command):
+            m = _GH_BODY_AT_RX.search(command)
+            matched = m.group(0).strip() if m else ""
+            preview = command[:200]
+            _trace_hook(
+                "PreToolUse",
+                "Bash",
+                preview,
+                "deny",
+                "gh-body-at-antipattern",
+            )
+            print(
+                "gh --body takes a literal string, not stdin or a file reference.\n"
+                "Use --body-file - (stdin) or --body-file <path> instead.\n"
+                f"Detected: {matched}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        sys.exit(0)
+
     if tool_name not in ("Write", "Edit"):
         sys.exit(0)
     # Stash for downstream deny-path trace calls (deny_coverage and

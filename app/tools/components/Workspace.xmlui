@@ -25,6 +25,7 @@
   var.worklistTurnsTick="{0}"
   var.lastAssistantTickAt="{0}"
   var.lastAssistantStableText="{''}"
+  var.staleAssistantBaseline="{''}"
   var.lastConversationSig="{''}"
   var.messageSentAtText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
@@ -153,6 +154,9 @@
     url="/__current-turn-edits?t={lastAssistantTick}" />
 
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" when="{conversationOpen}" />
+  <ChangeListener
+    listenTo="{agentIsWorking}"
+    onDidChange="(c) => { if (c.newValue) { staleAssistantBaseline = lastAssistantStableText || ''; } }" />
   <ChangeListener
     listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {
@@ -864,7 +868,7 @@
             </Items>
           </VStack>
         </VStack>
-        <VStack gap="$space-3" opacity="{agentIsWorking &amp;&amp; !conversationExchangeMatchesSubmitted ? 0.5 : 1.0}">
+        <VStack gap="$space-3" opacity="{agentIsWorking &amp;&amp; (lastAssistantStableText || '') === staleAssistantBaseline ? 0.5 : 1.0}">
         <VStack
           gap="$space-1"
           when="{conversationAssistantText || (conversationAssistantImages &amp;&amp; conversationAssistantImages.length > 0)}">

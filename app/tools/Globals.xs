@@ -1468,19 +1468,26 @@ function appendVoiceTranscript(component, transcript) {
 // clicks a toolbar button (1/2/3/Yes/No/Esc), so post-hoc analysis
 // can tell whether the click landed on a menu that was actually
 // still open vs one the host had already cleared.
-var __toolbarPendingMenuPresent = false;
-var __toolbarPendingMenuAtMs = 0;
-
+// State lives on `window` rather than as xs `var` declarations. The
+// XMLUI evaluator rejected the `var` form ("Left value variable ...
+// not found in the scope") when this code path was reached via
+// `subscribeTauriEvent` passing the function by reference — different
+// scope-lookup path than the inline `onInit="someFn()"` pattern that
+// the worklistVoice* vars use. `window.` is plain JS at runtime and
+// bypasses the xs scope chain entirely. Confirmed existing pattern:
+// see `window.setAppFontSize` in Main.xmlui:185.
 function setToolbarPendingMenuFromEvent(e) {
-  __toolbarPendingMenuPresent = !!(e && e.payload);
-  __toolbarPendingMenuAtMs = Date.now();
+  window.__toolbarPendingMenuPresent = !!(e && e.payload);
+  window.__toolbarPendingMenuAtMs = Date.now();
 }
 
 function traceToolbarKey(key) {
   iframeTrace('toolbar-key', {
     key,
-    menuPresent: __toolbarPendingMenuPresent ? 1 : 0,
-    menuAgeMs: __toolbarPendingMenuAtMs ? (Date.now() - __toolbarPendingMenuAtMs) : -1
+    menuPresent: window.__toolbarPendingMenuPresent ? 1 : 0,
+    menuAgeMs: window.__toolbarPendingMenuAtMs
+      ? (Date.now() - window.__toolbarPendingMenuAtMs)
+      : -1
   });
 }
 

@@ -1213,6 +1213,28 @@ function restoreWorklistDraft() {
   return readLocalStorage('bram.worklistMessageDraft', '');
 }
 
+function persistWorklistDraftCursor(component) {
+  if (!component || typeof component.selectionStart !== 'number') return;
+  writeLocalStorage('bram.worklistMessageDraftCursor', JSON.stringify({
+    start: component.selectionStart,
+    end: typeof component.selectionEnd === 'number'
+      ? component.selectionEnd
+      : component.selectionStart,
+    direction: component.selectionDirection || 'none'
+  }));
+}
+
+function restoreWorklistDraftCursor(component) {
+  if (!component || typeof component.setSelectionRange !== 'function') return false;
+  const raw = readLocalStorage('bram.worklistMessageDraftCursor', '');
+  if (!raw) return false;
+  let saved;
+  try { saved = JSON.parse(raw); } catch (e) { return false; }
+  if (!saved || typeof saved.start !== 'number') return false;
+  const currentLength = String(component.value || '').length;
+  return restoreTextSelection(component, saved, currentLength, 0);
+}
+
 // Recency-gated restore of the awaiting gate so hot-reloading the
 // iframe in the middle of a real turn doesn't drop the user back to
 // the stale prior agent text. Window deliberately generous (5 min)
@@ -1266,6 +1288,7 @@ function submitWorklistMessage(text, baseline) {
   iframeTrace('message-agent-submit', { stage: 'after-toTurn', chars: message.length, sentAt });
   writeLocalStorage('bram.awaitingResponse', '');
   writeLocalStorage('bram.worklistMessageDraft', '');
+  writeLocalStorage('bram.worklistMessageDraftCursor', '');
   writeLocalStorage('bram.worklistSubmittedMessage', message);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
   return message;
@@ -1280,6 +1303,7 @@ function submitWorklistMessageFast(text) {
   iframeTrace('message-agent-submit', { stage: 'after-toTurn', chars: message.length, sentAt });
   const baseline = 0;
   writeLocalStorage('bram.worklistMessageDraft', '');
+  writeLocalStorage('bram.worklistMessageDraftCursor', '');
   writeLocalStorage('bram.worklistSubmittedMessage', message);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
   return { message, baseline, sentAtText: new Date().toLocaleTimeString() };

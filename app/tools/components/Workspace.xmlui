@@ -151,7 +151,6 @@
     id="currentTurnEditsDS"
     url="/__current-turn-edits?t={lastAssistantTick}" />
 
-  <DataSource id="agentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" when="{conversationOpen}" />
   <ChangeListener
     listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (awaitingResponse ? '1' : '0')}"
@@ -161,7 +160,7 @@
       const exchangeAssistant = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').trim();
       const exchangeUserImages = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []);
       const exchangeAssistantImages = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []);
-      const exchangeTools = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-5);
+      const exchangeTools = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-3);
       const exchangeMatchesSubmitted = worklistSubmittedMatches(exchangeUser, submitted);
       const user = awaitingResponse &amp;&amp; submitted ? submitted : (exchangeUser || submitted);
       const assistant = awaitingResponse
@@ -244,9 +243,7 @@
       pendingMenu = e &amp;&amp; e.payload ? e.payload : null;
       iframeTrace('listener-fired', ptyMenuTracePayload(pendingMenu));
     });
-    subscribeTauriEvent('__bramAgentStatusUnsub', 'agent-status-changed', () => {
-      agentStatus.refetch();
-    });">
+">
     <Theme
       maxWidth-ModalDialog="50vw"
       backgroundColor-ModalDialog="$color-surface-50"
@@ -385,43 +382,6 @@
             variant="ghost"
             size="xs"
             onClick="conversationOpen = !conversationOpen; writeLocalStorage('bram.conversationOpen', conversationOpen ? '1' : '0')" />
-        </HStack>
-        <HStack
-          when="{agentStatus.value &amp;&amp; agentStatus.value.state === 'working' &amp;&amp; !pendingMenu}"
-          gap="$space-2"
-          verticalAlignment="center"
-          padding="$space-1">
-          <Theme size-Spinner="1em">
-            <Spinner />
-          </Theme>
-          <Text
-            fontStyle="italic"
-            overflowMode="none"
-            value="{(agentStatus.value.verb || 'working') + '…'}" />
-          <Text
-            when="{!pendingMenu}"
-            fontSize="$fontSize-sm"
-            overflowMode="none"
-            color="$textColor-secondary"
-            value="{agentStatus.value.elapsedText || ''}" />
-          <Text
-            when="{agentStatus.value.substate &amp;&amp; !pendingMenu}"
-            fontSize="$fontSize-sm"
-            fontStyle="italic"
-            overflowMode="none"
-            color="$textColor-secondary"
-            value="· {agentStatus.value.substate}" />
-        </HStack>
-        <HStack
-          when="{agentStatus.value &amp;&amp; agentStatus.value.state === 'finished' &amp;&amp; !pendingMenu}"
-          gap="$space-2"
-          verticalAlignment="center"
-          padding="$space-1">
-          <Text
-            fontStyle="italic"
-            overflowMode="none"
-            color="$textColor-secondary"
-            value="{(agentStatus.value.verb || 'Finished') + (agentStatus.value.elapsedText ? ' · ' + agentStatus.value.elapsedText : '')}" />
         </HStack>
         <VStack
           when="{pendingMenu}"
@@ -822,7 +782,7 @@
         overflowY="auto"
         var.conversationUserText="{awaitingResponse &amp;&amp; submittedWorklistMessage ? submittedWorklistMessage : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || submittedWorklistMessage || '').trim())}"
         var.conversationExchangeMatchesSubmitted="{worklistSubmittedMatches(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage)}"
-        var.conversationTools="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-5)}"
+        var.conversationTools="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-3)}"
         var.conversationAssistantText="{awaitingResponse ? (conversationExchangeMatchesSubmitted ? ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').trim() : '') : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '').trim())}"
         var.conversationUserImages="{awaitingResponse &amp;&amp; submittedWorklistMessage &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || [])}"
         var.conversationAssistantImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []}">
@@ -857,41 +817,54 @@
         </VStack>
         <VStack
           gap="$space-1"
+          when="{conversationTools &amp;&amp; conversationTools.length > 0}">
+          <Text
+            fontWeight="$fontWeight-bold"
+            color="$color-success-700"
+            value="Agent: Tool uses" />
+          <VStack
+            height="9.5rem"
+            overflowY="auto"
+            gap="$space-1">
+            <Items data="{conversationTools}">
+              <VStack
+                gap="$space-1"
+                padding="$space-2"
+                borderRadius="$borderRadius"
+                border="1px solid $borderColor"
+                backgroundColor="$color-surface-100">
+                <Link onClick="openTool = $item; openToolId = $item.id" noIndicator="true">
+                  <HStack gap="$space-2" verticalAlignment="center">
+                    <Text
+                      fontFamily="$fontFamily-monospace"
+                      fontSize="$fontSize-xs"
+                      fontWeight="$fontWeight-bold"
+                      paddingHorizontal="$space-1_5"
+                      paddingVertical="$space-0_5"
+                      borderRadius="$borderRadius"
+                      backgroundColor="$color-surface-200"
+                      value="{$item.name || 'Tool'}" />
+                    <Text fontSize="$fontSize-sm" value="{$item.summary || ''}" />
+                    <SpaceFiller />
+                    <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-xs" color="$textColor-secondary" value="↗" />
+                  </HStack>
+                </Link>
+                <Text
+                  when="{$item.errored &amp;&amp; $item.errorText}"
+                  color="$color-danger-700"
+                  fontSize="$fontSize-sm"
+                  value="{$item.errorText}" />
+              </VStack>
+            </Items>
+          </VStack>
+        </VStack>
+        <VStack
+          gap="$space-1"
           when="{conversationAssistantText || (conversationAssistantImages &amp;&amp; conversationAssistantImages.length > 0)}">
           <Text
             fontWeight="$fontWeight-bold"
             color="$color-success-700"
-            value="Agent" />
-          <Items data="{conversationTools}">
-            <VStack
-              gap="$space-1"
-              padding="$space-2"
-              borderRadius="$borderRadius"
-              border="1px solid $borderColor"
-              backgroundColor="$color-surface-100">
-              <Link onClick="openTool = $item; openToolId = $item.id" noIndicator="true">
-                <HStack gap="$space-2" verticalAlignment="center">
-                  <Text
-                    fontFamily="$fontFamily-monospace"
-                    fontSize="$fontSize-xs"
-                    fontWeight="$fontWeight-bold"
-                    paddingHorizontal="$space-1_5"
-                    paddingVertical="$space-0_5"
-                    borderRadius="$borderRadius"
-                    backgroundColor="$color-surface-200"
-                    value="{$item.name || 'Tool'}" />
-                  <Text fontSize="$fontSize-sm" value="{$item.summary || ''}" />
-                  <SpaceFiller />
-                  <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-xs" color="$textColor-secondary" value="↗" />
-                </HStack>
-              </Link>
-              <Text
-                when="{$item.errored &amp;&amp; $item.errorText}"
-                color="$color-danger-700"
-                fontSize="$fontSize-sm"
-                value="{$item.errorText}" />
-            </VStack>
-          </Items>
+            value="Agent: Last response" />
           <Markdown content="{stripImagePaths(conversationAssistantText)}" />
           <VStack gap="$space-2" when="{conversationAssistantImages &amp;&amp; conversationAssistantImages.length > 0}">
             <Items data="{conversationAssistantImages}">

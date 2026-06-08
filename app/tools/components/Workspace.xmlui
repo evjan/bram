@@ -195,8 +195,9 @@
         stickyConversationTools = exchangeTools;
         stickyConversationToolsKey = conversationKey;
       }
-      const stickyTools = stickyConversationToolsKey === conversationKey ? (stickyConversationTools || []) : [];
-      const displayTools = exchangeTools.length > 0 ? exchangeTools : (stickyTools.length > 0 ? stickyTools : []);
+      const stickyMatches = stickyConversationToolsKey === conversationKey;
+      const stickyTools = stickyMatches ? (stickyConversationTools || []) : [];
+      const displayTools = exchangeTools.length >= stickyTools.length ? exchangeTools : stickyTools;
       const user = awaitingResponse &amp;&amp; submitted ? submitted : (exchangeUser || submitted);
       const assistant = awaitingResponse
         ? (exchangeMatchesSubmitted ? exchangeAssistant : '')

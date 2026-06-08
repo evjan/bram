@@ -25,7 +25,6 @@
   var.worklistTurnsTick="{0}"
   var.lastAssistantTickAt="{0}"
   var.lastAssistantStableText="{''}"
-  var.lastStableTools="{[]}"
   var.lastConversationSig="{''}"
   var.messageSentAtText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
@@ -153,11 +152,7 @@
     id="currentTurnEditsDS"
     url="/__current-turn-edits?t={lastAssistantTick}" />
 
-  <DataSource
-    id="lastExchangeDS"
-    url="/__last-exchange?t={lastAssistantTick}"
-    when="{conversationOpen}"
-    onLoaded="(data) => { const t = (data &amp;&amp; data.tools) || []; if (t.length > 0) lastStableTools = t; }" />
+  <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" when="{conversationOpen}" />
   <ChangeListener
     listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {
@@ -793,7 +788,7 @@
         overflowY="auto"
         var.conversationUserText="{awaitingResponse &amp;&amp; submittedWorklistMessage ? submittedWorklistMessage : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || submittedWorklistMessage || '').trim())}"
         var.conversationExchangeMatchesSubmitted="{worklistSubmittedMatches(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage)}"
-        var.conversationTools="{((((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).length > 0 ? lastExchangeDS.value.tools : (lastStableTools || []))).slice(-3)}"
+        var.conversationTools="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-3)}"
         var.conversationAssistantText="{(((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '')).trim()}"
         var.conversationUserImages="{awaitingResponse &amp;&amp; submittedWorklistMessage &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || [])}"
         var.conversationAssistantImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []}">
@@ -826,7 +821,6 @@
             </Items>
           </VStack>
         </VStack>
-        <VStack gap="$space-3" opacity="{agentIsWorking ? 0.5 : 1.0}">
         <VStack
           gap="$space-1"
           when="{conversationTools &amp;&amp; conversationTools.length > 0}">
@@ -870,6 +864,7 @@
             </Items>
           </VStack>
         </VStack>
+        <VStack gap="$space-3" opacity="{agentIsWorking &amp;&amp; !conversationExchangeMatchesSubmitted ? 0.5 : 1.0}">
         <VStack
           gap="$space-1"
           when="{conversationAssistantText || (conversationAssistantImages &amp;&amp; conversationAssistantImages.length > 0)}">

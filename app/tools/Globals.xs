@@ -1060,13 +1060,14 @@ function settingsInspectorTap(s) {
 function settingsTracingEnabled(s) {
   return !!(s && s.traces && s.traces.enabled);
 }
-// Default ON — only explicit `false` disables. The host
-// settings_view always populates ui.toolsPaneHotReload, so an
-// unset / null value reflects an older config and should keep
-// the historical hot-reload behavior.
+// Default OFF — only explicit `true` enables. Matches the host
+// default; the setting is opt-in. Bram-on-Bram developers turn
+// this on if they want source-edit hot-reload; everyone else
+// experiences no observable difference either way (their edits
+// trigger right-pane-reload, not tools-pane-reload).
 function settingsToolsPaneHotReload(s) {
-  if (!s || !s.ui) return true;
-  return s.ui.toolsPaneHotReload !== false;
+  if (!s || !s.ui) return false;
+  return s.ui.toolsPaneHotReload === true;
 }
 
 // Diff rendering — used by the DiffView component, which all three

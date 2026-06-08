@@ -76,7 +76,7 @@
             size="xs"
             variant="ghost"
             tooltip="About UI"
-            onClick="infoTitle = 'UI'; infoBody = 'Minimize target app — drives the agent pane splitter to give the agent tools maximum room. The target app stays mounted at the splitter’s minimum height — distinct from hiding it entirely.&#10;&#10;Agent-pane hot-reload — when on, the agent pane reloads automatically whenever files under app/tools/ change on disk. When off, source-code edits to Bram itself (Workspace.xmlui, Globals.xs, etc.) do not appear until you reload manually (Cmd+R in the agent pane). Suppresses the blank-pane cascade documented in #182 incident 7. Does not affect the target app on the right, which always hot-reloads on project-file changes. Persists in .bram.json under ui.toolsPaneHotReload; default on.'; settingInfoDialog.open()" />
+            onClick="infoTitle = 'UI'; infoBody = 'Minimize target app — drives the agent pane splitter to give the agent tools maximum room. The target app stays mounted at the splitter’s minimum height — distinct from hiding it entirely.&#10;&#10;Agent-pane hot-reload — when on, the agent pane reloads automatically whenever files under app/tools/ change on disk. When off, source-code edits to Bram itself (Workspace.xmlui, Globals.xs, etc.) do not appear until you reload manually (Cmd+R in the agent pane). Default off — Bram-on-Bram development is the only context this affects (target-app developers route edits through right-pane-reload, which is unconditional). Suppresses the blank-pane cascade documented in #182 incident 7. Persists in .bram.json under ui.toolsPaneHotReload.'; settingInfoDialog.open()" />
         </HStack>
         <Switch
           label="Minimize target app"

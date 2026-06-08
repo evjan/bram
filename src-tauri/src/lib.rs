@@ -5590,16 +5590,17 @@ fn project_config_batch_commit_actions(config: Option<ProjectConfig>) -> bool {
 }
 
 // #182 incident 7 follow-up: master toggle for agent-pane source hot-reload.
-// Default `true`; only an explicit `false` in .bram.json `ui.toolsPaneHotReload`
-// disables. Suppresses every `tools-pane-reload` emit when off so heavy
-// agent-edit cycles do not cascade into blank-pane windows. `right-pane-reload`
-// is unaffected — target-app hot-reload remains the Bram value prop.
+// Default `false`; only an explicit `true` in .bram.json `ui.toolsPaneHotReload`
+// enables. The setting only affects users who edit files under app/tools/
+// (Bram-on-Bram development). Target-app developers don't observe a
+// difference — their project edits route through `right-pane-reload`, which
+// is unaffected.
 fn tools_pane_hot_reload_enabled<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
     project_root(Some(app))
         .and_then(|root| load_project_config(&root))
         .and_then(|c| c.ui)
         .and_then(|u| u.tools_pane_hot_reload)
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 // User-facing slice of .bram.json exposed to the Settings tab and the
@@ -5620,13 +5621,13 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
                     ui.as_ref()
                         .and_then(|u| u.target_app_minimized)
                         .unwrap_or(false),
-                    // Default ON — only explicit `false` disables.
-                    ui.and_then(|u| u.tools_pane_hot_reload).unwrap_or(true),
+                    // Default OFF — only explicit `true` enables.
+                    ui.and_then(|u| u.tools_pane_hot_reload).unwrap_or(false),
                     traces.as_ref().and_then(|t| t.enabled).unwrap_or(false),
                     traces.and_then(|t| t.inspector_tap).unwrap_or(false),
                 )
             }
-            None => (String::new(), false, false, true, false, false),
+            None => (String::new(), false, false, false, false, false),
         };
     serde_json::json!({
         "shell": { "agent": agent },

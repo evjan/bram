@@ -70,6 +70,25 @@
       }
       lastWorklistSig = currentSig;
     }" />
+  <!-- #182 incident 1 investigation. Fires on every worklist value-shape
+       transition (loaded / isRefetching / value-presence / item-count),
+       not just the loaded event. If the trace shows value briefly
+       transitioning through undefined or items.length through 0 during
+       a refetch where the host payload was unchanged, the flicker is
+       iframe-side and the gate at line 376 should switch from
+       when="{worklist.value}" to when="{worklist.loaded}". If the trace
+       shows the host returning a transient empty payload, the fix is
+       host-side (atomic read in /__worklist). -->
+  <ChangeListener
+    listenTo="{(worklist.value ? 'V' : '-') + ':' + ((worklist.value &amp;&amp; worklist.value.exists) ? 'E' : '-') + ':' + ((worklist.value &amp;&amp; worklist.value.items || []).length) + ':' + (worklist.loaded ? 'L' : '-') + ':' + (worklist.isRefetching ? 'R' : '-')}"
+    onDidChange="(c) => iframeTrace('worklist-value-transition', {
+      prev: c.prevValue,
+      next: c.newValue,
+      loaded: worklist.loaded,
+      isRefetching: worklist.isRefetching,
+      hasValue: !!worklist.value,
+      itemsLength: (worklist.value &amp;&amp; worklist.value.items || []).length
+    })" />
   <DataSource
     id="worklistConfig"
     url="/__worklist-config" />

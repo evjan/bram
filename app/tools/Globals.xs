@@ -1060,6 +1060,14 @@ function settingsInspectorTap(s) {
 function settingsTracingEnabled(s) {
   return !!(s && s.traces && s.traces.enabled);
 }
+// Default ON — only explicit `false` disables. The host
+// settings_view always populates ui.toolsPaneHotReload, so an
+// unset / null value reflects an older config and should keep
+// the historical hot-reload behavior.
+function settingsToolsPaneHotReload(s) {
+  if (!s || !s.ui) return true;
+  return s.ui.toolsPaneHotReload !== false;
+}
 
 // Diff rendering — used by the DiffView component, which all three
 // diff sites (Transcript, Workspace, Commits) share. Per-line

@@ -223,6 +223,8 @@ struct WorklistConfig {
 struct UiConfig {
     #[serde(default, rename = "targetAppMinimized")]
     target_app_minimized: Option<bool>,
+    #[serde(default, rename = "toolsPaneHotReload")]
+    tools_pane_hot_reload: Option<bool>,
 }
 
 #[derive(Default, Clone, serde::Deserialize)]
@@ -5546,30 +5548,49 @@ fn project_config_batch_commit_actions(config: Option<ProjectConfig>) -> bool {
         .unwrap_or(false)
 }
 
+// #182 incident 7 follow-up: master toggle for agent-pane source hot-reload.
+// Default `true`; only an explicit `false` in .bram.json `ui.toolsPaneHotReload`
+// disables. Suppresses every `tools-pane-reload` emit when off so heavy
+// agent-edit cycles do not cascade into blank-pane windows. `right-pane-reload`
+// is unaffected — target-app hot-reload remains the Bram value prop.
+fn tools_pane_hot_reload_enabled<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    project_root(Some(app))
+        .and_then(|root| load_project_config(&root))
+        .and_then(|c| c.ui)
+        .and_then(|u| u.tools_pane_hot_reload)
+        .unwrap_or(true)
+}
+
 // User-facing slice of .bram.json exposed to the Settings tab and the
 // parent shell. Always returns a populated value (false / empty string)
 // so the consumer never sees nulls; out-of-scope blocks like `server`
 // stay invisible — they're project infrastructure, not Settings knobs.
 fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value {
-    let (agent, batch, minimized, tracing_enabled, inspector_tap) = match config {
-        Some(c) => {
-            let traces = c.traces;
-            (
-                c.shell.and_then(|s| s.agent).unwrap_or_default(),
-                c.worklist
-                    .and_then(|w| w.batch_commit_actions)
-                    .unwrap_or(false),
-                c.ui.and_then(|u| u.target_app_minimized).unwrap_or(false),
-                traces.as_ref().and_then(|t| t.enabled).unwrap_or(false),
-                traces.and_then(|t| t.inspector_tap).unwrap_or(false),
-            )
-        }
-        None => (String::new(), false, false, false, false),
-    };
+    let (agent, batch, minimized, tools_pane_hot_reload, tracing_enabled, inspector_tap) =
+        match config {
+            Some(c) => {
+                let traces = c.traces;
+                let ui = c.ui;
+                (
+                    c.shell.and_then(|s| s.agent).unwrap_or_default(),
+                    c.worklist
+                        .and_then(|w| w.batch_commit_actions)
+                        .unwrap_or(false),
+                    ui.as_ref()
+                        .and_then(|u| u.target_app_minimized)
+                        .unwrap_or(false),
+                    // Default ON — only explicit `false` disables.
+                    ui.and_then(|u| u.tools_pane_hot_reload).unwrap_or(true),
+                    traces.as_ref().and_then(|t| t.enabled).unwrap_or(false),
+                    traces.and_then(|t| t.inspector_tap).unwrap_or(false),
+                )
+            }
+            None => (String::new(), false, false, true, false, false),
+        };
     serde_json::json!({
         "shell": { "agent": agent },
         "worklist": { "batchCommitActions": batch },
-        "ui": { "targetAppMinimized": minimized },
+        "ui": { "targetAppMinimized": minimized, "toolsPaneHotReload": tools_pane_hot_reload },
         "traces": { "enabled": tracing_enabled, "inspectorTap": inspector_tap },
     })
 }
@@ -11611,13 +11632,21 @@ fn clear_inflight_claim_sentinel<R: tauri::Runtime>(
     // cycle (refs #93). Atomic swap-to-false; the previous value tells
     // us whether to fire.
     if PENDING_TOOLS_RELOAD.swap(false, std::sync::atomic::Ordering::SeqCst) {
-        if bram_trace_enabled() {
-            append_bram_trace_line(app, "tools-pane-reload", "op=flushed-on-clear");
+        if tools_pane_hot_reload_enabled(app) {
+            if bram_trace_enabled() {
+                append_bram_trace_line(app, "tools-pane-reload", "op=flushed-on-clear");
+            }
+            // Replayable: same late-attach reasoning as right-pane-reload
+            // above. A reload-on-attach refreshes the agent-tools drawer
+            // iframe with current state, which is idempotent. Refs #170.
+            emit_replayable_signal(app, "tools-pane-reload");
+        } else if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "tools-pane-reload",
+                "op=skipped reason=disabled-by-setting source=deferred-flush",
+            );
         }
-        // Replayable: same late-attach reasoning as right-pane-reload
-        // above. A reload-on-attach refreshes the agent-tools drawer
-        // iframe with current state, which is idempotent. Refs #170.
-        emit_replayable_signal(app, "tools-pane-reload");
     }
     true
 }
@@ -11649,6 +11678,16 @@ fn inflight_sentinel_is_active<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
 // from blowing away the user's mid-cycle context and causing the 7+s
 // of drift / click swallows we measured pre-fix.
 fn emit_or_defer_tools_pane_reload<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if !tools_pane_hot_reload_enabled(app) {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "tools-pane-reload",
+                "op=skipped reason=disabled-by-setting",
+            );
+        }
+        return;
+    }
     if inflight_sentinel_is_active(app) {
         PENDING_TOOLS_RELOAD.store(true, std::sync::atomic::Ordering::SeqCst);
         if bram_trace_enabled() {

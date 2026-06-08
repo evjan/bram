@@ -1074,6 +1074,44 @@ struct PtyMenu {
     signature_source: Option<&'static str>,
 }
 
+// #182 incident 8 instrumentation. Adjacent trace line to every
+// `pty-menu-changed` emit that previews the parsed `options` array —
+// `tool=<name> count=<n> options=[key="label", key="label", ...]`.
+// Lets next-sample analysis tell whether a malformed agent-pane render
+// (e.g. options 1 and 2 merged on one row) is upstream payload-shape
+// or downstream renderer. No-op when payload is a clear (None).
+fn trace_pty_menu_options<R: tauri::Runtime>(app: &AppHandle<R>, payload: &Option<PtyMenu>) {
+    if !bram_trace_enabled() {
+        return;
+    }
+    let Some(menu) = payload else {
+        return;
+    };
+    let mut buf = String::new();
+    for (i, opt) in menu.options.iter().enumerate() {
+        if i > 0 {
+            buf.push_str(", ");
+        }
+        let label_preview: String = opt.label.chars().take(60).collect();
+        let truncated = opt.label.chars().count() > 60;
+        if truncated {
+            buf.push_str(&format!("{}={:?}\u{2026}", opt.key, label_preview));
+        } else {
+            buf.push_str(&format!("{}={:?}", opt.key, label_preview));
+        }
+    }
+    append_bram_trace_line(
+        app,
+        "pty-menu-options",
+        &format!(
+            "tool={} count={} options=[{}]",
+            menu.tool,
+            menu.options.len(),
+            buf
+        ),
+    );
+}
+
 // Trim the "Do you want to proceed?" footer + numbered options off the
 // captured menu text before it ships to the iframe. The options are
 // already parsed separately into `PtyMenu.options` and rendered as
@@ -2669,6 +2707,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
 
     if let Some(payload) = emit_payload {
         emit_replayable_payload(app, "pty-menu-changed", &payload);
+        trace_pty_menu_options(app, &payload);
     }
 
     if let Some(target_tool) = recheck_target {
@@ -2742,6 +2781,7 @@ fn try_signature_recheck_on_jsonl_change<R: tauri::Runtime>(app: &AppHandle<R>) 
             );
         }
         emit_replayable_payload(app, "pty-menu-changed", &payload);
+        trace_pty_menu_options(app, &payload);
     }
 }
 
@@ -2853,6 +2893,7 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                     );
                 }
                 emit_replayable_payload(&app_handle, "pty-menu-changed", &payload);
+                trace_pty_menu_options(&app_handle, &payload);
             }
             return;
         }

@@ -1459,8 +1459,8 @@ function appendVoiceTranscript(component, transcript) {
 // clicks a toolbar button (1/2/3/Yes/No/Esc), so post-hoc analysis
 // can tell whether the click landed on a menu that was actually
 // still open vs one the host had already cleared.
-let __toolbarPendingMenuPresent = false;
-let __toolbarPendingMenuAtMs = 0;
+var __toolbarPendingMenuPresent = false;
+var __toolbarPendingMenuAtMs = 0;
 
 function setToolbarPendingMenuFromEvent(e) {
   __toolbarPendingMenuPresent = !!(e && e.payload);

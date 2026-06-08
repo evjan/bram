@@ -170,7 +170,7 @@
               value="{(mainAgentStatus.value.provider === 'claude' ? 'claude code' : (mainAgentStatus.value.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.value.verb || 'Finished') + (mainAgentStatus.value.elapsedText ? ' · ' + mainAgentStatus.value.elapsedText : '')}" />
           </HStack>
         </HStack>
-        <Stack width="1rem" minWidth="1rem" />
+        <Stack width="1.5rem" minWidth="1.5rem" />
         <Theme fontSize-Button="$fontSize-lg">
           <Button
             label="ⓘ"

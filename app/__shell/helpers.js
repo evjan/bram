@@ -338,6 +338,15 @@ window.sendKeys = function (text) {
     } catch (le) {}
   });
 };
+window.recordToolbarPendingMenuFromEvent = function (event) {
+  window.__bramToolbarMenuState = {
+    present: !!(event && event.payload),
+    atMs: Date.now(),
+  };
+};
+window.getToolbarPendingMenuState = function () {
+  return window.__bramToolbarMenuState || { present: false, atMs: 0 };
+};
 window.logToHost = function (payload) {
   var invoke = getTauriInvoke();
   if (!invoke) return;

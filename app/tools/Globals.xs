@@ -1468,29 +1468,17 @@ function appendVoiceTranscript(component, transcript) {
 // clicks a toolbar button (1/2/3/Yes/No/Esc), so post-hoc analysis
 // can tell whether the click landed on a menu that was actually
 // still open vs one the host had already cleared.
-// State held inside an object so the xs evaluator's LHS resolution
-// always lands on a property access (`__toolbarMenuState.present`),
-// never on a bare top-level variable name. The two prior attempts
-// failed under the function-reference-via-subscribeTauriEvent code
-// path: `let` (5e8de73) and bare `var` (43c99ef) both produced
-// "Left value variable not found", and the `window.` workaround
-// (4ad0716) silently had its prefix stripped by the xs evaluator.
-// With an object, the lvalue is `<base>.property`, which the
-// evaluator handles correctly because the property write doesn't
-// need a scope lookup for the property name — only for the base.
-var __toolbarMenuState = { present: false, atMs: 0 };
-
 function setToolbarPendingMenuFromEvent(e) {
-  __toolbarMenuState.present = !!(e && e.payload);
-  __toolbarMenuState.atMs = Date.now();
+  recordToolbarPendingMenuFromEvent(e);
 }
 
 function traceToolbarKey(key) {
+  const toolbarMenuState = getToolbarPendingMenuState();
   iframeTrace('toolbar-key', {
     key,
-    menuPresent: __toolbarMenuState.present ? 1 : 0,
-    menuAgeMs: __toolbarMenuState.atMs
-      ? (Date.now() - __toolbarMenuState.atMs)
+    menuPresent: toolbarMenuState.present ? 1 : 0,
+    menuAgeMs: toolbarMenuState.atMs
+      ? (Date.now() - toolbarMenuState.atMs)
       : -1
   });
 }

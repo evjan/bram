@@ -1430,6 +1430,27 @@ function appendVoiceTranscript(component, transcript) {
   return true;
 }
 
+// Toolbar PTY keystroke instrumentation for #182 incident 6: tracks
+// the iframe's current view of pendingMenu at the moment the user
+// clicks a toolbar button (1/2/3/Yes/No/Esc), so post-hoc analysis
+// can tell whether the click landed on a menu that was actually
+// still open vs one the host had already cleared.
+let __toolbarPendingMenuPresent = false;
+let __toolbarPendingMenuAtMs = 0;
+
+function setToolbarPendingMenuFromEvent(e) {
+  __toolbarPendingMenuPresent = !!(e && e.payload);
+  __toolbarPendingMenuAtMs = Date.now();
+}
+
+function traceToolbarKey(key) {
+  iframeTrace('toolbar-key', {
+    key,
+    menuPresent: __toolbarPendingMenuPresent ? 1 : 0,
+    menuAgeMs: __toolbarPendingMenuAtMs ? (Date.now() - __toolbarPendingMenuAtMs) : -1
+  });
+}
+
 function toggleVoiceForCurrentTarget(recording) {
   if (recording) {
     voiceStop(t => {

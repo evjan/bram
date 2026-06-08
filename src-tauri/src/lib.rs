@@ -688,12 +688,24 @@ fn trace_emit_payload<R: tauri::Runtime, S: serde::Serialize>(
         .and_then(|v| v.as_i64())
         .map(|v| v.to_string())
         .unwrap_or_default();
+    // #182 incident 2: include `state` / `verb` when present so
+    // agent-status-changed emits are diagnosable from the host trace
+    // alone (without relying on inspector tap on the iframe DataSource).
+    // Fields are optional and only appended when set, so this does not
+    // pollute the trace shape for other event kinds.
+    let mut extra = String::new();
+    if let Some(state) = value.get("state").and_then(|v| v.as_str()) {
+        extra.push_str(&format!(" state={}", state));
+    }
+    if let Some(verb) = value.get("verb").and_then(|v| v.as_str()) {
+        extra.push_str(&format!(" verb={}", verb));
+    }
     append_bram_trace_line(
         app,
         "emit",
         &format!(
-            "kind={} payload_size={} correlation_id={} at_host_ms={}",
-            kind, size, correlation_id, at_host_ms
+            "kind={} payload_size={} correlation_id={} at_host_ms={}{}",
+            kind, size, correlation_id, at_host_ms, extra
         ),
     );
 }

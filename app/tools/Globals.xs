@@ -1353,7 +1353,7 @@ function worklistConversationUserText(exchangeUserText, submitted, awaiting, sub
   const display = String(submitted || '').trim();
   if (awaiting && display) return display;
   if (isWorklistActionPayloadText(exchange)) {
-    if (display && submittedItemId) return display;
+    if (display) return display;
     return formatUserTurnForTranscript(exchange);
   }
   return (exchange || display).trim();

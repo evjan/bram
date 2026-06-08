@@ -343,6 +343,78 @@ window.logToHost = function (payload) {
   if (!invoke) return;
   invoke("log_from_right_pane", { payload: payload }).catch(function () {});
 };
+
+// Interleave devtools console output + unhandled-error paths into
+// bram-trace.log via the iframe-trace channel. Catches what previously
+// only landed in the browser devtools panel (e.g. the toolbar
+// __toolbarPendingMenuPresent scope errors fixed in 4ad0716). Inherits
+// the host's traces.enabled master switch automatically — when traces
+// are off, logToHost still runs but the host emits nothing.
+//
+// Uses window.logToHost directly rather than the xs `iframeTrace`
+// function (which lives in Globals.xs and isn't reliably reachable
+// from plain JS at this load point). Payload shape matches what
+// iframeTrace produces: kind="iframe-trace", subkind=...
+(function installConsoleInterleave() {
+  if (typeof window.logToHost !== "function") return;
+  if (window.__bramConsoleInterleaveInstalled) return;
+  window.__bramConsoleInterleaveInstalled = true;
+
+  var inTrace = false;
+  function safeStringify(a) {
+    try {
+      return typeof a === "string" ? a : JSON.stringify(a);
+    } catch (e) {
+      return String(a);
+    }
+  }
+  function emit(subkind, fields) {
+    if (inTrace) return;
+    inTrace = true;
+    try {
+      var payload = {
+        kind: "iframe-trace",
+        subkind: subkind,
+        at: new Date().toISOString(),
+      };
+      Object.keys(fields || {}).forEach(function (k) {
+        if (fields[k] !== undefined) payload[k] = fields[k];
+      });
+      window.logToHost(payload);
+    } catch (_) {}
+    inTrace = false;
+  }
+
+  ["log", "warn", "error"].forEach(function (level) {
+    var orig = console[level];
+    console[level] = function () {
+      var args = Array.prototype.slice.call(arguments);
+      emit("console-" + level, {
+        message: args.map(safeStringify).join(" "),
+      });
+      orig.apply(console, args);
+    };
+  });
+
+  window.addEventListener("error", function (e) {
+    emit("console-error", {
+      message: (e && e.message) || "window error",
+      filename: e && e.filename,
+      lineno: e && e.lineno,
+      stack: e && e.error && e.error.stack,
+      source: "window.error",
+    });
+  });
+
+  window.addEventListener("unhandledrejection", function (e) {
+    var reason = e && e.reason;
+    emit("console-unhandledrejection", {
+      message:
+        (reason && (reason.message || String(reason))) || "unhandled rejection",
+      stack: reason && reason.stack,
+    });
+  });
+})();
 window.openExternal = function (url) {
   var invoke = getTauriInvoke();
   if (!invoke) return;

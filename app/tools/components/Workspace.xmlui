@@ -27,6 +27,8 @@
   var.lastAssistantStableText="{''}"
   var.staleAssistantBaseline="{''}"
   var.lastConversationSig="{''}"
+  var.stickyConversationTools="{[]}"
+  var.stickyConversationToolsKey="{''}"
   var.messageSentAtText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
   var.awaitingResponseSetAt="{restoreWorklistAwaitingSetAt()}"
@@ -133,6 +135,8 @@
         submitting = false;
         selected = null;
         submittedItemId = null;
+        stickyConversationTools = [];
+        stickyConversationToolsKey = '';
         selectedFeedback = '';
         feedbackExpanded = false; expandedItemId = null;
       }
@@ -177,7 +181,7 @@
     listenTo="{agentIsWorking}"
     onDidChange="(c) => { if (c.newValue) { staleAssistantBaseline = lastAssistantStableText || ''; } }" />
   <ChangeListener
-    listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (awaitingResponse ? '1' : '0')}"
+    listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (submittedItemId || '') + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {
       const submitted = (submittedWorklistMessage || '').trim();
       const exchangeUser = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').trim();
@@ -186,6 +190,13 @@
       const exchangeAssistantImages = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []);
       const exchangeTools = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-3);
       const exchangeMatchesSubmitted = worklistSubmittedMatches(exchangeUser, submitted);
+      const conversationKey = submitted || (submittedItemId || '') || exchangeUser;
+      if (exchangeTools.length > 0) {
+        stickyConversationTools = exchangeTools;
+        stickyConversationToolsKey = conversationKey;
+      }
+      const stickyTools = stickyConversationToolsKey === conversationKey ? (stickyConversationTools || []) : [];
+      const displayTools = exchangeTools.length > 0 ? exchangeTools : (stickyTools.length > 0 ? stickyTools : []);
       const user = awaitingResponse &amp;&amp; submitted ? submitted : (exchangeUser || submitted);
       const assistant = awaitingResponse
         ? (exchangeMatchesSubmitted ? exchangeAssistant : '')
@@ -193,12 +204,12 @@
       const source = awaitingResponse
         ? (exchangeMatchesSubmitted ? (exchangeAssistant ? 'last-exchange' : 'awaiting') : 'awaiting')
         : (exchangeAssistant ? 'last-exchange' : (assistant ? 'last-assistant-text' : 'none'));
-      const toolsSig = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? '' : exchangeTools.map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|');
+      const toolsSig = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? '' : displayTools.map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|');
       const imageSig = exchangeUserImages.join('|') + '\n---\n' + exchangeAssistantImages.join('|');
       const sig = user + '\n---\n' + toolsSig + '\n---\n' + assistant + '\n---\n' + imageSig;
       if (sig !== lastConversationSig) {
         lastConversationSig = sig;
-        iframeTrace('conversation-sync', {source, entries: (assistant ? 1 : 0) + (toolsSig ? exchangeTools.length : 0), userImages: exchangeUserImages.length, assistantImages: exchangeAssistantImages.length});
+        iframeTrace('conversation-sync', {source, entries: (assistant ? 1 : 0) + (toolsSig ? displayTools.length : 0), userImages: exchangeUserImages.length, assistantImages: exchangeAssistantImages.length});
       }
       if (awaitingResponse &amp;&amp; exchangeMatchesSubmitted &amp;&amp; assistant) {
         iframeTrace('clear-awaiting', {
@@ -777,7 +788,7 @@
         storageKey="bram.worklistMessageDraftForm"
         dataAfterSubmit="clear"
         onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
-        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
+        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { stickyConversationTools = []; stickyConversationToolsKey = ''; submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
         <property name="buttonRowTemplate"><Fragment/></property>
         <HStack gap="$space-2" verticalAlignment="end">
           <TextArea
@@ -811,7 +822,9 @@
         overflowY="auto"
         var.conversationUserText="{awaitingResponse &amp;&amp; submittedWorklistMessage ? submittedWorklistMessage : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || submittedWorklistMessage || '').trim())}"
         var.conversationExchangeMatchesSubmitted="{worklistSubmittedMatches(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage)}"
-        var.conversationTools="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-3)}"
+        var.conversationKey="{(submittedWorklistMessage || submittedItemId || ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '')).trim()}"
+        var.conversationRawTools="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-3)}"
+        var.conversationTools="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((conversationRawTools &amp;&amp; conversationRawTools.length > 0) ? conversationRawTools : ((stickyConversationToolsKey === conversationKey) ? stickyConversationTools : []))}"
         var.conversationAssistantText="{(((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '')).trim()}"
         var.conversationUserImages="{awaitingResponse &amp;&amp; submittedWorklistMessage &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || [])}"
         var.conversationAssistantImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []}">

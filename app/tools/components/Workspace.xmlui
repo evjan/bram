@@ -21,6 +21,8 @@
   var.openToolId="{null}"
   var.openTool="{null}"
   var.inflightTick="{0}"
+  var.actionProgressTick="{0}"
+  var.actionProgressKind="{''}"
   var.lastAssistantTick="{0}"
   var.worklistTurnsTick="{0}"
   var.lastAssistantTickAt="{0}"
@@ -136,11 +138,14 @@
           submitting = true;
           submittedItemId = targeted;
         }
+        actionProgressKind = (data &amp;&amp; data.kind) || actionProgressKind || '';
       } else if (submitting) {
         iframeTrace('inflight-clear', {reason: 'sentinel-cleared', item: submittedItemId || ''});
         submitting = false;
         selected = null;
         submittedItemId = null;
+        actionProgressKind = '';
+        actionProgressTick = 0;
         stickyConversationTools = [];
         stickyConversationToolsKey = '';
         stickyConversationUserImages = [];
@@ -189,6 +194,14 @@
     initialDelay="0"
     interval="250"
     onTick="pendingPastedImageCount = window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0; pendingPastedImagePaths = window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0" />
+  <!-- Drives the in-flight "Approving./.../..." dot cycle below the
+       targeted item. 2 s tick is intentionally slow - action cycles can
+       take minutes, and a fast cycle is distracting at that scale. -->
+  <Timer
+    initialDelay="0"
+    interval="2000"
+    enabled="{submitting &amp;&amp; actionProgressKind}"
+    onTick="actionProgressTick = actionProgressTick + 1" />
   <ChangeListener
     listenTo="{agentIsWorking}"
     onDidChange="(c) => {
@@ -586,13 +599,13 @@
             label="{'Approve all (' + countByStatus(worklist.value.items, 'applied') + ')'}"
             size="xs"
             enabled="{!submitting}"
-            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'approve-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = 'action'; iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'approve-all'}); toTurn('approved: ' + buildBatchApprovePayload(worklist.value.items, '')); })()" />
+            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'approve-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = 'action'; iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'approve-all'}); toTurn('approved: ' + buildBatchApprovePayload(worklist.value.items, '')); })()" />
           <Button
             label="{'Drop all (' + countByStatus(worklist.value.items, 'applied') + ')'}"
             size="xs"
             variant="outlined"
             enabled="{!submitting}"
-            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'drop-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = 'action'; iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'drop-all'}); toTurn('drop: ' + buildBatchDropPayload(worklist.value.items, '')); })()" />
+            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'drop-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; actionProgressKind = 'drop'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = 'action'; iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'drop-all'}); toTurn('drop: ' + buildBatchDropPayload(worklist.value.items, '')); })()" />
           <Button
             label="ⓘ"
             variant="ghost"
@@ -731,7 +744,7 @@
                       label="Approve"
                       size="xs"
                       enabled="{!submitting && !!selected && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed')}"
-                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } submittedItemId = selected; submittedKind = 'action'; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, feedback)); })()" />
+                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } submittedItemId = selected; submittedKind = 'action'; submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, feedback)); })()" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -746,7 +759,7 @@
                       label="Iterate"
                       size="xs"
                       enabled="{!submitting && !!selected && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed') && ((feedbackBox &amp;&amp; feedbackBox.value) || '').trim().length > 0}"
-                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } submittedItemId = selected; submittedKind = 'action'; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); sendIterateWithFeedbackDraft(worklist.value.items, selected, feedback)" />
+                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } submittedItemId = selected; submittedKind = 'action'; submitting = true; actionProgressKind = 'iterate'; actionProgressTick = 0; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); sendIterateWithFeedbackDraft(worklist.value.items, selected, feedback)" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -761,7 +774,7 @@
                       label="Drop"
                       size="xs"
                       enabled="{!submitting && !!selected}"
-                      onClick="iframeTrace('click', {target: 'drop', item: selected}); const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } submittedItemId = selected; submittedKind = 'action'; submitting = true; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, feedback))" />
+                      onClick="iframeTrace('click', {target: 'drop', item: selected}); const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const sent = recordWorklistFeedbackConversation(feedback); if (sent) { submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } submittedItemId = selected; submittedKind = 'action'; submitting = true; actionProgressKind = 'drop'; actionProgressTick = 0; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, feedback))" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -775,8 +788,14 @@
                     when="{submitting}"
                     label="Cancel"
                     variant="ghost"
-                    onClick="submitting = false; submittedItemId = null; selectedFeedback = ''; feedbackExpanded = false; expandedItemId = null; selected = null" />
+                    onClick="submitting = false; submittedItemId = null; actionProgressKind = ''; actionProgressTick = 0; selectedFeedback = ''; feedbackExpanded = false; expandedItemId = null; selected = null" />
                 </HStack>
+                <Text
+                  when="{submitting &amp;&amp; submittedItemId === $item.id &amp;&amp; actionProgressKind}"
+                  fontSize="$fontSize-sm"
+                  fontStyle="italic"
+                  color="$textColor-secondary"
+                  value="{inflightActionLabel(((inflightClaim.value &amp;&amp; (inflightClaim.value.ids || []).includes($item.id)) ? inflightClaim.value.kind : '') || actionProgressKind) + '.'.repeat(1 + (actionProgressTick % 3))}" />
                 <VStack
                   when="{expandedItemId === $item.id}"
                   gap="$space-2"
@@ -1089,11 +1108,11 @@
           <Button
             label="Confirm"
             tooltip="Commit, push this commit through the verified close helper, then close"
-            onClick="const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const display = recordWorklistFeedbackConversation(feedback); if (display) { submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } submittedItemId = closeIssuesItemRef.id; submittedKind = 'action'; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines(feedback, buildCloseIssueLines(closeIssuesState), true))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const display = recordWorklistFeedbackConversation(feedback); if (display) { submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } submittedItemId = closeIssuesItemRef.id; submittedKind = 'action'; submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines(feedback, buildCloseIssueLines(closeIssuesState), true))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Approve without closing"
             variant="outlined"
-            onClick="const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const display = recordWorklistFeedbackConversation(feedback); if (display) { submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } submittedItemId = closeIssuesItemRef.id; submittedKind = 'action'; submitting = true; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, feedback)); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="const feedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const display = recordWorklistFeedbackConversation(feedback); if (display) { submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } submittedItemId = closeIssuesItemRef.id; submittedKind = 'action'; submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, feedback)); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Cancel"
             variant="ghost"

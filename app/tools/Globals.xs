@@ -1362,6 +1362,16 @@ function clearWorklistAwaiting(clearDraft) {
 // can be matched against the locally-stored submittedWorklistMessage
 // (pre-collapse). Strict === would fail whenever the submitted text
 // contained any internal whitespace runs.
+// Map the inflight sentinel's `kind` field to the gerund verb shown below
+// the in-flight item ("Approving", "Iterating", "Dropping"). Returns '' for
+// unknown / missing kind so the calling markup hides cleanly.
+function inflightActionLabel(kind) {
+  if (kind === 'approved') return 'Approving';
+  if (kind === 'iterate') return 'Iterating';
+  if (kind === 'drop') return 'Dropping';
+  return '';
+}
+
 // Strip the screenshot-paste marker prefix that submitWorklistMessageFast
 // prepends to outgoing messages. The JSONL parser removes `[Image: source: ...]`
 // but leaves the `Read this screenshot: @<path>` prefix in userText (claude-code

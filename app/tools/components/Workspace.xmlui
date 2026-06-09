@@ -214,7 +214,18 @@
       const sig = user + '\n---\n' + toolsSig + '\n---\n' + assistant + '\n---\n' + imageSig;
       if (sig !== lastConversationSig) {
         lastConversationSig = sig;
-        iframeTrace('conversation-sync', {source, entries: (assistant ? 1 : 0) + (toolsSig ? displayTools.length : 0), userImages: exchangeUserImages.length, assistantImages: exchangeAssistantImages.length});
+        iframeTrace('conversation-sync', {
+          source,
+          entries: (assistant ? 1 : 0) + (toolsSig ? displayTools.length : 0),
+          userImages: exchangeUserImages.length,
+          assistantImages: exchangeAssistantImages.length,
+          matchesSubmitted: !!exchangeMatchesSubmitted,
+          submittedKind: submittedKind || '',
+          awaiting: !!awaitingResponse,
+          rawToolsLen: exchangeTools.length,
+          displayToolsLen: displayTools.length,
+          gateFires: !!(awaitingResponse && submittedKind !== 'action' && !exchangeMatchesSubmitted)
+        });
       }
       if (awaitingResponse &amp;&amp; exchangeMatchesSubmitted &amp;&amp; assistant) {
         iframeTrace('clear-awaiting', {
@@ -834,8 +845,8 @@
         var.conversationUserText="{worklistConversationUserText(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage, awaitingResponse, submittedItemId)}"
         var.conversationExchangeMatchesSubmitted="{worklistSubmittedMatches(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage)}"
         var.conversationKey="{(submittedWorklistMessage || submittedItemId || ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '')).trim()}"
-        var.conversationRawTools="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-3)}"
-        var.conversationTools="{awaitingResponse &amp;&amp; submittedKind !== 'action' &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((conversationRawTools &amp;&amp; conversationRawTools.length > 0) ? conversationRawTools : ((stickyConversationToolsKey === conversationKey) ? stickyConversationTools : []))}"
+        var.conversationRawTools="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []}"
+        var.conversationTools="{awaitingResponse &amp;&amp; submittedKind !== 'action' &amp;&amp; !conversationExchangeMatchesSubmitted ? ((stickyConversationToolsKey === conversationKey) ? stickyConversationTools : []) : ((conversationRawTools &amp;&amp; conversationRawTools.length > 0) ? conversationRawTools : ((stickyConversationToolsKey === conversationKey) ? stickyConversationTools : []))}"
         var.conversationAssistantText="{(((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '')).trim()}"
         var.conversationUserImages="{awaitingResponse &amp;&amp; submittedKind !== 'action' &amp;&amp; submittedWorklistMessage &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || [])}"
         var.conversationAssistantImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []}">
@@ -875,41 +886,43 @@
             fontWeight="$fontWeight-bold"
             color="$color-success-700"
             value="Agent: Tool uses" />
-          <VStack
+          <ChangeListener
+            listenTo="{conversationTools &amp;&amp; conversationTools.length}"
+            onDidChange="() => { if (conversationToolsList) conversationToolsList.scrollToBottom(); }" />
+          <List
+            id="conversationToolsList"
+            data="{conversationTools}"
             height="9.5rem"
-            overflowY="auto"
-            gap="$space-1">
-            <Items data="{conversationTools}">
-              <VStack
-                gap="$space-1"
-                padding="$space-2"
-                borderRadius="$borderRadius"
-                border="1px solid $borderColor"
-                backgroundColor="$color-surface-100">
-                <Link onClick="openTool = $item; openToolId = $item.id" noIndicator="true">
-                  <HStack gap="$space-2" verticalAlignment="center">
-                    <Text
-                      fontFamily="$fontFamily-monospace"
-                      fontSize="$fontSize-xs"
-                      fontWeight="$fontWeight-bold"
-                      paddingHorizontal="$space-1_5"
-                      paddingVertical="$space-0_5"
-                      borderRadius="$borderRadius"
-                      backgroundColor="$color-surface-200"
-                      value="{$item.name || 'Tool'}" />
-                    <Text fontSize="$fontSize-sm" value="{$item.summary || ''}" />
-                    <SpaceFiller />
-                    <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-xs" color="$textColor-secondary" value="↗" />
-                  </HStack>
-                </Link>
-                <Text
-                  when="{$item.errored &amp;&amp; $item.errorText}"
-                  color="$color-danger-700"
-                  fontSize="$fontSize-sm"
-                  value="{$item.errorText}" />
-              </VStack>
-            </Items>
-          </VStack>
+            fixedItemSize="true">
+            <VStack
+              gap="$space-1"
+              padding="$space-2"
+              borderRadius="$borderRadius"
+              border="1px solid $borderColor"
+              backgroundColor="$color-surface-100">
+              <Link onClick="openTool = $item; openToolId = $item.id" noIndicator="true">
+                <HStack gap="$space-2" verticalAlignment="center">
+                  <Text
+                    fontFamily="$fontFamily-monospace"
+                    fontSize="$fontSize-xs"
+                    fontWeight="$fontWeight-bold"
+                    paddingHorizontal="$space-1_5"
+                    paddingVertical="$space-0_5"
+                    borderRadius="$borderRadius"
+                    backgroundColor="$color-surface-200"
+                    value="{$item.name || 'Tool'}" />
+                  <Text fontSize="$fontSize-sm" value="{$item.summary || ''}" />
+                  <SpaceFiller />
+                  <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-xs" color="$textColor-secondary" value="↗" />
+                </HStack>
+              </Link>
+              <Text
+                when="{$item.errored &amp;&amp; $item.errorText}"
+                color="$color-danger-700"
+                fontSize="$fontSize-sm"
+                value="{$item.errorText}" />
+            </VStack>
+          </List>
         </VStack>
         <VStack gap="$space-3" opacity="{agentIsWorking &amp;&amp; (lastAssistantStableText || '') === staleAssistantBaseline ? 0.5 : 1.0}">
         <VStack

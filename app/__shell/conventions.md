@@ -558,9 +558,15 @@ commonly:
   (`cleanup_stale_inflight_claim` runs at startup).
 - **Iterate stuck:** `/__iterate/end` was never called. Convention
   violation — bracket every iterate response.
-- **Premature clear:** structurally impossible post-#84. If observed,
-  grep `[inflight-sentinel]` and `[jsonl-turn-end]` in
-  `bram-trace.log`.
+- **Premature clear:** silence alone is not authoritative. PTY silence
+  can request a sentinel clear, but the host first checks the latest
+  provider JSONL completion detector. If JSONL says the assistant turn is
+  still non-final, the host logs
+  `[agent-status] op=skip-sentinel-clear ... reason=jsonl-non-final` and
+  leaves the sentinel intact. If a premature clear is suspected, inspect
+  `[agent-status] op=skip-sentinel-clear`, `[jsonl-turn-end]`, and
+  `[inflight-sentinel]` in `bram-trace.log`. Missing/unreadable JSONL
+  falls back to the legacy silence-clear behavior.
 
 The Status tab's Inflight Sentinel section includes a `Turn completion`
 row. Use it first when diagnosing a stuck spinner: it reports the last

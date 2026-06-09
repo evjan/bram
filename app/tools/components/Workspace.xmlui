@@ -180,7 +180,10 @@
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" when="{conversationOpen}" />
   <ChangeListener
     listenTo="{agentIsWorking}"
-    onDidChange="(c) => { if (c.newValue) { staleAssistantBaseline = lastAssistantStableText || ''; } }" />
+    onDidChange="(c) => {
+      App.mark('dim-baseline:listener-fired|new=' + (c.newValue ? '1' : '0') + '|prevBaselineLen=' + (staleAssistantBaseline || '').length + '|stableLen=' + (lastAssistantStableText || '').length + '|stablePfx=' + (lastAssistantStableText || '').slice(0, 24).replace(/\|/g, '_'));
+      if (c.newValue) { staleAssistantBaseline = lastAssistantStableText || ''; }
+    }" />
   <ChangeListener
     listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (submittedItemId || '') + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {

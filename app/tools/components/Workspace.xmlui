@@ -892,7 +892,7 @@
           <List
             id="conversationToolsList"
             data="{conversationTools}"
-            height="9.5rem"
+            height="5.7rem"
             fixedItemSize="true">
             <VStack
               gap="$space-1"

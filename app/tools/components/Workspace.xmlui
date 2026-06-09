@@ -571,13 +571,19 @@
         <Items data="{worklist.value.items}">
           <VStack gap="$space-1">
             <HStack gap="$space-3" verticalAlignment="start">
-              <Button
-                label="{selected === $item.id ? '●' : '○'}"
-                variant="ghost"
-                size="xs"
-                enabled="{!submitting}"
-                tooltip="Select this item"
-                onClick="selected = (selected === $item.id ? null : $item.id); selectedFeedback = ''; feedbackExpanded = false" />
+              <HStack width="1.75em" horizontalAlignment="center" verticalAlignment="center">
+                <Theme size-Spinner="0.85em">
+                  <Spinner when="{submitting &amp;&amp; submittedItemId === $item.id &amp;&amp; selected === $item.id}" />
+                </Theme>
+                <Button
+                  when="{!(submitting &amp;&amp; submittedItemId === $item.id &amp;&amp; selected === $item.id)}"
+                  label="{selected === $item.id ? '●' : '○'}"
+                  variant="ghost"
+                  size="xs"
+                  enabled="{!submitting}"
+                  tooltip="Select this item"
+                  onClick="selected = (selected === $item.id ? null : $item.id); selectedFeedback = ''; feedbackExpanded = false" />
+              </HStack>
               <VStack gap="$space-1" width="*">
                 <HStack gap="$space-2" verticalAlignment="center">
                   <Theme paddingHorizontal-Button-xs="$space-0_5">
@@ -606,7 +612,7 @@
                       fontSize="$fontSize-xs" />
                   </Link>
                   <Theme size-Spinner="1em">
-                    <Spinner when="{submitting && submittedItemId === $item.id}" />
+                    <Spinner when="{submitting &amp;&amp; submittedItemId === $item.id &amp;&amp; selected !== $item.id}" />
                   </Theme>
                 </HStack>
                 <!-- In-flight feedback panel: shows files touched in the

@@ -473,6 +473,117 @@ window.captureScreenshot = function () {
   invoke("capture_screenshot", {}).then(deliver).catch(report);
 };
 
+// Stage a clipboard-pasted image to disk via /__paste-image and remember its
+// path so submitWorklistMessageFast can prepend the `[Image: source: <path>]`
+// marker on the next form submit. Mirrors the marker protocol that
+// captureScreenshot uses and that st_extract_image_paths reads back.
+//
+// We listen for paste events at document level so any Cmd/Ctrl+V — including
+// one fired from the TextArea — stages clipboard images. The original
+// FileUploadDropZone-based UX required clicking the dropzone first, but the
+// underlying react-dropzone setup is configured with noKeyboard:true, which
+// strips the rootDiv's tabIndex (react-dropzone/src/index.js:920); without
+// focus the rootDiv never receives the React paste event, so click-then-paste
+// silently no-ops. Window-level listening sidesteps the focus problem.
+window.bramPendingPastedImages = window.bramPendingPastedImages || [];
+window.bramStagingPastedImages = window.bramStagingPastedImages || 0;
+document.addEventListener("paste", function (event) {
+  if (!event.clipboardData) return;
+  var items = event.clipboardData.items || [];
+  var imageFiles = [];
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (item.kind === "file" && /^image\//.test(item.type || "")) {
+      var f = item.getAsFile();
+      if (f) imageFiles.push(f);
+    }
+  }
+  if (imageFiles.length === 0) return;
+  // Suppress the default paste so the TextArea doesn't pick up any file-path
+  // or filename text the OS may have placed on the clipboard alongside the
+  // image (Finder copy-image, macOS screenshot tool, etc.).
+  event.preventDefault();
+  for (var j = 0; j < imageFiles.length; j++) {
+    window.bramStagePastedImage(imageFiles[j]);
+  }
+});
+window.bramStagePastedImage = function (file) {
+  if (!file) return Promise.reject(new Error("no file"));
+  var type = file.type || "image/png";
+  var url = "/__paste-image?type=" + encodeURIComponent(type);
+  // Read as ArrayBuffer first. `fetch(url, { body: file })` with a File body
+  // in this Tauri webview wrote 0-byte files server-side (the host saw an
+  // empty request body). Sending an ArrayBuffer via fetch reliably carries
+  // the bytes through.
+  return new Promise(function (resolve, reject) {
+    var reader = new FileReader();
+    window.bramStagingPastedImages++;
+    reader.onload = function () {
+      if (!reader.result || reader.result.byteLength === 0) {
+        var empty = new Error("paste-image: empty clipboard image");
+        try { logToHost({ kind: "paste-image", stage: "empty" }); } catch (e) {}
+        window.bramStagingPastedImages = Math.max(0, (window.bramStagingPastedImages || 0) - 1);
+        reject(empty);
+        return;
+      }
+      fetch(url, {
+        method: "POST",
+        body: reader.result,
+        headers: { "Content-Type": type },
+      })
+        .then(function (r) {
+          if (!r.ok) throw new Error("paste-image HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (json) {
+          if (!json || !json.path) throw new Error("paste-image: no path in response");
+          window.bramPendingPastedImages.push(json.path);
+          try { logToHost({ kind: "paste-image", stage: "staged", path: json.path, bytes: reader.result.byteLength }); } catch (e) {}
+          resolve(json.path);
+        })
+        .catch(function (e) {
+          try { logToHost({ kind: "paste-image", stage: "error", message: String((e && e.message) || e) }); } catch (er) {}
+          reject(e);
+        })
+        .finally(function () {
+          window.bramStagingPastedImages = Math.max(0, (window.bramStagingPastedImages || 0) - 1);
+        });
+    };
+    reader.onerror = function () {
+      try { logToHost({ kind: "paste-image", stage: "read-error", message: String(reader.error || "") }); } catch (e) {}
+      window.bramStagingPastedImages = Math.max(0, (window.bramStagingPastedImages || 0) - 1);
+      reject(reader.error);
+    };
+    reader.readAsArrayBuffer(file);
+  });
+};
+window.bramConsumePastedImagePaths = function () {
+  var paths = (window.bramPendingPastedImages || []).slice();
+  window.bramPendingPastedImages = [];
+  return paths;
+};
+window.bramRemovePastedImagePath = function (path) {
+  if (!path) return;
+  var arr = window.bramPendingPastedImages || [];
+  var idx = arr.indexOf(path);
+  if (idx >= 0) {
+    arr.splice(idx, 1);
+    try { logToHost({ kind: "paste-image", stage: "removed", path: path }); } catch (e) {}
+  }
+};
+window.bramHasPendingPastedImages = function () {
+  return (window.bramPendingPastedImages || []).length > 0;
+};
+window.bramPendingPastedImageCount = function () {
+  return (window.bramPendingPastedImages || []).length;
+};
+window.bramPendingPastedImagePaths = function () {
+  return (window.bramPendingPastedImages || []).slice();
+};
+window.bramStagingPastedImageCount = function () {
+  return window.bramStagingPastedImages || 0;
+};
+
 // Click-to-toggle voice. Single in-flight session per iframe.
 //   voiceStart()              — starts recording (parent records on iframe's behalf).
 //   voiceStop(callback)       — stops; callback(transcript) fires when transcript is ready.

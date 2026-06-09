@@ -1307,17 +1307,37 @@ function submitWorklistMessage(text, baseline) {
 
 function submitWorklistMessageFast(text) {
   if (!text || !text.trim()) return false;
-  const message = text.trim();
+  const userTyped = text.trim();
+  const toSend = withStagedImageMarkers(userTyped);
   const sentAt = Date.now();
-  iframeTrace('message-agent-submit', { stage: 'before-toTurn', chars: message.length, sentAt });
-  toTurn(message);
-  iframeTrace('message-agent-submit', { stage: 'after-toTurn', chars: message.length, sentAt });
+  iframeTrace('message-agent-submit', { stage: 'before-toTurn', chars: toSend.length, sentAt });
+  toTurn(toSend);
+  iframeTrace('message-agent-submit', { stage: 'after-toTurn', chars: toSend.length, sentAt });
   const baseline = 0;
   writeLocalStorage('bram.worklistMessageDraft', '');
   writeLocalStorage('bram.worklistMessageDraftCursor', '');
-  writeLocalStorage('bram.worklistSubmittedMessage', message);
+  // Track the user-typed text (not the marker-augmented send), so it matches
+  // the stripped `userText` the JSONL extractor returns and
+  // `conversationExchangeMatchesSubmitted` resolves true. Mismatch keeps
+  // awaitingResponse stuck (it clears on exchange-match) and gates
+  // conversationUserImages to [] during awaiting.
+  writeLocalStorage('bram.worklistSubmittedMessage', userTyped);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
-  return { message, baseline, sentAtText: new Date().toLocaleTimeString() };
+  return { message: userTyped, baseline, sentAtText: new Date().toLocaleTimeString() };
+}
+
+// Drain any clipboard-staged image paths and prepend the dual marker format
+// captureScreenshot also uses: `@<path>` triggers claude-code's Read tool,
+// `[Image: source: <path>]` is what st_extract_image_paths matches for the
+// thumbnail strip in the conversation pane.
+function withStagedImageMarkers(text) {
+  const paths = window.bramConsumePastedImagePaths
+    ? window.bramConsumePastedImagePaths()
+    : [];
+  if (!paths || paths.length === 0) return text;
+  const lines = paths.map(p => 'Read this screenshot: @' + p + '\n[Image: source: ' + p + ']');
+  const markers = lines.join('\n');
+  return text ? markers + '\n\n' + text : markers;
 }
 
 function recordWorklistFeedbackConversation(text) {
@@ -1342,15 +1362,31 @@ function clearWorklistAwaiting(clearDraft) {
 // can be matched against the locally-stored submittedWorklistMessage
 // (pre-collapse). Strict === would fail whenever the submitted text
 // contained any internal whitespace runs.
+// Strip the screenshot-paste marker prefix that submitWorklistMessageFast
+// prepends to outgoing messages. The JSONL parser removes `[Image: source: ...]`
+// but leaves the `Read this screenshot: @<path>` prefix in userText (claude-code
+// needs the `@<path>` to fire its Read tool). For exchange-match purposes we
+// reduce both sides to just the user-typed text.
+function stripImageMarkerPrefix(text) {
+  return (text || '').replace(/^(\s*Read this screenshot: @\S+\s*)+/, '').trim();
+}
+
 function worklistSubmittedMatches(exchangeUserText, submitted) {
   if (!submitted) return false;
-  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+  const norm = s => stripImageMarkerPrefix(s || '').replace(/\s+/g, ' ').trim();
   return norm(exchangeUserText) === norm(submitted);
 }
 
 function worklistConversationUserText(exchangeUserText, submitted, awaiting, submittedItemId) {
   App.mark('worklist:conv-user-text:start');
-  const exchange = String(exchangeUserText || '').trim();
+  // Strip the `Read this screenshot: @<path>` marker prefix that
+  // submitWorklistMessageFast prepended on the way out. The JSONL extractor
+  // already removes `[Image: source: ...]` but leaves the `@<path>` prefix
+  // in userText. Without this strip, the conversation pane's "You" element
+  // flaps between the marker-augmented exchange text (long) and the typed
+  // submittedWorklistMessage (short) as lastExchangeDS refetches return
+  // empty mid-cycle. Stripping unifies both branches to the typed text.
+  const exchange = stripImageMarkerPrefix(String(exchangeUserText || '')).trim();
   const display = String(submitted || '').trim();
   const exchangeIsPayload = isWorklistActionPayloadText(exchange);
   let result;

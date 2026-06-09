@@ -29,10 +29,15 @@
   var.lastConversationSig="{''}"
   var.stickyConversationTools="{[]}"
   var.stickyConversationToolsKey="{''}"
+  var.stickyConversationUserImages="{[]}"
+  var.stickyConversationUserImagesKey="{''}"
   var.messageSentAtText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
   var.awaitingResponseSetAt="{restoreWorklistAwaitingSetAt()}"
   var.fullscreenImage="{null}"
+  var.pendingPastedImageCount="{window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0}"
+  var.pendingPastedImagePaths="{window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []}"
+  var.stagingPastedImageCount="{window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0}"
   var.conversationOpen="{readLocalStorage('bram.conversationOpen', '1') !== '0'}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}"
@@ -138,6 +143,8 @@
         submittedItemId = null;
         stickyConversationTools = [];
         stickyConversationToolsKey = '';
+        stickyConversationUserImages = [];
+        stickyConversationUserImagesKey = '';
         selectedFeedback = '';
         feedbackExpanded = false; expandedItemId = null;
       }
@@ -178,6 +185,10 @@
     url="/__current-turn-edits?t={lastAssistantTick}" />
 
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" when="{conversationOpen}" />
+  <Timer
+    initialDelay="0"
+    interval="250"
+    onTick="pendingPastedImageCount = window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0; pendingPastedImagePaths = window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0" />
   <ChangeListener
     listenTo="{agentIsWorking}"
     onDidChange="(c) => {
@@ -198,6 +209,10 @@
       if (exchangeTools.length > 0) {
         stickyConversationTools = exchangeTools;
         stickyConversationToolsKey = conversationKey;
+      }
+      if (exchangeUserImages.length > 0) {
+        stickyConversationUserImages = exchangeUserImages;
+        stickyConversationUserImagesKey = conversationKey;
       }
       const stickyMatches = stickyConversationToolsKey === conversationKey;
       const stickyTools = stickyMatches ? (stickyConversationTools || []) : [];
@@ -270,6 +285,12 @@
       if (awaitingResponse) {
         lastAssistantTickAt = Date.now();
         lastAssistantTick = lastAssistantTick + 1;
+      }
+      if (window.bramConsumePastedImagePaths) {
+        window.bramConsumePastedImagePaths();
+        pendingPastedImageCount = 0;
+        pendingPastedImagePaths = [];
+        stagingPastedImageCount = 0;
       }
     });
     subscribeTauriEvent('__bramWorkspaceAgentTurnKilledUnsub', 'agent-turn-killed', () => {
@@ -809,7 +830,7 @@
         storageKey="bram.worklistMessageDraftForm"
         dataAfterSubmit="clear"
         onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
-        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { stickyConversationTools = []; stickyConversationToolsKey = ''; submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = 'message'; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
+        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0; pendingPastedImagePaths = window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = 'message'; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
         <property name="buttonRowTemplate"><Fragment/></property>
         <HStack gap="$space-2" verticalAlignment="end">
           <TextArea
@@ -821,11 +842,37 @@
             onGotFocus="setWorklistVoiceTarget('message-agent')"
             enabled="{!feedbackExpanded}"
             readOnly="{false}"
-            placeholder="Message agent — Enter sends, Shift+Enter newline"
+            placeholder="Message agent — Enter sends, Shift+Enter newline, Ctrl-V or Cmd-V to paste screenshot"
             autoSize="true"
             minRows="1"
             maxRows="6"
             width="*" />
+        </HStack>
+        <HStack
+          gap="$space-2"
+          verticalAlignment="center"
+          when="{pendingPastedImageCount > 0 || stagingPastedImageCount > 0}">
+          <Items data="{pendingPastedImagePaths}">
+            <HStack gap="$space-1" verticalAlignment="center">
+              <Link onClick="fullscreenImage = $item" noIndicator="true">
+                <Badge variant="pill" value="image {$itemIndex + 1}" />
+              </Link>
+              <Button
+                label="×"
+                variant="ghost"
+                size="xs"
+                tooltip="Remove this image"
+                onClick="window.bramRemovePastedImagePath($item)" />
+            </HStack>
+          </Items>
+          <Badge
+            when="{pendingPastedImageCount === 0 &amp;&amp; stagingPastedImageCount > 0}"
+            variant="pill"
+            value="staging image" />
+          <Text
+            fontSize="$fontSize-xs"
+            color="$textColor-secondary"
+            value="{pendingPastedImageCount > 0 ? 'click image to preview; × to remove' : 'will be sent with your message'}" />
         </HStack>
         <Text
           when="{messageSentAtText}"
@@ -846,7 +893,8 @@
         var.conversationRawTools="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []}"
         var.conversationTools="{awaitingResponse &amp;&amp; submittedKind !== 'action' &amp;&amp; !conversationExchangeMatchesSubmitted ? ((stickyConversationToolsKey === conversationKey) ? stickyConversationTools : []) : ((conversationRawTools &amp;&amp; conversationRawTools.length > 0) ? conversationRawTools : ((stickyConversationToolsKey === conversationKey) ? stickyConversationTools : []))}"
         var.conversationAssistantText="{(((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '')).trim()}"
-        var.conversationUserImages="{awaitingResponse &amp;&amp; submittedKind !== 'action' &amp;&amp; submittedWorklistMessage &amp;&amp; !conversationExchangeMatchesSubmitted ? [] : ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || [])}"
+        var.conversationRawUserImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []}"
+        var.conversationUserImages="{awaitingResponse &amp;&amp; !conversationExchangeMatchesSubmitted ? ((stickyConversationUserImagesKey === conversationKey) ? stickyConversationUserImages : []) : ((conversationRawUserImages &amp;&amp; conversationRawUserImages.length > 0) ? conversationRawUserImages : ((stickyConversationUserImagesKey === conversationKey) ? stickyConversationUserImages : []))}"
         var.conversationAssistantImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []}">
         <ChangeListener
           listenTo="{conversationAssistantText}"

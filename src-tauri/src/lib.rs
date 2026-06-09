@@ -6582,6 +6582,82 @@ fn handle_diff_annotate(body: &[u8]) -> (u16, &'static str, Vec<u8>) {
     (200, "application/json; charset=utf-8", body)
 }
 
+// Stage a pasted image to disk so the agent-message text can reference it via
+// the `[Image: source: /abs/path.ext]` marker (the same protocol Claude Code's
+// terminal-paste path uses and `st_extract_image_paths` already parses on the
+// read side). Body is the raw image bytes; query carries `type=<mime>` to pick
+// the extension. Files land under `~/.cache/bram/paste/`.
+fn handle_paste_image(query: &str, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
+    if body.is_empty() {
+        return (
+            400,
+            "text/plain; charset=utf-8",
+            b"empty image body".to_vec(),
+        );
+    }
+    let mut mime = String::new();
+    for pair in query.split('&') {
+        if let Some(enc) = pair.strip_prefix("type=") {
+            mime = percent_decode(enc);
+        }
+    }
+    let ext = match mime.as_str() {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => {
+            return (
+                400,
+                "text/plain; charset=utf-8",
+                format!("unsupported image type: {}", mime).into_bytes(),
+            );
+        }
+    };
+    let home = match home_dir() {
+        Some(h) => h,
+        None => {
+            return (
+                500,
+                "text/plain; charset=utf-8",
+                b"no HOME or USERPROFILE".to_vec(),
+            );
+        }
+    };
+    let dir = home.join(".cache").join("bram").join("paste");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return (
+            500,
+            "text/plain; charset=utf-8",
+            format!("create staging dir: {}", e).into_bytes(),
+        );
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let rand: u32 = {
+        let mut s = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hasher::write(&mut s, body);
+        std::hash::Hasher::write_u128(&mut s, ts);
+        (std::hash::Hasher::finish(&s) & 0xffff_ffff) as u32
+    };
+    let file = dir.join(format!("{}-{:08x}.{}", ts, rand, ext));
+    if let Err(e) = std::fs::write(&file, body) {
+        return (
+            500,
+            "text/plain; charset=utf-8",
+            format!("write file: {}", e).into_bytes(),
+        );
+    }
+    let body = serde_json::to_vec(&serde_json::json!({
+        "ok": true,
+        "path": file.to_string_lossy().to_string(),
+    }))
+    .unwrap_or_default();
+    (200, "application/json; charset=utf-8", body)
+}
+
 fn handle_settings_post<R: tauri::Runtime>(
     app: &AppHandle<R>,
     body: &[u8],
@@ -14590,7 +14666,15 @@ mod turn_completion_tests {
 
 #[cfg(test)]
 mod session_turn_tests {
-    use super::st_parse_lines_to_turns;
+    use super::{handle_paste_image, st_parse_lines_to_turns};
+
+    #[test]
+    fn paste_image_rejects_empty_body() {
+        let (status, content_type, body) = handle_paste_image("type=image%2Fpng", &[]);
+        assert_eq!(status, 400);
+        assert_eq!(content_type, "text/plain; charset=utf-8");
+        assert_eq!(String::from_utf8(body).unwrap(), "empty image body");
+    }
 
     #[test]
     fn codex_message_input_image_becomes_turn_image() {
@@ -18332,6 +18416,10 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Re
         let mut buf = Vec::new();
         let _ = request.as_reader().read_to_end(&mut buf);
         handle_diff_annotate(&buf)
+    } else if path == "__paste-image" && method == "POST" {
+        let mut buf = Vec::new();
+        let _ = request.as_reader().read_to_end(&mut buf);
+        handle_paste_image(query, &buf)
     } else {
         route_request(app, path, query)
     };

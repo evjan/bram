@@ -446,7 +446,7 @@
           border="1px solid $color-warn-200"
           backgroundColor="$color-warn-50">
           <Text fontSize="$fontSize-sm" color="$color-warn-800">
-            Agent wants to use <Text fontFamily="$fontFamily-monospace" inline="true">{pendingMenu.tool}</Text>
+            Agent wants to use <Text fontFamily="$fontFamily-monospace">{pendingMenu.tool}</Text>
           </Text>
           <VStack
             when="{pendingMenu.toolCallSignature}"
@@ -684,7 +684,6 @@
                     autoFocus="true"
                     onInit="setWorklistVoiceTarget('feedback')"
                     onCleanup="setWorklistVoiceTarget('message-agent')"
-                    onClick="setWorklistVoiceTarget('feedback')"
                     onGotFocus="setWorklistVoiceTarget('feedback')"
                     resize="vertical"
                     minRows="2"
@@ -819,7 +818,6 @@
             enterSubmits="true"
             onInit="setWorklistVoiceTarget('message-agent'); delay(0); restoreWorklistDraftCursor(worklistInputBox);"
             onDidChange="() => persistWorklistDraftCursor(worklistInputBox)"
-            onClick="setWorklistVoiceTarget('message-agent'); persistWorklistDraftCursor(worklistInputBox);"
             onGotFocus="setWorklistVoiceTarget('message-agent')"
             enabled="{!feedbackExpanded}"
             readOnly="{false}"
@@ -1026,7 +1024,7 @@
             backgroundColor="$backgroundColor-primary"
             var.issue="{normalizeCloseIssue($item)}">
             <HStack gap="$space-2" verticalAlignment="start">
-              <Text fontWeight="$fontWeight-bold" width="*" overflowMode="wrap">
+              <Text fontWeight="$fontWeight-bold" width="*" overflowMode="flow" breakMode="word">
                 Closes #{issue.number}{issue.title ? ' — ' + issue.title : ''}
               </Text>
             </HStack>
@@ -1190,7 +1188,6 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
               maxRows="16"
               width="*"
               onInit="setWorklistVoiceTarget('new-item')"
-              onClick="setWorklistVoiceTarget('new-item')"
               onGotFocus="setWorklistVoiceTarget('new-item')" />
             <Button
               label="{newItemVoiceRecording ? '⏹ stop' : '🎤 voice'}"

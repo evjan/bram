@@ -119,7 +119,6 @@
             maxRows="16"
             width="*"
             onInit="setWorklistVoiceTarget('new-issue')"
-            onClick="setWorklistVoiceTarget('new-issue')"
             onGotFocus="setWorklistVoiceTarget('new-issue')"
             onDidChange="(v) => { newIssueText = v; setWorklistVoiceTarget('new-issue'); }" />
           <Button
@@ -289,8 +288,8 @@
                       value="{$item.snippet}"
                       fontSize="$fontSize-xs"
                       whiteSpace="nowrap"
-                      textOverflow="ellipsis"
-                      overflow="hidden" />
+                      overflowMode="ellipsis"
+                      maxLines="1" />
                   </HStack>
                 </Link>
               </Items>

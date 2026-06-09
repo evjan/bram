@@ -241,7 +241,7 @@
       border="1px solid $color-warn-200"
       backgroundColor="$color-warn-50">
       <Text fontSize="$fontSize-sm" color="$color-warn-800">
-        Agent wants to use <Text fontFamily="$fontFamily-monospace" inline="true">{pendingMenu.tool}</Text>
+        Agent wants to use <Text fontFamily="$fontFamily-monospace">{pendingMenu.tool}</Text>
       </Text>
       <VStack
         when="{pendingMenu.toolCallSignature}"
@@ -290,7 +290,9 @@
       when="{(waitingDS.value &amp;&amp; waitingDS.value.waiting) &amp;&amp; !pendingMenu}"
       paddingVertical="$space-3"
       verticalAlignment="center">
-      <Spinner size="sm" delay="{200}" />
+      <Theme size-Spinner="1em">
+        <Spinner delay="{200}" />
+      </Theme>
     </HStack>
 
     <StickyBox to="bottom">

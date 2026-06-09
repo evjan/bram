@@ -89,7 +89,7 @@
                 noIndicator="true">
                 <HStack gap="$space-2">
                   <Text value="{$item.line}" fontSize="$fontSize-xs" color="$textColor-secondary" />
-                  <Text value="{$item.snippet}" fontSize="$fontSize-xs" whiteSpace="nowrap" textOverflow="ellipsis" overflow="hidden" />
+                  <Text value="{$item.snippet}" fontSize="$fontSize-xs" whiteSpace="nowrap" overflowMode="ellipsis" maxLines="1" />
                 </HStack>
               </Link>
             </Items>

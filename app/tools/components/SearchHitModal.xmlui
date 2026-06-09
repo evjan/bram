@@ -12,7 +12,7 @@
       padding="$space-2"
       var.win="{searchHitWindow($props.body, $props.query, 500)}">
       <Text color="$textColor-secondary">
-        {(win.truncatedLeft ? '… ' : '') + win.before}<Text inline="true" backgroundColor="$color-warn-100" fontWeight="$fontWeight-bold">{win.match}</Text>{win.after + (win.truncatedRight ? ' …' : '')}
+        {(win.truncatedLeft ? '… ' : '') + win.before}<Text backgroundColor="$color-warn-100" fontWeight="$fontWeight-bold">{win.match}</Text>{win.after + (win.truncatedRight ? ' …' : '')}
       </Text>
       <HStack gap="$space-2">
         <SpaceFiller />

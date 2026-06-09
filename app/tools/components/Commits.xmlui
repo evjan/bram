@@ -145,8 +145,8 @@
                     value="{$item.snippet}"
                     fontSize="$fontSize-xs"
                     whiteSpace="nowrap"
-                    textOverflow="ellipsis"
-                    overflow="hidden" />
+                    overflowMode="ellipsis"
+                    maxLines="1" />
                 </HStack>
               </Link>
             </Items>

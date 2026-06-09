@@ -84,9 +84,9 @@
         onClear="selectedHistoryGroup = null; searchHitModalRef.close()" />
     </HStack>
 
-    <Spinner
-      when="{!history.value}"
-      size="sm" />
+    <Theme size-Spinner="1em">
+      <Spinner when="{!history.value}" />
+    </Theme>
 
     <Text
       when="{history.value &amp;&amp; history.value.length === 0}"

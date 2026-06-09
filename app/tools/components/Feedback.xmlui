@@ -58,9 +58,9 @@
         onClear="selectedFeedback = null; searchHitModalRef.close()" />
     </HStack>
 
-    <Spinner
-      when="{!feedbackList.value}"
-      size="sm" />
+    <Theme size-Spinner="1em">
+      <Spinner when="{!feedbackList.value}" />
+    </Theme>
 
     <Text
       when="{feedbackList.value &amp;&amp; feedbackList.value.length === 0}"

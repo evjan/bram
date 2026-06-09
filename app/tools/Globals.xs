@@ -1472,27 +1472,27 @@ function appendVoiceTranscript(component, transcript) {
   const cleaned = transcript.replace(/\r?\n/g, ' ').replace(/[ \t]+/g, ' ').trim();
   if (!cleaned) return false;
   const spacer = current && !/\s$/.test(current) ? ' ' : '';
-  const selection = typeof component.selectionStart === 'number'
-    ? {
-        start: component.selectionStart,
-        end: typeof component.selectionEnd === 'number' ? component.selectionEnd : component.selectionStart,
-        direction: component.selectionDirection || 'none'
-      }
-    : null;
   const appended = spacer + cleaned;
-  component.setValue(current + appended);
+  const next = current + appended;
+  component.setValue(next);
   const restore = () => {
-    let restored = false;
-    if (selection && typeof component.setSelectionRange === 'function') {
-      restored = restoreTextSelection(component, selection, current.length, appended.length);
+    let focused = false;
+    let cursorAtEnd = false;
+    if (typeof component.focus === 'function') {
+      component.focus();
+      focused = true;
+    }
+    if (typeof component.setSelectionRange === 'function') {
+      component.setSelectionRange(next.length, next.length);
+      cursorAtEnd = true;
     }
     iframeTrace('voice-input', {
       target: worklistVoiceTarget || 'message-agent',
       stage: 'append',
       chars: cleaned.length,
       rawChars: transcript.length,
-      hadSelection: !!selection,
-      restored
+      focused,
+      cursorAtEnd
     });
   };
   delay(0);

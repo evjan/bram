@@ -1469,7 +1469,9 @@ function restoreTextSelection(control, selection, currentLength, appendedLength)
 function appendVoiceTranscript(component, transcript) {
   if (!component || !transcript) return false;
   const current = String(component.value || '');
-  const spacer = current && !/\s$/.test(current) ? '\n' : '';
+  const cleaned = transcript.replace(/\r?\n/g, ' ').replace(/[ \t]+/g, ' ').trim();
+  if (!cleaned) return false;
+  const spacer = current && !/\s$/.test(current) ? ' ' : '';
   const selection = typeof component.selectionStart === 'number'
     ? {
         start: component.selectionStart,
@@ -1477,7 +1479,7 @@ function appendVoiceTranscript(component, transcript) {
         direction: component.selectionDirection || 'none'
       }
     : null;
-  const appended = spacer + transcript;
+  const appended = spacer + cleaned;
   component.setValue(current + appended);
   const restore = () => {
     let restored = false;
@@ -1487,7 +1489,8 @@ function appendVoiceTranscript(component, transcript) {
     iframeTrace('voice-input', {
       target: worklistVoiceTarget || 'message-agent',
       stage: 'append',
-      chars: transcript.length,
+      chars: cleaned.length,
+      rawChars: transcript.length,
       hadSelection: !!selection,
       restored
     });

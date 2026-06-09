@@ -347,6 +347,20 @@ window.recordToolbarPendingMenuFromEvent = function (event) {
 window.getToolbarPendingMenuState = function () {
   return window.__bramToolbarMenuState || { present: false, atMs: 0 };
 };
+// Pure helper hoisted from Globals.xs because the xs-script sandbox parser
+// rejects the regex-literal forms (`return /.../.test(...)` and
+// `String(...).match(/...\s/)`) — both produce "Error parsing code behind"
+// at load time. Native JS in window scope handles the same patterns fine,
+// and bare-name calls in xs (matching the toTurn / logToHost convention)
+// resolve to this implementation.
+window.isWorklistActionPayloadText = function (text) {
+  var t = String(text == null ? "" : text).trim();
+  return (
+    t.indexOf("approved: ") === 0 ||
+    t.indexOf("iterate: ") === 0 ||
+    t.indexOf("drop: ") === 0
+  );
+};
 window.logToHost = function (payload) {
   var invoke = getTauriInvoke();
   if (!invoke) return;

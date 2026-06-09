@@ -1349,14 +1349,35 @@ function worklistSubmittedMatches(exchangeUserText, submitted) {
 }
 
 function worklistConversationUserText(exchangeUserText, submitted, awaiting, submittedItemId) {
+  App.mark('worklist:conv-user-text:start');
   const exchange = String(exchangeUserText || '').trim();
   const display = String(submitted || '').trim();
-  if (awaiting && display) return display;
-  if (isWorklistActionPayloadText(exchange)) {
-    if (display) return display;
-    return formatUserTurnForTranscript(exchange);
+  const exchangeIsPayload = isWorklistActionPayloadText(exchange);
+  let result;
+  let branch;
+  if (awaiting && display) {
+    result = display;
+    branch = 'awaiting+display';
+  } else if (exchangeIsPayload) {
+    if (display) {
+      result = display;
+      branch = 'payload+display';
+    } else {
+      result = formatUserTurnForTranscript(exchange);
+      branch = 'payload+summary';
+    }
+  } else {
+    result = (exchange || display).trim();
+    branch = 'fallback';
   }
-  return (exchange || display).trim();
+  App.mark('worklist:conv-user-text:branch=' + branch +
+    '|awaiting=' + (awaiting ? '1' : '0') +
+    '|isPayload=' + (exchangeIsPayload ? '1' : '0') +
+    '|exchangeStart=' + exchange.slice(0, 16).replace(/\|/g, '_') +
+    '|displayStart=' + display.slice(0, 16).replace(/\|/g, '_') +
+    '|resultStart=' + (result || '').slice(0, 40).replace(/\|/g, '_'));
+  App.measure('worklist:conv-user-text:dur', 'worklist:conv-user-text:start');
+  return result;
 }
 
 // Returns true when the agent-turn-killed event should actually clear
@@ -1627,10 +1648,10 @@ function worklistLatestUserText(turns) {
   return worklistTurnText(turns[idx]).trim();
 }
 
-function isWorklistActionPayloadText(text) {
-  const t = String(text || '').trim();
-  return t.startsWith('approved: ') || t.startsWith('iterate: ') || t.startsWith('drop: ');
-}
+// isWorklistActionPayloadText lives in app/__shell/helpers.js as a
+// window helper — the xs-script parser choked on regex-literal versions
+// here. Bare-name calls resolve via the window scope (same as toTurn,
+// logToHost, queueFeedbackDraft).
 
 function worklistLatestAgentEntries(turns) {
   return worklistAgentEntriesAfterUser(turns, worklistLatestUserIndex(turns));

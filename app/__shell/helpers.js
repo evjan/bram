@@ -487,6 +487,7 @@ window.captureScreenshot = function () {
 // silently no-ops. Window-level listening sidesteps the focus problem.
 window.bramPendingPastedImages = window.bramPendingPastedImages || [];
 window.bramStagingPastedImages = window.bramStagingPastedImages || 0;
+window.bramPastedImageForCurrentTurn = window.bramPastedImageForCurrentTurn || false;
 document.addEventListener("paste", function (event) {
   if (!event.clipboardData) return;
   var items = event.clipboardData.items || [];
@@ -499,6 +500,12 @@ document.addEventListener("paste", function (event) {
     }
   }
   if (imageFiles.length === 0) return;
+  // A fresh paste means "this is the screenshot I am attaching now".
+  // Replace any older unsent staged paths so preview/send cannot stick on a
+  // stale image from an earlier test or abandoned draft. Multiple image files
+  // from the same paste event are still staged together below.
+  window.bramPendingPastedImages = [];
+  window.bramPastedImageForCurrentTurn = true;
   // Suppress the default paste so the TextArea doesn't pick up any file-path
   // or filename text the OS may have placed on the clipboard alongside the
   // image (Finder copy-image, macOS screenshot tool, etc.).
@@ -558,8 +565,13 @@ window.bramStagePastedImage = function (file) {
   });
 };
 window.bramConsumePastedImagePaths = function () {
+  if (!window.bramPastedImageForCurrentTurn) {
+    window.bramPendingPastedImages = [];
+    return [];
+  }
   var paths = (window.bramPendingPastedImages || []).slice();
   window.bramPendingPastedImages = [];
+  window.bramPastedImageForCurrentTurn = false;
   return paths;
 };
 window.bramRemovePastedImagePath = function (path) {

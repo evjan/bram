@@ -725,23 +725,33 @@ window.subscribeTalkSessionChange = function (key, fn) {
   // some of the 175→83 delivery gap if the parent listen() were
   // racing the iframe's swap window.
   try {
-    iframeTrace("subscriber-changed", {
-      context: "talk-session-changed",
-      op: "subscribe",
-      key: key,
-      count: __talkSessionSubscribers.length,
-    });
+    if (typeof window.logToHost === "function") {
+      window.logToHost({
+        kind: "iframe-trace",
+        subkind: "subscriber-changed",
+        at: new Date().toISOString(),
+        context: "talk-session-changed",
+        op: "subscribe",
+        key: key,
+        count: __talkSessionSubscribers.length,
+      });
+    }
   } catch (e) {}
   window[key] = function () {
     var idx = __talkSessionSubscribers.indexOf(fn);
     if (idx >= 0) __talkSessionSubscribers.splice(idx, 1);
     try {
-      iframeTrace("subscriber-changed", {
-        context: "talk-session-changed",
-        op: "unsubscribe",
-        key: key,
-        count: __talkSessionSubscribers.length,
-      });
+      if (typeof window.logToHost === "function") {
+        window.logToHost({
+          kind: "iframe-trace",
+          subkind: "subscriber-changed",
+          at: new Date().toISOString(),
+          context: "talk-session-changed",
+          op: "unsubscribe",
+          key: key,
+          count: __talkSessionSubscribers.length,
+        });
+      }
     } catch (e) {}
     window[key] = null;
   };
@@ -759,13 +769,18 @@ function __tscBatchTick(elapsedMs) {
   if (elapsedMs > __tscBatch.maxMs) __tscBatch.maxMs = elapsedMs;
   if (__tscBatch.count >= 10) {
     try {
-      iframeTrace("talk-session-batch", {
-        count: __tscBatch.count,
-        sumMs: Math.round(__tscBatch.totalMs * 10) / 10,
-        avgMs: Math.round((__tscBatch.totalMs / __tscBatch.count) * 10) / 10,
-        maxMs: Math.round(__tscBatch.maxMs * 10) / 10,
-        spanMs: Date.now() - __tscBatch.sinceMs,
-      });
+      if (typeof window.logToHost === "function") {
+        window.logToHost({
+          kind: "iframe-trace",
+          subkind: "talk-session-batch",
+          at: new Date().toISOString(),
+          count: __tscBatch.count,
+          sumMs: Math.round(__tscBatch.totalMs * 10) / 10,
+          avgMs: Math.round((__tscBatch.totalMs / __tscBatch.count) * 10) / 10,
+          maxMs: Math.round(__tscBatch.maxMs * 10) / 10,
+          spanMs: Date.now() - __tscBatch.sinceMs,
+        });
+      }
     } catch (e) {}
     __tscBatch = { count: 0, totalMs: 0, maxMs: 0, sinceMs: 0 };
   }
@@ -784,13 +799,18 @@ try {
       var correlationId = (event && event.payload && event.payload.correlation_id) || "";
       var atHostMs = (event && event.payload && typeof event.payload.at_host_ms === "number") ? event.payload.at_host_ms : 0;
       try {
-        iframeTrace("event-received", {
-          context: "talk-session-changed",
-          correlation_id: correlationId,
-          subscribers: __talkSessionSubscribers.length,
-          at_host_ms: atHostMs,
-          delta_to_emit_ms: atHostMs ? (Date.now() - atHostMs) : -1,
-        });
+        if (typeof window.logToHost === "function") {
+          window.logToHost({
+            kind: "iframe-trace",
+            subkind: "event-received",
+            at: new Date().toISOString(),
+            context: "talk-session-changed",
+            correlation_id: correlationId,
+            subscribers: __talkSessionSubscribers.length,
+            at_host_ms: atHostMs,
+            delta_to_emit_ms: atHostMs ? (Date.now() - atHostMs) : -1,
+          });
+        }
       } catch (e) {}
       var n = __talkSessionSubscribers.length;
       for (var i = 0; i < n; i++) {
@@ -970,12 +990,17 @@ window.startLatestJsonlPolling = function (key, getProvider) {
         if (!env || stopped) return;
         var content = env.content || "";
         try {
-          iframeTrace("jsonl-fanout", {
-            source: "helper",
-            len: content.length,
-            reset: !!env.reset,
-            truncated: !!env.truncated,
-          });
+          if (typeof window.logToHost === "function") {
+            window.logToHost({
+              kind: "iframe-trace",
+              subkind: "jsonl-fanout",
+              at: new Date().toISOString(),
+              source: "helper",
+              len: content.length,
+              reset: !!env.reset,
+              truncated: !!env.truncated,
+            });
+          }
         } catch (e) {}
         if (env.reset) {
           window.setLatestJsonl(content);

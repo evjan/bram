@@ -6431,27 +6431,47 @@ fn whisper_status(state: State<'_, WhisperState>) -> WhisperStatusReport {
 
 #[tauri::command]
 fn log_from_right_pane(app: AppHandle, payload: serde_json::Value) {
-    // Iframe-side trace records arrive with `kind: "iframe-trace"` and a
-    // `subkind` field; route them to the [iframe] category in the trace
-    // log. Other payloads keep the existing stderr behavior so unrelated
-    // iframe logging (e.g. git-push status from helpers.js) still shows
-    // up at the command line.
-    if payload.get("kind").and_then(|v| v.as_str()) == Some("iframe-trace") {
+    // Route structured iframe/parent logs into bram-trace.log so they're
+    // grep-able after a restart. Three categories today:
+    //
+    // - `iframe-trace` → `[iframe] subkind=<name> {...}`. The general-
+    //   purpose iframe-side trace channel (subscribeTauriEvent listeners,
+    //   conversation-sync ChangeListener, paste-image, etc.).
+    // - `voice` → `[voice] stage=<name> {...}`. The iframe helpers.js
+    //   voiceStart / voiceStop / voice-into-result lifecycle.
+    // - `voice-host` → `[voice-host] stage=<name> {...}`. main.js parent
+    //   shell recording pipeline (startRecording-enter, mediaRecorder-
+    //   onstop, whisper-request, deliverTranscript, etc.).
+    //
+    // Any other kind falls through to stderr (preserving previous
+    // behavior so unrelated logging — e.g. git-push status — still shows
+    // up at the command line).
+    let kind = payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let (category, label_key) = match kind {
+        "iframe-trace" => ("iframe", "subkind"),
+        "voice" => ("voice", "stage"),
+        "voice-host" => ("voice-host", "stage"),
+        _ => ("", ""),
+    };
+    if !category.is_empty() {
         if bram_trace_enabled() {
-            let subkind = payload
-                .get("subkind")
+            let label = payload
+                .get(label_key)
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
-            // Render remaining fields (anything other than kind/subkind/at)
+            // Render remaining fields (anything other than kind/label/at)
             // as a compact JSON object so the line stays scannable. `at`
             // is already captured by the outer [<ISO timestamp>]; the
-            // iframe-side `at` is preserved inside the JSON for cases
-            // where event-loop scheduling pushes the host's receive
-            // moment well after the iframe's send moment.
+            // emit-side `at` is preserved inside the JSON for cases where
+            // event-loop scheduling pushes the host's receive moment well
+            // after the emit moment.
             let mut rest = serde_json::Map::new();
             if let Some(obj) = payload.as_object() {
                 for (k, v) in obj {
-                    if k == "kind" || k == "subkind" {
+                    if k == "kind" || k == label_key {
                         continue;
                     }
                     rest.insert(k.clone(), v.clone());
@@ -6459,7 +6479,11 @@ fn log_from_right_pane(app: AppHandle, payload: serde_json::Value) {
             }
             let rest_str = serde_json::to_string(&serde_json::Value::Object(rest))
                 .unwrap_or_else(|_| "{}".to_string());
-            append_bram_trace_line(&app, "iframe", &format!("subkind={} {}", subkind, rest_str));
+            append_bram_trace_line(
+                &app,
+                category,
+                &format!("{}={} {}", label_key, label, rest_str),
+            );
         }
         return;
     }

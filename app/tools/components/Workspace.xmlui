@@ -127,53 +127,34 @@
     id="inflightClaim"
     url="/__inflight?t={inflightTick}"
     onLoaded="(data) => {
-      // Sentinel is the single source of truth for spinner state.
-      // No localStorage involvement — every reload re-derives from
-      // the host's .inflight-claim.json. If the sentinel claims any
-      // ids, we're submitting; otherwise we're not. The first id
-      // populates submittedItemId so the per-item spinner renders
-      // under the right row after an iframe reload mid-cycle.
-      const claimIds = (data &amp;&amp; data.ids) || [];
-      if (claimIds.length > 0) {
-        const targeted = claimIds[0];
-        if (!submitting || submittedItemId !== targeted) {
-          submitting = true;
-          submittedItemId = targeted;
-        }
-        actionProgressKind = (data &amp;&amp; data.kind) || actionProgressKind || '';
-      } else if (submitting) {
-        iframeTrace('inflight-clear', {reason: 'sentinel-cleared', item: submittedItemId || ''});
+      const u = inflightSentinelDecide(data, submitting, submittedItemId);
+      if (u.kind === 'submit') {
+        submitting = u.submitting;
+        submittedItemId = u.submittedItemId;
+        actionProgressKind = u.actionProgressKind || actionProgressKind || '';
+      } else if (u.kind === 'clear') {
+        iframeTrace('inflight-clear', u.trace);
         submitting = false;
         selected = null;
         submittedItemId = null;
         actionProgressKind = '';
         actionProgressTick = 0;
-        // stickyConversationTools / stickyConversationToolsKey intentionally
-        // NOT reset here. Mirror of the b54e9b1 fix in onSubmit: the sticky
-        // cache is the cross-turn bridge that keeps the `Agent: Tool uses`
-        // section mounted between the end of one turn and the first raw
-        // tool of the next. Resetting it here causes a transient unmount
-        // when the next turn's lastExchangeDS refetch hasn't populated raw
-        // yet -- diagnosed today as the 'transient flash of tool uses' the
-        // user reported on the reset-voice-target-on-inflight-clear approve
-        // cycle. The ChangeListener at line ~226 will overwrite sticky as
-        // soon as the next turn produces its own raw tools.
-        // Reset voice target back to message-agent. After an action cycle
-        // completes, `selected` clears and the feedback panel unmounts —
-        // which also unmounts the ChangeListener that delivers
-        // worklistVoiceText into feedbackBox. If worklistVoiceTarget stays
-        // 'feedback', the next voice cycle's transcript lands nowhere
-        // (the only mounted listener gates on 'message-agent'). Caught by
-        // the voice trace routing in `route-voice-logs-into-bram-trace`:
-        // [voice] stage=voice-into-result fired with a 64-char transcript
-        // but no matching subkind=voice-input stage=append followed.
         setWorklistVoiceTarget('message-agent');
         stickyConversationUserImages = [];
         stickyConversationUserImagesKey = '';
         selectedFeedback = '';
-        feedbackExpanded = false; expandedItemId = null;
+        feedbackExpanded = false;
+        expandedItemId = null;
       }
     }" />
+  <!-- Reactive voice-target reset: when the feedback panel becomes
+       unmounted (any path), set worklistVoiceTarget back to
+       'message-agent' so the always-mounted ChangeListener can deliver
+       transcripts. See resetVoiceTargetIfFeedbackPanelGone in Globals.xs
+       for the full rationale. -->
+  <ChangeListener
+    listenTo="{(selected || '') + ':' + (feedbackExpanded ? '1' : '0')}"
+    onDidChange="() => resetVoiceTargetIfFeedbackPanelGone(selected, feedbackExpanded)" />
   <!-- Transcript-aligned last response. Host derives this from the same
        parsed turn stream Transcript uses. Refetch is driven by JSONL
        fanout plus the shell's talk-session bridge so Workspace does not

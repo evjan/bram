@@ -1512,6 +1512,80 @@ window.bramCurrentPasteTarget = function () {
   return bramWorklistVoiceTarget || worklistVoiceTarget || '';
 };
 
+// Decide the iframe-side state update for the `inflightClaim` DataSource
+// (the wrapper around resources/.inflight-claim.json). Sentinel is the
+// single source of truth for the spinner. Returns an object the caller
+// destructures and assigns; xs scope rules prevent us from writing
+// App-level vars from a function defined here (that's the same lvalue
+// constraint we hit on the active-tool path in 525a718). Kinds:
+//   - 'submit' : sentinel claims an item; caller sets submitting +
+//                submittedItemId + actionProgressKind.
+//   - 'clear'  : sentinel went empty after a submitting state; caller
+//                runs the cleanup block (and emits the iframe-clear trace
+//                with the returned trace payload).
+//   - 'none'   : no transition needed.
+//
+// IMPORTANT non-resets in the 'clear' branch:
+//
+//   - stickyConversationTools / stickyConversationToolsKey
+//     INTENTIONALLY not reset here. Mirror of b54e9b1 in onSubmit:
+//     the sticky cache is the cross-turn bridge that keeps the
+//     `Agent: Tool uses` section mounted between the end of one
+//     turn and the first raw tool of the next. Resetting causes a
+//     transient unmount when lastExchangeDS hasn't refetched yet --
+//     diagnosed as the "transient flash of tool uses" symptom.
+//     The ChangeListener that updates sticky will overwrite it as
+//     soon as the next turn produces its own raw tools.
+//
+//   - setWorklistVoiceTarget('message-agent') IS called in the
+//     'clear' branch (and also via the reactive listener below).
+//     Belt-and-suspenders: after an action cycle completes, the
+//     feedback panel unmounts along with the ChangeListener that
+//     delivers worklistVoiceText into feedbackBox. If
+//     worklistVoiceTarget stayed 'feedback', the next voice cycle's
+//     transcript would land nowhere (only the message-agent
+//     ChangeListener is always mounted, and it gates on the target
+//     matching). The reactive listener below covers every other
+//     path that unmounts the feedback panel.
+function inflightSentinelDecide(data, prevSubmitting, prevSubmittedItemId) {
+  const claimIds = (data && data.ids) || [];
+  if (claimIds.length > 0) {
+    const targeted = claimIds[0];
+    const transitioning = !prevSubmitting || prevSubmittedItemId !== targeted;
+    return {
+      kind: 'submit',
+      submitting: transitioning ? true : prevSubmitting,
+      submittedItemId: transitioning ? targeted : prevSubmittedItemId,
+      actionProgressKind: (data && data.kind) || ''
+    };
+  } else if (prevSubmitting) {
+    return {
+      kind: 'clear',
+      trace: { reason: 'sentinel-cleared', item: prevSubmittedItemId || '' }
+    };
+  }
+  return { kind: 'none' };
+}
+
+// Reset worklistVoiceTarget to 'message-agent' whenever the feedback
+// panel is no longer mounted. Mounted condition:
+//   selected !== null AND feedbackExpanded === true.
+//
+// When the panel unmounts via any path (radio-dot click on a different
+// row, inflight-clear, item swap from the worklist, etc.), the feedback
+// ChangeListener that consumes worklistVoiceText goes with it. The
+// message-agent ChangeListener is always mounted but gates on
+// target === 'message-agent', so a stale 'feedback' target drops
+// transcripts on the floor (diagnosed 2026-06-10 06:18:12: [voice]
+// stage=voice-into-result fired, no subkind=voice-input stage=append).
+// Wired into a ChangeListener at the Workspace VStack so every
+// transition that affects panel mount-state triggers the check.
+function resetVoiceTargetIfFeedbackPanelGone(selected, feedbackExpanded) {
+  if (!selected || !feedbackExpanded) {
+    setWorklistVoiceTarget('message-agent');
+  }
+}
+
 function restoreTextSelection(control, selection, currentLength, appendedLength) {
   if (!control || !selection) return false;
   const atEnd = selection.start === currentLength && selection.end === currentLength;

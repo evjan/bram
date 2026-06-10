@@ -230,9 +230,7 @@
         stickyConversationUserImages = exchangeUserImages;
         stickyConversationUserImagesKey = conversationKey;
       }
-      const stickyMatches = stickyConversationToolsKey === conversationKey;
-      const stickyTools = stickyMatches ? (stickyConversationTools || []) : [];
-      const displayTools = exchangeTools.length >= stickyTools.length ? exchangeTools : stickyTools;
+      const displayTools = exchangeTools.length > 0 ? exchangeTools : (stickyConversationTools || []);
       const user = awaitingResponse &amp;&amp; submitted ? submitted : (exchangeUser || submitted);
       const assistant = awaitingResponse
         ? (exchangeMatchesSubmitted ? exchangeAssistant : '')
@@ -947,7 +945,7 @@
         var.conversationExchangeMatchesSubmitted="{worklistSubmittedMatches(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage)}"
         var.conversationKey="{(((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') || submittedWorklistMessage || submittedItemId || '').trim()}"
         var.conversationRawTools="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []}"
-        var.conversationTools="{awaitingResponse &amp;&amp; submittedKind !== 'action' &amp;&amp; !conversationExchangeMatchesSubmitted ? ((stickyConversationToolsKey === conversationKey) ? stickyConversationTools : []) : ((conversationRawTools &amp;&amp; conversationRawTools.length > 0) ? conversationRawTools : ((stickyConversationToolsKey === conversationKey) ? stickyConversationTools : []))}"
+        var.conversationTools="{(conversationRawTools &amp;&amp; conversationRawTools.length > 0) ? conversationRawTools : (stickyConversationTools || [])}"
         var.conversationAssistantText="{(((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '')).trim()}"
         var.conversationRawUserImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []}"
         var.conversationSubmittedImages="{(submittedWorklistImages &amp;&amp; submittedWorklistImages.length > 0) ? submittedWorklistImages : (extractImagePaths(submittedWorklistMessage || '').length > 0 ? extractImagePaths(submittedWorklistMessage || '') : extractImagePaths(conversationUserText || ''))}"

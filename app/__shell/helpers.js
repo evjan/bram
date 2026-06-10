@@ -856,7 +856,25 @@ function __ensureTauriEventListener(eventName) {
         }
       } catch (err) {}
       for (var i = 0; i < subs.length; i++) {
+        var subStart = (typeof performance !== "undefined" && performance.now)
+          ? performance.now()
+          : Date.now();
         try { subs[i](e); } catch (err) {}
+        try {
+          if (typeof window.logToHost === "function") {
+            var subEnd = (typeof performance !== "undefined" && performance.now)
+              ? performance.now()
+              : Date.now();
+            window.logToHost({
+              kind: "iframe-trace",
+              subkind: "subscriber-fired",
+              at: new Date().toISOString(),
+              event_name: eventName,
+              subscriber_index: i,
+              elapsed_ms: Math.round(subEnd - subStart),
+            });
+          }
+        } catch (err) {}
       }
     });
     __tauriEventListenReady[eventName] = Promise.resolve(listenResult).then(

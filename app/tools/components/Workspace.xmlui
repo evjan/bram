@@ -17,6 +17,7 @@
   var.newItemIssue="{null}"
   var.newItemVoiceRecording="{false}"
   var.pendingMenu="{null}"
+  var.pendingMenuSuppressFallback="{false}"
   var.agentIsWorking="{false}"
   var.openToolId="{null}"
   var.openTool="{null}"
@@ -190,6 +191,7 @@
     id="currentTurnEditsDS"
     url="/__current-turn-edits?t={lastAssistantTick}" />
 
+  <DataSource id="turnStateDS" url="/__turn-state" pollIntervalInSeconds="1" />
   <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" when="{conversationOpen}" />
   <Timer
     initialDelay="0"
@@ -325,8 +327,16 @@
       iframeTrace('listener-fired', {context: 'inflight-claim-changed'});
       inflightTick = inflightTick + 1;
     });
+    subscribeTauriEvent('__bramWorkspaceTurnStateUnsub', 'turn-state-changed', (e) => {
+      const p = (e &amp;&amp; e.payload) || {};
+      iframeTrace('listener-fired', {context: 'turn-state-changed', phase: p.phase || '', source: p.source || '', menu: p.pendingMenu ? p.pendingMenu.tool : ''});
+      turnStateDS.refetch();
+      pendingMenu = p.pendingMenu || null;
+      pendingMenuSuppressFallback = !p.pendingMenu;
+    });
     subscribeTauriEvent('__bramPtyMenuUnsub', 'pty-menu-changed', (e) => {
       pendingMenu = e &amp;&amp; e.payload ? e.payload : null;
+      pendingMenuSuppressFallback = !pendingMenu;
       iframeTrace('listener-fired', ptyMenuTracePayload(pendingMenu));
     });
     subscribeTauriEvent('__bramConvPaneAgentStatusUnsub', 'agent-status-changed', (e) => {
@@ -454,7 +464,7 @@
       maxPrimarySize="-320px"
       onResize="(px) => saveSplitterSize('worklist', px)">
       <VStack gap="$space-3" paddingRight="$space-3" overflowY="auto">
-    <VStack gap="$space-3" when="{worklist.value}">
+    <VStack gap="$space-3" when="{worklist.value}" var.effectivePendingMenu="{pendingMenu || (!pendingMenuSuppressFallback &amp;&amp; turnStateDS.value &amp;&amp; turnStateDS.value.pendingMenu)}">
       <VStack gap="$space-3">
         <HStack gap="$space-3" verticalAlignment="center">
           <Heading level="h2">Worklist</Heading>
@@ -474,59 +484,59 @@
             onClick="conversationOpen = !conversationOpen; writeLocalStorage('bram.conversationOpen', conversationOpen ? '1' : '0')" />
         </HStack>
         <VStack
-          when="{pendingMenu}"
+          when="{effectivePendingMenu}"
           gap="$space-2"
           padding="$space-3"
           borderRadius="$borderRadius"
           border="1px solid $color-warn-200"
           backgroundColor="$color-warn-50">
           <Text fontSize="$fontSize-sm" color="$color-warn-800">
-            Agent wants to use <Text fontFamily="$fontFamily-monospace">{pendingMenu.tool}</Text>
+            Agent wants to use <Text fontFamily="$fontFamily-monospace">{effectivePendingMenu.tool}</Text>
           </Text>
           <VStack
-            when="{pendingMenu.toolCallSignature}"
+            when="{effectivePendingMenu.toolCallSignature}"
             maxHeight="20em"
             overflowY="auto"
             padding="$space-2"
             borderRadius="$borderRadius"
             backgroundColor="$color-surface-100">
             <Text
-              when="{!pendingMenu.toolCallDiff}"
-              value="{pendingMenu.toolCallSignature}"
+              when="{!effectivePendingMenu.toolCallDiff}"
+              value="{effectivePendingMenu.toolCallSignature}"
               fontFamily="$fontFamily-monospace"
               fontSize="$fontSize-sm"
               preserveLinebreaks="true" />
             <DiffView
-              when="{pendingMenu.toolCallDiff}"
-              text="{(pendingMenu.toolCallDiff || '').slice(0, 20000)}" />
+              when="{effectivePendingMenu.toolCallDiff}"
+              text="{(effectivePendingMenu.toolCallDiff || '').slice(0, 20000)}" />
           </VStack>
           <VStack
-            when="{pendingMenu.toolCallContent}"
+            when="{effectivePendingMenu.toolCallContent}"
             maxHeight="20em"
             overflowY="auto"
             padding="$space-2"
             borderRadius="$borderRadius"
             backgroundColor="$color-surface-100">
-            <Markdown content="{pendingMenu.toolCallContent}" />
+            <Markdown content="{effectivePendingMenu.toolCallContent}" />
           </VStack>
           <VStack
-            when="{!pendingMenu.toolCallSignature &amp;&amp; pendingMenu.text}"
+            when="{!effectivePendingMenu.toolCallSignature &amp;&amp; effectivePendingMenu.text}"
             maxHeight="12em"
             overflowY="auto"
             padding="$space-2"
             borderRadius="$borderRadius"
             backgroundColor="$color-surface-100">
             <Text
-              value="{pendingMenu.text}"
+              value="{effectivePendingMenu.text}"
               fontFamily="$fontFamily-monospace"
               fontSize="$fontSize-xs"
               preserveLinebreaks="true" />
           </VStack>
           <VStack
-            when="{pendingMenu.options &amp;&amp; pendingMenu.options.length > 0}"
+            when="{effectivePendingMenu.options &amp;&amp; effectivePendingMenu.options.length > 0}"
             gap="$space-1">
             <Theme paddingHorizontal-Button-sm="$space-3">
-              <Items data="{pendingMenu.options}">
+              <Items data="{effectivePendingMenu.options}">
                 <HStack gap="$space-2" verticalAlignment="center">
                   <Button
                     label="{$item.key}"
@@ -539,7 +549,7 @@
             </Theme>
           </VStack>
           <HStack
-            when="{!pendingMenu.options || pendingMenu.options.length === 0}"
+            when="{!effectivePendingMenu.options || effectivePendingMenu.options.length === 0}"
             gap="$space-2"
             wrapContent="true">
             <Button label="1. Yes" variant="outlined" size="sm" onClick="sendKeys('1\r')" />

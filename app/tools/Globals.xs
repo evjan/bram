@@ -1564,6 +1564,10 @@ function setToolbarPendingMenuFromEvent(e) {
   recordToolbarPendingMenuFromEvent(e);
 }
 
+function setToolbarPendingMenuFromTurnState(turnState) {
+  recordToolbarPendingMenuFromEvent({ payload: turnState && turnState.pendingMenu });
+}
+
 function traceToolbarKey(key) {
   const toolbarMenuState = getToolbarPendingMenuState();
   iframeTrace('toolbar-key', {

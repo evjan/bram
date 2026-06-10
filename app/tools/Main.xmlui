@@ -1,9 +1,10 @@
 <App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.recording="{false}" var.setupCompleteProvider="{''}"
-  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); subscribeTauriEvent('__bramMainAgentStatusUnsub', 'agent-status-changed', () => { mainAgentStatus.refetch(); }); subscribeTauriEvent('__bramToolbarPtyMenuUnsub', 'pty-menu-changed', setToolbarPendingMenuFromEvent); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
+  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); subscribeTauriEvent('__bramMainAgentStatusUnsub', 'agent-status-changed', () => { mainAgentStatus.refetch(); turnState.refetch(); }); subscribeTauriEvent('__bramTurnStateUnsub', 'turn-state-changed', (e) => { turnState.refetch(); setToolbarPendingMenuFromTurnState(e &amp;&amp; e.payload); }); subscribeTauriEvent('__bramToolbarPtyMenuUnsub', 'pty-menu-changed', (e) => { setToolbarPendingMenuFromEvent(e); turnState.refetch(); }); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
   <DataSource id="appInfo" url="/__app-info" />
   <DataSource id="mainAgentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
+  <DataSource id="turnState" url="/__turn-state" pollIntervalInSeconds="1" />
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
     onDidChange="(c) => { if (c.newValue) { if ($pathname !== '/') navigate('/'); window.scrollAllToTop(); } }" />
@@ -132,10 +133,10 @@
   <AppHeader>
     <Theme fontSize-Button="$fontSize-md">
       <HStack gap="$space-0_5" verticalAlignment="center" width="100%">
-        <HStack width="14rem" minWidth="14rem" verticalAlignment="center" paddingHorizontal="$space-2">
+        <HStack width="16rem" minWidth="16rem" verticalAlignment="center" paddingHorizontal="$space-2">
           <Text
             when="{(mainAgentStatus.value || enhanceStatus.value) &amp;&amp; !(mainAgentStatus.value &amp;&amp; (mainAgentStatus.value.state === 'working' || mainAgentStatus.value.state === 'finished')) &amp;&amp; ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider))}"
-            fontSize="$fontSize-sm"
+            fontSize="$fontSize-md"
             fontStyle="italic"
             color="$textColor-secondary"
             overflowMode="none"
@@ -148,12 +149,12 @@
               <Spinner />
             </Theme>
             <Text
-              fontSize="$fontSize-sm"
+              fontSize="$fontSize-md"
               fontStyle="italic"
               overflowMode="none"
               value="{(mainAgentStatus.value.provider === 'claude' ? 'claude code' : (mainAgentStatus.value.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.value.verb || 'working') + '…'}" />
             <Text
-              fontSize="$fontSize-sm"
+              fontSize="$fontSize-md"
               color="$textColor-secondary"
               overflowMode="none"
               value="{mainAgentStatus.value.elapsedText || ''}" />
@@ -163,7 +164,7 @@
             gap="$space-1"
             verticalAlignment="center">
             <Text
-              fontSize="$fontSize-sm"
+              fontSize="$fontSize-md"
               fontStyle="italic"
               color="$textColor-secondary"
               overflowMode="none"

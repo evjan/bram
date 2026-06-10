@@ -702,6 +702,9 @@ fn trace_emit_payload<R: tauri::Runtime, S: serde::Serialize>(
     if let Some(verb) = value.get("verb").and_then(|v| v.as_str()) {
         extra.push_str(&format!(" verb={}", verb));
     }
+    if let Some(source) = value.get("source").and_then(|v| v.as_str()) {
+        extra.push_str(&format!(" source={}", source));
+    }
     append_bram_trace_line(
         app,
         "emit",
@@ -1256,6 +1259,8 @@ struct AgentStatus {
     output_tokens_text: Option<String>,
     #[serde(rename = "updatedAtMs")]
     updated_at_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
 }
 
 impl AgentStatus {
@@ -1268,6 +1273,7 @@ impl AgentStatus {
             substate: None,
             output_tokens_text: None,
             updated_at_ms: 0,
+            source: None,
         }
     }
 }
@@ -1278,6 +1284,152 @@ fn agent_status_cell() -> &'static Mutex<AgentStatus> {
 }
 
 const CODEX_AGENT_STATUS_STALE_MS: i64 = 3_000;
+
+#[derive(Clone, PartialEq, serde::Serialize)]
+struct TurnState {
+    provider: Option<String>,
+    phase: String,
+    #[serde(rename = "turnStamp", skip_serializing_if = "Option::is_none")]
+    turn_stamp: Option<String>,
+    #[serde(rename = "lastPtyActivityAtMs")]
+    last_pty_activity_at_ms: i64,
+    #[serde(rename = "lastJsonlActivityAtMs")]
+    last_jsonl_activity_at_ms: i64,
+    #[serde(rename = "lastJsonlReason", skip_serializing_if = "Option::is_none")]
+    last_jsonl_reason: Option<String>,
+    #[serde(rename = "lastNonFinalAssistantAtMs")]
+    last_non_final_assistant_at_ms: i64,
+    #[serde(rename = "lastCompletionAtMs")]
+    last_completion_at_ms: i64,
+    #[serde(
+        rename = "lastCompletionSource",
+        skip_serializing_if = "Option::is_none"
+    )]
+    last_completion_source: Option<String>,
+    #[serde(rename = "pendingMenu", skip_serializing_if = "Option::is_none")]
+    pending_menu: Option<PtyMenu>,
+    source: String,
+    reason: String,
+    #[serde(rename = "updatedAtMs")]
+    updated_at_ms: i64,
+}
+
+impl TurnState {
+    fn idle() -> Self {
+        TurnState {
+            provider: None,
+            phase: "idle".to_string(),
+            turn_stamp: None,
+            last_pty_activity_at_ms: 0,
+            last_jsonl_activity_at_ms: 0,
+            last_jsonl_reason: None,
+            last_non_final_assistant_at_ms: 0,
+            last_completion_at_ms: 0,
+            last_completion_source: None,
+            pending_menu: None,
+            source: "startup".to_string(),
+            reason: "initial".to_string(),
+            updated_at_ms: 0,
+        }
+    }
+}
+
+static TURN_STATE: OnceLock<Mutex<TurnState>> = OnceLock::new();
+fn turn_state_cell() -> &'static Mutex<TurnState> {
+    TURN_STATE.get_or_init(|| Mutex::new(TurnState::idle()))
+}
+
+fn trace_turn_state_transition<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    prev: &TurnState,
+    next: &TurnState,
+) {
+    if !bram_trace_enabled() {
+        return;
+    }
+    append_bram_trace_line(
+        app,
+        "turn-state",
+        &format!(
+            "from={} to={} provider={} turn={} source={} reason={} menu={} jsonlReason={}",
+            prev.phase,
+            next.phase,
+            next.provider.as_deref().unwrap_or(""),
+            next.turn_stamp.as_deref().unwrap_or(""),
+            next.source,
+            next.reason,
+            next.pending_menu
+                .as_ref()
+                .map(|m| m.tool.as_str())
+                .unwrap_or(""),
+            next.last_jsonl_reason.as_deref().unwrap_or("")
+        ),
+    );
+}
+
+fn update_turn_state<R: tauri::Runtime, F>(
+    app: &AppHandle<R>,
+    source: &str,
+    reason: &str,
+    update: F,
+) where
+    F: FnOnce(&mut TurnState),
+{
+    let mut emit_payload: Option<TurnState> = None;
+    let mut transition: Option<(TurnState, TurnState)> = None;
+    if let Ok(mut guard) = turn_state_cell().lock() {
+        let prev = guard.clone();
+        update(&mut guard);
+        guard.source = source.to_string();
+        guard.reason = reason.to_string();
+        guard.updated_at_ms = unix_now_ms();
+        if *guard != prev {
+            let next = guard.clone();
+            transition = Some((prev, next.clone()));
+            emit_payload = Some(next);
+        }
+    }
+    if let Some((prev, next)) = transition {
+        trace_turn_state_transition(app, &prev, &next);
+    }
+    if let Some(payload) = emit_payload {
+        emit_replayable_payload(app, "turn-state-changed", &payload);
+    }
+}
+
+fn turn_state_note_pty_activity() {
+    if let Ok(mut guard) = turn_state_cell().lock() {
+        let now = unix_now_ms();
+        if now.saturating_sub(guard.last_pty_activity_at_ms) >= 250 {
+            guard.last_pty_activity_at_ms = now;
+        }
+    }
+}
+
+fn session_provider_label(provider: SessionProvider) -> &'static str {
+    match provider {
+        SessionProvider::Claude => "claude",
+        SessionProvider::Codex => "codex",
+    }
+}
+
+fn turn_state_set_menu<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    menu: Option<PtyMenu>,
+    source: &str,
+    reason: &str,
+) {
+    let phase = if menu.is_some() {
+        "waiting-for-permission"
+    } else {
+        "working"
+    };
+    update_turn_state(app, source, reason, |s| {
+        s.provider = hinted_session_provider(app).map(|p| session_provider_label(p).to_string());
+        s.phase = phase.to_string();
+        s.pending_menu = menu;
+    });
+}
 
 // Parsed snapshot of Claude's rotating status line. Drives the row's
 // verb, elapsed text, and substate ("thinking some more", "almost done
@@ -1785,7 +1937,7 @@ fn kill_current_claude_turn_with_finished<R: tauri::Runtime>(
         Some(SessionProvider::Codex) => "codex",
         _ => "claude",
     };
-    agent_status_emit_finished(app, provider, verb, elapsed_text);
+    agent_status_emit_finished(app, provider, verb, elapsed_text, "pty-turn-finished");
     // Dedicated "real end-of-turn" signal — distinct from the eager
     // `agent-turn-end` event which fires on any 800 ms silence. The
     // worklist's awaitingResponse gate keys on this; agent-turn-end
@@ -1802,6 +1954,7 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
     provider: &str,
     verb: Option<String>,
     elapsed_text: Option<String>,
+    source: &str,
 ) {
     let next = AgentStatus {
         provider: Some(provider.to_string()),
@@ -1811,6 +1964,7 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
         substate: None,
         output_tokens_text: None,
         updated_at_ms: unix_now_ms(),
+        source: Some(source.to_string()),
     };
     // Idempotency: if the cached state already matches the proposed
     // finished payload, skip the side effects. Without this, the same
@@ -1841,6 +1995,13 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
         *cur = next.clone();
     }
     emit_replayable_payload(app, "agent-status-changed", &next);
+    update_turn_state(app, "agent-status", "finished", |s| {
+        s.provider = Some(provider.to_string());
+        s.phase = "finished".to_string();
+        s.last_completion_at_ms = next.updated_at_ms;
+        s.last_completion_source = next.source.clone();
+        s.pending_menu = None;
+    });
 }
 
 // Background poller: re-reads the latest Claude session JSONL every
@@ -2118,6 +2279,7 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
             // we deliberately don't surface them on the row.
             output_tokens_text: None,
             updated_at_ms: unix_now_ms(),
+            source: Some("pty-status".to_string()),
         }
     } else {
         // Full-form parse missed. Try the standalone "Verb…" form
@@ -2139,6 +2301,7 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
             substate: scanned_substate.or_else(sticky_substate_recall),
             output_tokens_text: None,
             updated_at_ms: unix_now_ms(),
+            source: Some("pty-status-fallback".to_string()),
         }
     };
 
@@ -2158,6 +2321,26 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
     if let Some(payload) = emit_payload {
         emit_replayable_payload(app, "agent-status-changed", &payload);
+        update_turn_state(
+            app,
+            payload.source.as_deref().unwrap_or("pty-status"),
+            "working",
+            |s| {
+                s.provider = Some("claude".to_string());
+                // pty-menu outranks pty-status / pty-status-fallback: when a
+                // permission menu is open, the user-facing truth is
+                // "waiting-for-permission", not "working", even though the
+                // JSONL still shows non-final-assistant (the tool_use block
+                // IS the last assistant content). If pending_menu is set,
+                // leave both pending_menu and phase alone — the next
+                // pty-menu source emit (dismissed / cleared) will release
+                // the phase back to working.
+                if s.pending_menu.is_none() {
+                    s.phase = "working".to_string();
+                }
+                s.turn_stamp = Some(stats.user_ts_ms.to_string());
+            },
+        );
     }
 }
 
@@ -2266,6 +2449,7 @@ fn agent_status_set_codex_working<R: tauri::Runtime>(
         substate: None,
         output_tokens_text: None,
         updated_at_ms: unix_now_ms(),
+        source: Some("pty-spinner".to_string()),
     };
     let mut emit_payload: Option<AgentStatus> = None;
     if let Ok(mut cur) = agent_status_cell().lock() {
@@ -2283,10 +2467,87 @@ fn agent_status_set_codex_working<R: tauri::Runtime>(
     }
     if let Some(payload) = emit_payload {
         emit_replayable_payload(app, "agent-status-changed", &payload);
+        update_turn_state(app, "pty-spinner", "codex-working", |s| {
+            s.provider = Some("codex".to_string());
+            s.phase = "working".to_string();
+            s.pending_menu = None;
+        });
     }
 }
 
+fn agent_status_set_claude_jsonl_working<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    file_mtime_ms: i64,
+    reason: &str,
+) {
+    if !matches!(hinted_session_provider(app), Some(SessionProvider::Claude)) {
+        return;
+    }
+    let stats = match claude_turn_stats_cell().lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => None,
+    };
+    let Some(stats) = stats else { return };
+    if !stats.is_working {
+        return;
+    }
+    let killed_ts = last_killed_user_ts_ms_cell()
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(0);
+    if stats.user_ts_ms <= killed_ts {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "agent-status",
+                &format!(
+                    "op=skip-jsonl-working reason=killed-turn userTs={} killedTs={}",
+                    stats.user_ts_ms, killed_ts
+                ),
+            );
+        }
+        return;
+    }
+    let elapsed_ms = (unix_now_ms() - stats.user_ts_ms).max(0);
+    let next = AgentStatus {
+        provider: Some("claude".to_string()),
+        state: "working".to_string(),
+        verb: sticky_verb_recall().or_else(|| Some("working".to_string())),
+        elapsed_text: Some(format_elapsed_text(elapsed_ms)),
+        substate: sticky_substate_recall(),
+        output_tokens_text: None,
+        updated_at_ms: unix_now_ms(),
+        source: Some("jsonl-non-final".to_string()),
+    };
+    let mut emit_payload: Option<AgentStatus> = None;
+    if let Ok(mut cur) = agent_status_cell().lock() {
+        let changed = cur.state != next.state
+            || cur.provider != next.provider
+            || cur.verb != next.verb
+            || cur.elapsed_text != next.elapsed_text
+            || cur.substate != next.substate;
+        if changed {
+            *cur = next.clone();
+            emit_payload = Some(next);
+        } else {
+            cur.updated_at_ms = next.updated_at_ms;
+        }
+    }
+    if let Some(payload) = emit_payload {
+        emit_replayable_payload(app, "agent-status-changed", &payload);
+    }
+    update_turn_state(app, "jsonl-non-final", reason, |s| {
+        s.provider = Some("claude".to_string());
+        s.phase = "working".to_string();
+        s.turn_stamp = Some(stats.user_ts_ms.to_string());
+        s.last_jsonl_activity_at_ms = file_mtime_ms;
+        s.last_non_final_assistant_at_ms = file_mtime_ms;
+        s.last_jsonl_reason = Some(reason.to_string());
+    });
+}
+
 fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
+    turn_state_note_pty_activity();
     let now = std::time::Instant::now();
     let has_spinner = pty_chunk_has_turn_activity_glyph(chunk);
     let mut emit_now = false;
@@ -2739,6 +3000,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     }
 
     if let Some(payload) = emit_payload {
+        turn_state_set_menu(app, payload.clone(), "pty-menu", "detected");
         emit_replayable_payload(app, "pty-menu-changed", &payload);
         trace_pty_menu_options(app, &payload);
     }
@@ -2813,6 +3075,12 @@ fn try_signature_recheck_on_jsonl_change<R: tauri::Runtime>(app: &AppHandle<R>) 
                 ),
             );
         }
+        turn_state_set_menu(
+            app,
+            payload.clone(),
+            "pty-menu",
+            "signature-watcher-recheck",
+        );
         emit_replayable_payload(app, "pty-menu-changed", &payload);
         trace_pty_menu_options(app, &payload);
     }
@@ -2925,6 +3193,12 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                         ),
                     );
                 }
+                turn_state_set_menu(
+                    &app_handle,
+                    payload.clone(),
+                    "pty-menu",
+                    "signature-deferred-recheck",
+                );
                 emit_replayable_payload(&app_handle, "pty-menu-changed", &payload);
                 trace_pty_menu_options(&app_handle, &payload);
             }
@@ -3673,6 +3947,7 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
         // Tell subscribers the menu went away. Emit AFTER releasing all
         // pty_menu_* locks for the same anti-deadlock reason as in
         // pty_menu_update.
+        turn_state_set_menu(app, None, "pty-menu", "dismissed");
         emit_replayable_payload(app, "pty-menu-changed", Option::<PtyMenu>::None);
     } else if input == "\x1b" {
         clear_active_sentinel_with_reason(app, "pty-escape");
@@ -12196,6 +12471,16 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
             JsonlCompletionProvider::Claude
         ) | (Some(SessionProvider::Codex), JsonlCompletionProvider::Codex)
     );
+    if active_matches {
+        update_turn_state(app, "jsonl", decision.reason, |s| {
+            s.provider = Some(provider_label.to_string());
+            s.last_jsonl_activity_at_ms = file_mtime_ms;
+            s.last_jsonl_reason = Some(decision.reason.to_string());
+        });
+        if provider == JsonlCompletionProvider::Claude && decision.reason == "non-final-assistant" {
+            agent_status_set_claude_jsonl_working(app, file_mtime_ms, decision.reason);
+        }
+    }
     if decision.detected && active_matches {
         match provider {
             JsonlCompletionProvider::Claude => {
@@ -12228,7 +12513,7 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
                         "source=jsonl provider=codex verb=(none) elapsed=(none)",
                     );
                 }
-                agent_status_emit_finished(app, provider_label, None, None);
+                agent_status_emit_finished(app, provider_label, None, None, "jsonl-end-turn");
             }
         }
     }
@@ -16255,9 +16540,18 @@ fn route_request<R: tauri::Runtime>(
             false
         };
         if codex_stale {
-            agent_status_emit_finished(app, "codex", None, None);
+            agent_status_emit_finished(app, "codex", None, None, "codex-stale");
         }
         let body = if let Ok(cur) = agent_status_cell().lock() {
+            serde_json::to_vec(&*cur).unwrap_or_default()
+        } else {
+            b"{}".to_vec()
+        };
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    if path == "__turn-state" {
+        let body = if let Ok(cur) = turn_state_cell().lock() {
             serde_json::to_vec(&*cur).unwrap_or_default()
         } else {
             b"{}".to_vec()

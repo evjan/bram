@@ -1270,6 +1270,20 @@ function restoreWorklistDraftCursor(component) {
   return restoreTextSelection(component, saved, currentLength, 0);
 }
 
+function restoreConversationOpen() {
+  const raw = readLocalStorage('bram.conversationOpen', '1');
+  const result = raw !== '0';
+  iframeTrace('conversation-open-restore', { raw, open: result });
+  return result;
+}
+
+function toggleConversationOpen(current) {
+  const next = !current;
+  writeLocalStorage('bram.conversationOpen', next ? '1' : '0');
+  iframeTrace('conversation-open-save', { open: next });
+  return next;
+}
+
 function restoreWorklistUiState(field) {
   const raw = readLocalStorage('bram.worklistUiState', '');
   if (!raw) {

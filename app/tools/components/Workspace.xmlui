@@ -45,7 +45,7 @@
   var.pendingPastedImageCount="{window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0}"
   var.pendingPastedImagePaths="{window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []}"
   var.stagingPastedImageCount="{window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0}"
-  var.conversationOpen="{readLocalStorage('bram.conversationOpen', '1') !== '0'}"
+  var.conversationOpen="{restoreConversationOpen()}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}"
   var.submittedKind="{restoreWorklistSubmittedKind()}">
@@ -508,7 +508,7 @@
             label="{conversationOpen ? 'Hide conversation' : 'Show conversation'}"
             variant="ghost"
             size="xs"
-            onClick="conversationOpen = !conversationOpen; writeLocalStorage('bram.conversationOpen', conversationOpen ? '1' : '0')" />
+            onClick="conversationOpen = toggleConversationOpen(conversationOpen)" />
         </HStack>
         <VStack
           when="{effectivePendingMenu}"

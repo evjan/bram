@@ -17,7 +17,7 @@
   var.newItemIssue="{null}"
   var.newItemVoiceRecording="{false}"
   var.pendingMenu="{null}"
-  var.pendingMenuSuppressFallback="{false}"
+  var.pendingMenuSuppressFallback="{true}"
   var.agentIsWorking="{false}"
   var.openToolId="{null}"
   var.openTool="{null}"
@@ -342,15 +342,15 @@
     });
     subscribeTauriEvent('__bramWorkspaceTurnStateUnsub', 'turn-state-changed', (e) => {
       const p = (e &amp;&amp; e.payload) || {};
-      iframeTrace('listener-fired', {context: 'turn-state-changed', phase: p.phase || '', source: p.source || '', menu: p.pendingMenu ? p.pendingMenu.tool : ''});
       turnStateDS.refetch();
       pendingMenu = p.pendingMenu || null;
       pendingMenuSuppressFallback = !p.pendingMenu;
+      iframeTrace('listener-fired', {context: 'turn-state-changed', surface: 'worklist', phase: p.phase || '', source: p.source || '', menu: p.pendingMenu ? p.pendingMenu.tool : '', assignedMenu: pendingMenu ? pendingMenu.tool : '', suppressFallback: pendingMenuSuppressFallback});
     });
     subscribeTauriEvent('__bramPtyMenuUnsub', 'pty-menu-changed', (e) => {
       pendingMenu = e &amp;&amp; e.payload ? e.payload : null;
       pendingMenuSuppressFallback = !pendingMenu;
-      iframeTrace('listener-fired', ptyMenuTracePayload(pendingMenu));
+      iframeTrace('listener-fired', {context: 'pty-menu-changed', surface: 'worklist', tool: (pendingMenu &amp;&amp; pendingMenu.tool) || '', hasSignature: !!(pendingMenu &amp;&amp; pendingMenu.toolCallSignature), signatureChars: pendingMenu &amp;&amp; pendingMenu.toolCallSignature ? pendingMenu.toolCallSignature.length : 0, assignedMenu: pendingMenu ? pendingMenu.tool : '', suppressFallback: pendingMenuSuppressFallback});
     });
     subscribeTauriEvent('__bramConvPaneAgentStatusUnsub', 'agent-status-changed', (e) => {
       const p = e &amp;&amp; e.payload;

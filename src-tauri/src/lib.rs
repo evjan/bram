@@ -1031,7 +1031,7 @@ static PTY_MENU_SUPPRESSED: OnceLock<Mutex<Option<(String, std::time::Instant)>>
 // re-detection emits the dismiss normally. Refs #77 menu-detector
 // stabilization.
 static PTY_MENU_EVICTION_GRACE: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
-const MENU_EVICTION_GRACE_MS: u128 = 350;
+const MENU_EVICTION_GRACE_MS: u128 = 1500;
 
 // The loopback HTTP server's port, captured at setup. Used to inject
 // XMLUI_DESKTOP_PORT into the PTY child's environment so the agent can
@@ -3040,6 +3040,17 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                         new_menu.tool,
                         when.elapsed().as_millis()
                     );
+                    if bram_trace_enabled() {
+                        append_bram_trace_line(
+                            app,
+                            "pty-menu",
+                            &format!(
+                                "state=suppressed tool={} reason=post-dismiss-redetect elapsed_ms={}",
+                                new_menu.tool,
+                                when.elapsed().as_millis()
+                            ),
+                        );
+                    }
                     detected = None;
                 }
             }
@@ -3064,6 +3075,13 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         if detected.is_none() && codex_action_required_title {
             if let Some(prev) = prev_menu.as_ref() {
                 if prev.tool != PENDING_TOOL {
+                    if bram_trace_enabled() {
+                        append_bram_trace_line(
+                            app,
+                            "pty-menu",
+                            &format!("state=held tool={} reason=codex-action-title", prev.tool),
+                        );
+                    }
                     detected = Some(prev.clone());
                 }
             }
@@ -3086,9 +3104,32 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                             "[pty-menu] eviction grace started for tool={}",
                             prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?")
                         );
+                        if bram_trace_enabled() {
+                            append_bram_trace_line(
+                                app,
+                                "pty-menu",
+                                &format!(
+                                    "state=hold-start tool={} reason=buffer-evicted grace_ms={}",
+                                    prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?"),
+                                    MENU_EVICTION_GRACE_MS
+                                ),
+                            );
+                        }
                         return;
                     }
                     Some(started) if started.elapsed().as_millis() < MENU_EVICTION_GRACE_MS => {
+                        if bram_trace_enabled() {
+                            append_bram_trace_line(
+                                app,
+                                "pty-menu",
+                                &format!(
+                                    "state=holding tool={} reason=buffer-evicted elapsed_ms={} grace_ms={}",
+                                    prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?"),
+                                    started.elapsed().as_millis(),
+                                    MENU_EVICTION_GRACE_MS
+                                ),
+                            );
+                        }
                         return;
                     }
                     Some(started) => {
@@ -3097,6 +3138,17 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                             "[pty-menu] eviction grace expired ({}ms); proceeding with dismiss",
                             started.elapsed().as_millis()
                         );
+                        if bram_trace_enabled() {
+                            append_bram_trace_line(
+                                app,
+                                "pty-menu",
+                                &format!(
+                                    "state=hold-expired tool={} reason=buffer-evicted elapsed_ms={}",
+                                    prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?"),
+                                    started.elapsed().as_millis()
+                                ),
+                            );
+                        }
                     }
                 }
             }
@@ -3104,6 +3156,13 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             if let Ok(mut grace) = pty_menu_eviction_grace_cell().lock() {
                 if grace.is_some() {
                     eprintln!("[pty-menu] eviction grace cleared by re-detection");
+                    if bram_trace_enabled() {
+                        append_bram_trace_line(
+                            app,
+                            "pty-menu",
+                            "state=hold-cleared reason=redetected",
+                        );
+                    }
                     *grace = None;
                 }
             }
@@ -3693,14 +3752,14 @@ fn pty_codex_action_required_pos(tail: &[u8]) -> Option<usize> {
 }
 
 fn codex_fragmented_menu_options(text: &str) -> Vec<MenuOption> {
-    let parsed = parse_menu_options(text);
-    if !parsed.is_empty() {
-        return parsed;
-    }
-
     let flattened = codex_flattened_menu_options(text);
     if !flattened.is_empty() {
         return flattened;
+    }
+
+    let parsed = parse_menu_options(text);
+    if !parsed.is_empty() {
+        return parsed;
     }
 
     let mut keys: Vec<String> = Vec::new();
@@ -3782,18 +3841,13 @@ fn codex_flattened_menu_options(text: &str) -> Vec<MenuOption> {
             break;
         }
         let raw_label = text[*label_start..next_marker].trim();
-        let label = raw_label
-            .split("Esc to cancel")
-            .next()
-            .unwrap_or(raw_label)
-            .trim()
-            .trim_matches(|c: char| c == '\u{a0}' || c.is_whitespace());
+        let label = normalize_codex_menu_label(raw_label);
         opts.push(MenuOption {
             key: key.clone(),
             label: if label.is_empty() {
                 format!("Option {key}")
             } else {
-                label.to_string()
+                label
             },
         });
         expected += 1;
@@ -3804,6 +3858,91 @@ fn codex_flattened_menu_options(text: &str) -> Vec<MenuOption> {
     } else {
         Vec::new()
     }
+}
+
+fn normalize_codex_menu_label(raw_label: &str) -> String {
+    let without_footer = strip_codex_menu_footer(raw_label);
+    let collapsed = collapse_menu_label_whitespace(without_footer);
+    repair_codex_collapsed_label(&collapsed)
+}
+
+fn strip_codex_menu_footer(raw_label: &str) -> &str {
+    let lower = raw_label.to_ascii_lowercase();
+    let mut end = raw_label.len();
+    for needle in [
+        "press enter to confirm",
+        "esc to cancel",
+        "tab to amend",
+        "ctrl+e to explain",
+    ] {
+        if let Some(idx) = lower.find(needle) {
+            end = end.min(idx);
+        }
+    }
+    raw_label[..end].trim()
+}
+
+fn collapse_menu_label_whitespace(raw_label: &str) -> String {
+    let mut out = String::new();
+    let mut pending_space = false;
+    for c in raw_label.chars() {
+        if c == '\r' || c == '\n' || c == '\u{a0}' || c.is_whitespace() {
+            pending_space = !out.is_empty();
+            continue;
+        }
+        if pending_space {
+            out.push(' ');
+            pending_space = false;
+        }
+        out.push(c);
+    }
+    out.trim().to_string()
+}
+
+fn repair_codex_collapsed_label(label: &str) -> String {
+    if label.contains(' ') {
+        return label.to_string();
+    }
+    let lower = label.to_ascii_lowercase();
+    if lower == "yes,proceed(y)" {
+        return "Yes, proceed (y)".to_string();
+    }
+    let ask_again = "yes,anddon'taskagainforcommandsthatstartwith";
+    if lower.starts_with(ask_again) {
+        let suffix = &label[ask_again.len()..];
+        return format!(
+            "Yes, and don't ask again for commands that start with {}",
+            space_shortcut_suffix(suffix)
+        )
+        .trim()
+        .to_string();
+    }
+    let no_prefix = "no,andtellcodexwhattododifferently";
+    if lower.starts_with(no_prefix) {
+        let suffix = &label[no_prefix.len()..];
+        return format!(
+            "No, and tell Codex what to do differently{}",
+            if suffix.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", space_shortcut_suffix(suffix))
+            }
+        );
+    }
+    label.to_string()
+}
+
+fn space_shortcut_suffix(suffix: &str) -> String {
+    let mut out = String::new();
+    let mut prev = '\0';
+    for c in suffix.chars() {
+        if c == '(' && !out.is_empty() && prev != ' ' {
+            out.push(' ');
+        }
+        out.push(c);
+        prev = c;
+    }
+    out
 }
 
 fn codex_menu_line_is_numbered_option(line: &str) -> bool {
@@ -15076,6 +15215,24 @@ command: pwd     1. Yes, proceed (y)  2. Yes, and don't ask again for commands t
         assert_eq!(
             menu.options[2].label,
             "No, and tell Codex what to do differently"
+        );
+    }
+
+    #[test]
+    fn codex_flattened_menu_repairs_collapsed_spacing_and_footer() {
+        let text = "\x1b]0;[ ! ] Action Required | bram\x07\
+command: pwd ❯1.Yes,proceed(y)2.Yes,anddon'taskagainforcommandsthatstartwith`pwd`(p)3.No,andtellCodexwhattododifferently(esc)Press enter to confirm or esc to cancel";
+        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
+
+        assert_eq!(menu.options.len(), 3);
+        assert_eq!(menu.options[0].label, "Yes, proceed (y)");
+        assert_eq!(
+            menu.options[1].label,
+            "Yes, and don't ask again for commands that start with `pwd` (p)"
+        );
+        assert_eq!(
+            menu.options[2].label,
+            "No, and tell Codex what to do differently (esc)"
         );
     }
 

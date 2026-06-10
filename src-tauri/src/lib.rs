@@ -2612,7 +2612,6 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                         now.saturating_duration_since(t).as_millis() < AGENT_TURN_EMIT_COOLDOWN_MS
                     });
                     if !in_cooldown {
-                        state.last_emit_at = Some(now);
                         emit_now = true;
                         turn_end_silence_ms = Some(silence);
                     }
@@ -2636,6 +2635,40 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         }
     }
     if emit_now {
+        // Defer to JSONL: if the detector says non-final-assistant,
+        // skip the emit entirely. PTY silence alone is unreliable;
+        // inter-tool-call think pauses can cross
+        // AGENT_TURN_IDLE_THRESHOLD_MS while JSONL still shows
+        // non-final-assistant. Fallback (unreadable / missing JSONL)
+        // keeps the pre-change behavior.
+        let jsonl_says_done = match latest_session_path(app, None).ok().flatten() {
+            Some(path) => match std::fs::read_to_string(&path) {
+                Ok(content) => match hinted_session_provider(app) {
+                    Some(SessionProvider::Codex) => {
+                        codex_jsonl_completion_decision(&content).detected
+                    }
+                    _ => claude_jsonl_completion_decision(&content).detected,
+                },
+                Err(_) => true,
+            },
+            None => true,
+        };
+        if !jsonl_says_done {
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    app,
+                    "agent-status",
+                    &format!(
+                        "op=skip-agent-turn-end source=pty-turn-activity-stop silence_ms={} reason=jsonl-non-final",
+                        turn_end_silence_ms.unwrap_or(0)
+                    ),
+                );
+            }
+            return;
+        }
+        if let Ok(mut state) = agent_turn_state_cell().lock() {
+            state.last_emit_at = Some(now);
+        }
         if bram_trace_enabled() {
             // Include the silence gap that triggered the fire. A
             // premature fire (#78) typically shows silence_ms close to
@@ -2701,54 +2734,21 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // turn-end removes that risk class. The explicit end routes
         // still work for agents that want to clear early.
         if turn_end_silence_ms.map_or(false, |s| s >= MIN_SILENCE_FOR_SENTINEL_CLEAR_MS) {
-            // Defer to JSONL when it disagrees. A think pause between two
-            // tool calls can easily exceed MIN_SILENCE_FOR_SENTINEL_CLEAR_MS
-            // (observed 3923 ms on 2026-06-09); clearing the sentinel
-            // mid-turn drops the spinner / selection / expansion on the
-            // user-facing worklist item while the agent is still writing.
-            // The JSONL detector knows the difference between
-            // non-final-assistant (still writing) and end_turn (truly
-            // done) — consult it before letting silence alone clear the
-            // claim. Fallback (unreadable / missing JSONL) keeps the
-            // pre-change behavior.
-            let jsonl_says_done = match latest_session_path(app, None).ok().flatten() {
-                Some(path) => match std::fs::read_to_string(&path) {
-                    Ok(content) => match hinted_session_provider(app) {
-                        Some(SessionProvider::Codex) => {
-                            codex_jsonl_completion_decision(&content).detected
-                        }
-                        _ => claude_jsonl_completion_decision(&content).detected,
-                    },
-                    Err(_) => true,
-                },
-                None => true,
-            };
-            if jsonl_says_done {
-                let claimed_after = inflight_claim_ids_and_claimed_at(app)
-                    .map(|(ids, claimed_at)| !ids.is_empty() && unix_now_ms() >= claimed_at)
-                    .unwrap_or(false);
-                record_turn_completion_monitor(
-                    "pty-silence",
-                    "pty",
-                    "silence-threshold",
-                    format!(
-                        "PTY turn activity stopped after {} ms of silence",
-                        turn_end_silence_ms.unwrap_or(0)
-                    ),
-                    unix_now_ms(),
-                    claimed_after,
-                );
-                clear_active_sentinel(app);
-            } else if bram_trace_enabled() {
-                append_bram_trace_line(
-                    app,
-                    "agent-status",
-                    &format!(
-                        "op=skip-sentinel-clear source=pty-turn-activity-stop silence_ms={} reason=jsonl-non-final",
-                        turn_end_silence_ms.unwrap_or(0)
-                    ),
-                );
-            }
+            let claimed_after = inflight_claim_ids_and_claimed_at(app)
+                .map(|(ids, claimed_at)| !ids.is_empty() && unix_now_ms() >= claimed_at)
+                .unwrap_or(false);
+            record_turn_completion_monitor(
+                "pty-silence",
+                "pty",
+                "silence-threshold",
+                format!(
+                    "PTY turn activity stopped after {} ms of silence",
+                    turn_end_silence_ms.unwrap_or(0)
+                ),
+                unix_now_ms(),
+                claimed_after,
+            );
+            clear_active_sentinel(app);
         }
     }
 }
@@ -2893,11 +2893,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     } else {
         None
     };
-    let scan_outcome: &'static str = if detected.is_some() {
-        "fire"
-    } else {
-        "skip"
-    };
+    let scan_outcome: &'static str = if detected.is_some() { "fire" } else { "skip" };
 
     drop(tail);
     if let Some(diag) = scan_log {
@@ -6582,10 +6578,7 @@ fn log_from_right_pane(app: AppHandle, payload: serde_json::Value) {
     // Any other kind falls through to stderr (preserving previous
     // behavior so unrelated logging — e.g. git-push status — still shows
     // up at the command line).
-    let kind = payload
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let kind = payload.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     let (category, label_key) = match kind {
         "iframe-trace" => ("iframe", "subkind"),
         "voice" => ("voice", "stage"),

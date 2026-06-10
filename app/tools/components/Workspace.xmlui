@@ -30,6 +30,8 @@
   var.lastAssistantStableText="{''}"
   var.staleAssistantBaseline="{''}"
   var.lastConversationSig="{''}"
+  var.liveSubmittedAssistantText="{''}"
+  var.liveSubmittedAssistantKey="{''}"
   var.stickyConversationTools="{[]}"
   var.stickyConversationToolsKey="{''}"
   var.stickyConversationUserImages="{[]}"
@@ -219,8 +221,13 @@
       }
       const displayTools = exchangeTools.length > 0 ? exchangeTools : (stickyConversationTools || []);
       const user = awaitingResponse &amp;&amp; submitted ? submitted : (exchangeUser || submitted);
+      if (awaitingResponse &amp;&amp; submittedKind === 'message' &amp;&amp; submitted &amp;&amp; exchangeMatchesSubmitted &amp;&amp; exchangeAssistant) {
+        liveSubmittedAssistantText = exchangeAssistant;
+        liveSubmittedAssistantKey = submitted;
+      }
+      const liveSubmittedAssistant = liveSubmittedAssistantKey === submitted ? (liveSubmittedAssistantText || '') : '';
       const assistant = awaitingResponse
-        ? (exchangeMatchesSubmitted ? exchangeAssistant : '')
+        ? (exchangeMatchesSubmitted ? (exchangeAssistant || liveSubmittedAssistant) : '')
         : (exchangeAssistant || lastAssistantStableText || '').trim();
       const source = awaitingResponse
         ? (exchangeMatchesSubmitted ? (exchangeAssistant ? 'last-exchange' : 'awaiting') : 'awaiting')
@@ -253,6 +260,8 @@
           submittedLen: submitted.length
         });
         awaitingResponse = false;
+        liveSubmittedAssistantText = '';
+        liveSubmittedAssistantKey = '';
         clearWorklistAwaiting(false);
         if (submittedKind === 'message' &amp;&amp; submitting) {
           iframeTrace('inflight-clear', { reason: 'message-exchange-match', item: submittedItemId || '' });
@@ -312,6 +321,8 @@
           submittedLen: (submittedWorklistMessage || '').length
         });
         awaitingResponse = false;
+        liveSubmittedAssistantText = '';
+        liveSubmittedAssistantKey = '';
         clearWorklistAwaiting(false);
       }
     });
@@ -883,7 +894,7 @@
         storageKey="bram.worklistMessageDraftForm"
         dataAfterSubmit="clear"
         onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
-        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = 'message'; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
+        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = 'message'; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
         <property name="buttonRowTemplate"><Fragment/></property>
         <HStack gap="$space-2" verticalAlignment="end">
           <TextArea
@@ -945,7 +956,7 @@
         var.conversationKey="{(((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') || submittedWorklistMessage || submittedItemId || '').trim()}"
         var.conversationRawTools="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []}"
         var.conversationTools="{(conversationRawTools &amp;&amp; conversationRawTools.length > 0) ? conversationRawTools : (stickyConversationTools || [])}"
-        var.conversationAssistantText="{awaitingResponse &amp;&amp; submittedKind === 'message' ? (conversationExchangeMatchesSubmitted ? (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '')).trim() : '') : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '')).trim()}"
+        var.conversationAssistantText="{awaitingResponse &amp;&amp; submittedKind === 'message' ? (conversationExchangeMatchesSubmitted ? ((((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') || (liveSubmittedAssistantKey === (submittedWorklistMessage || '').trim() ? liveSubmittedAssistantText : ''))).trim() : '') : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '')).trim()}"
         var.conversationRawUserImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []}"
         var.conversationSubmittedImages="{(submittedWorklistImages &amp;&amp; submittedWorklistImages.length > 0) ? submittedWorklistImages : (extractImagePaths(submittedWorklistMessage || '').length > 0 ? extractImagePaths(submittedWorklistMessage || '') : extractImagePaths(conversationUserText || ''))}"
         var.conversationUserImages="{(conversationSubmittedImages &amp;&amp; conversationSubmittedImages.length > 0) ? conversationSubmittedImages : ((conversationRawUserImages &amp;&amp; conversationRawUserImages.length > 0) ? conversationRawUserImages : ((stickyConversationUserImagesKey === conversationKey) ? stickyConversationUserImages : []))}"
@@ -1335,6 +1346,8 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
                 newItemTurnEnded = false;
                 newItemSubmitting = true;
                 submittedWorklistMessage = msg;
+                liveSubmittedAssistantText = '';
+                liveSubmittedAssistantKey = '';
                 submittedKind = 'message';
                 messageSentAtText = new Date().toLocaleTimeString();
                 awaitingResponse = true;

@@ -40,6 +40,7 @@
   var.messageSentAtText="{''}"
   var.awaitingResponse="{restoreWorklistAwaiting()}"
   var.awaitingResponseSetAt="{restoreWorklistAwaitingSetAt()}"
+  var.agentTurnEndedSinceSubmit="{false}"
   var.fullscreenImage="{null}"
   var.pendingPastedImageCount="{window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0}"
   var.pendingPastedImagePaths="{window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []}"
@@ -203,6 +204,9 @@
       if (c.newValue) { staleAssistantBaseline = lastAssistantStableText || ''; }
     }" />
   <ChangeListener
+    listenTo="{awaitingResponse}"
+    onDidChange="(c) => { if (c.newValue &amp;&amp; !c.prevValue) { agentTurnEndedSinceSubmit = false; } }" />
+  <ChangeListener
     listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (submittedItemId || '') + ':' + (submittedKind || '') + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {
       const submitted = (submittedWorklistMessage || '').trim();
@@ -252,7 +256,7 @@
           gateFires: !!(awaitingResponse && submittedKind !== 'action' && !exchangeMatchesSubmitted)
         });
       }
-      if (awaitingResponse &amp;&amp; exchangeMatchesSubmitted &amp;&amp; assistant) {
+      if (awaitingResponse &amp;&amp; exchangeMatchesSubmitted &amp;&amp; assistant &amp;&amp; agentTurnEndedSinceSubmit) {
         iframeTrace('clear-awaiting', {
           via: 'exchange-match',
           sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1,
@@ -306,6 +310,7 @@
       if (awaitingResponse) {
         lastAssistantTickAt = Date.now();
         lastAssistantTick = lastAssistantTick + 1;
+        agentTurnEndedSinceSubmit = true;
       }
       if (window.bramConsumePastedImagePaths) {
         window.bramConsumePastedImagePaths();

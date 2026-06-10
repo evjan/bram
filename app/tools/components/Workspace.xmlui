@@ -148,8 +148,16 @@
         submittedItemId = null;
         actionProgressKind = '';
         actionProgressTick = 0;
-        stickyConversationTools = [];
-        stickyConversationToolsKey = '';
+        // stickyConversationTools / stickyConversationToolsKey intentionally
+        // NOT reset here. Mirror of the b54e9b1 fix in onSubmit: the sticky
+        // cache is the cross-turn bridge that keeps the `Agent: Tool uses`
+        // section mounted between the end of one turn and the first raw
+        // tool of the next. Resetting it here causes a transient unmount
+        // when the next turn's lastExchangeDS refetch hasn't populated raw
+        // yet -- diagnosed today as the 'transient flash of tool uses' the
+        // user reported on the reset-voice-target-on-inflight-clear approve
+        // cycle. The ChangeListener at line ~226 will overwrite sticky as
+        // soon as the next turn produces its own raw tools.
         // Reset voice target back to message-agent. After an action cycle
         // completes, `selected` clears and the feedback panel unmounts —
         // which also unmounts the ChangeListener that delivers

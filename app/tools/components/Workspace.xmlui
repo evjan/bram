@@ -150,6 +150,16 @@
         actionProgressTick = 0;
         stickyConversationTools = [];
         stickyConversationToolsKey = '';
+        // Reset voice target back to message-agent. After an action cycle
+        // completes, `selected` clears and the feedback panel unmounts —
+        // which also unmounts the ChangeListener that delivers
+        // worklistVoiceText into feedbackBox. If worklistVoiceTarget stays
+        // 'feedback', the next voice cycle's transcript lands nowhere
+        // (the only mounted listener gates on 'message-agent'). Caught by
+        // the voice trace routing in `route-voice-logs-into-bram-trace`:
+        // [voice] stage=voice-into-result fired with a 64-char transcript
+        // but no matching subkind=voice-input stage=append followed.
+        setWorklistVoiceTarget('message-agent');
         stickyConversationUserImages = [];
         stickyConversationUserImagesKey = '';
         selectedFeedback = '';

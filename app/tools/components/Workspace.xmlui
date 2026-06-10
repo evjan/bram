@@ -338,7 +338,7 @@
     subscribeTauriEvent('__bramWorkspaceTurnStateUnsub', 'turn-state-changed', (e) => {
       const p = (e &amp;&amp; e.payload) || {};
       iframeTrace('listener-fired', {context: 'turn-state-changed', phase: p.phase || '', source: p.source || '', menu: p.pendingMenu ? p.pendingMenu.tool : ''});
-      debounceWorkspaceTurnStateRefetch(turnStateDS, p.source || '');
+      turnStateDS.refetch();
       pendingMenu = p.pendingMenu || null;
       pendingMenuSuppressFallback = !p.pendingMenu;
     });

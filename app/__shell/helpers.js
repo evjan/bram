@@ -824,6 +824,17 @@ function __ensureTauriEventListener(eventName) {
   try {
     var listenResult = ev.listen(eventName, function (e) {
       var subs = __tauriEventSubscribers[eventName] || [];
+      try {
+        if (typeof window.logToHost === "function") {
+          window.logToHost({
+            kind: "iframe-trace",
+            subkind: "event-received",
+            at: new Date().toISOString(),
+            event_name: eventName,
+            subscribers: subs.length,
+          });
+        }
+      } catch (err) {}
       for (var i = 0; i < subs.length; i++) {
         try { subs[i](e); } catch (err) {}
       }

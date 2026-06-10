@@ -489,6 +489,7 @@ window.bramPendingPastedImages = window.bramPendingPastedImages || [];
 window.bramStagingPastedImages = window.bramStagingPastedImages || 0;
 window.bramPastedImageForCurrentTurn = window.bramPastedImageForCurrentTurn || false;
 window.bramPastedImageTarget = window.bramPastedImageTarget || "";
+window.bramLastConsumedPastedImages = window.bramLastConsumedPastedImages || [];
 document.addEventListener("paste", function (event) {
   if (!event.clipboardData) return;
   var items = event.clipboardData.items || [];
@@ -573,13 +574,18 @@ window.bramConsumePastedImagePaths = function (target) {
     window.bramPendingPastedImages = [];
     window.bramPastedImageForCurrentTurn = false;
     window.bramPastedImageTarget = "";
+    window.bramLastConsumedPastedImages = [];
     return [];
   }
   var paths = (window.bramPendingPastedImages || []).slice();
   window.bramPendingPastedImages = [];
   window.bramPastedImageForCurrentTurn = false;
   window.bramPastedImageTarget = "";
+  window.bramLastConsumedPastedImages = paths.slice();
   return paths;
+};
+window.bramLastConsumedPastedImagePaths = function () {
+  return (window.bramLastConsumedPastedImages || []).slice();
 };
 window.bramRemovePastedImagePath = function (path) {
   if (!path) return;

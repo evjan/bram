@@ -1326,7 +1326,7 @@ function submitWorklistMessageFast(text) {
   // conversationUserImages to [] during awaiting.
   writeLocalStorage('bram.worklistSubmittedMessage', userTyped);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
-  return { message: userTyped, baseline, sentAtText: new Date().toLocaleTimeString() };
+  return { message: userTyped, images: extractImagePaths(toSend), baseline, sentAtText: new Date().toLocaleTimeString() };
 }
 
 // Drain any clipboard-staged image paths and prepend the dual marker format
@@ -1349,7 +1349,7 @@ function recordWorklistFeedbackConversation(text) {
   const baseline = 0;
   writeLocalStorage('bram.worklistSubmittedMessage', message);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline));
-  return { message, baseline, sentAtText: new Date().toLocaleTimeString() };
+  return { message, images: extractImagePaths(message), baseline, sentAtText: new Date().toLocaleTimeString() };
 }
 
 function clearWorklistAwaiting(clearDraft) {

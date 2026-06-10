@@ -1146,7 +1146,37 @@ fn trim_menu_text_for_preview(text: &str) -> String {
 // the UI falls back to its hardcoded buttons in that case.
 fn parse_menu_options(text: &str) -> Vec<MenuOption> {
     let mut opts: Vec<MenuOption> = Vec::new();
-    for raw in text.lines() {
+    // Normalize line endings. `.lines()` only honors `\n` and `\r\n`;
+    // Claude TUI mid-redraw byte patterns (observed at 22:55 UTC,
+    // 2026-06-10) can emit a standalone `\r` between options, which
+    // would otherwise collapse two options into one. Naïve two-pass
+    // replacement (`\r\n` → `\n` then `\r` → `\n`) creates `\n\n`
+    // blank lines from `\r\r\n` inputs and prematurely terminates
+    // the option list (observed at 23:25 UTC same day — only option 1
+    // visible, options 2-3 missing). Use a single-pass run collapse:
+    // any sequence of `\r` characters with at most one trailing `\n`
+    // becomes one `\n`. This preserves genuine `\n\n` blank lines
+    // (the parser's intended option-list terminator) while folding
+    // any CR-prefixed run into one newline. Refs #182 #12 shape 4.
+    let normalized: String = {
+        let mut s = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\r' {
+                while chars.peek() == Some(&'\r') {
+                    chars.next();
+                }
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                s.push('\n');
+            } else {
+                s.push(c);
+            }
+        }
+        s
+    };
+    for raw in normalized.lines() {
         // Strip leading cursor marker (with optional space / NBSP) and whitespace.
         let mut trimmed =
             raw.trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
@@ -1204,6 +1234,101 @@ fn parse_menu_options(text: &str) -> Vec<MenuOption> {
         });
     }
     opts
+}
+
+#[cfg(test)]
+mod parse_menu_options_line_ending_tests {
+    use super::parse_menu_options;
+
+    #[test]
+    fn parses_three_options_with_lf_separators() {
+        // Baseline: standard \n line endings.
+        let text = "1. Yes\n2. Yes, and don't ask again\n3. No\n";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 3);
+        assert_eq!(opts[0].key, "1");
+        assert_eq!(opts[0].label, "Yes");
+        assert_eq!(opts[1].key, "2");
+        assert_eq!(opts[1].label, "Yes, and don't ask again");
+        assert_eq!(opts[2].key, "3");
+        assert_eq!(opts[2].label, "No");
+    }
+
+    #[test]
+    fn parses_three_options_with_crlf_separators() {
+        // CRLF (Windows-style). The \r\n -> \n normalization must
+        // not produce extra blank lines or the parser would
+        // terminate prematurely.
+        let text = "1. Yes\r\n2. Yes, and don't ask again\r\n3. No\r\n";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 3);
+        assert_eq!(opts[0].label, "Yes");
+        assert_eq!(opts[1].label, "Yes, and don't ask again");
+        assert_eq!(opts[2].label, "No");
+    }
+
+    #[test]
+    fn parses_three_options_with_bare_cr_separators() {
+        // 2026-06-10 22:55 UTC trace evidence: Claude TUI emitted
+        // option labels separated by bare \r during a mid-redraw
+        // cycle. Pre-fix this would collapse to one option with
+        // all three labels concatenated.
+        let text = "1. Yes\r2. Yes, and don't ask again\r3. No\r";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 3, "expected 3 options after \\r split, got {}: {:?}", opts.len(), opts.iter().map(|o| &o.label).collect::<Vec<_>>());
+        assert_eq!(opts[0].label, "Yes");
+        assert_eq!(opts[1].label, "Yes, and don't ask again");
+        assert_eq!(opts[2].label, "No");
+    }
+
+    #[test]
+    fn parses_three_options_with_cr_cr_lf_does_not_create_blank_line() {
+        // 2026-06-10 23:25 UTC trace evidence: Claude TUI mid-redraw
+        // emitted `\r\r\n` between options. A two-pass normalization
+        // (`\r\n` → `\n` then bare `\r` → `\n`) would create `\n\n`
+        // (blank line) and terminate parsing after option 1, producing
+        // a partial menu render where only "Yes" was visible. The
+        // single-pass run-collapse handles this correctly.
+        let text = "1. Yes\r\r\n2. Yes, and don't ask again\r\r\n3. No\r\r\n";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 3, "expected 3 options after \\r\\r\\n collapse, got: {:?}", opts.iter().map(|o| &o.label).collect::<Vec<_>>());
+        assert_eq!(opts[0].label, "Yes");
+        assert_eq!(opts[1].label, "Yes, and don't ask again");
+        assert_eq!(opts[2].label, "No");
+    }
+
+    #[test]
+    fn preserves_genuine_blank_line_between_options_and_footer() {
+        // A trailing `\n\n` (blank line) separates the option list
+        // from the menu footer ("Esc to cancel · Tab to amend · …").
+        // The normalization must NOT collapse this blank line, else
+        // the parser would walk into the footer and emit non-option
+        // text as wrapped continuation of option 3.
+        let text = "1. Yes\n2. Yes, and don't ask\n3. No\n\nEsc to cancel\n";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 3);
+        assert_eq!(opts[2].label, "No");
+    }
+
+    #[test]
+    fn regression_2026_06_10_2255_collapsed_options_payload() {
+        // The exact payload shape from the 22:55:50.319 trace line
+        // that collapsed three options into one before this fix:
+        //
+        //   [pty-menu-options] tool=Bash count=1
+        //   options=[1="Yes\r  2. Yes, and don't ask again for similar
+        //   commands in\r  "...]
+        //
+        // The \r line endings and two-space indentation match what
+        // Claude TUI emitted mid-redraw. Pre-fix: count=1. Post-fix:
+        // count=3.
+        let text = "1. Yes\r  2. Yes, and don't ask again for similar commands in /Users/jonudell\r  3. No\r  ";
+        let opts = parse_menu_options(text);
+        assert_eq!(opts.len(), 3);
+        assert_eq!(opts[0].label, "Yes");
+        assert!(opts[1].label.starts_with("Yes, and don't ask"));
+        assert_eq!(opts[2].label, "No");
+    }
 }
 
 // PtyMenu equality compares only `tool` — `text` carries surrounding

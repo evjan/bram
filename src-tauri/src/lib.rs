@@ -1343,6 +1343,7 @@ fn trace_turn_state_transition<R: tauri::Runtime>(
     app: &AppHandle<R>,
     prev: &TurnState,
     next: &TurnState,
+    emitted: bool,
 ) {
     if !bram_trace_enabled() {
         return;
@@ -1351,7 +1352,7 @@ fn trace_turn_state_transition<R: tauri::Runtime>(
         app,
         "turn-state",
         &format!(
-            "from={} to={} provider={} turn={} source={} reason={} menu={} jsonlReason={}",
+            "from={} to={} provider={} turn={} source={} reason={} menu={} jsonlReason={} emitted={}",
             prev.phase,
             next.phase,
             next.provider.as_deref().unwrap_or(""),
@@ -1362,7 +1363,8 @@ fn trace_turn_state_transition<R: tauri::Runtime>(
                 .as_ref()
                 .map(|m| m.tool.as_str())
                 .unwrap_or(""),
-            next.last_jsonl_reason.as_deref().unwrap_or("")
+            next.last_jsonl_reason.as_deref().unwrap_or(""),
+            emitted,
         ),
     );
 }
@@ -1375,22 +1377,47 @@ fn update_turn_state<R: tauri::Runtime, F>(
 ) where
     F: FnOnce(&mut TurnState),
 {
+    // Two-tier change detection:
+    //
+    //   * A `[turn-state]` trace line fires whenever ANY field of the
+    //     struct changed (including source / reason / metadata
+    //     timestamps). The multi-source attribution this preserves is
+    //     what made #11 and the #4 followup incident-diagnosable this
+    //     session -- worth keeping.
+    //
+    //   * The `kind=turn-state-changed` Tauri emit fires ONLY when
+    //     user-visible state changed: phase, pending_menu, provider, or
+    //     turn_stamp. Source-only re-confirmations (e.g.
+    //     pty-status-fallback re-asserting "working" while phase stays
+    //     "working") used to fire the emit and triggered an iframe
+    //     ChangeListener cascade + `/__turn-state` refetch storm.
+    //     Observed cost on 2026-06-10: 4 menu cycles all had 475-1018 ms
+    //     render delays and 881-1969 ms dismiss delays because
+    //     pty-menu-changed was queued behind the storm. Tightening here
+    //     removes the storm at the source.
     let mut emit_payload: Option<TurnState> = None;
-    let mut transition: Option<(TurnState, TurnState)> = None;
+    let mut transition: Option<(TurnState, TurnState, bool)> = None;
     if let Ok(mut guard) = turn_state_cell().lock() {
         let prev = guard.clone();
         update(&mut guard);
         guard.source = source.to_string();
         guard.reason = reason.to_string();
         guard.updated_at_ms = unix_now_ms();
-        if *guard != prev {
+        let any_changed = *guard != prev;
+        if any_changed {
+            let visible_changed = guard.phase != prev.phase
+                || guard.pending_menu != prev.pending_menu
+                || guard.provider != prev.provider
+                || guard.turn_stamp != prev.turn_stamp;
             let next = guard.clone();
-            transition = Some((prev, next.clone()));
-            emit_payload = Some(next);
+            transition = Some((prev, next.clone(), visible_changed));
+            if visible_changed {
+                emit_payload = Some(next);
+            }
         }
     }
-    if let Some((prev, next)) = transition {
-        trace_turn_state_transition(app, &prev, &next);
+    if let Some((prev, next, emitted)) = transition {
+        trace_turn_state_transition(app, &prev, &next, emitted);
     }
     if let Some(payload) = emit_payload {
         emit_replayable_payload(app, "turn-state-changed", &payload);

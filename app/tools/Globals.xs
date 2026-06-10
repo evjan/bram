@@ -1642,6 +1642,30 @@ function setToolbarPendingMenuFromTurnState(turnState) {
   recordToolbarPendingMenuFromEvent({ payload: turnState && turnState.pendingMenu });
 }
 
+function refetchTurnStateDataSource(dataSource, surface, source) {
+  if (!dataSource || typeof dataSource.refetch !== 'function') return;
+  iframeTrace('refetch-called', {
+    context: 'turn-state-changed',
+    surface: surface || '',
+    source: source || ''
+  });
+  dataSource.refetch();
+}
+
+function debounceToolbarTurnStateRefetch(dataSource, source) {
+  debounce(50, (s) => refetchTurnStateDataSource(dataSource, 'toolbar', s), source || '');
+}
+
+function debounceWorkspaceTurnStateRefetch(dataSource, source) {
+  debounce(50, (s) => refetchTurnStateDataSource(dataSource, 'workspace', s), source || '');
+}
+
+function handleToolbarTurnStateChanged(dataSource, event) {
+  const payload = event && event.payload;
+  debounceToolbarTurnStateRefetch(dataSource, (payload && payload.source) || '');
+  setToolbarPendingMenuFromTurnState(payload);
+}
+
 function traceToolbarKey(key) {
   const toolbarMenuState = getToolbarPendingMenuState();
   iframeTrace('toolbar-key', {

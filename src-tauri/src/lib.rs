@@ -2738,6 +2738,80 @@ fn pty_menu_eviction_grace_cell() -> &'static Mutex<Option<std::time::Instant>> 
     PTY_MENU_EVICTION_GRACE.get_or_init(|| Mutex::new(None))
 }
 
+// Sampled timestamp for `[pty-menu-scan]` instrumentation. Throttles
+// scan-trace emission to ~5 Hz so spinner-driven PTY chatter (10+
+// chunks/s during a working turn) doesn't flood bram-trace.log.
+fn pty_menu_scan_last_log_cell() -> &'static Mutex<u128> {
+    static CELL: OnceLock<Mutex<u128>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(0))
+}
+
+// Diagnostic summary of which menu-detection anchors are present in
+// the current PTY tail. Returns a compact `k=v` string suitable for
+// embedding in a `[pty-menu-scan]` trace line. Re-runs the same
+// anchor checks `pty_menu_detect` uses but doesn't do the full
+// detection — cheap to compute (a handful of byte scans) and tells
+// us *why* a detection cycle decided not to fire.
+fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
+    let raw_codex_action = pty_codex_action_required_pos(tail).is_some();
+    let stripped = strip_ansi(tail);
+    let s = stripped.as_slice();
+    let pos1_cursor = pty_menu_anchor_pos(s);
+    let pos1_numbered = if raw_codex_action {
+        pty_numbered_menu_anchor_pos(s).or_else(|| pty_any_numbered_menu_anchor_pos(s))
+    } else {
+        None
+    };
+    let needle2: &[u8] = b"2.";
+    let header: &[u8] = b"Do you want";
+    let pos1 = pos1_cursor.or(pos1_numbered);
+    let needle2_after_pos1 = pos1
+        .and_then(|p1| {
+            let after = &s[p1..];
+            after
+                .windows(needle2.len())
+                .position(|w| w == needle2)
+                .map(|rel| (rel, p1 + rel))
+        })
+        .map(|(_, p2)| p2);
+    let needle2_anywhere = s.windows(needle2.len()).any(|w| w == needle2);
+    let header_pos = s.windows(header.len()).rposition(|w| w == header);
+    let distance_ok = match (pos1, needle2_after_pos1) {
+        (Some(p1), Some(p2)) => Some(p2 - p1 <= 512),
+        _ => None,
+    };
+    let stripped_len = s.len();
+    let head_hex = s
+        .iter()
+        .take(16)
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
+    let tail_hex = s
+        .iter()
+        .rev()
+        .take(16)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
+    format!(
+        "stripped_len={} cursor={} numbered={} needle2_after_anchor={} needle2_anywhere={} header={} anchor_distance_ok={} codex_action={} fp_head={} fp_tail={}",
+        stripped_len,
+        pos1_cursor.is_some(),
+        pos1_numbered.is_some(),
+        needle2_after_pos1.is_some(),
+        needle2_anywhere,
+        header_pos.is_some(),
+        distance_ok
+            .map(|b| if b { "true" } else { "false" })
+            .unwrap_or("n/a"),
+        raw_codex_action,
+        head_hex,
+        tail_hex,
+    )
+}
+
 // Update the menu detection state with a fresh chunk of PTY output.
 // Maintains a rolling 8KB tail buffer; checks for claude's menu signature
 // ("1. Yes" + "2. Yes" within proximity); transitions PTY_MENU accordingly.
@@ -2770,7 +2844,42 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     }
     let codex_action_required_title = pty_codex_action_required_pos(&tail).is_some();
     let mut detected = pty_menu_detect(&tail);
+
+    // Sample the scan diagnostic at ~5 Hz so spinner activity doesn't
+    // flood the trace. Emit after the lock is released so the trace
+    // append doesn't hold up downstream scans. See
+    // `pty_menu_scan_diagnostic` for the field shape.
+    let scan_log: Option<String> = if bram_trace_enabled() {
+        let now_ms = unix_now_ms() as u128;
+        let last = pty_menu_scan_last_log_cell()
+            .lock()
+            .map(|g| *g)
+            .unwrap_or(0);
+        if detected.is_some() || now_ms.saturating_sub(last) >= 200 {
+            if let Ok(mut g) = pty_menu_scan_last_log_cell().lock() {
+                *g = now_ms;
+            }
+            Some(pty_menu_scan_diagnostic(&tail))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let scan_outcome: &'static str = if detected.is_some() {
+        "fire"
+    } else {
+        "skip"
+    };
+
     drop(tail);
+    if let Some(diag) = scan_log {
+        append_bram_trace_line(
+            app,
+            "pty-menu-scan",
+            &format!("op={} {}", scan_outcome, diag),
+        );
+    }
 
     let mut signature_trace: Option<(bool, &'static str, usize, usize)> = None;
     if let Some(menu) = detected.as_mut() {

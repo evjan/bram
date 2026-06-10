@@ -547,11 +547,15 @@ document.addEventListener("paste", function (event) {
     }
   }
   if (imageFiles.length === 0) return;
-  // A fresh paste means "this is the screenshot I am attaching now".
-  // Replace any older unsent staged paths so preview/send cannot stick on a
-  // stale image from an earlier test or abandoned draft. Multiple image files
-  // from the same paste event are still staged together below.
-  window.bramPendingPastedImages = [];
+  // Accumulate pasted images across paste events within a single turn.
+  // Originally (804bc37) this point cleared `bramPendingPastedImages`
+  // on every paste to avoid sticking on stale images from abandoned
+  // drafts, but the clear made multi-paste-event accumulation
+  // impossible — pasting four screenshots one after another into a
+  // single Iterate feedback box dropped all but one (race-dependent
+  // first or last). Staleness is now handled by
+  // `bramConsumePastedImagePaths` on turn submission and by the
+  // `bramPastedImageForCurrentTurn` flag below.
   window.bramPastedImageForCurrentTurn = true;
   window.bramPastedImageTarget = window.bramCurrentPasteTarget
     ? window.bramCurrentPasteTarget()

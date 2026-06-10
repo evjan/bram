@@ -305,7 +305,10 @@ function extractImagePaths(text) {
 }
 function stripImagePaths(text) {
   if (!text) return text;
-  return text.replace(/\n*\[Image: source: \/[^\]]+\.(?:png|jpg|jpeg|gif|webp)\]/gi, '');
+  return text
+    .replace(/\n*\[Image: source: \/[^\]]+\.(?:png|jpg|jpeg|gif|webp)\]/gi, '')
+    .replace(/^(\s*Read this screenshot: @\S+\s*)+/, '')
+    .trim();
 }
 
 // Same shape as extractImagePaths/stripImagePaths but for GitHub-flavored
@@ -1308,7 +1311,7 @@ function submitWorklistMessage(text, baseline) {
 function submitWorklistMessageFast(text) {
   if (!text || !text.trim()) return false;
   const userTyped = text.trim();
-  const toSend = withStagedImageMarkers(userTyped);
+  const toSend = withStagedImageMarkers(userTyped, 'message-agent');
   const sentAt = Date.now();
   iframeTrace('message-agent-submit', { stage: 'before-toTurn', chars: toSend.length, sentAt });
   toTurn(toSend);
@@ -1330,9 +1333,9 @@ function submitWorklistMessageFast(text) {
 // captureScreenshot also uses: `@<path>` triggers claude-code's Read tool,
 // `[Image: source: <path>]` is what st_extract_image_paths matches for the
 // thumbnail strip in the conversation pane.
-function withStagedImageMarkers(text) {
+function withStagedImageMarkers(text, target) {
   const paths = window.bramConsumePastedImagePaths
-    ? window.bramConsumePastedImagePaths()
+    ? window.bramConsumePastedImagePaths(target || worklistVoiceTarget || '')
     : [];
   if (!paths || paths.length === 0) return text;
   const lines = paths.map(p => 'Read this screenshot: @' + p + '\n[Image: source: ' + p + ']');
@@ -1486,6 +1489,7 @@ function saveSplitterSize(key, sizes) {
 var worklistVoiceTarget = '';
 var worklistVoiceText = '';
 var worklistVoiceSeq = 0;
+var bramWorklistVoiceTarget = '';
 
 function isWorklistTextVoiceTarget(target) {
   return [
@@ -1498,10 +1502,15 @@ function isWorklistTextVoiceTarget(target) {
 
 function setWorklistVoiceTarget(target) {
   const next = target || '';
+  bramWorklistVoiceTarget = next;
   if (worklistVoiceTarget === next) return;
   worklistVoiceTarget = next;
   iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'target' });
 }
+
+window.bramCurrentPasteTarget = function () {
+  return bramWorklistVoiceTarget || worklistVoiceTarget || '';
+};
 
 function restoreTextSelection(control, selection, currentLength, appendedLength) {
   if (!control || !selection) return false;

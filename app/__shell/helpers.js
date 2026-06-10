@@ -488,6 +488,7 @@ window.captureScreenshot = function () {
 window.bramPendingPastedImages = window.bramPendingPastedImages || [];
 window.bramStagingPastedImages = window.bramStagingPastedImages || 0;
 window.bramPastedImageForCurrentTurn = window.bramPastedImageForCurrentTurn || false;
+window.bramPastedImageTarget = window.bramPastedImageTarget || "";
 document.addEventListener("paste", function (event) {
   if (!event.clipboardData) return;
   var items = event.clipboardData.items || [];
@@ -506,6 +507,9 @@ document.addEventListener("paste", function (event) {
   // from the same paste event are still staged together below.
   window.bramPendingPastedImages = [];
   window.bramPastedImageForCurrentTurn = true;
+  window.bramPastedImageTarget = window.bramCurrentPasteTarget
+    ? window.bramCurrentPasteTarget()
+    : "";
   // Suppress the default paste so the TextArea doesn't pick up any file-path
   // or filename text the OS may have placed on the clipboard alongside the
   // image (Finder copy-image, macOS screenshot tool, etc.).
@@ -545,7 +549,7 @@ window.bramStagePastedImage = function (file) {
         .then(function (json) {
           if (!json || !json.path) throw new Error("paste-image: no path in response");
           window.bramPendingPastedImages.push(json.path);
-          try { logToHost({ kind: "paste-image", stage: "staged", path: json.path, bytes: reader.result.byteLength }); } catch (e) {}
+          try { logToHost({ kind: "paste-image", stage: "staged", path: json.path, target: window.bramPastedImageTarget || "", bytes: reader.result.byteLength }); } catch (e) {}
           resolve(json.path);
         })
         .catch(function (e) {
@@ -564,14 +568,17 @@ window.bramStagePastedImage = function (file) {
     reader.readAsArrayBuffer(file);
   });
 };
-window.bramConsumePastedImagePaths = function () {
+window.bramConsumePastedImagePaths = function (target) {
   if (!window.bramPastedImageForCurrentTurn) {
     window.bramPendingPastedImages = [];
+    window.bramPastedImageForCurrentTurn = false;
+    window.bramPastedImageTarget = "";
     return [];
   }
   var paths = (window.bramPendingPastedImages || []).slice();
   window.bramPendingPastedImages = [];
   window.bramPastedImageForCurrentTurn = false;
+  window.bramPastedImageTarget = "";
   return paths;
 };
 window.bramRemovePastedImagePath = function (path) {
@@ -589,7 +596,13 @@ window.bramHasPendingPastedImages = function () {
 window.bramPendingPastedImageCount = function () {
   return (window.bramPendingPastedImages || []).length;
 };
+window.bramPendingPastedImageCountForTarget = function (target) {
+  return (window.bramPendingPastedImages || []).length;
+};
 window.bramPendingPastedImagePaths = function () {
+  return (window.bramPendingPastedImages || []).slice();
+};
+window.bramPendingPastedImagePathsForTarget = function (target) {
   return (window.bramPendingPastedImages || []).slice();
 };
 window.bramStagingPastedImageCount = function () {

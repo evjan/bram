@@ -512,6 +512,7 @@
         </HStack>
         <VStack
           when="{effectivePendingMenu}"
+          var.menuPreviewOpen="{false}"
           gap="$space-2"
           padding="$space-3"
           borderRadius="$borderRadius"
@@ -520,8 +521,14 @@
           <Text fontSize="$fontSize-sm" color="$color-warn-800">
             Agent wants to use <Text fontFamily="$fontFamily-monospace">{effectivePendingMenu.tool}</Text>
           </Text>
+          <Button
+            when="{effectivePendingMenu.toolCallSignature || effectivePendingMenu.toolCallContent || effectivePendingMenu.text}"
+            label="{menuPreviewOpen ? 'Hide preview' : 'Show preview'}"
+            variant="ghost"
+            size="xs"
+            onClick="menuPreviewOpen = !menuPreviewOpen" />
           <VStack
-            when="{effectivePendingMenu.toolCallSignature}"
+            when="{menuPreviewOpen &amp;&amp; effectivePendingMenu.toolCallSignature}"
             maxHeight="20em"
             overflowY="auto"
             padding="$space-2"
@@ -538,7 +545,7 @@
               text="{(effectivePendingMenu.toolCallDiff || '').slice(0, 20000)}" />
           </VStack>
           <VStack
-            when="{effectivePendingMenu.toolCallContent}"
+            when="{menuPreviewOpen &amp;&amp; effectivePendingMenu.toolCallContent}"
             maxHeight="20em"
             overflowY="auto"
             padding="$space-2"
@@ -547,7 +554,7 @@
             <Markdown content="{effectivePendingMenu.toolCallContent}" />
           </VStack>
           <VStack
-            when="{!effectivePendingMenu.toolCallSignature &amp;&amp; effectivePendingMenu.text}"
+            when="{menuPreviewOpen &amp;&amp; !effectivePendingMenu.toolCallSignature &amp;&amp; effectivePendingMenu.text}"
             maxHeight="12em"
             overflowY="auto"
             padding="$space-2"

@@ -1,11 +1,11 @@
 <Component
   name="Workspace"
-  var.selected="{null}"
+  var.selected="{restoreWorklistUiState('selected')}"
   var.submittedItemId="{null}"
   var.submitting="{false}"
-  var.expandedItemId="{null}"
-  var.feedbackExpanded="{false}"
-  var.selectedFeedback="{''}"
+  var.expandedItemId="{restoreWorklistUiState('expandedItemId')}"
+  var.feedbackExpanded="{restoreWorklistUiState('feedbackExpanded')}"
+  var.selectedFeedback="{restoreWorklistUiState('selectedFeedback')}"
   var.lastWorklistSig="{''}"
   var.closeIssuesDialog="{null}"
   var.closeIssuesItemRef="{null}"
@@ -65,12 +65,20 @@
       // The host-managed sentinel is the authoritative spinner signal
       // (no localStorage involvement); this onLoaded just tracks
       // selection state.
-      if (selected && !items.some(i => i.id === selected)) selected = null;
       const currentSig = items.filter(i => i && i.id).map(i => i.id + ':' + (i.status || 'proposed')).sort().join(',');
-      if (lastWorklistSig && currentSig !== lastWorklistSig) {
+      const transientEmpty = lastWorklistSig && !currentSig;
+      if (!transientEmpty && selected && !items.some(i => i.id === selected)) {
+        selected = null;
+        selectedFeedback = '';
+        feedbackExpanded = false;
+        expandedItemId = null;
+        clearWorklistUiState();
+      }
+      if (!transientEmpty && lastWorklistSig && currentSig !== lastWorklistSig) {
         selected = null;
         selectedFeedback = '';
         feedbackExpanded = false; expandedItemId = null;
+        clearWorklistUiState();
       }
       if (newItemSubmitting && newItemStartSig && currentSig !== newItemStartSig) {
         iframeTrace('new-item-clear', {via: 'sig-change', prevSig: newItemStartSig, currentSig: currentSig});
@@ -83,7 +91,7 @@
         newItemStartSig = '';
         newItemTurnEnded = false;
       }
-      lastWorklistSig = currentSig;
+      if (currentSig) lastWorklistSig = currentSig;
     }" />
   <!-- #182 incident 1 investigation. Fires on every worklist value-shape
        transition (loaded / isRefetching / value-presence / item-count),
@@ -150,6 +158,7 @@
         selectedFeedback = '';
         feedbackExpanded = false;
         expandedItemId = null;
+        clearWorklistUiState();
       }
     }" />
   <!-- Reactive voice-target reset: when the feedback panel becomes
@@ -628,13 +637,13 @@
             label="{'Approve all (' + countByStatus(worklist.value.items, 'applied') + ')'}"
             size="xs"
             enabled="{!submitting}"
-            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'approve-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = setWorklistSubmittedKind('action'); iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'approve-all'}); toTurn('approved: ' + buildBatchApprovePayload(worklist.value.items, '')); })()" />
+            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'approve-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; clearWorklistUiState(); submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = setWorklistSubmittedKind('action'); iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'approve-all'}); toTurn('approved: ' + buildBatchApprovePayload(worklist.value.items, '')); })()" />
           <Button
             label="{'Drop all (' + countByStatus(worklist.value.items, 'applied') + ')'}"
             size="xs"
             variant="outlined"
             enabled="{!submitting}"
-            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'drop-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; actionProgressKind = 'drop'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = setWorklistSubmittedKind('action'); iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'drop-all'}); toTurn('drop: ' + buildBatchDropPayload(worklist.value.items, '')); })()" />
+            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'drop-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; clearWorklistUiState(); submitting = true; actionProgressKind = 'drop'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = setWorklistSubmittedKind('action'); iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'drop-all'}); toTurn('drop: ' + buildBatchDropPayload(worklist.value.items, '')); })()" />
           <Button
             label="ⓘ"
             variant="ghost"
@@ -656,7 +665,7 @@
                   size="xs"
                   enabled="{!submitting}"
                   tooltip="Select this item"
-                  onClick="selected = (selected === $item.id ? null : $item.id); selectedFeedback = ''; feedbackExpanded = false" />
+                  onClick="selected = (selected === $item.id ? null : $item.id); selectedFeedback = ''; feedbackExpanded = false; persistWorklistUiState(selected, expandedItemId, feedbackExpanded, selectedFeedback)" />
               </HStack>
               <VStack gap="$space-1" width="*">
                 <HStack gap="$space-2" verticalAlignment="center">
@@ -679,7 +688,7 @@
                   </Theme>
                   <Text value="{$item.id}" fontWeight="$fontWeight-bold" />
                   <Link
-                    onClick="expandedItemId = (expandedItemId === $item.id ? null : $item.id)"
+                    onClick="expandedItemId = (expandedItemId === $item.id ? null : $item.id); persistWorklistUiState(selected, expandedItemId, feedbackExpanded, selectedFeedback)"
                     noIndicator>
                     <Text
                       value="{expandedItemId === $item.id ? 'hide details' : 'show details'}"
@@ -725,7 +734,7 @@
                   gap="$space-1"
                   verticalAlignment="center">
                   <Link
-                    onClick="feedbackExpanded = true; setWorklistVoiceTarget('feedback')"
+                    onClick="feedbackExpanded = true; persistWorklistUiState(selected, expandedItemId, feedbackExpanded, selectedFeedback); setWorklistVoiceTarget('feedback')"
                     noIndicator>
                     <Text value="+ feedback" fontSize="$fontSize-xs" />
                   </Link>
@@ -747,7 +756,7 @@
                     autoFocus="true"
                     onInit="setWorklistVoiceTarget('feedback')"
                     onGotFocus="setWorklistVoiceTarget('feedback')"
-                    onDidChange="() => setWorklistVoiceTarget('feedback')"
+                    onDidChange="() => { selectedFeedback = feedbackBox.value || ''; persistWorklistUiState(selected, expandedItemId, feedbackExpanded, selectedFeedback); setWorklistVoiceTarget('feedback'); }"
                     resize="vertical"
                     minRows="2"
                     maxRows="16"
@@ -762,7 +771,7 @@
                     variant="ghost"
                     size="xs"
                     tooltip="Collapse feedback"
-                    onClick="feedbackExpanded = false; expandedItemId = null; selectedFeedback = ''; setWorklistVoiceTarget('message-agent')" />
+                    onClick="feedbackExpanded = false; expandedItemId = null; selectedFeedback = ''; persistWorklistUiState(selected, expandedItemId, feedbackExpanded, selectedFeedback); setWorklistVoiceTarget('message-agent')" />
                 </HStack>
                 <HStack
                   when="{selected === $item.id}"
@@ -817,7 +826,7 @@
                     when="{submitting}"
                     label="Cancel"
                     variant="ghost"
-                    onClick="submitting = false; submittedItemId = null; submittedKind = null; setWorklistSubmittedKind(null); actionProgressKind = ''; actionProgressTick = 0; selectedFeedback = ''; feedbackExpanded = false; expandedItemId = null; selected = null" />
+                    onClick="submitting = false; submittedItemId = null; submittedKind = null; setWorklistSubmittedKind(null); actionProgressKind = ''; actionProgressTick = 0; selectedFeedback = ''; feedbackExpanded = false; expandedItemId = null; selected = null; clearWorklistUiState()" />
                 </HStack>
                 <Text
                   when="{submitting &amp;&amp; submittedItemId === $item.id &amp;&amp; actionProgressKind}"

@@ -1270,6 +1270,63 @@ function restoreWorklistDraftCursor(component) {
   return restoreTextSelection(component, saved, currentLength, 0);
 }
 
+function restoreWorklistUiState(field) {
+  const raw = readLocalStorage('bram.worklistUiState', '');
+  if (!raw) {
+    iframeTrace('worklist-ui-state-restore', { field, raw: '', result: field === 'feedbackExpanded' ? false : '' });
+    if (field === 'feedbackExpanded') return false;
+    return field === 'selectedFeedback' ? '' : null;
+  }
+  let saved;
+  try { saved = JSON.parse(raw); } catch (e) { saved = null; }
+  if (!saved || typeof saved !== 'object') {
+    iframeTrace('worklist-ui-state-restore', { field, raw: 'invalid', result: field === 'feedbackExpanded' ? false : '' });
+    if (field === 'feedbackExpanded') return false;
+    return field === 'selectedFeedback' ? '' : null;
+  }
+  if (field === 'feedbackExpanded') {
+    const result = !!saved.feedbackExpanded;
+    iframeTrace('worklist-ui-state-restore', { field, result, selected: saved.selected || '', expandedItemId: saved.expandedItemId || '' });
+    return result;
+  }
+  if (field === 'selectedFeedback') {
+    const result = String(saved.selectedFeedback || '');
+    iframeTrace('worklist-ui-state-restore', { field, resultLength: result.length, selected: saved.selected || '', expandedItemId: saved.expandedItemId || '' });
+    return result;
+  }
+  if (field === 'selected') {
+    const result = saved.selected || null;
+    iframeTrace('worklist-ui-state-restore', { field, result: result || '', expandedItemId: saved.expandedItemId || '', feedbackExpanded: !!saved.feedbackExpanded });
+    return result;
+  }
+  if (field === 'expandedItemId') {
+    const result = saved.expandedItemId || null;
+    iframeTrace('worklist-ui-state-restore', { field, result: result || '', selected: saved.selected || '', feedbackExpanded: !!saved.feedbackExpanded });
+    return result;
+  }
+  return null;
+}
+
+function persistWorklistUiState(selected, expandedItemId, feedbackExpanded, selectedFeedback) {
+  iframeTrace('worklist-ui-state-save', {
+    selected: selected || '',
+    expandedItemId: expandedItemId || '',
+    feedbackExpanded: !!feedbackExpanded,
+    selectedFeedbackLength: (selectedFeedback || '').length
+  });
+  writeLocalStorage('bram.worklistUiState', JSON.stringify({
+    selected: selected || null,
+    expandedItemId: expandedItemId || null,
+    feedbackExpanded: !!feedbackExpanded,
+    selectedFeedback: selectedFeedback || ''
+  }));
+}
+
+function clearWorklistUiState() {
+  iframeTrace('worklist-ui-state-clear', {});
+  writeLocalStorage('bram.worklistUiState', '');
+}
+
 // Recency-gated restore of the awaiting gate so hot-reloading the
 // iframe in the middle of a real turn doesn't drop the user back to
 // the stale prior agent text. Window deliberately generous (5 min)
@@ -1489,16 +1546,11 @@ function shouldClearOnAgentTurnKilled(awaitingResponseSetAt, exchangeUserText, s
   return false;
 }
 
-// Per-tab splitter persistence. XMLUI's HSplitter `onResize` actually
-// delivers `[primary, secondary]` as a two-element array (the docs at
-// https://docs.xmlui.org/components/Splitter claim `primarySize:
-// number`, but the trace at restore-window-and-splitter-state showed
-// an array). The unit is inconsistent: the first event of a drag
-// arrives in pixels (e.g. `[491, 491]` for a 982 px container) and
-// subsequent events arrive in percentages summing to 100. Normalize
-// both forms to `primary / (primary + secondary) * 100` percent.
-// Store as a percent string so `initialPrimarySize` can rehydrate via
-// `'<n>%'`. Note: `writeLocalStorage('bram.splitter.<key>', v)` does
+// Per-tab splitter persistence. XMLUI's documented `resize` event
+// delivers the primary panel size in pixels, while older traces showed
+// `[primary, secondary]` arrays. Preserve both forms: pixel events are
+// stored as `Npx`, arrays are normalized to a percentage.
+// Note: `writeLocalStorage('bram.splitter.<key>', v)` does
 // persist to native localStorage, but XMLUI nests dotted keys under
 // the top-level — value lands at `localStorage.bram.splitter.<key>`
 // inside the JSON blob at `localStorage['bram']`, not as a flat
@@ -1509,19 +1561,31 @@ function shouldClearOnAgentTurnKilled(awaitingResponseSetAt, exchangeUserText, s
 // app/main.js and uses native localStorage flat keys.
 function restoreSplitterSize(key, fallback) {
   const raw = readLocalStorage('bram.splitter.' + key, '');
-  const n = parseFloat(raw);
-  const result = (!isNaN(n) && n > 0 && n < 100) ? (n + '%') : fallback;
+  const s = String(raw || '').trim();
+  const n = parseFloat(s);
+  const hasUnit = /(?:px|%)$/i.test(s);
+  const result = (!isNaN(n) && n > 0)
+    ? (hasUnit ? s : (n < 100 ? (n + '%') : (n + 'px')))
+    : fallback;
   iframeTrace('splitter-restore', { key, raw, result });
   return result;
 }
 function saveSplitterSize(key, sizes) {
-  const a = Array.isArray(sizes) ? sizes[0] : sizes;
-  const b = Array.isArray(sizes) ? sizes[1] : 0;
-  const total = a + b;
-  const pct = total > 0 ? (a / total) * 100 : a;
-  iframeTrace('splitter-save', { key, sizes, pct });
-  if (pct > 0 && pct < 100) {
-    writeLocalStorage('bram.splitter.' + key, String(Math.round(pct * 10) / 10));
+  if (Array.isArray(sizes)) {
+    const a = Number(sizes[0]);
+    const b = Number(sizes[1]);
+    const total = a + b;
+    const pct = total > 0 ? (a / total) * 100 : 0;
+    iframeTrace('splitter-save', { key, sizes, pct, unit: '%' });
+    if (pct > 0 && pct < 100) {
+      writeLocalStorage('bram.splitter.' + key, String(Math.round(pct * 10) / 10) + '%');
+    }
+    return;
+  }
+  const px = Number(sizes);
+  iframeTrace('splitter-save', { key, sizes, px, unit: 'px' });
+  if (px > 0) {
+    writeLocalStorage('bram.splitter.' + key, String(Math.round(px)) + 'px');
   }
 }
 

@@ -450,6 +450,17 @@ const LEFT_SPLITTER_KEY = "bram.splitter.left";
 // Persists the chosen flexBasis percentage to localStorage as
 // `bram.splitter.shell` and rehydrates it on startup.
 const SHELL_SPLITTER_KEY = "bram.splitter.shell";
+const TOOLS_ROUTE_KEY = "bram.tools.route";
+const LEGACY_TOOLS_ROUTE_KEY = "xmlui-desktop.tools.route";
+const TOOLS_ROUTE_POLL_MS = 500;
+const TOOLS_HIDDEN_KEY = "bram.tools.hidden";
+
+const logShellEvent = (payload) => {
+  try {
+    invoke("log_from_right_pane", { payload }).catch(() => {});
+  } catch {}
+};
+
 (() => {
   const tools = document.getElementById("tools-pane");
   if (!tools) return;
@@ -518,10 +529,29 @@ const SHELL_SPLITTER_KEY = "bram.splitter.shell";
   const tools = document.getElementById("tools-pane");
   const hSplitter = document.getElementById("h-splitter");
   if (!btn || !tools || !hSplitter) return;
+  try {
+    const hidden = localStorage.getItem(TOOLS_HIDDEN_KEY) === "1";
+    tools.classList.toggle("hidden", hidden);
+    hSplitter.classList.toggle("hidden", hidden);
+    logShellEvent({
+      kind: "tools-drawer-restore",
+      hidden,
+      at: new Date().toISOString(),
+    });
+  } catch {}
   btn.addEventListener("click", () => {
     const opening = tools.classList.contains("hidden");
-    tools.classList.toggle("hidden", !opening);
-    hSplitter.classList.toggle("hidden", !opening);
+    const hidden = !opening;
+    tools.classList.toggle("hidden", hidden);
+    hSplitter.classList.toggle("hidden", hidden);
+    try {
+      localStorage.setItem(TOOLS_HIDDEN_KEY, hidden ? "1" : "0");
+    } catch {}
+    logShellEvent({
+      kind: "tools-drawer-save",
+      hidden,
+      at: new Date().toISOString(),
+    });
   });
 })();
 
@@ -660,6 +690,63 @@ const { listen } = window.__TAURI__.event;
   // a path (e.g. http://localhost:8080/) but no query string — we
   // document `path` in .bram.json as path-only, so `?` is safe.
   const bust = (u) => u + (u.includes("?") ? "&" : "?") + "t=" + Date.now();
+  const normalizeToolsRoute = (loc) => {
+    const hash = loc?.hash || "";
+    if (hash.startsWith("#/")) return hash;
+    const path = loc?.pathname || "";
+    if (!path || path === "/" || path === "/tools/" || path === "/tools/index.html") {
+      return "";
+    }
+    return path.startsWith("/") ? "#" + path : "#/" + path;
+  };
+  const readSavedToolsHash = () => {
+    try {
+      const saved =
+        localStorage.getItem(TOOLS_ROUTE_KEY) ||
+        localStorage.getItem(LEGACY_TOOLS_ROUTE_KEY) ||
+        "";
+      const route = saved.startsWith("#/") ? saved : "";
+      logShellEvent({
+        kind: "tools-route-read",
+        saved,
+        route,
+        at: new Date().toISOString(),
+      });
+      return route;
+    } catch {
+      return "";
+    }
+  };
+  let lastPersistedToolsRoute = "";
+  const persistToolsRoute = (toolsWindow) => {
+    try {
+      const route = normalizeToolsRoute(toolsWindow?.location);
+      if (route && route !== lastPersistedToolsRoute) {
+        localStorage.setItem(TOOLS_ROUTE_KEY, route);
+        lastPersistedToolsRoute = route;
+        logShellEvent({
+          kind: "tools-route-save",
+          route,
+          pathname: toolsWindow?.location?.pathname || "",
+          hash: toolsWindow?.location?.hash || "",
+          at: new Date().toISOString(),
+        });
+      }
+      return route;
+    } catch {
+      return "";
+    }
+  };
+  const toolsSrcWithHash = (src, hash) => {
+    const route = hash || readSavedToolsHash();
+    logShellEvent({
+      kind: "tools-route-restore",
+      route,
+      hasHash: !!hash,
+      at: new Date().toISOString(),
+    });
+    return route ? src + route : src;
+  };
   // Double-buffer swap for the tools iframe so reloads don't flash a
   // blank frame. Create a new iframe off-screen, wait for `load`, then
   // promote it (replace the old in the DOM with the new, inheriting the
@@ -681,7 +768,7 @@ const { listen } = window.__TAURI__.event;
     // (tauri://localhost), so contentWindow.location.hash is readable.
     let preservedHash = "";
     try {
-      preservedHash = (oldTools.contentWindow && oldTools.contentWindow.location.hash) || "";
+      preservedHash = persistToolsRoute(oldTools.contentWindow);
     } catch (e) {}
 
     const newTools = document.createElement("iframe");
@@ -704,7 +791,7 @@ const { listen } = window.__TAURI__.event;
     }
     newTools.addEventListener("load", onLoad);
     parent.appendChild(newTools);
-    newTools.src = newSrc + preservedHash;
+    newTools.src = toolsSrcWithHash(newSrc, preservedHash);
   }
   // reloadAll: reload BOTH iframes. Used by the manual "reload xmlui app"
   // toolbar button and by the "tools-pane-reload" watcher event (drawer
@@ -742,7 +829,11 @@ const { listen } = window.__TAURI__.event;
   setTimeout(() => {
     if (!loaded) iframe.src = bust(RIGHT_PANE_SRC);
   }, 1500);
-  if (tools) tools.src = TOOLS_PANE_SRC;
+  if (tools) tools.src = toolsSrcWithHash(TOOLS_PANE_SRC);
+  setInterval(() => {
+    const currentTools = document.getElementById("tools-pane");
+    if (currentTools?.contentWindow) persistToolsRoute(currentTools.contentWindow);
+  }, TOOLS_ROUTE_POLL_MS);
   document
     .getElementById("reload-right")
     ?.addEventListener("click", reloadAll);

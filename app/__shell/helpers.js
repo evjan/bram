@@ -42,20 +42,65 @@ window._xsLogs = window._xsLogs || [];
   if (window.location.pathname.indexOf("/tools/") === -1) return;
   var key = "bram.tools.route";
   var legacyKey = "xmlui-desktop.tools.route";
+  var bootedAt = Date.now();
+  var STARTUP_SUPPRESS_MS = 1500;
+  function trace(subkind, fields) {
+    setTimeout(function () {
+      try {
+        if (typeof window.logToHost !== "function") return;
+        var payload = {
+          kind: "iframe-trace",
+          subkind: subkind,
+          at: new Date().toISOString(),
+        };
+        if (fields && typeof fields === "object") {
+          Object.assign(payload, fields);
+        }
+        window.logToHost(payload);
+      } catch (e) {}
+    }, 0);
+  }
   try {
     var current = window.location.hash;
+    var saved = localStorage.getItem(key) || localStorage.getItem(legacyKey) || "";
+    trace("tools-route-boot", {
+      current: current || "",
+      saved: saved,
+      pathname: window.location.pathname || "",
+    });
     if (!current || current === "#/") {
-      var saved = localStorage.getItem(key) || localStorage.getItem(legacyKey);
       if (saved && saved !== "#/") {
         window.location.hash = saved;
+        trace("tools-route-restore", {
+          from: current || "",
+          route: saved,
+        });
       }
     }
     // react-router-dom uses history.pushState which doesn't fire
     // hashchange, so poll instead of listening.
     setInterval(function () {
       var h = window.location.hash;
+      var stored = localStorage.getItem(key) || "";
+      if (
+        h === "#/" &&
+        stored &&
+        stored !== "#/" &&
+        Date.now() - bootedAt < STARTUP_SUPPRESS_MS
+      ) {
+        trace("tools-route-skip-root-save", {
+          stored: stored,
+          elapsedMs: Date.now() - bootedAt,
+        });
+        return;
+      }
       if (h && h !== localStorage.getItem(key)) {
         localStorage.setItem(key, h);
+        trace("tools-route-save", {
+          route: h,
+          previous: stored,
+          elapsedMs: Date.now() - bootedAt,
+        });
       }
     }, 500);
   } catch (e) {}

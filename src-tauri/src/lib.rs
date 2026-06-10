@@ -1076,8 +1076,8 @@ struct PtyMenu {
     // Origin of the current `tool_call_signature` for trace introspection.
     // Not serialized to the iframe — purely a host-side bookkeeping field
     // surfaced via the [pty-menu] state=... trace lines.
-    // "pty" — produced by `extract_pty_tool_call` from the rendered
-    //         `⏺ <Tool>(...)` line in the PTY tail.
+    // "pty" — produced by `extract_claude_command_signature` from the
+    //         rendered `⏺ <Tool>(...)` line in the PTY tail.
     // "jsonl" — produced by `lookup_pending_tool_call` from the Claude
     //          session JSONL (initial detect or recheck).
     // None — signature is currently None.
@@ -3591,7 +3591,13 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
 // `<Tool>(args)` slice (matching what the panel renders). Returns None
 // when no anchor is found OR the paren walk hits buffer end without
 // closing — partial captures are not emitted. Refs #170 follow-up.
-fn extract_pty_tool_call(stripped_tail: &[u8]) -> Option<(String, String)> {
+// Symmetric with `extract_codex_command_signature`. Anchors on Claude's
+// PTY tool-call marker `⏺<ToolName>(` (cursor glyph U+23FA followed by
+// optional space then a name token then an open paren), then walks
+// forward through balanced quotes and parens to the matching close.
+// Bounded by construction: the signature returned is exactly the
+// `<Name>(...)` byte range, never upstream PTY noise. Refs #182 #12.
+fn extract_claude_command_signature(stripped_tail: &[u8]) -> Option<(String, String)> {
     let cursor_glyph: &[u8] = b"\xe2\x8f\xba";
     let mut search_end = stripped_tail.len();
     while let Some(rel) = stripped_tail[..search_end]
@@ -4152,10 +4158,25 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
         let start = pos1.saturating_sub(200);
         let end = (pos2 + 200).min(tail.len());
         let text = String::from_utf8_lossy(&tail[start..end]).into_owned();
-        if pos1_from_cursor.is_none()
-            && !raw_codex_action
-            && !pty_text_looks_like_permission_menu(&text)
-        {
+        // False-positive guards. Originally both were gated on
+        // `pos1_from_cursor.is_none()` because the chevron anchor was
+        // treated as definitive. The chevron-in-codeblock case
+        // (screenshot 2026-06-10 22:49 UTC) showed the keyword guard
+        // needs to run universally so a chevron in rendered chat
+        // markdown lacking "do you want" gets rejected.
+        //
+        // The stale-worklist guard stays gated on `is_none()`. Its
+        // job is to reject *non-cursor* anchors (raw numbered prompts)
+        // whose surrounding text looks like a diff or repo path. A
+        // chevron-anchored Claude menu whose surrounding 900-byte
+        // text window happens to include "src-tauri/src/lib.rs",
+        // "worklist", or "diff --git" — e.g., right after a git
+        // command or commit-message recall — IS a real menu and
+        // must not be rejected. The restart at 23:01 UTC surfaced
+        // this regression: a legit Bash menu was suppressed because
+        // the just-typed commit message containing repo paths sat in
+        // the PTY tail around the menu anchor.
+        if !raw_codex_action && !pty_text_looks_like_permission_menu(&text) {
             return None;
         }
         if pos1_from_cursor.is_none()
@@ -4225,13 +4246,33 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
         } else {
             parse_menu_options(&text)
         };
+        // Structural anti-false-positive: a real Claude permission
+        // menu's option 1 is always literally "Yes" (sometimes "Yes,
+        // <suffix>"). Markdown numbered lists in chat that happen to
+        // contain "1." virtually never have "Yes" as the option-1
+        // label. Reject when option 1's label does not begin with
+        // "yes". Necessary because the keyword guard above is weak in
+        // a development context: our own discussion of the detector
+        // contains "do you want", "approve", "permission", etc., so
+        // those keywords don't distinguish chat text from a real
+        // menu. Skipped for codex_action paths (different layout +
+        // separate option parser).
+        if !raw_codex_action {
+            let first_label_is_yes = options
+                .first()
+                .map(|o| o.label.trim().to_ascii_lowercase().starts_with("yes"))
+                .unwrap_or(false);
+            if !first_label_is_yes {
+                return None;
+            }
+        }
         // PTY-preferred signature. Scan the full ANSI-stripped tail for
         // `⏺ <Tool>(...)`. When found, override the menu's tool name with
         // the PTY-derived one — `pty_menu_tool_from_header` /
         // `pty_menu_guess_tool` have proven unreliable (live: "MultiEdit"
         // header for a Bash gh issue comment, and again for a Write). The
         // PTY scan finds the actual tool call. Refs #170 follow-up.
-        let pty_call = extract_pty_tool_call(tail);
+        let pty_call = extract_claude_command_signature(tail);
         let codex_signature = if raw_codex_action {
             extract_codex_command_signature(&text)
         } else {

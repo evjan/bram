@@ -71,6 +71,6 @@ ${CHANGELOG}
 
 - **`bram` not found on PATH.** Re-run the install script, or follow its printed PATH advice.
 - **macOS Gatekeeper blocks first launch.** The install script clears the quarantine xattr automatically. For browser downloads, run the `xattr -d com.apple.quarantine` command above.
-- **Linux/WSL: `error while loading shared libraries: libwebkit2gtk-4.1.so.0`.** Tauri's WebView dynamically links WebKitGTK. On Ubuntu/Debian 24.04+, install the runtime libs with `sudo apt install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 librsvg2-2`. On Ubuntu 22.04, the `4.1` package isn't in the repos — upgrade to 24.04. WSL2 also needs WSLg (ships with Windows 11 and recent Windows 10 builds).
+- **Linux/WSL: `error while loading shared libraries: libwebkit2gtk-4.1.so.0`.** Tauri's WebView dynamically links WebKitGTK. On Ubuntu/Debian 22.04+, install the runtime libs with `sudo apt install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 librsvg2-2`. WSL2 also needs WSLg (ships with Windows 11 and recent Windows 10 builds).
 - **Update.** Re-run the install command.
 - **Uninstall.** Delete the binary from `/usr/local/bin/bram`, `~/.local/bin/bram`, or `~/bin/bram.exe`.

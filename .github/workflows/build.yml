@@ -14,7 +14,7 @@ permissions:
 jobs:
 
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - name: Worklist-guard bundle in sync with canonical
@@ -22,7 +22,7 @@ jobs:
 
   create-release:
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,7 +58,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             label: linux-amd64
             target: x86_64-unknown-linux-gnu
             ext: ""
@@ -96,7 +96,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Install Linux dependencies (Tauri webkit2gtk + friends)
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -136,7 +136,7 @@ jobs:
 
   publish-checksums:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Download all release artifacts
         run: |

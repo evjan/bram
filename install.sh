@@ -143,8 +143,7 @@ esac
 if [[ "${OS}" == "Linux" ]]; then
   echo
   echo "Note: Bram dynamically links libwebkit2gtk-4.1 and friends."
-  echo "On Ubuntu/Debian 24.04+, install runtime deps with:"
+  echo "On Ubuntu/Debian 22.04+, install runtime deps with:"
   echo "  sudo apt install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 librsvg2-2"
-  echo "(On Ubuntu 22.04, the 4.1 package isn't in the repos — upgrade to 24.04.)"
   echo "WSL2 also requires WSLg (ships with Windows 11 / recent Windows 10)."
 fi

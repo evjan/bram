@@ -1601,6 +1601,7 @@ fn parse_claude_status_verb_only(stripped_tail: &[u8]) -> Option<String> {
 // bursts (single Read of a big file), short enough that a turn that
 // genuinely moved on doesn't keep showing the old verb forever.
 const STICKY_VERB_TTL_MS: i64 = 15_000;
+const PTY_TURN_FINISHED_VERB_GRACE_MS: u64 = 500;
 
 struct StickyVerb {
     verb: String,
@@ -1629,6 +1630,13 @@ fn sticky_verb_recall() -> Option<String> {
             .filter(|s| now - s.captured_at_ms <= STICKY_VERB_TTL_MS)
             .map(|s| s.verb.clone())
     })
+}
+
+fn sticky_verb_captured_at_ms() -> Option<i64> {
+    sticky_verb_cell()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|s| s.captured_at_ms))
 }
 
 fn sticky_verb_clear() {
@@ -1964,13 +1972,80 @@ fn kill_current_claude_turn_with_finished<R: tauri::Runtime>(
         Some(SessionProvider::Codex) => "codex",
         _ => "claude",
     };
-    agent_status_emit_finished(app, provider, verb, elapsed_text, "pty-turn-finished");
-    // Dedicated "real end-of-turn" signal — distinct from the eager
-    // `agent-turn-end` event which fires on any 800 ms silence. The
-    // worklist's awaitingResponse gate keys on this; agent-turn-end
-    // would clear it on every inter-burst pause.
-    trace_emit_signal(app, "agent-turn-killed");
-    let _ = app.emit("agent-turn-killed", ());
+    schedule_pty_turn_finished(app, provider.to_string(), current_ts, verb, elapsed_text);
+}
+
+fn schedule_pty_turn_finished<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: String,
+    current_ts: i64,
+    verb: Option<String>,
+    elapsed_text: Option<String>,
+) {
+    let app_handle = app.clone();
+    let started_ms = unix_now_ms();
+    let initial_verb = verb.or_else(sticky_verb_recall);
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "turn-end-defer",
+            &format!(
+                "op=schedule reason=pty-turn-finished grace_ms={} provider={} verb={}",
+                PTY_TURN_FINISHED_VERB_GRACE_MS,
+                provider,
+                initial_verb.as_deref().unwrap_or("(none)")
+            ),
+        );
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(
+            PTY_TURN_FINISHED_VERB_GRACE_MS,
+        ));
+        let last_verb_ms = sticky_verb_captured_at_ms().unwrap_or(0);
+        if last_verb_ms > started_ms {
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    &app_handle,
+                    "turn-end-defer",
+                    &format!(
+                        "op=skip reason=verb-refreshed started_ms={} last_verb_ms={}",
+                        started_ms, last_verb_ms
+                    ),
+                );
+            }
+            return;
+        }
+        let final_verb = initial_verb.or_else(sticky_verb_recall);
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                &app_handle,
+                "turn-end-defer",
+                &format!(
+                    "op=fire reason=quiet started_ms={} last_verb_ms={} verb={}",
+                    started_ms,
+                    last_verb_ms,
+                    final_verb.as_deref().unwrap_or("(none)")
+                ),
+            );
+        }
+        if let Ok(mut g) = last_killed_user_ts_ms_cell().lock() {
+            *g = current_ts;
+        }
+        if agent_status_emit_finished(
+            &app_handle,
+            &provider,
+            final_verb,
+            elapsed_text,
+            "pty-turn-finished",
+        ) {
+            // Dedicated "real end-of-turn" signal — distinct from the eager
+            // `agent-turn-end` event which fires on any 800 ms silence. The
+            // worklist's awaitingResponse gate keys on this; agent-turn-end
+            // would clear it on every inter-burst pause.
+            trace_emit_signal(&app_handle, "agent-turn-killed");
+            let _ = app_handle.emit("agent-turn-killed", ());
+        }
+    });
 }
 
 // Emit a "finished" agent-status payload. Stamps the cleared-at cursor
@@ -1982,7 +2057,7 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
     verb: Option<String>,
     elapsed_text: Option<String>,
     source: &str,
-) {
+) -> bool {
     let next = AgentStatus {
         provider: Some(provider.to_string()),
         state: "finished".to_string(),
@@ -2011,7 +2086,7 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
         true
     };
     if !changed {
-        return;
+        return false;
     }
     if let Ok(mut g) = last_cleared_at_cell().lock() {
         *g = unix_now_ms();
@@ -2029,6 +2104,7 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
         s.last_completion_source = next.source.clone();
         s.pending_menu = None;
     });
+    true
 }
 
 // Background poller: re-reads the latest Claude session JSONL every

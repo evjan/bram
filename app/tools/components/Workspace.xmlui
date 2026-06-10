@@ -166,18 +166,6 @@
       const text = data && data.text;
       if (text && text !== lastAssistantStableText) {
         lastAssistantStableText = text;
-        if (awaitingResponse) {
-          iframeTrace('clear-awaiting', {
-            via: 'last-assistant-text',
-            sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1,
-            stableLen: (lastAssistantStableText || '').length,
-            exchangeUserLen: ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').length,
-            exchangeAssistantLen: ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').length,
-            submittedLen: (submittedWorklistMessage || '').length
-          });
-          awaitingResponse = false;
-          clearWorklistAwaiting(false);
-        }
       }
     }" />
   <!-- Same derive-at-the-boundary shape as lastAssistantTextDS: replaces
@@ -266,6 +254,13 @@
         });
         awaitingResponse = false;
         clearWorklistAwaiting(false);
+        if (submittedKind === 'message' &amp;&amp; submitting) {
+          iframeTrace('inflight-clear', { reason: 'message-exchange-match', item: submittedItemId || '' });
+          submitting = false;
+          submittedItemId = null;
+          actionProgressKind = '';
+          actionProgressTick = 0;
+        }
       }
     }" />
   <DataSource
@@ -339,6 +334,11 @@
     subscribeTauriEvent('__bramConvPaneAgentStatusUnsub', 'agent-status-changed', (e) => {
       const p = e &amp;&amp; e.payload;
       agentIsWorking = !!(p &amp;&amp; p.state === 'working');
+      if (awaitingResponse &amp;&amp; p &amp;&amp; p.state !== 'working') {
+        iframeTrace('refetch-called', {context: 'agent-status-changed', state: p.state || ''});
+        lastAssistantTickAt = Date.now();
+        lastAssistantTick = lastAssistantTick + 1;
+      }
     });
 ">
     <Theme
@@ -945,7 +945,7 @@
         var.conversationKey="{(((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') || submittedWorklistMessage || submittedItemId || '').trim()}"
         var.conversationRawTools="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []}"
         var.conversationTools="{(conversationRawTools &amp;&amp; conversationRawTools.length > 0) ? conversationRawTools : (stickyConversationTools || [])}"
-        var.conversationAssistantText="{(((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '')).trim()}"
+        var.conversationAssistantText="{awaitingResponse &amp;&amp; submittedKind === 'message' ? (conversationExchangeMatchesSubmitted ? (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '')).trim() : '') : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '')).trim()}"
         var.conversationRawUserImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []}"
         var.conversationSubmittedImages="{(submittedWorklistImages &amp;&amp; submittedWorklistImages.length > 0) ? submittedWorklistImages : (extractImagePaths(submittedWorklistMessage || '').length > 0 ? extractImagePaths(submittedWorklistMessage || '') : extractImagePaths(conversationUserText || ''))}"
         var.conversationUserImages="{(conversationSubmittedImages &amp;&amp; conversationSubmittedImages.length > 0) ? conversationSubmittedImages : ((conversationRawUserImages &amp;&amp; conversationRawUserImages.length > 0) ? conversationRawUserImages : ((stickyConversationUserImagesKey === conversationKey) ? stickyConversationUserImages : []))}"

@@ -1,4 +1,4 @@
-<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.recording="{false}" var.setupCompleteProvider="{''}"
+<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.recording="{false}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}"
   onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); subscribeTauriEvent('__bramMainAgentStatusUnsub', 'agent-status-changed', () => { mainAgentStatus.refetch(); turnState.refetch(); }); subscribeTauriEvent('__bramTurnStateUnsub', 'turn-state-changed', (e) => { turnState.refetch(); setToolbarPendingMenuFromTurnState(e &amp;&amp; e.payload); }); subscribeTauriEvent('__bramToolbarPtyMenuUnsub', 'pty-menu-changed', (e) => { setToolbarPendingMenuFromEvent(e); turnState.refetch(); }); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
@@ -8,6 +8,9 @@
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
     onDidChange="(c) => { if (c.newValue) { if ($pathname !== '/') navigate('/'); window.scrollAllToTop(); } }" />
+  <ChangeListener
+    listenTo="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.verb}"
+    onDidChange="(c) => { if (c.newValue) { lastSeenAgentVerb = c.newValue; } }" />
 
   <ModalDialog id="setupInfoDialog" title="About agent coordination">
     <VStack gap="$space-3">
@@ -168,7 +171,7 @@
               fontStyle="italic"
               color="$textColor-secondary"
               overflowMode="none"
-              value="{(mainAgentStatus.value.provider === 'claude' ? 'claude code' : (mainAgentStatus.value.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.value.verb || 'Finished') + (mainAgentStatus.value.elapsedText ? ' · ' + mainAgentStatus.value.elapsedText : '')}" />
+              value="{(mainAgentStatus.value.provider === 'claude' ? 'claude code' : (mainAgentStatus.value.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.value.verb || lastSeenAgentVerb || 'Finished') + (mainAgentStatus.value.elapsedText ? ' · ' + mainAgentStatus.value.elapsedText : '')}" />
           </HStack>
         </HStack>
         <Stack width="4rem" minWidth="4rem" />

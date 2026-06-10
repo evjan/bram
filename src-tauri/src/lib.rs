@@ -1030,8 +1030,17 @@ static PTY_MENU_SUPPRESSED: OnceLock<Mutex<Option<(String, std::time::Instant)>>
 // suppresses both the dismiss and the re-show; grace expiry without
 // re-detection emits the dismiss normally. Refs #77 menu-detector
 // stabilization.
+//
+// Grace bumped to 60s for incident #182 #17: when the user steps away
+// from a permission prompt and the menu scrolls past the PTY tail
+// while Claude's TUI keeps presenting it, a 1.5s grace would dismiss
+// the menu host-side even though the terminal is still asking for
+// input. 60s covers a realistic "walk back to the keyboard" window.
+// A subsequent TUI redraw clears the grace via the `detected.is_some()`
+// branch below; if no redraw ever brings the menu back into the tail
+// and 60s passes, dismiss legitimately.
 static PTY_MENU_EVICTION_GRACE: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
-const MENU_EVICTION_GRACE_MS: u128 = 1500;
+const MENU_EVICTION_GRACE_MS: u128 = 60_000;
 
 // The loopback HTTP server's port, captured at setup. Used to inject
 // XMLUI_DESKTOP_PORT into the PTY child's environment so the agent can
@@ -2945,8 +2954,13 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         Err(_) => return,
     };
     tail.extend_from_slice(chunk);
-    if tail.len() > 8192 {
-        let drop = tail.len() - 8192;
+    // Bumped from 8 KB to 64 KB for incident #182 #17: a wider scan
+    // window gives Claude's TUI redraws more chances to bring the
+    // current menu's bytes back into the detector's view before the
+    // eviction grace expires. Byte-pattern scan at this size is still
+    // sub-millisecond. Paired with MENU_EVICTION_GRACE_MS = 60s.
+    if tail.len() > 65536 {
+        let drop = tail.len() - 65536;
         tail.drain(..drop);
         // After a mid-buffer trim, advance to the next newline so the
         // tail does not start mid-escape. strip_ansi reads only
@@ -3033,7 +3047,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         if let Ok(suppressed) = pty_menu_suppressed_cell().lock() {
             if let Some((suppressed_tool, when)) = suppressed.as_ref() {
                 if suppressed_tool == &new_menu.tool
-                    && when.elapsed() < std::time::Duration::from_secs(2)
+                    && when.elapsed() < std::time::Duration::from_secs(10)
                 {
                     eprintln!(
                         "[pty-menu] suppressed re-detection of tool={} ({}ms after dismissal)",

@@ -481,11 +481,17 @@ function worklistActionDisplay(kind, items) {
   return action + ' ' + ids.length + ' items: ' + ids.join(', ');
 }
 
+function worklistActionStatusSuffix(item) {
+  const status = (item && item.status) || 'proposed';
+  if (status === 'applied') return ' to commit';
+  if (status === 'proposed') return ' to apply';
+  return '';
+}
+
 function worklistActionConversationDisplay(kind, items, selectedId, feedback) {
   const selected = (items || []).filter(i => i.id === selectedId);
-  const summary = worklistActionDisplay(kind, selected);
-  const note = String(feedback || '').trim();
-  return note ? summary + '\n\n' + note : summary;
+  const suffix = selected.length === 1 ? worklistActionStatusSuffix(selected[0]) : '';
+  return worklistActionDisplay(kind, selected) + suffix;
 }
 
 // Compact one-line summary for a tool_use block. Falls back to the tool

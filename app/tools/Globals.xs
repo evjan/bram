@@ -448,7 +448,7 @@ function _traceHelperTiming(name, t0, extra) {
 // Clean a user turn for transcript display: strip protocol prefixes
 // (`voice: `, `talk: `) so spoken / typed content reads as plain text;
 // summarize structured Worklist lifecycle payloads to a one-line
-// glyph + count instead of dumping JSON. Anything else passes through.
+// action + item label instead of dumping JSON. Anything else passes through.
 function formatUserTurnForTranscript(text) {
   if (!text) return '';
   const stripped = text.replace(/^(voice|talk):\s*/, '');
@@ -458,19 +458,34 @@ function formatUserTurnForTranscript(text) {
     const kind = m[1];
     try {
       const data = JSON.parse(m[2]);
-      const n = ((data.items || data.ids || [])).length;
-      if (kind === 'approved') {
-        return '✓ Approved ' + n + ' item' + (n === 1 ? '' : 's');
-      }
-      if (kind === 'iterate') {
-        return 'Iterated ' + n + ' item' + (n === 1 ? '' : 's');
-      }
-      return '✕ Dropped ' + n + ' item' + (n === 1 ? '' : 's');
+      return worklistActionDisplay(kind, data.items || data.ids || []);
     } catch (e) {
       return text;
     }
   }
   return text;
+}
+
+function worklistActionDisplay(kind, items) {
+  const action =
+    kind === 'approved' ? 'Approved' :
+    kind === 'iterate' ? 'Iterated' :
+    kind === 'drop' ? 'Dropped' :
+    'Submitted';
+  const ids = (items || []).map(i => {
+    if (typeof i === 'string') return i;
+    return (i && i.id) || '';
+  }).filter(Boolean);
+  if (ids.length === 0) return action;
+  if (ids.length === 1) return action + ' ' + ids[0];
+  return action + ' ' + ids.length + ' items: ' + ids.join(', ');
+}
+
+function worklistActionConversationDisplay(kind, items, selectedId, feedback) {
+  const selected = (items || []).filter(i => i.id === selectedId);
+  const summary = worklistActionDisplay(kind, selected);
+  const note = String(feedback || '').trim();
+  return note ? summary + '\n\n' + note : summary;
 }
 
 // Compact one-line summary for a tool_use block. Falls back to the tool

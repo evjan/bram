@@ -234,6 +234,65 @@ const setTerminalFontSize = (n) => {
 
 const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.userAgent);
 
+const isTerminalEventTarget = (target) => {
+  if (!target || !container) return false;
+  return target === container || container.contains(target);
+};
+
+const writeTerminalPaste = (text, source) => {
+  if (!text) return;
+  invoke("pty_write", {
+    data: "\x1b[200~" + text + "\x1b[201~",
+  }).catch((e) => console.error("pty_write paste", source, e));
+};
+
+const copyTerminalSelection = (text) => {
+  if (!text) return;
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch((e) => {
+      console.error("clipboard write", e);
+      copyTerminalSelectionFallback(text);
+    });
+    return;
+  }
+  copyTerminalSelectionFallback(text);
+};
+
+const copyTerminalSelectionFallback = (text) => {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    document.execCommand("copy");
+  } catch (e) {
+    console.error("clipboard copy fallback", e);
+  } finally {
+    textarea.remove();
+    term.focus();
+  }
+};
+
+const readClipboardAndPasteToTerminal = (source) => {
+  if (!navigator.clipboard?.readText) return false;
+  navigator.clipboard
+    .readText()
+    .then((text) => writeTerminalPaste(text, source))
+    .catch((e) => console.error("clipboard read", source, e));
+  return true;
+};
+
+container.addEventListener("paste", (ev) => {
+  if (isMac || !isTerminalEventTarget(ev.target)) return;
+  const text = ev.clipboardData?.getData("text/plain");
+  if (!text) return;
+  ev.preventDefault();
+  writeTerminalPaste(text, "paste-event");
+});
+
 term.attachCustomKeyEventHandler((ev) => {
   if (ev.type !== "keydown") return true;
   // Don't interfere with AltGr (Ctrl+Alt on Win/Linux produces @, |, [, ]
@@ -246,7 +305,9 @@ term.attachCustomKeyEventHandler((ev) => {
   //     selection. We avoid Ctrl+Shift+C because WebView2 owns that combo
   //     at the native layer for the Edge "Inspect Element" devtools
   //     accelerator, which fires before our JS handler can preventDefault.
-  //   - Ctrl+Shift+V: pastes clipboard text via the bracketed-paste path.
+  //   - Plain Ctrl+V and Ctrl+Shift+V paste clipboard text via the
+  //     bracketed-paste path. Ctrl+V is the Windows expectation; Ctrl+Shift+V
+  //     remains supported for Linux terminal muscle memory.
   //     preventDefault stops the WebView's native paste event from also
   //     firing — without it, xterm.js's textarea paste listener would
   //     write the clipboard a second time.
@@ -254,24 +315,17 @@ term.attachCustomKeyEventHandler((ev) => {
     const sel = term.getSelection();
     if (sel) {
       ev.preventDefault();
-      navigator.clipboard.writeText(sel).catch((e) =>
-        console.error("clipboard write", e),
-      );
+      copyTerminalSelection(sel);
       return false;
     }
     // No selection: let xterm.js send ^C → SIGINT.
   }
-  if (!isMac && ev.ctrlKey && ev.shiftKey && (ev.key === "V" || ev.key === "v")) {
+  if (!isMac && ev.ctrlKey && (ev.key === "V" || ev.key === "v")) {
+    const handled = readClipboardAndPasteToTerminal(
+      ev.shiftKey ? "ctrl-shift-v" : "ctrl-v",
+    );
+    if (!handled) return true;
     ev.preventDefault();
-    navigator.clipboard
-      .readText()
-      .then((text) => {
-        if (!text) return;
-        invoke("pty_write", {
-          data: "\x1b[200~" + text + "\x1b[201~",
-        }).catch((e) => console.error("pty_write paste", e));
-      })
-      .catch((e) => console.error("clipboard read", e));
     return false;
   }
 

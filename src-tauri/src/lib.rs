@@ -2058,6 +2058,16 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
     elapsed_text: Option<String>,
     source: &str,
 ) -> bool {
+    if !should_emit_finished_status(pty_permission_menu_pending()) {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "agent-status",
+                &format!("op=skip-finished source={} reason=menu-pending", source),
+            );
+        }
+        return false;
+    }
     let next = AgentStatus {
         provider: Some(provider.to_string()),
         state: "finished".to_string(),
@@ -2105,6 +2115,14 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
         s.pending_menu = None;
     });
     true
+}
+
+fn pty_permission_menu_pending() -> bool {
+    pty_menu_cell()
+        .lock()
+        .ok()
+        .map(|g| g.is_some())
+        .unwrap_or(false)
 }
 
 // Background poller: re-reads the latest Claude session JSONL every
@@ -2517,6 +2535,10 @@ fn should_clear_status_on_turn_activity_stop(
         && !post_escape
 }
 
+fn should_emit_finished_status(menu_pending: bool) -> bool {
+    !menu_pending
+}
+
 // Byte-level check for turn-activity glyphs without allocating a
 // String. Asterisk family is U+2700..U+277F (UTF-8 prefix 0xE2 0x9C);
 // braille patterns are U+2800..U+283F (prefix 0xE2 0xA0). In practice
@@ -2767,11 +2789,7 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // silence; hard-killing on that loses the row for the rest of
         // the turn once the user finally answers. The menu surface
         // shows "awaiting your input" via pendingMenu independently.
-        let menu_pending = pty_menu_cell()
-            .lock()
-            .ok()
-            .map(|g| g.is_some())
-            .unwrap_or(false);
+        let menu_pending = pty_permission_menu_pending();
         // Recently after Esc the user is in control — silence is them
         // thinking, not the turn ending. Suppress the hard kill for
         // 15s after an Esc so the row survives think pauses. Double-Esc
@@ -3680,6 +3698,11 @@ fn codex_fragmented_menu_options(text: &str) -> Vec<MenuOption> {
         return parsed;
     }
 
+    let flattened = codex_flattened_menu_options(text);
+    if !flattened.is_empty() {
+        return flattened;
+    }
+
     let mut keys: Vec<String> = Vec::new();
     for raw in text.lines() {
         let trimmed =
@@ -3705,6 +3728,82 @@ fn codex_fragmented_menu_options(text: &str) -> Vec<MenuOption> {
             key,
         })
         .collect()
+}
+
+fn codex_flattened_menu_options(text: &str) -> Vec<MenuOption> {
+    let mut markers: Vec<(usize, String, usize)> = Vec::new();
+    for (idx, _) in text.char_indices() {
+        let rest = &text[idx..];
+        let rest =
+            rest.trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
+        let skipped = text[idx..].len() - rest.len();
+        let marker_idx = idx + skipped;
+        let Some(dot_idx) = rest.find('.') else {
+            continue;
+        };
+        let digits = &rest[..dot_idx];
+        if digits.is_empty() || digits.len() > 2 || !digits.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let before = text[..marker_idx].chars().next_back();
+        if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '.') {
+            continue;
+        }
+        if markers
+            .last()
+            .is_some_and(|(prev_idx, _, _)| *prev_idx == marker_idx)
+        {
+            continue;
+        }
+        let after_dot = marker_idx + dot_idx + 1;
+        markers.push((marker_idx, digits.to_string(), after_dot));
+    }
+
+    let start = markers.iter().position(|(_, key, _)| key == "1");
+    let Some(start) = start else {
+        return Vec::new();
+    };
+
+    let mut opts: Vec<MenuOption> = Vec::new();
+    let mut expected = 1usize;
+    for i in start..markers.len() {
+        let (marker_idx, key, label_start) = &markers[i];
+        let Ok(key_num) = key.parse::<usize>() else {
+            break;
+        };
+        if key_num != expected {
+            break;
+        }
+        let next_marker = markers
+            .get(i + 1)
+            .map(|(idx, _, _)| *idx)
+            .unwrap_or(text.len());
+        if next_marker.saturating_sub(*marker_idx) > 512 {
+            break;
+        }
+        let raw_label = text[*label_start..next_marker].trim();
+        let label = raw_label
+            .split("Esc to cancel")
+            .next()
+            .unwrap_or(raw_label)
+            .trim()
+            .trim_matches(|c: char| c == '\u{a0}' || c.is_whitespace());
+        opts.push(MenuOption {
+            key: key.clone(),
+            label: if label.is_empty() {
+                format!("Option {key}")
+            } else {
+                label.to_string()
+            },
+        });
+        expected += 1;
+    }
+
+    if opts.len() >= 2 {
+        opts
+    } else {
+        Vec::new()
+    }
 }
 
 fn codex_menu_line_is_numbered_option(line: &str) -> bool {
@@ -14627,7 +14726,7 @@ impl IfEmpty for String {
 mod agent_status_tests {
     use super::{
         parse_claude_natural_end_banner, parse_claude_status_line, parse_claude_status_verb_only,
-        should_clear_status_on_turn_activity_stop,
+        should_clear_status_on_turn_activity_stop, should_emit_finished_status,
     };
 
     #[test]
@@ -14755,6 +14854,12 @@ mod agent_status_tests {
             true
         ));
     }
+
+    #[test]
+    fn menu_pending_suppresses_finished_status_emit() {
+        assert!(!should_emit_finished_status(true));
+        assert!(should_emit_finished_status(false));
+    }
 }
 
 #[cfg(test)]
@@ -14826,6 +14931,36 @@ mod pty_menu_tests {
         };
 
         assert!(before != after);
+    }
+
+    #[test]
+    fn pty_menu_equality_treats_options_appearing_as_visible_state_change() {
+        let before = super::PtyMenu {
+            tool: "Bash".to_string(),
+            text: "Action Required".to_string(),
+            options: Vec::new(),
+            tool_call_signature: Some("Bash(pwd)".to_string()),
+            tool_call_diff: None,
+            tool_call_content: None,
+            signature_source: Some("pty"),
+        };
+        let after = super::PtyMenu {
+            options: vec![
+                super::MenuOption {
+                    key: "1".to_string(),
+                    label: "Yes".to_string(),
+                },
+                super::MenuOption {
+                    key: "2".to_string(),
+                    label: "No".to_string(),
+                },
+            ],
+            ..before.clone()
+        };
+        let same = after.clone();
+
+        assert!(before != after);
+        assert!(after == same);
     }
 
     #[test]
@@ -14919,6 +15054,27 @@ mod pty_menu_tests {
         assert_eq!(menu.options[1].key, "2");
         assert_eq!(
             menu.options[1].label,
+            "No, and tell Codex what to do differently"
+        );
+    }
+
+    #[test]
+    fn detects_codex_action_required_menu_with_flattened_options() {
+        let text = "\x1b]0;[ ! ] Action Required | bram\x07\
+command: pwd     1. Yes, proceed (y)  2. Yes, and don't ask again for commands that start with `pwd` (p)  3. No, and tell Codex what to do differently Esc to cancel";
+        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
+
+        assert_eq!(menu.options.len(), 3);
+        assert_eq!(menu.options[0].key, "1");
+        assert_eq!(menu.options[0].label, "Yes, proceed (y)");
+        assert_eq!(menu.options[1].key, "2");
+        assert_eq!(
+            menu.options[1].label,
+            "Yes, and don't ask again for commands that start with `pwd` (p)"
+        );
+        assert_eq!(menu.options[2].key, "3");
+        assert_eq!(
+            menu.options[2].label,
             "No, and tell Codex what to do differently"
         );
     }

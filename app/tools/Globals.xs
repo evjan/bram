@@ -1308,6 +1308,20 @@ function restoreWorklistSubmittedMessage() {
   return readLocalStorage('bram.worklistSubmittedMessage', '');
 }
 
+function restoreWorklistSubmittedKind() {
+  const kind = readLocalStorage('bram.worklistSubmittedKind', '');
+  return kind === 'message' || kind === 'action' ? kind : null;
+}
+
+function setWorklistSubmittedKind(kind) {
+  if (kind === 'message' || kind === 'action') {
+    writeLocalStorage('bram.worklistSubmittedKind', kind);
+  } else {
+    writeLocalStorage('bram.worklistSubmittedKind', '');
+  }
+  return kind || null;
+}
+
 function restoreWorklistSubmittedBaseline() {
   const raw = readLocalStorage('bram.worklistSubmittedBaseline', '');
   const n = parseInt(raw, 10);
@@ -1326,6 +1340,7 @@ function submitWorklistMessage(text, baseline) {
   writeLocalStorage('bram.worklistMessageDraftCursor', '');
   writeLocalStorage('bram.worklistSubmittedMessage', message);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
+  setWorklistSubmittedKind('message');
   return message;
 }
 
@@ -1347,6 +1362,7 @@ function submitWorklistMessageFast(text) {
   // conversationUserImages to [] during awaiting.
   writeLocalStorage('bram.worklistSubmittedMessage', userTyped);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
+  setWorklistSubmittedKind('message');
   return { message: userTyped, images: extractImagePaths(toSend), baseline, sentAtText: new Date().toLocaleTimeString() };
 }
 
@@ -1370,12 +1386,14 @@ function recordWorklistFeedbackConversation(text) {
   const baseline = 0;
   writeLocalStorage('bram.worklistSubmittedMessage', message);
   writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline));
+  setWorklistSubmittedKind('action');
   return { message, images: extractImagePaths(message), baseline, sentAtText: new Date().toLocaleTimeString() };
 }
 
 function clearWorklistAwaiting(clearDraft) {
   writeLocalStorage('bram.awaitingResponse', '');
   writeLocalStorage('bram.awaitingResponseSetAt', '');
+  setWorklistSubmittedKind(null);
   if (clearDraft) {
     writeLocalStorage('bram.worklistMessageDraft', '');
   }

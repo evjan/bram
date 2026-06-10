@@ -47,7 +47,7 @@
   var.conversationOpen="{readLocalStorage('bram.conversationOpen', '1') !== '0'}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}"
-  var.submittedKind="{null}">
+  var.submittedKind="{restoreWorklistSubmittedKind()}">
   <DataSource
     id="worklist"
     url="/__worklist"
@@ -139,6 +139,8 @@
         submitting = false;
         selected = null;
         submittedItemId = null;
+        submittedKind = null;
+        setWorklistSubmittedKind(null);
         actionProgressKind = '';
         actionProgressTick = 0;
         setWorklistVoiceTarget('message-agent');
@@ -201,7 +203,7 @@
       if (c.newValue) { staleAssistantBaseline = lastAssistantStableText || ''; }
     }" />
   <ChangeListener
-    listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (submittedItemId || '') + ':' + (awaitingResponse ? '1' : '0')}"
+    listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (submittedItemId || '') + ':' + (submittedKind || '') + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {
       const submitted = (submittedWorklistMessage || '').trim();
       const exchangeUser = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').trim();
@@ -260,6 +262,7 @@
           submittedLen: submitted.length
         });
         awaitingResponse = false;
+        submittedKind = null;
         liveSubmittedAssistantText = '';
         liveSubmittedAssistantKey = '';
         clearWorklistAwaiting(false);
@@ -267,6 +270,7 @@
           iframeTrace('inflight-clear', { reason: 'message-exchange-match', item: submittedItemId || '' });
           submitting = false;
           submittedItemId = null;
+          submittedKind = null;
           actionProgressKind = '';
           actionProgressTick = 0;
         }
@@ -321,6 +325,7 @@
           submittedLen: (submittedWorklistMessage || '').length
         });
         awaitingResponse = false;
+        submittedKind = null;
         liveSubmittedAssistantText = '';
         liveSubmittedAssistantKey = '';
         clearWorklistAwaiting(false);
@@ -618,13 +623,13 @@
             label="{'Approve all (' + countByStatus(worklist.value.items, 'applied') + ')'}"
             size="xs"
             enabled="{!submitting}"
-            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'approve-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = 'action'; iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'approve-all'}); toTurn('approved: ' + buildBatchApprovePayload(worklist.value.items, '')); })()" />
+            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'approve-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = setWorklistSubmittedKind('action'); iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'approve-all'}); toTurn('approved: ' + buildBatchApprovePayload(worklist.value.items, '')); })()" />
           <Button
             label="{'Drop all (' + countByStatus(worklist.value.items, 'applied') + ')'}"
             size="xs"
             variant="outlined"
             enabled="{!submitting}"
-            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'drop-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; actionProgressKind = 'drop'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = 'action'; iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'drop-all'}); toTurn('drop: ' + buildBatchDropPayload(worklist.value.items, '')); })()" />
+            onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); iframeTrace('click', {target: 'drop-all', count: ids.length}); selected = null; feedbackExpanded = false; selectedFeedback = ''; expandedItemId = null; submitting = true; actionProgressKind = 'drop'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = setWorklistSubmittedKind('action'); iframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'drop-all'}); toTurn('drop: ' + buildBatchDropPayload(worklist.value.items, '')); })()" />
           <Button
             label="ⓘ"
             variant="ghost"
@@ -763,7 +768,7 @@
                       label="Approve"
                       size="xs"
                       enabled="{!submitting && !!selected && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed')}"
-                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } const rawFeedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const feedback = withStagedImageMarkers(rawFeedback, 'feedback'); const sent = recordWorklistFeedbackConversation(worklistActionConversationDisplay('approved', worklist.value.items, selected, feedback)); if (sent) { submittedWorklistImages = (sent.images || []); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; submittedItemId = selected; submittedKind = 'action'; submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, feedback)); })()" />
+                      onClick="(() => { iframeTrace('click', {target: 'approve', item: selected}); const item = (worklist.value.items || []).find(i => i.id === selected); if (item && item.status === 'applied' && item.closesIssues && item.closesIssues.length > 0) { closeIssuesItemRef = item; closeIssuesState = initCloseIssueState(item.closesIssues); closeIssuesDialog = item.id; return; } const rawFeedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const feedback = withStagedImageMarkers(rawFeedback, 'feedback'); const sent = recordWorklistFeedbackConversation(worklistActionConversationDisplay('approved', worklist.value.items, selected, feedback)); if (sent) { submittedWorklistImages = (sent.images || []); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; submittedItemId = selected; submittedKind = setWorklistSubmittedKind('action'); submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'approve'}); toTurn('approved: ' + buildApprovePayload(worklist.value.items, selected, feedback)); })()" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -778,7 +783,7 @@
                       label="Iterate"
                       size="xs"
                       enabled="{!submitting && !!selected && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed') && (((feedbackBox &amp;&amp; feedbackBox.value) || '').trim().length > 0 || pendingPastedImageCount > 0)}"
-                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); const rawFeedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const feedback = withStagedImageMarkers(rawFeedback, 'feedback'); const sent = recordWorklistFeedbackConversation(worklistActionConversationDisplay('iterate', worklist.value.items, selected, feedback)); if (sent) { submittedWorklistImages = (sent.images || []); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; submittedItemId = selected; submittedKind = 'action'; submitting = true; actionProgressKind = 'iterate'; actionProgressTick = 0; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); sendIterateWithFeedbackDraft(worklist.value.items, selected, feedback)" />
+                      onClick="iframeTrace('click', {target: 'iterate', item: selected}); const rawFeedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const feedback = withStagedImageMarkers(rawFeedback, 'feedback'); const sent = recordWorklistFeedbackConversation(worklistActionConversationDisplay('iterate', worklist.value.items, selected, feedback)); if (sent) { submittedWorklistImages = (sent.images || []); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; submittedItemId = selected; submittedKind = setWorklistSubmittedKind('action'); submitting = true; actionProgressKind = 'iterate'; actionProgressTick = 0; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'iterate'}); sendIterateWithFeedbackDraft(worklist.value.items, selected, feedback)" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -793,7 +798,7 @@
                       label="Drop"
                       size="xs"
                       enabled="{!submitting && !!selected}"
-                      onClick="iframeTrace('click', {target: 'drop', item: selected}); const rawFeedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const feedback = withStagedImageMarkers(rawFeedback, 'feedback'); const sent = recordWorklistFeedbackConversation(worklistActionConversationDisplay('drop', worklist.value.items, selected, feedback)); if (sent) { submittedWorklistImages = (sent.images || []); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; submittedItemId = selected; submittedKind = 'action'; submitting = true; actionProgressKind = 'drop'; actionProgressTick = 0; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, feedback))" />
+                      onClick="iframeTrace('click', {target: 'drop', item: selected}); const rawFeedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const feedback = withStagedImageMarkers(rawFeedback, 'feedback'); const sent = recordWorklistFeedbackConversation(worklistActionConversationDisplay('drop', worklist.value.items, selected, feedback)); if (sent) { submittedWorklistImages = (sent.images || []); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; submittedItemId = selected; submittedKind = setWorklistSubmittedKind('action'); submitting = true; actionProgressKind = 'drop'; actionProgressTick = 0; iframeTrace('inflight-set', {item: selected, via: 'click', target: 'drop'}); toTurn('drop: ' + buildDropPayload(worklist.value.items, selected, feedback))" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -807,7 +812,7 @@
                     when="{submitting}"
                     label="Cancel"
                     variant="ghost"
-                    onClick="submitting = false; submittedItemId = null; actionProgressKind = ''; actionProgressTick = 0; selectedFeedback = ''; feedbackExpanded = false; expandedItemId = null; selected = null" />
+                    onClick="submitting = false; submittedItemId = null; submittedKind = null; setWorklistSubmittedKind(null); actionProgressKind = ''; actionProgressTick = 0; selectedFeedback = ''; feedbackExpanded = false; expandedItemId = null; selected = null" />
                 </HStack>
                 <Text
                   when="{submitting &amp;&amp; submittedItemId === $item.id &amp;&amp; actionProgressKind}"
@@ -894,7 +899,7 @@
         storageKey="bram.worklistMessageDraftForm"
         dataAfterSubmit="clear"
         onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
-        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = 'message'; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
+        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = setWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
         <property name="buttonRowTemplate"><Fragment/></property>
         <HStack gap="$space-2" verticalAlignment="end">
           <TextArea
@@ -1177,11 +1182,11 @@
           <Button
             label="Confirm"
             tooltip="Commit, push this commit through the verified close helper, then close"
-            onClick="const rawFeedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const feedback = withStagedImageMarkers(rawFeedback, 'feedback'); const display = recordWorklistFeedbackConversation(worklistActionConversationDisplay('approved', [closeIssuesItemRef], closeIssuesItemRef.id, feedback)); if (display) { submittedWorklistImages = (display.images || []); submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; submittedItemId = closeIssuesItemRef.id; submittedKind = 'action'; submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines(feedback, buildCloseIssueLines(closeIssuesState), true))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="const rawFeedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const feedback = withStagedImageMarkers(rawFeedback, 'feedback'); const display = recordWorklistFeedbackConversation(worklistActionConversationDisplay('approved', [closeIssuesItemRef], closeIssuesItemRef.id, feedback)); if (display) { submittedWorklistImages = (display.images || []); submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; submittedItemId = closeIssuesItemRef.id; submittedKind = setWorklistSubmittedKind('action'); submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, combineFeedbackWithCloseLines(feedback, buildCloseIssueLines(closeIssuesState), true))); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Approve without closing"
             variant="outlined"
-            onClick="const rawFeedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const feedback = withStagedImageMarkers(rawFeedback, 'feedback'); const display = recordWorklistFeedbackConversation(worklistActionConversationDisplay('approved', [closeIssuesItemRef], closeIssuesItemRef.id, feedback)); if (display) { submittedWorklistImages = (display.images || []); submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; submittedItemId = closeIssuesItemRef.id; submittedKind = 'action'; submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, feedback)); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="const rawFeedback = (feedbackBox &amp;&amp; feedbackBox.value) || ''; const feedback = withStagedImageMarkers(rawFeedback, 'feedback'); const display = recordWorklistFeedbackConversation(worklistActionConversationDisplay('approved', [closeIssuesItemRef], closeIssuesItemRef.id, feedback)); if (display) { submittedWorklistImages = (display.images || []); submittedWorklistMessage = display.message; submittedTurnsBaseline = display.baseline; messageSentAtText = display.sentAtText; awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; submittedItemId = closeIssuesItemRef.id; submittedKind = setWorklistSubmittedKind('action'); submitting = true; actionProgressKind = 'approved'; actionProgressTick = 0; toTurn('approved: ' + buildSingleItemApprovePayload(closeIssuesItemRef, feedback)); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Cancel"
             variant="ghost"
@@ -1348,7 +1353,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
                 submittedWorklistMessage = msg;
                 liveSubmittedAssistantText = '';
                 liveSubmittedAssistantKey = '';
-                submittedKind = 'message';
+                submittedKind = setWorklistSubmittedKind('message');
                 messageSentAtText = new Date().toLocaleTimeString();
                 awaitingResponse = true;
                 awaitingResponseSetAt = markAwaitingStarted();

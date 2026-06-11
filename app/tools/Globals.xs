@@ -298,15 +298,17 @@ function rewriteXmluiDocUrls(text) {
 function extractImagePaths(text) {
   if (!text) return [];
   const paths = [];
-  const re = /\[Image: source: (\/[^\]]+\.(?:png|jpg|jpeg|gif|webp))\]/gi;
+  const imagePath = '(?:/[^\]]+|[A-Za-z]:\\\\[^\]]+)\\.(?:png|jpg|jpeg|gif|webp)';
+  const re = new RegExp('\\[Image: source: (' + imagePath + ')\\]', 'gi');
   let m;
   while ((m = re.exec(text)) !== null) paths.push(m[1]);
   return paths;
 }
 function stripImagePaths(text) {
   if (!text) return text;
+  const imagePath = '(?:/[^\]]+|[A-Za-z]:\\\\[^\]]+)\\.(?:png|jpg|jpeg|gif|webp)';
   return text
-    .replace(/\n*\[Image: source: \/[^\]]+\.(?:png|jpg|jpeg|gif|webp)\]/gi, '')
+    .replace(new RegExp('\\n*\\[Image: source: ' + imagePath + '\\]', 'gi'), '')
     .replace(/^(\s*Read this screenshot: @\S+\s*)+/, '')
     .trim();
 }

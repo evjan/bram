@@ -9884,21 +9884,49 @@ fn read_current_turn_edits<R: tauri::Runtime>(
 //   }, ...]
 // ---------------------------------------------------------------------
 
+const IMAGE_MARKER_PREFIX: &str = "[Image: source: ";
+
+// True when `path_bytes` looks like the start of an absolute path the
+// marker contract accepts: either Unix `/...` or Windows `<letter>:\...`.
+// Mirrors the iframe-side regex `(?:/[^\]]+|[A-Za-z]:\\[^\]]+)` in
+// `Globals.xs` so host- and iframe-derived panes agree on what is a marker.
+fn image_marker_path_recognized(path_bytes: &[u8]) -> bool {
+    if path_bytes.first() == Some(&b'/') {
+        return true;
+    }
+    if path_bytes.len() >= 3
+        && path_bytes[0].is_ascii_alphabetic()
+        && path_bytes[1] == b':'
+        && path_bytes[2] == b'\\'
+    {
+        return true;
+    }
+    false
+}
+
 fn st_strip_image_paths(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     loop {
-        let Some(start) = rest.find("[Image: source: /") else {
+        let Some(start) = rest.find(IMAGE_MARKER_PREFIX) else {
             out.push_str(rest);
             break;
         };
-        // Find the end of the bracketed marker (next ']').
         let after_start = &rest[start..];
+        let path_start = &after_start[IMAGE_MARKER_PREFIX.len()..];
+        if !image_marker_path_recognized(path_start.as_bytes()) {
+            // Bracketed text doesn't look like a Unix or Windows absolute
+            // path; emit through `[` and resume scanning.
+            out.push_str(&rest[..start + 1]);
+            rest = &rest[start + 1..];
+            continue;
+        }
+        // Find the end of the bracketed marker (next ']').
         let Some(close) = after_start.find(']') else {
             out.push_str(rest);
             break;
         };
-        // The iframe's regex matches `[Image: source: /<path>.(png|jpg|jpeg|gif|webp)]`
+        // The iframe's regex matches `[Image: source: <path>.(png|jpg|jpeg|gif|webp)]`
         // plus the leading `\n*`. We try the bracket-only match and
         // verify it's an image extension; if not, treat as literal text.
         let marker = &after_start[..=close];
@@ -9930,12 +9958,17 @@ fn st_strip_image_paths(text: &str) -> String {
 fn st_extract_image_paths(text: &str) -> Vec<String> {
     let mut paths = Vec::new();
     let mut rest = text;
-    while let Some(start) = rest.find("[Image: source: /") {
+    while let Some(start) = rest.find(IMAGE_MARKER_PREFIX) {
         let after = &rest[start..];
+        let path_start = &after[IMAGE_MARKER_PREFIX.len()..];
+        if !image_marker_path_recognized(path_start.as_bytes()) {
+            rest = &rest[start + 1..];
+            continue;
+        }
         let Some(close) = after.find(']') else { break };
         let marker = &after[..=close];
         // Strip prefix "[Image: source: " and suffix "]" to get the path.
-        let path = &marker["[Image: source: ".len()..marker.len() - 1];
+        let path = &marker[IMAGE_MARKER_PREFIX.len()..marker.len() - 1];
         let lower_path = path.to_ascii_lowercase();
         if lower_path.ends_with(".png")
             || lower_path.ends_with(".jpg")
@@ -15925,7 +15958,54 @@ mod turn_completion_tests {
 
 #[cfg(test)]
 mod session_turn_tests {
-    use super::{handle_paste_image, st_parse_lines_to_turns};
+    use super::{
+        handle_paste_image, st_extract_image_paths, st_parse_lines_to_turns, st_strip_image_paths,
+    };
+
+    #[test]
+    fn extract_image_paths_handles_windows_absolute_path() {
+        let text = "look\n[Image: source: C:\\Users\\jon\\.cache\\bram\\paste\\foo.png]";
+        let paths = st_extract_image_paths(text);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], "C:\\Users\\jon\\.cache\\bram\\paste\\foo.png");
+    }
+
+    #[test]
+    fn extract_image_paths_collects_mixed_unix_and_windows_markers() {
+        let text =
+            "[Image: source: /tmp/a.png]\n[Image: source: D:\\paste\\b.jpg]\n[Image: source: /var/c.webp]";
+        let paths = st_extract_image_paths(text);
+        assert_eq!(
+            paths,
+            vec![
+                "/tmp/a.png".to_string(),
+                "D:\\paste\\b.jpg".to_string(),
+                "/var/c.webp".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_image_paths_rejects_relative_and_non_image_extensions() {
+        let text = "[Image: source: relative/path.png] and [Image: source: C:\\notes\\file.txt]";
+        let paths = st_extract_image_paths(text);
+        assert!(paths.is_empty(), "got {:?}", paths);
+    }
+
+    #[test]
+    fn strip_image_paths_removes_windows_marker_with_leading_newlines() {
+        let text = "look at this\n\n[Image: source: C:\\Users\\jon\\.cache\\bram\\paste\\foo.png]";
+        let stripped = st_strip_image_paths(text);
+        assert_eq!(stripped, "look at this");
+    }
+
+    #[test]
+    fn strip_image_paths_preserves_non_marker_brackets_before_windows_marker() {
+        let text = "prose [Image: source: not-a-path] tail\n[Image: source: E:\\x.png]";
+        let stripped = st_strip_image_paths(text);
+        assert_eq!(stripped, "prose [Image: source: not-a-path] tail");
+    }
+
 
     #[test]
     fn paste_image_rejects_empty_body() {

@@ -2895,19 +2895,27 @@ fn pty_chunk_has_turn_activity_glyph(chunk: &[u8]) -> bool {
     false
 }
 
+fn pty_chunk_has_codex_working_status(chunk: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(chunk);
+    text.contains("Working (") && text.contains("esc to interrupt")
+}
+
 fn agent_status_set_codex_working<R: tauri::Runtime>(
     app: &AppHandle<R>,
     active_since: std::time::Instant,
+    source: &str,
 ) {
     if !matches!(hinted_session_provider(app), Some(SessionProvider::Codex)) {
         return;
     }
     if let Ok(state) = turn_state_cell().lock() {
-        if should_suppress_codex_spinner_after_completion(
-            &state.phase,
-            state.last_completion_at_ms,
-            state.turn_stamp.as_deref(),
-        ) {
+        let stale_spinner_after_completion = source == "pty-spinner"
+            && should_suppress_codex_spinner_after_completion(
+                &state.phase,
+                state.last_completion_at_ms,
+                state.turn_stamp.as_deref(),
+            );
+        if stale_spinner_after_completion {
             if bram_trace_enabled() {
                 append_bram_trace_line(
                     app,
@@ -2935,7 +2943,7 @@ fn agent_status_set_codex_working<R: tauri::Runtime>(
         substate: None,
         output_tokens_text: None,
         updated_at_ms: unix_now_ms(),
-        source: Some("pty-spinner".to_string()),
+        source: Some(source.to_string()),
     };
     let mut emit_payload: Option<AgentStatus> = None;
     if let Ok(mut cur) = agent_status_cell().lock() {
@@ -2953,7 +2961,7 @@ fn agent_status_set_codex_working<R: tauri::Runtime>(
     }
     if let Some(payload) = emit_payload {
         emit_replayable_payload(app, "agent-status-changed", &payload);
-        update_turn_state(app, "pty-spinner", "codex-working", |s| {
+        update_turn_state(app, source, "codex-working", |s| {
             s.provider = Some("codex".to_string());
             s.phase = "working".to_string();
             s.pending_menu = None;
@@ -3035,7 +3043,10 @@ fn agent_status_set_claude_jsonl_working<R: tauri::Runtime>(
 fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     turn_state_note_pty_activity();
     let now = std::time::Instant::now();
-    let has_spinner = pty_chunk_has_turn_activity_glyph(chunk);
+    let has_activity_glyph = pty_chunk_has_turn_activity_glyph(chunk);
+    let has_codex_working_status = matches!(hinted_session_provider(app), Some(SessionProvider::Codex))
+        && pty_chunk_has_codex_working_status(chunk);
+    let has_spinner = has_activity_glyph || has_codex_working_status;
     let mut emit_now = false;
     let mut spinner_started = false;
     let mut spinner_ended_duration_ms: Option<u128> = None;
@@ -3079,9 +3090,17 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         }
     }
     if let Some(active_since) = codex_active_since {
-        agent_status_set_codex_working(app, active_since);
+        let source = if has_codex_working_status && !has_activity_glyph {
+            "pty-status-text"
+        } else {
+            "pty-spinner"
+        };
+        agent_status_set_codex_working(app, active_since, source);
     }
     if bram_trace_enabled() {
+        if has_codex_working_status && !has_activity_glyph {
+            append_bram_trace_line(app, "agent-status", "op=codex-working-status-text");
+        }
         if spinner_started {
             append_bram_trace_line(app, "spinner-period", "state=started");
         }
@@ -3407,13 +3426,36 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                         when.elapsed().as_millis()
                     );
                     if bram_trace_enabled() {
+                        // Diagnostic for #185-adjacent menu-state miss: when
+                        // post-dismiss-redetect suppression fires, log the
+                        // *new* menu's option labels and signature too. The
+                        // suppression is meant to drop stale rebounds of the
+                        // just-dismissed menu — but on Windows the user can
+                        // submit a fresh tool call within the 10-second
+                        // window, and its menu legitimately deserves a
+                        // shown emit. If the labels here differ from what
+                        // was just dismissed, that's strong evidence the
+                        // suppression is over-aggressive.
+                        let option_summary = new_menu
+                            .options
+                            .iter()
+                            .map(|o| format!("{}={:?}", o.key, o.label))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let signature_summary = new_menu
+                            .tool_call_signature
+                            .as_deref()
+                            .map(|s| format!(" signature={:?}", s))
+                            .unwrap_or_default();
                         append_bram_trace_line(
                             app,
                             "pty-menu",
                             &format!(
-                                "state=suppressed tool={} reason=post-dismiss-redetect elapsed_ms={}",
+                                "state=suppressed tool={} reason=post-dismiss-redetect elapsed_ms={} new_options=[{}]{}",
                                 new_menu.tool,
-                                when.elapsed().as_millis()
+                                when.elapsed().as_millis(),
+                                option_summary,
+                                signature_summary,
                             ),
                         );
                     }
@@ -15612,8 +15654,8 @@ impl IfEmpty for String {
 mod agent_status_tests {
     use super::{
         parse_claude_natural_end_banner, parse_claude_status_line, parse_claude_status_verb_only,
-        should_clear_status_on_turn_activity_stop, should_emit_finished_status,
-        should_suppress_codex_spinner_after_completion,
+        pty_chunk_has_codex_working_status, should_clear_status_on_turn_activity_stop,
+        should_emit_finished_status, should_suppress_codex_spinner_after_completion,
     };
 
     #[test]
@@ -15767,6 +15809,16 @@ mod agent_status_tests {
             "working",
             1_000,
             Some("900")
+        ));
+    }
+
+    #[test]
+    fn codex_working_status_text_is_detected() {
+        assert!(pty_chunk_has_codex_working_status(
+            "Working (1m 00s • esc to interrupt)".as_bytes()
+        ));
+        assert!(!pty_chunk_has_codex_working_status(
+            "The agent is working on the request".as_bytes()
         ));
     }
 }

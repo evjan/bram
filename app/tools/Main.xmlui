@@ -3,7 +3,17 @@
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
   <DataSource id="appInfo" url="/__app-info" />
-  <DataSource id="mainAgentStatus" url="/__agent-status" pollIntervalInSeconds="1" />
+  <DataSource
+    id="mainAgentStatus"
+    url="/__agent-status"
+    pollIntervalInSeconds="1"
+    onLoaded="(data) => iframeTrace('agent-header-status-loaded', {
+      state: (data &amp;&amp; data.state) || '',
+      verb: (data &amp;&amp; data.verb) || '',
+      provider: (data &amp;&amp; data.provider) || '',
+      source: (data &amp;&amp; data.source) || '',
+      elapsed: (data &amp;&amp; data.elapsedText) || ''
+    })" />
   <DataSource id="turnState" url="/__turn-state" pollIntervalInSeconds="1" />
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
@@ -11,6 +21,26 @@
   <ChangeListener
     listenTo="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.verb}"
     onDidChange="(c) => { if (c.newValue) { lastSeenAgentVerb = c.newValue; } }" />
+  <ChangeListener
+    listenTo="{((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state) || '') + ':' + ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.verb) || '') + ':' + ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.provider) || '') + ':' + ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.source) || '') + ':' + ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.elapsedText) || '') + ':' + ((enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')}"
+    onDidChange="() => {
+      const s = mainAgentStatus.value || {};
+      const provider = s.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '';
+      const branch = s.state === 'working'
+        ? 'working'
+        : (s.state === 'finished'
+          ? 'finished'
+          : ((mainAgentStatus.value || enhanceStatus.value) &amp;&amp; provider ? 'idle-provider' : 'none'));
+      iframeTrace('agent-header-branch', {
+        branch,
+        state: s.state || '',
+        verb: s.verb || '',
+        provider,
+        source: s.source || '',
+        elapsed: s.elapsedText || '',
+        lastSeenAgentVerb: lastSeenAgentVerb || ''
+      });
+    }" />
 
   <ModalDialog id="setupInfoDialog" title="About agent coordination">
     <VStack gap="$space-3">

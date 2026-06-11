@@ -81,7 +81,7 @@
         feedbackExpanded = false; expandedItemId = null;
         clearWorklistUiState();
       }
-      if (newItemSubmitting && newItemStartSig && currentSig !== newItemStartSig) {
+      if (newItemSubmitting && currentSig !== newItemStartSig) {
         iframeTrace('new-item-clear', {via: 'sig-change', prevSig: newItemStartSig, currentSig: currentSig});
         newItemSubmitting = false;
         newItemStartSig = '';

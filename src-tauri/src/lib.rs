@@ -12939,14 +12939,18 @@ struct JsonlCompletionDecision {
 }
 
 fn jsonl_completion_provider_for_path(path: &std::path::Path) -> Option<JsonlCompletionProvider> {
-    let path_str = path.to_string_lossy();
-    if path_str.contains("/.claude/") {
-        Some(JsonlCompletionProvider::Claude)
-    } else if path_str.contains("/.codex/") {
-        Some(JsonlCompletionProvider::Codex)
-    } else {
-        None
+    // Walk path components rather than substring-matching the stringified
+    // path. Substring matching with a hardcoded `/` separator misclassifies
+    // every Windows session file (`C:\Users\…\.claude\projects\…`) as
+    // `unknown`, which silently disables the JSONL completion detector.
+    for component in path.components() {
+        match component.as_os_str().to_str() {
+            Some(".claude") => return Some(JsonlCompletionProvider::Claude),
+            Some(".codex") => return Some(JsonlCompletionProvider::Codex),
+            _ => {}
+        }
     }
+    None
 }
 
 fn jsonl_file_basename(path: &std::path::Path) -> String {
@@ -15944,15 +15948,43 @@ mod turn_completion_tests {
 
     #[test]
     fn provider_detection_uses_session_roots() {
-        assert!(jsonl_completion_provider_for_path(Path::new(
-            "/Users/me/.claude/projects/x/session.jsonl"
-        ))
-        .is_some());
-        assert!(jsonl_completion_provider_for_path(Path::new(
-            "/Users/me/.codex/sessions/2026/06/01/rollout.jsonl"
-        ))
-        .is_some());
+        assert_eq!(
+            jsonl_completion_provider_for_path(Path::new(
+                "/Users/me/.claude/projects/x/session.jsonl"
+            ))
+            .map(|p| p.label()),
+            Some("claude")
+        );
+        assert_eq!(
+            jsonl_completion_provider_for_path(Path::new(
+                "/Users/me/.codex/sessions/2026/06/01/rollout.jsonl"
+            ))
+            .map(|p| p.label()),
+            Some("codex")
+        );
         assert!(jsonl_completion_provider_for_path(Path::new("/tmp/session.jsonl")).is_none());
+    }
+
+    #[test]
+    fn provider_detection_handles_windows_backslash_paths() {
+        assert_eq!(
+            jsonl_completion_provider_for_path(Path::new(
+                r"C:\Users\jon\.claude\projects\encoded\uuid.jsonl"
+            ))
+            .map(|p| p.label()),
+            Some("claude")
+        );
+        assert_eq!(
+            jsonl_completion_provider_for_path(Path::new(
+                r"C:\Users\jon\.codex\sessions\2026\06\01\rollout.jsonl"
+            ))
+            .map(|p| p.label()),
+            Some("codex")
+        );
+        assert!(jsonl_completion_provider_for_path(Path::new(
+            r"C:\Users\jon\AppData\Local\Temp\session.jsonl"
+        ))
+        .is_none());
     }
 }
 

@@ -1,7 +1,8 @@
 *.xmlui linguist-language=XML
 *.xmlui linguist-detectable=true
 
-# Windows ConPTY raw byte captures must preserve every CR for the
-# strip_ansi tests they back. `binary` disables CRLF normalization
-# and textual diff on these files.
+# Raw PTY byte captures must preserve every CR for the strip_ansi
+# tests they back. `binary` disables CRLF normalization and textual
+# diff on these files.
 src-tauri/tests/fixtures/windows-conpty/* binary
+src-tauri/tests/fixtures/macos-pty/* binary

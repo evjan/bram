@@ -763,7 +763,7 @@ const { listen } = window.__TAURI__.event;
 
     // Preserve the current XMLUI route across hot-reload. Without this,
     // the new iframe loads tools/index.html with no hash → router
-    // restarts at "/" (Transcript), yanking the user away from
+    // restarts at the root route, yanking the user away from
     // /worklist or wherever else they were. Same-origin iframe
     // (tauri://localhost), so contentWindow.location.hash is readable.
     let preservedHash = "";

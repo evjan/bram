@@ -322,8 +322,8 @@
     </HStack>
   </VStack>
 
-  <Pages fallbackPath="/">
-    <Page url="/"><Transcript activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
+  <Pages fallbackPath="/worklist">
+    <Page url="/"><Workspace activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
     <Page url="/worklist"><Workspace activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
     <Page url="/status"><Status /></Page>
     <Page url="/settings"><Settings /></Page>

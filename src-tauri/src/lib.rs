@@ -1275,7 +1275,13 @@ mod parse_menu_options_line_ending_tests {
         // all three labels concatenated.
         let text = "1. Yes\r2. Yes, and don't ask again\r3. No\r";
         let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3, "expected 3 options after \\r split, got {}: {:?}", opts.len(), opts.iter().map(|o| &o.label).collect::<Vec<_>>());
+        assert_eq!(
+            opts.len(),
+            3,
+            "expected 3 options after \\r split, got {}: {:?}",
+            opts.len(),
+            opts.iter().map(|o| &o.label).collect::<Vec<_>>()
+        );
         assert_eq!(opts[0].label, "Yes");
         assert_eq!(opts[1].label, "Yes, and don't ask again");
         assert_eq!(opts[2].label, "No");
@@ -1291,7 +1297,12 @@ mod parse_menu_options_line_ending_tests {
         // single-pass run-collapse handles this correctly.
         let text = "1. Yes\r\r\n2. Yes, and don't ask again\r\r\n3. No\r\r\n";
         let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3, "expected 3 options after \\r\\r\\n collapse, got: {:?}", opts.iter().map(|o| &o.label).collect::<Vec<_>>());
+        assert_eq!(
+            opts.len(),
+            3,
+            "expected 3 options after \\r\\r\\n collapse, got: {:?}",
+            opts.iter().map(|o| &o.label).collect::<Vec<_>>()
+        );
         assert_eq!(opts[0].label, "Yes");
         assert_eq!(opts[1].label, "Yes, and don't ask again");
         assert_eq!(opts[2].label, "No");
@@ -12986,8 +12997,8 @@ fn codex_jsonl_completion_decision(content: &str) -> JsonlCompletionDecision {
             continue;
         };
         if entry_type == "event_msg" {
-            let payload_type = entry
-                .get("payload")
+            let payload = entry.get("payload");
+            let payload_type = payload
                 .and_then(|p| p.get("type"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
@@ -12997,6 +13008,24 @@ fn codex_jsonl_completion_decision(content: &str) -> JsonlCompletionDecision {
                     reason: "task_complete",
                 };
             }
+            if payload_type == "agent_message" {
+                let is_final_answer = payload
+                    .and_then(|p| p.get("phase"))
+                    .and_then(|v| v.as_str())
+                    == Some("final_answer");
+                let has_message = payload
+                    .and_then(|p| p.get("message"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false);
+                if is_final_answer && has_message {
+                    return JsonlCompletionDecision {
+                        detected: true,
+                        reason: "final_agent_message",
+                    };
+                }
+                continue;
+            }
             if payload_type == "task_started" || payload_type == "user_message" {
                 return JsonlCompletionDecision {
                     detected: false,
@@ -13005,7 +13034,57 @@ fn codex_jsonl_completion_decision(content: &str) -> JsonlCompletionDecision {
             }
             continue;
         }
-        if entry_type == "response_item" || entry_type == "turn_context" {
+        if entry_type == "response_item" {
+            let payload = entry.get("payload");
+            let payload_type = payload
+                .and_then(|p| p.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if payload_type == "message" {
+                let role = payload
+                    .and_then(|p| p.get("role"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if role == "user" {
+                    return JsonlCompletionDecision {
+                        detected: false,
+                        reason: "next-task-started",
+                    };
+                }
+                let is_final_answer = payload
+                    .and_then(|p| p.get("phase"))
+                    .and_then(|v| v.as_str())
+                    == Some("final_answer");
+                let has_output_text = payload
+                    .and_then(|p| p.get("content"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter().any(|c| {
+                            c.get("type").and_then(|v| v.as_str()) == Some("output_text")
+                                && c.get("text")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| !s.trim().is_empty())
+                                    .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false);
+                if role == "assistant" && is_final_answer && has_output_text {
+                    return JsonlCompletionDecision {
+                        detected: true,
+                        reason: "final_response_item",
+                    };
+                }
+                continue;
+            }
+            if payload_type == "function_call" || payload_type == "custom_tool_call" {
+                return JsonlCompletionDecision {
+                    detected: false,
+                    reason: "active-tool-call",
+                };
+            }
+            continue;
+        }
+        if entry_type == "turn_context" {
             continue;
         }
         return JsonlCompletionDecision {
@@ -13095,10 +13174,12 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
             app,
             "jsonl-turn-end",
             &format!(
-                "op=scan provider={} path={} tailTypes={}",
+                "op=scan provider={} path={} tailTypes={} decision={} detected={}",
                 provider_label,
                 basename,
-                jsonl_tail_shape(&content, 6)
+                jsonl_tail_shape(&content, 6),
+                decision.reason,
+                decision.detected
             ),
         );
     }
@@ -15646,6 +15727,36 @@ mod turn_completion_tests {
     }
 
     #[test]
+    fn codex_final_agent_message_detects_completion_without_task_complete() {
+        let content = r#"
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}}
+{"type":"event_msg","payload":{"type":"user_message","message":"go"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"done","phase":"final_answer"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}],"phase":"final_answer"}}
+{"type":"event_msg","payload":{"type":"token_count"}}
+"#;
+        let decision = codex_jsonl_completion_decision(content);
+        assert!(decision.detected);
+        assert_eq!(decision.reason, "final_response_item");
+    }
+
+    #[test]
+    fn codex_commentary_agent_message_does_not_clear() {
+        let content = r#"
+{"type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"go"}]}}
+{"type":"event_msg","payload":{"type":"user_message","message":"go"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"working","phase":"commentary"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"working"}],"phase":"commentary"}}
+{"type":"event_msg","payload":{"type":"token_count"}}
+"#;
+        let decision = codex_jsonl_completion_decision(content);
+        assert!(!decision.detected);
+        assert_eq!(decision.reason, "next-task-started");
+    }
+
+    #[test]
     fn codex_intermediate_tool_records_do_not_clear() {
         let content = r#"
 {"type":"event_msg","payload":{"type":"agent_message","message":"working"}}
@@ -15654,7 +15765,7 @@ mod turn_completion_tests {
 "#;
         let decision = codex_jsonl_completion_decision(content);
         assert!(!decision.detected);
-        assert_eq!(decision.reason, "no-completion-record");
+        assert_eq!(decision.reason, "active-tool-call");
     }
 
     #[test]

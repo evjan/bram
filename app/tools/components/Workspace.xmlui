@@ -48,7 +48,8 @@
   var.conversationOpen="{restoreConversationOpen()}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}"
-  var.submittedKind="{restoreWorklistSubmittedKind()}">
+  var.submittedKind="{restoreWorklistSubmittedKind()}"
+  var.worklistMessageDraft="{restoreWorklistDraft()}">
   <DataSource
     id="worklist"
     url="/__worklist"
@@ -914,20 +915,16 @@
       <Form
         id="worklistMessageForm"
         width="*"
-        data="{{ message: restoreWorklistDraft() }}"
-        persist="true"
-        storageKey="bram.worklistMessageDraftForm"
-        dataAfterSubmit="clear"
-        onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
-        onSubmit="(data) => { const sent = submitWorklistMessageFast(data.message); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = setWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
+        onWillSubmit="() => { return !!(worklistMessageDraft && worklistMessageDraft.trim()); }"
+        onSubmit="() => { const sent = submitWorklistMessageFast(worklistMessageDraft); if (sent) { worklistMessageDraft = ''; worklistInputBox.setValue(''); clearWorklistDraft(); pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = setWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
         <property name="buttonRowTemplate"><Fragment/></property>
         <HStack gap="$space-2" verticalAlignment="end">
           <TextArea
             id="worklistInputBox"
-            bindTo="message"
+            initialValue="{worklistMessageDraft}"
             enterSubmits="true"
-            onInit="setWorklistVoiceTarget('message-agent'); delay(0); restoreWorklistDraftCursor(worklistInputBox);"
-            onDidChange="() => { setWorklistVoiceTarget('message-agent'); persistWorklistDraftCursor(worklistInputBox); }"
+            onInit="setWorklistVoiceTarget('message-agent')"
+            onDidChange="(val) => { worklistMessageDraft = val || ''; persistWorklistDraft(worklistMessageDraft); }"
             onGotFocus="setWorklistVoiceTarget('message-agent')"
             enabled="{!feedbackExpanded}"
             readOnly="{false}"

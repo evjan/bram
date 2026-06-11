@@ -1,0 +1,64 @@
+ * Swooping… (1m 18s · ↓ 3.6k tokens)              ⎿  Tip: Use /btw to ask a quick side question     wihout interrupting Claude's current work
+                                                ────────────────────────────────────────────────❯                                               ────────────────────────────────────────────────  esc to interrupt           ◉ xhigh · /effort                                                                                                                                                                                                                                                  
+
+
+
+
+
+
+
+
+
+
+●↑✢●
+  ⎿  PreToolUse:Edit   ⎿  Failed with 
+    hook error             nn-blocking status
+code:                        /usr/bin/bash: line1: py: command not
+found
+  ⎿  Added5lines
+      1  *.xmlui linguist-language=XML    2  *.xmlui linguist-detectable=true        3 + 4 +# Windows ConPTY raw byte captur   +es must preserve every CR for th   +e 5 +# strip_ansi tests they back. `b   +inary` disables CRLF normalizati   +on 6 +# and textual diff on these file   +s. 7 +src-tauri/tests/fixtures/windows   +-conpty/* binary✢Swooping…(1m18s·↑3.6ktokens)
+ ⎿ Tip:Use/btwtoaskaquicksidequestionwithoutinterruptingClaude'scurrentwork
+
+────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────
+  esc to interrupt           ◉ xhigh · /effort  
+Sw·Soowpoionpig…9n✢g…*✶✻✽20Sw✻oSo✶wpooin*pgi…✢ng…·1✢*✶S✻wo✽Swopoionpgin…g2…✻✶*✢·↓3✢*✶✻7✽4✻✶*✢…·gn5✢i…*pg✶8✻on✽oiwp6✻So✶o*✢w──────────────────────────────────────────────── Bash commandcp/tmp/bram-pty-banner-snapshot-raw.txt
+   src-tauri/tests/fixtures/windows-conpty/     
+  &&cp/tmp/bram-pty-banner-snapshot.txt
+   src-tauri/tests/fixtures/windows-conpty/      && cp/tmp/bram-pty-menu-detect-miss-raw.txt
+   src-tauri/tests/fixtures/windows-conpty/     
+   && cp /tmp/bram-pty-menu-detect-miss.txt     
+   src-tauri/tests/fixtures/windows-conpty/     
+   && cp /tmp/bram-pty-menu-options-collapsed   
+   -raw.txt
+   src-tauri/tests/fixtures/windows-conpty/     
+   && cp
+   /tmp/bram-pty-menu-options-collapsed.txt     
+   src-tauri/tests/fixtures/windows-conpty/     
+   && git rm --cached src-tauri/tests/fixture   
+   s/windows-conpty/*.txt 2>&1 | tail -3 &&     
+   git add .gitattributes
+   src-tauri/tests/fixtures/windows-conpty/     
+   && git commit --amend --no-edit 2>&1 |       
+   tail -10
+   Refresh fixtures, mark binary, amend
+   commit
+
+ Do you want to proceed?
+ ❯ 1. Yes
+  2.Yes, and don't ask again for similar        
+    commands in C:\Users\jon\bram
+   3. No
+
+ Esc to cancel · Tab to amend · ctrl+e to       
+ explain
+● Bash(cp /tmp/bram-pty-banner-snapshot-raw.txt      src-tauri/tests/fixtures/windows-conpty/&&cp/tmp/bram-pty-banner-snapshot.txt  src-tauri/tests/fixtures/windows-conpt…)
+  ⎿  Waiting…
+────────────────────────────────────────────────Bash command
+cp /mp/bram-pty-banner-snapshotraw.xtsrc-tauri/tests/fixtures/windows-conpy/&& cp /tmp/bram-pty-banner-snaphot.txt      src-tauri/tests/fixtures/windwnpty/     && cp/tmp/bram-pty-menu-detct-miss-raw.tx       src-tauri/tests/fixtures/windows-conpty/&& cp /tp/bra-pty-menu-detect-misscp /tp/brm-pty-menu-option-collapsed-raw.txtsrc-tauri/tess/fixures/windows-conpty/&& cp/tmp/bram-pty-menu-optioscollapsed.txtsrc-tauri/tests/fixtures/windows-conpty/&& git rm --cached src-tauri/tests/fixtures/windows-conpty/*.txt2>&1|tail-3&&gitadd.gitattributes  src-tauri/ests/fixtures/windows-conpty/ && gitcommit--amend--no-edit2>&1| tail -10Refresh fixtures, mark binary, amend commitDo you want to proceed?❯ 1. Yes2.Yes,anddon'taskagainforsimilar
+    commands in C:\Users\jon\bram
+   3. No
+
+ Esc to cancel · Tab to amend · ctrl+e to       
+ explain

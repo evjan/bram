@@ -1144,6 +1144,28 @@ fn trim_menu_text_for_preview(text: &str) -> String {
 // matching line after at least one option has been collected so trailing
 // PTY chatter doesn't get swept in. Returns an empty Vec on no matches —
 // the UI falls back to its hardcoded buttons in that case.
+// Heuristic for the #187 "options collapsed onto one line" symptom.
+// A real Claude menu option label never contains its own `<digit>.`
+// marker — that's the marker for the *next* option. So when we see
+// a digit-followed-by-dot anywhere after position 0 in a parsed
+// label, it's strong evidence that strip_ansi dropped the inter-
+// option boundary and two options merged. Used to gate the
+// `bram-pty-menu-options-collapsed.txt` snapshot capture.
+fn label_has_inner_numbered_marker(label: &str) -> bool {
+    let bytes = label.as_bytes();
+    if bytes.len() < 2 {
+        return false;
+    }
+    // Skip position 0 — a label starting with `<digit>.` is just the
+    // option's own marker leaked through if anything.
+    for i in 1..bytes.len() - 1 {
+        if bytes[i].is_ascii_digit() && bytes[i + 1] == b'.' {
+            return true;
+        }
+    }
+    false
+}
+
 fn parse_menu_options(text: &str) -> Vec<MenuOption> {
     let mut opts: Vec<MenuOption> = Vec::new();
     // Normalize line endings. `.lines()` only honors `\n` and `\r\n`;
@@ -4313,9 +4335,9 @@ fn extract_codex_command_signature(text: &str) -> Option<(String, String)> {
 // from preceding context. Runs on the ANSI-stripped tail — the raw
 // bytes contain escape sequences interleaved within the visible menu
 // text, which would fragment the literal needle match.
-fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
-    let raw_codex_action = pty_codex_action_required_pos(tail).is_some();
-    let stripped = strip_ansi(tail);
+fn pty_menu_detect(raw_tail: &[u8]) -> Option<PtyMenu> {
+    let raw_codex_action = pty_codex_action_required_pos(raw_tail).is_some();
+    let stripped = strip_ansi(raw_tail);
     let tail = stripped.as_slice();
     // Prefer Claude's selection-cursor anchor (❯, U+276F) followed by an
     // optional run of spaces / NBSP, then "1.". Codex prompts can render
@@ -4486,8 +4508,9 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
     })();
 
     // Diagnostic: when the menu prompt header is present but detection
-    // returned None, log what we found AND dump the full stripped tail
-    // to /tmp/pty-menu-snapshot.txt so we can iterate on the matcher.
+    // returned None, log a one-line printable summary of the 300 bytes
+    // following the header. Useful when running `cargo run` with a
+    // console attached; silent for users of the bundled app.
     if result.is_none() {
         if let Some(h) = pos_header {
             let pos2_after_pos1 = pos1_opt.and_then(|p1| {
@@ -4516,7 +4539,43 @@ fn pty_menu_detect(tail: &[u8]) -> Option<PtyMenu> {
                 pos2_after_pos1,
                 printable
             );
-            let _ = std::fs::write("/tmp/pty-menu-snapshot.txt", tail);
+        }
+    }
+
+    // Windows evidence-capture snapshots. Distinct filenames per failure
+    // mode under `std::env::temp_dir()` so one mode's capture never
+    // overwrites another's, and the path is portable across OSes
+    // (Unix `/tmp`, Windows `%TEMP%`). Each failure mode writes BOTH
+    // the post-strip tail (the bytes the parsers actually saw) and
+    // the pre-strip raw_tail (the bytes strip_ansi consumed); the
+    // pre-strip copy is what a strip_ansi unit test needs as input.
+    // All writes use `let _ =` so a failed write never affects the
+    // live menu-detect path.
+    let temp = std::env::temp_dir();
+    // detect-miss: cursor anchor present but pty_menu_detect rejected
+    // (e.g., keyword guard failed, stale-worklist guard fired,
+    // option-1-not-Yes guard rejected). Catches the Write-to-Desktop
+    // shape where Claude's prompt wording doesn't trip the keyword
+    // guard.
+    if result.is_none() && pos1_from_cursor.is_some() {
+        let _ = std::fs::write(temp.join("bram-pty-menu-detect-miss.txt"), tail);
+        let _ = std::fs::write(temp.join("bram-pty-menu-detect-miss-raw.txt"), raw_tail);
+    }
+    // options-collapsed: menu was detected but at least one parsed
+    // option's label contains an inner `<digit>.` marker, suggesting
+    // strip_ansi dropped the inter-option boundary and the next option's
+    // marker leaked into this option's label. Catches the #187 shape.
+    if let Some(menu) = result.as_ref() {
+        if menu
+            .options
+            .iter()
+            .any(|o| label_has_inner_numbered_marker(&o.label))
+        {
+            let _ = std::fs::write(temp.join("bram-pty-menu-options-collapsed.txt"), tail);
+            let _ = std::fs::write(
+                temp.join("bram-pty-menu-options-collapsed-raw.txt"),
+                raw_tail,
+            );
         }
     }
 
@@ -12054,6 +12113,10 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create {}: {}", parent.display(), e))?;
     }
+    // Used only under `#[cfg(unix)]` below to gate a chmod after a
+    // fresh write. On Windows there's no Unix permission bit to set,
+    // so the binding is intentionally unused there.
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let hook_written = write_template_if_safe(
         &hook_path,
         &hook_bytes,
@@ -12183,6 +12246,8 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
     // Whole-file Setup-managed bundle; force-write so bundle bumps land on
     // existing installs. No source-repo carve-out — this hook installs to
     // $HOME/.bram/ on every machine. Issue #174.
+    // Same Unix-only chmod gate as the Claude hook above.
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let codex_hook_written =
         write_template_if_safe(&script_path, &script_bytes, true, &mut wrote, &mut skipped)?;
     #[cfg(unix)]
@@ -13353,14 +13418,32 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
     if decision.detected && active_matches {
         match provider {
             JsonlCompletionProvider::Claude => {
-                let (verb, elapsed) = pty_tail_cell()
-                    .lock()
-                    .ok()
-                    .map(|tail| strip_ansi(&tail))
+                // Clone the raw Vec<u8> out from under the mutex so we
+                // can both feed `strip_ansi` and snapshot the pre-strip
+                // bytes after the lock drops.
+                let raw = pty_tail_cell().lock().ok().map(|tail| tail.clone());
+                let stripped = raw.as_ref().map(|t| strip_ansi(t));
+                let (verb, elapsed) = stripped
                     .as_ref()
                     .and_then(|s| parse_claude_natural_end_banner(s))
                     .map(|b| (Some(b.verb), Some(b.duration_text)))
                     .unwrap_or((None, None));
+                // banner-miss: JSONL says the turn ended, but the
+                // `<Verb> for <duration>` banner wasn't found in the
+                // stripped tail. Likely the same ConPTY whitespace-
+                // collapse class as the menu cases; capture both
+                // stripped and raw so a strip_ansi fix can be unit-
+                // tested against real Windows input.
+                if verb.is_none() {
+                    let temp = std::env::temp_dir();
+                    if let Some(s) = stripped.as_ref() {
+                        let _ = std::fs::write(temp.join("bram-pty-banner-snapshot.txt"), s);
+                    }
+                    if let Some(r) = raw.as_ref() {
+                        let _ =
+                            std::fs::write(temp.join("bram-pty-banner-snapshot-raw.txt"), r);
+                    }
+                }
                 if bram_trace_enabled() {
                     append_bram_trace_line(
                         app,
@@ -15430,10 +15513,39 @@ mod agent_status_tests {
 mod pty_menu_tests {
     use super::{
         extract_codex_command_signature, extract_pending_tool_call_from_jsonl,
-        format_pending_tool_call, parse_menu_options, pty_menu_detect,
-        pty_menu_input_clears_inflight, pty_output_clears_inflight,
+        format_pending_tool_call, label_has_inner_numbered_marker, parse_menu_options,
+        pty_menu_detect, pty_menu_input_clears_inflight, pty_output_clears_inflight,
     };
     use serde_json::json;
+
+    #[test]
+    fn label_inner_marker_detects_collapsed_options() {
+        // Real failure: option 1 ("Yes") and option 2 ("Yes, and don't…")
+        // collapsed onto one line by strip_ansi dropping the CSI H
+        // between rows. Option 1's parsed label ends up containing
+        // option 2's marker.
+        assert!(label_has_inner_numbered_marker(
+            "Yes2.Yes,anddon'taskagainfor:cargotest*"
+        ));
+        // Same shape with a space surviving between marker and label.
+        assert!(label_has_inner_numbered_marker(
+            "Yes2. Yes,allowreadingfrompaste/duringthissession  3. No"
+        ));
+    }
+
+    #[test]
+    fn label_inner_marker_ignores_clean_labels() {
+        // Real Claude option labels never contain their own next-option
+        // marker, so these must not trigger.
+        assert!(!label_has_inner_numbered_marker("Yes"));
+        assert!(!label_has_inner_numbered_marker("No"));
+        assert!(!label_has_inner_numbered_marker(
+            "Yes, and don't ask again for: cargo test *"
+        ));
+        assert!(!label_has_inner_numbered_marker(
+            "Yes, allow all edits in Desktop/ during this session (shift+tab)"
+        ));
+    }
 
     #[test]
     fn parses_three_option_claude_menu() {

@@ -1,0 +1,65 @@
+[<u[>1u[>4;2m]0;⠂ Fix status bar not updating on Windows[?2026h[?2026l[38;2;153;153;153m[31;1H [38;2;215;119;87m[33;1H* Swooping… [38;2;153;153;153m(1m 18s · ↓ 3.6k tokens)              ⎿  Tip: Use /btw to ask a quick side question [m[35;2H    [38;2;153;153;153mwi[1Chout interrupting Claude's current work[m
+                                                [38;2;136;136;136m────────────────────────────────────────────────[38;2;153;153;153m❯                                               [38;2;136;136;136m────────────────────────────────────────────────[m  [38;2;153;153;153mesc to interrupt           ◉ xhigh · /effort  [m                                                                                                                                                                                                                                                
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K[38;3H[?25h[?2026h[?2026l[?25l[38;2;153;153;153m[31;1H●[33;23H↑[38;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[33;1H✢[38;3H[?25h[m[?25l[?2026h[38;2;78;186;101m[31;1H●[38;2;153;153;153m
+  ⎿  PreToolUse:Edit [3C  ⎿  Failed with [m
+ [1C   [38;2;153;153;153mhook error        [m[1C     [38;2;153;153;153mn[1Cn-blocking status[m
+[29X[38;2;153;153;153m[29Ccode:[K[m[35;6H                        [K[38;2;153;153;153m/usr/bin/bash: line[36;30H1: py: command not[m
+[29X[38;2;153;153;153m[29Cfound[K
+  ⎿  [mAdded[1m[1C5[22m[1Clines
+     [38;2;248;248;242m[2m 1 [22m *.xmlui linguist-language=XML[K[m[40;3H   [38;2;248;248;242m[2m 2 [22m *.xmlui linguist-detectable=true       [38;2;80;200;80m[48;2;2;40;0m[41;6H 3 +[32X[42;6H 4 +[38;2;248;248;242m# Windows ConPTY raw byte captur[38;2;80;200;80m[43;6H   +[38;2;248;248;242mes must preserve every CR for th[38;2;80;200;80m[44;6H   +[38;2;248;248;242me[31X[38;2;80;200;80m[45;6H 5 +[38;2;248;248;242m# strip_ansi tests they back. `b[38;2;80;200;80m[46;6H   +[38;2;248;248;242minary` disables CRLF normalizati[38;2;80;200;80m[47;6H   +[38;2;248;248;242mon[30X[38;2;80;200;80m[48;6H 6 +[38;2;248;248;242m# and textual diff on these file[38;2;80;200;80m[49;6H   +[38;2;248;248;242ms.[30X[38;2;80;200;80m[50;6H 7 +[38;2;248;248;242msrc-tauri/tests/fixtures/windows[38;2;80;200;80m[51;6H   +[38;2;248;248;242m-conpty/* binary[16X[38;2;215;119;87m[49m[53;1H✢[1CSwooping…[38;2;153;153;153m[1C(1m[1C18s[1C·[1C↑[1C3.6k[1Ctokens)
+ [1C⎿[1C Tip:[1CUse[1C/btw[1Cto[1Cask[1Ca[1Cquick[1Cside[1Cquestion[55;6Hwithout[1Cinterrupting[1CClaude's[1Ccurrent[1Cwork[m
+
+[38;2;136;136;136m────────────────────────────────────────────────[m
+[38;2;153;153;153m❯ [46C[m
+[38;2;136;136;136m────────────────────────────────────────────────[m
+  [38;2;153;153;153mesc to interrupt           ◉ xhigh · /effort  [?2026l[m
+[53;3H[?25h[?2026h[?2026l[?25l[38;2;235;159;127m[48;3HS[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;235;159;127m[48;4Hw[53;3H[?25h[m[?2026h[?2026l[?25l[38;2;215;119;87m[48;1H·[1CS[38;2;235;159;127m[1Coo[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;4Hw[38;2;235;159;127m[2Cp[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;5Ho[38;2;235;159;127m[2Ci[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;6Ho[38;2;235;159;127m[2Cn[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;7Hpi[38;2;235;159;127m[1Cg…[38;2;153;153;153m[6C9[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;9Hn[53;3H[?25h[m[?2026h[?2026l[?25l[38;2;215;119;87m[48;1H✢[8Cg[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;11H…[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H*[53;3H[?25h[m]0;⠐ Fix status bar not updating on Windows[?2026h[?2026l[?25l[38;2;215;119;87m[48;1H✶[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✻[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✽[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;153;153;153m[48;17H20[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;235;159;127m[48;3HSw[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✻[38;2;235;159;127m[3Co[53;3H[?25h[m[?2026h[?2026l[?25l[38;2;215;119;87m[48;3HS[38;2;235;159;127m[2Co[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✶[2Cw[38;2;235;159;127m[2Cp[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;5Hoo[38;2;235;159;127m[1Cin[53;3H[?25h[m]0;⠂ Fix status bar not updating on Windows[?2026h[?2026l[?25l[38;2;215;119;87m[48;1H*[5Cp[38;2;235;159;127m[2Cg[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;8Hi[38;2;235;159;127m[2C…[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✢[7Cn[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;10Hg…[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H·[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;153;153;153m[48;18H1[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✢[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H*[53;3H[?25h[m]0;⠐ Fix status bar not updating on Windows[?2026h[?2026l[?25l[38;2;215;119;87m[48;1H✶[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;235;159;127m[48;3HS[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✻[38;2;235;159;127m[2Cw[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;235;159;127m[48;5Ho[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✽[1CSw[38;2;235;159;127m[1Cop[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;5Ho[38;2;235;159;127m[2Ci[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;6Ho[38;2;235;159;127m[2Cn[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;7Hp[38;2;235;159;127m[2Cg[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;8Hin[38;2;235;159;127m[1C…[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;10Hg[38;2;153;153;153m[7C2[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;11H…[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✻[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✶[53;3H[?25h[m]0;⠂ Fix status bar not updating on Windows[?2026h[?2026l[?25l[38;2;215;119;87m[48;1H*[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✢[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H·[53;3H[?25h[m[?2026h[?2026l[?25l[38;2;153;153;153m[48;23H↓[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;153;153;153m[48;18H3[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✢[53;3H[?25h[m]0;⠐ Fix status bar not updating on Windows[?2026h[?2026l[?25l[38;2;215;119;87m[48;1H*[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✶[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✻[38;2;153;153;153m[25C7[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✽[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;153;153;153m[48;18H4[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✻[53;3H[?25h[m]0;⠂ Fix status bar not updating on Windows[?2026h[?2026l[?25l[38;2;215;119;87m[48;1H✶[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H*[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✢[38;2;235;159;127m[9C…[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H·[38;2;235;159;127m[8Cg[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;235;159;127m[48;9Hn[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;153;153;153m[48;18H5[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✢[38;2;235;159;127m[6Ci[38;2;215;119;87m[2C…[53;3H[?25h[m]0;⠐ Fix status bar not updating on Windows[?2026h[?2026l[?25l[38;2;215;119;87m[48;1H*[38;2;235;159;127m[5Cp[38;2;215;119;87m[2Cg[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✶[38;2;153;153;153m[25C8[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✻[38;2;235;159;127m[4Co[38;2;215;119;87m[2Cn[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✽[38;2;235;159;127m[3Co[38;2;215;119;87m[2Ci[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;235;159;127m[48;4Hw[38;2;215;119;87m[2Cp[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;153;153;153m[48;18H6[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✻[38;2;235;159;127m[1CS[38;2;215;119;87m[2Co[53;3H[?25h[m]0;⠂ Fix status bar not updating on Windows[?2026h[?2026l[?25l[38;2;215;119;87m[48;1H✶[3Co[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H*[53;3H[?25h[?2026h[?2026l[?25l[m[38;2;215;119;87m[48;1H✢[2Cw[53;3H[?25h[m]0;✳ Fix status bar not updating on Windows[?25l[?2026h[38;2;177;185;249m[48;1H────────────────────────────────────────────────[m [38;2;177;185;249m[1mBash command[m[K[50;6H[K[51;4Hcp[1C/tmp/bram-pty-banner-snapshot-raw.txt
+   src-tauri/tests/fixtures/windows-conpty/     
+  [1C&&[1Ccp[1C/tmp/bram-pty-banner-snapshot.txt
+   src-tauri/tests/fixtures/windows-conpty/     [55;3H && cp[K[56;4H/tmp/bram-pty-menu-detect-miss-raw.txt
+   src-tauri/tests/fixtures/windows-conpty/     
+   && cp /tmp/bram-pty-menu-detect-miss.txt     
+   src-tauri/tests/fixtures/windows-conpty/     
+   && cp /tmp/bram-pty-menu-options-collapsed   
+   -raw.txt[37C
+   src-tauri/tests/fixtures/windows-conpty/     
+   && cp[40C
+   /tmp/bram-pty-menu-options-collapsed.txt     
+   src-tauri/tests/fixtures/windows-conpty/     
+   && git rm --cached src-tauri/tests/fixture   
+   s/windows-conpty/*.txt 2>&1 | tail -3 &&     
+   git add .gitattributes[23C
+   src-tauri/tests/fixtures/windows-conpty/     
+   && git commit --amend --no-edit 2>&1 |       
+   tail -10[37C
+   [38;2;153;153;153mRefresh fixtures, mark binary, amend[K[9C[m
+   [38;2;153;153;153mcommit[K[39C[m
+[48C
+ Do you want to proceed?[24C
+ [38;2;177;185;249m❯ [38;2;153;153;153m1. [38;2;177;185;249mYes[K[39C[m
+  [38;2;153;153;153m2.[mYes, and don't ask again for similar        
+    commands in [1mC:\Users\jon\bram[22m[K[15C
+   [38;2;153;153;153m3. [mNo[K[40C
+[48C
+ [38;2;153;153;153mEsc to cancel · Tab to amend · ctrl+e to       [m
+ [38;2;153;153;153mexplain[K[40C[?2026l[m
+[48C[?2026h[38;2;153;153;153m[21;1H● [m[1mBash[22m(cp /tmp/bram-pty-banner-snapshot-raw.txt [22;2H     src-tauri/tests/fixtures/windows-conpty/[23;7H&&[1Ccp[1C/tmp/bram-pty-banner-snapshot.txt[24;4H  [1Csrc-tauri/tests/fixtures/windows-conpt…)[38;2;153;153;153m
+  ⎿  Waiting…[K[m[26;4H[K[38;2;177;185;249m
+────────────────────────────────────────────────[1m[28;2HBash command[m[29;4H[K
+cp /[1Cmp/bram-pty-banner-snapshot[1Craw.[1Cxt[31;4Hsrc-tauri/tests/fixtures/windows-conp[1Cy/[32;4H&& cp /tmp/bram-pty-banner-snap[1Chot.txt      [33;4Hsrc-tauri/tests/fixtures/wind[1Cw[4Cnpty/     [34;4H&& cp[K[35;4H/tmp/bram-pty-menu-det[1Cct-miss-raw.tx[1C       [36;4Hsrc-tauri/tests/fixtures/windows-conpty/[37;4H&& cp /t[1Cp/bra[1C-pty-menu-detect-miss[39;7Hcp /t[1Cp/br[1Cm-pty-menu-option[1C-collapsed[40;4H-raw.txt[K[41;4Hsrc-tauri/tes[1Cs/fix[1Cures/windows-conpty/[42;4H&& cp[K[43;4H/tmp/bram-pty-menu-optio[1Cs[1Ccollapsed.txt[44;4Hsrc-tauri/tests/fixtures/windows-conpty/[45;4H&& git rm --cached src-tauri/tests/fixture[46;4Hs/windows-conpty/*.txt[1C2>&1[1C|[1Ctail[1C-3[1C&&[47;4Hgit[1Cadd[1C.gitattributes[48;2H  src-tauri/[1Cests/fixtures/windows-conpty/[49;2H [1C&& git[1Ccommit[1C--amend[1C--no-edit[1C2>&1[1C|[50;3H tail -10[K[38;2;153;153;153m[51;4HRefresh fixtures, mark binary, amend [52;4Hcommit[m[54;2HDo you want to proceed?[K[38;2;177;185;249m[55;2H❯ [38;2;153;153;153m1. [38;2;177;185;249mYes[38;2;153;153;153m[56;3H2.[mYes,[1Cand[1Cdon't[1Cask[1Cagain[1Cfor[1Csimilar
+    commands in [1mC:\Users\jon\bram[22m[K[15C
+   [38;2;153;153;153m3. [mNo[K[40C
+[48C
+ [38;2;153;153;153mEsc to cancel · Tab to amend · ctrl+e to       [m
+ [38;2;153;153;153mexplain[K[40C[?2026l[m
+[48C

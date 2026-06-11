@@ -2251,6 +2251,17 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
     if let Ok(mut cur) = agent_status_cell().lock() {
         *cur = next.clone();
     }
+    agent_turn_state_clear_active();
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "agent-status",
+            &format!(
+                "op=clear-pty-active source={} provider={}",
+                source, provider
+            ),
+        );
+    }
     emit_replayable_payload(app, "agent-status-changed", &next);
     update_turn_state(app, "agent-status", "finished", |s| {
         s.provider = Some(provider.to_string());
@@ -2641,6 +2652,14 @@ fn agent_turn_state_cell() -> &'static Mutex<AgentTurnState> {
     })
 }
 
+fn agent_turn_state_clear_active() {
+    if let Ok(mut state) = agent_turn_state_cell().lock() {
+        state.last_spinner_at = None;
+        state.is_active = false;
+        state.active_since = None;
+    }
+}
+
 // 800ms threshold: activity ticks are 100-200ms apart while thinking;
 // 800ms of no spinner/activity reliably indicates the agent stopped
 // updating.
@@ -2684,6 +2703,18 @@ fn should_emit_finished_status(menu_pending: bool) -> bool {
     !menu_pending
 }
 
+fn should_suppress_codex_spinner_after_completion(
+    phase: &str,
+    completion_at_ms: i64,
+    turn_stamp: Option<&str>,
+) -> bool {
+    if phase != "finished" || completion_at_ms <= 0 {
+        return false;
+    }
+    let turn_started_at_ms = turn_stamp.and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    turn_started_at_ms <= completion_at_ms
+}
+
 // Byte-level check for turn-activity glyphs without allocating a
 // String. Asterisk family is U+2700..U+277F (UTF-8 prefix 0xE2 0x9C);
 // braille patterns are U+2800..U+283F (prefix 0xE2 0xA0). In practice
@@ -2706,6 +2737,27 @@ fn agent_status_set_codex_working<R: tauri::Runtime>(
 ) {
     if !matches!(hinted_session_provider(app), Some(SessionProvider::Codex)) {
         return;
+    }
+    if let Ok(state) = turn_state_cell().lock() {
+        if should_suppress_codex_spinner_after_completion(
+            &state.phase,
+            state.last_completion_at_ms,
+            state.turn_stamp.as_deref(),
+        ) {
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    app,
+                    "agent-status",
+                    &format!(
+                        "op=skip-codex-working source=pty-spinner reason=completion-cursor phase={} completionAtMs={} turnStamp={}",
+                        state.phase,
+                        state.last_completion_at_ms,
+                        state.turn_stamp.as_deref().unwrap_or("")
+                    ),
+                );
+            }
+            return;
+        }
     }
     let elapsed_ms = std::time::Instant::now()
         .saturating_duration_since(active_since)
@@ -13098,6 +13150,50 @@ fn codex_jsonl_completion_decision(content: &str) -> JsonlCompletionDecision {
     }
 }
 
+fn codex_latest_user_message_ts_ms(content: &str) -> Option<i64> {
+    for line in content.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        if entry.get("type").and_then(|v| v.as_str()) != Some("response_item") {
+            continue;
+        }
+        let Some(payload) = entry.get("payload") else {
+            continue;
+        };
+        if payload.get("type").and_then(|v| v.as_str()) != Some("message") {
+            continue;
+        }
+        if payload.get("role").and_then(|v| v.as_str()) != Some("user") {
+            continue;
+        }
+        let content_has_user_input = payload
+            .get("content")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter().any(|c| {
+                    matches!(
+                        c.get("type").and_then(|v| v.as_str()),
+                        Some("input_text") | Some("input_image")
+                    )
+                })
+            })
+            .unwrap_or(false);
+        if !content_has_user_input {
+            continue;
+        }
+        return entry
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .and_then(parse_iso_to_ms);
+    }
+    None
+}
+
 fn jsonl_completion_decision(
     provider: JsonlCompletionProvider,
     content: &str,
@@ -13169,6 +13265,11 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
         return;
     };
     let decision = jsonl_completion_decision(provider, &content);
+    let latest_codex_user_ts_ms = if provider == JsonlCompletionProvider::Codex {
+        codex_latest_user_message_ts_ms(&content)
+    } else {
+        None
+    };
     if bram_trace_enabled() {
         append_bram_trace_line(
             app,
@@ -13204,6 +13305,9 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
             s.provider = Some(provider_label.to_string());
             s.last_jsonl_activity_at_ms = file_mtime_ms;
             s.last_jsonl_reason = Some(decision.reason.to_string());
+            if let Some(ts) = latest_codex_user_ts_ms {
+                s.turn_stamp = Some(ts.to_string());
+            }
         });
         if provider == JsonlCompletionProvider::Claude && decision.reason == "non-final-assistant" {
             agent_status_set_claude_jsonl_working(app, file_mtime_ms, decision.reason);
@@ -15127,6 +15231,7 @@ mod agent_status_tests {
     use super::{
         parse_claude_natural_end_banner, parse_claude_status_line, parse_claude_status_verb_only,
         should_clear_status_on_turn_activity_stop, should_emit_finished_status,
+        should_suppress_codex_spinner_after_completion,
     };
 
     #[test]
@@ -15259,6 +15364,28 @@ mod agent_status_tests {
     fn menu_pending_suppresses_finished_status_emit() {
         assert!(!should_emit_finished_status(true));
         assert!(should_emit_finished_status(false));
+    }
+
+    #[test]
+    fn codex_spinner_stays_suppressed_until_newer_user_turn() {
+        assert!(should_suppress_codex_spinner_after_completion(
+            "finished",
+            1_000,
+            Some("900")
+        ));
+        assert!(should_suppress_codex_spinner_after_completion(
+            "finished", 1_000, None
+        ));
+        assert!(!should_suppress_codex_spinner_after_completion(
+            "finished",
+            1_000,
+            Some("1001")
+        ));
+        assert!(!should_suppress_codex_spinner_after_completion(
+            "working",
+            1_000,
+            Some("900")
+        ));
     }
 }
 
@@ -15694,7 +15821,7 @@ The Worklist permission panel proposal:\n\
 mod turn_completion_tests {
     use super::{
         claude_jsonl_completion_decision, codex_jsonl_completion_decision,
-        jsonl_completion_provider_for_path,
+        codex_latest_user_message_ts_ms, jsonl_completion_provider_for_path,
     };
     use std::path::Path;
 
@@ -15766,6 +15893,20 @@ mod turn_completion_tests {
         let decision = codex_jsonl_completion_decision(content);
         assert!(!decision.detected);
         assert_eq!(decision.reason, "active-tool-call");
+    }
+
+    #[test]
+    fn codex_latest_user_message_timestamp_uses_newest_real_user_input() {
+        let content = r#"
+{"timestamp":"2026-06-11T04:15:00.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"old"}]}}
+{"timestamp":"2026-06-11T04:15:01.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"x","output":"ok"}}
+{"timestamp":"2026-06-11T04:16:51.662Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"new"}]}}
+{"timestamp":"2026-06-11T04:16:58.935Z","type":"response_item","payload":{"type":"function_call","name":"exec_command"}}
+"#;
+        assert_eq!(
+            codex_latest_user_message_ts_ms(content),
+            Some(1781151411662)
+        );
     }
 
     #[test]

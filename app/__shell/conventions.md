@@ -57,6 +57,14 @@ change is "small":
 - **Explicit user opt-out in this turn.** The user ends with
 "just do it" or "skip the worklist". The opt-out must be in the same turn
  as the change request — don't carry it forward across turns or infer it from past patterns.
+ Both Claude and Codex honor the same phrase list, but along different paths:
+ Claude's guard matches `_OPT_OUT_PATTERNS` against `transcript_path` on every
+ `PreToolUse` and allows inline; Codex's guard matches the same list on
+ `UserPromptSubmit` and writes a one-turn `direct-edit` record
+ (`kind:"direct-edit"`, `paths:["*"]`, 1h TTL) to
+ `resources/.worklist-authorization.json`, which the subsequent `PreToolUse`
+ reads via `fresh_bypass()`. The phrases themselves are identical, so the
+ user-facing contract is the same regardless of agent.
 
 - **Correcting code you just wrote in the current iteration.**
   If you wrote a typo or off-by-one in the last assistant turn and

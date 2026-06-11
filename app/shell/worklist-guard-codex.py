@@ -655,6 +655,22 @@ def self_test():
             [],
         )
 
+        # Opt-out parity (#186): matching phrases write a fresh
+        # kind:"direct-edit" record at AUTH_REL, others don't.
+        assert has_opt_out("just do it")
+        assert has_opt_out("Skip the worklist")
+        assert has_opt_out("commit this directly")
+        assert not has_opt_out("looks good")
+        assert not has_opt_out("go ahead and merge")
+        assert not has_opt_out("")
+
+        write_direct_edit_record(str(root))
+        wrote = json.loads((root / AUTH_REL).read_text())
+        assert wrote["kind"] == "direct-edit"
+        assert wrote["paths"] == ["*"]
+        assert isinstance(wrote["issued_at_ms"], int)
+        assert wrote["issued_at_ms"] > 0
+
 
 def _worklist_new_content_from_tool_input(cwd, tool_input):
     old_content = current_worklist_text(cwd)
@@ -800,11 +816,60 @@ def looks_like_change_request(prompt):
     return bool(_CHANGE_KEYWORDS.search(prompt))
 
 
+# Opt-out phrases that authorize a one-turn direct edit. Mirrors Claude's
+# _OPT_OUT_PATTERNS verbatim so the user-facing contract is identical
+# regardless of agent. Anything ambiguous ("looks good", "go ahead") is
+# deliberately NOT here — matches the conventions' "Don't infer
+# commit/drop/advance from feedback" rule.
+_OPT_OUT_PATTERNS = [
+    re.compile(r"\bjust do it\b", re.IGNORECASE),
+    re.compile(r"\bcommit\s+(this|that|it)\s+directly\b", re.IGNORECASE),
+    re.compile(r"\bcommit directly[,\.\s]+no worklist\b", re.IGNORECASE),
+    re.compile(r"\bno worklist\s+(for\s+(this|that)|here)\b", re.IGNORECASE),
+    re.compile(r"\bskip the worklist\b", re.IGNORECASE),
+    re.compile(r"\binline (the )?fix\b", re.IGNORECASE),
+    re.compile(r"\bdon'?t bother with the worklist\b", re.IGNORECASE),
+]
+
+
+def has_opt_out(msg):
+    if not isinstance(msg, str):
+        return False
+    return any(rx.search(msg) for rx in _OPT_OUT_PATTERNS)
+
+
+def write_direct_edit_record(cwd):
+    """Write a fresh kind:'direct-edit' record so the next PreToolUse's
+    fresh_bypass() returns True. Uses snake_case issued_at_ms to match
+    Bram's host canon and Codex's fresh_bypass reader."""
+    path = os.path.join(cwd, AUTH_REL)
+    rec = {
+        "kind": "direct-edit",
+        "issued_at_ms": int(time.time() * 1000),
+        "paths": ["*"],
+    }
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".auth-", dir=directory)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(rec, f)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+
+
 def handle_user_prompt_submit(payload, cwd):
     # Only inject in Bram-managed repos (presence of auth file).
     if not os.path.exists(os.path.join(cwd, AUTH_REL)):
         allow()
-    if not looks_like_change_request(payload.get("prompt", "")):
+    prompt = payload.get("prompt", "")
+    if has_opt_out(prompt):
+        write_direct_edit_record(cwd)
+        allow()
+    if not looks_like_change_request(prompt):
         allow()
     emit_additional_context(GATE_REMINDER)
 

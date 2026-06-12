@@ -58,6 +58,7 @@
           when="{(commits.value || []).filter(c => !c.pushed).length > 0}"
           label="Push {(commits.value || []).filter(c => !c.pushed).length}"
           size="xs"
+          tooltip="Push all unpublished commits on the current branch to origin"
           onClick="pushError = null; gitPush(commits, (e) => pushError = e)" />
         <Button
           label="{gitStatus.value &amp;&amp; gitStatus.value.behind > 0 ? 'Pull ' + gitStatus.value.behind : 'Pull'}"

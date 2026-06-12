@@ -1,4 +1,4 @@
-This repo is driven through Bram. The canonical worklist gate is carried by codex's `developer_instructions` (top-level in `~/.codex/config.toml`, installed by Bram Setup) and enforced at runtime by a `PreToolUse` hook installed under `~/.bram`. Read `app/__shell/conventions.md` for the full conventions, including opt-out phrases, the two-stage proposed → applied → committed flow, approval payload shape, loopback lifecycle calls, and edge cases.
+This repo is driven through Bram. The canonical worklist gate is carried by codex's `developer_instructions` (top-level in `~/.codex/config.toml`, installed by Bram Setup) and enforced at runtime by a single `PreToolUse` hook installed under `~/.bram`; explicit same-turn opt-out phrases such as "just do it" are recorded host-side when Bram sends the turn. Read `app/__shell/conventions.md` for the full conventions, including opt-out phrases, the two-stage proposed → applied → committed flow, approval payload shape, loopback lifecycle calls, and edge cases.
 
 Quick summary so you can act in this turn:
 

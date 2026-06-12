@@ -86,7 +86,7 @@ struct WhisperState(Mutex<Option<std::process::Child>>);
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WorklistAuthorizationRecord {
-    // "approved" | "drop" | "rejected_stale" | "none"
+    // "approved" | "drop" | "rejected_stale" | "none" | "direct-edit"
     kind: String,
     #[serde(default)]
     ids: Vec<String>,
@@ -103,6 +103,25 @@ struct WorklistAuthorizationRecord {
     source: String,
     #[serde(default)]
     consumed_at_ms: Option<i64>,
+}
+
+fn turn_text_has_direct_edit_opt_out(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("just do it")
+        || lower.contains("skip the worklist")
+        || lower.contains("inline fix")
+        || lower.contains("inline the fix")
+        || lower.contains("don't bother with the worklist")
+        || lower.contains("dont bother with the worklist")
+        || lower.contains("commit this directly")
+        || lower.contains("commit that directly")
+        || lower.contains("commit it directly")
+        || lower.contains("commit directly, no worklist")
+        || lower.contains("commit directly. no worklist")
+        || lower.contains("commit directly no worklist")
+        || lower.contains("no worklist for this")
+        || lower.contains("no worklist for that")
+        || lower.contains("no worklist here")
 }
 
 // Cross-platform home directory: $HOME on Unix, %USERPROFILE% on Windows.
@@ -6984,6 +7003,7 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
     state: &State<'_, AppState>,
     data: &str,
 ) -> Result<(), String> {
+    record_codex_direct_edit_authorization(app, data);
     if cfg!(windows) {
         pty_write_internal(app, state, "\x15", "pty-intent-toTurn-windows-clear")?;
         pty_write_internal(app, state, data, "pty-intent-toTurn-windows-payload")?;
@@ -17727,6 +17747,49 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
     }
 }
 
+fn record_codex_direct_edit_authorization<R: tauri::Runtime>(app: &AppHandle<R>, turn_text: &str) {
+    if !matches!(hinted_session_provider(app), Some(SessionProvider::Codex)) {
+        return;
+    }
+    if !turn_text_has_direct_edit_opt_out(turn_text) {
+        return;
+    }
+    let Some(path) = worklist_auth_file(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("[worklist-auth] create {} failed: {}", parent.display(), e);
+            return;
+        }
+    }
+    let issued_at_ms = unix_now_ms();
+    let record = serde_json::json!({
+        "kind": "direct-edit",
+        "issued_at_ms": issued_at_ms,
+        "issuedAtMs": issued_at_ms,
+        "paths": ["*"],
+        "source": "host-to-turn-opt-out",
+    });
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "auth-record",
+            "op=write kind=direct-edit ids=[] source=host-to-turn-opt-out",
+        );
+    }
+    let body = match serde_json::to_string_pretty(&record) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[worklist-auth] serialize direct-edit failed: {}", e);
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(&path, format!("{}\n", body)) {
+        eprintln!("[worklist-auth] write {} failed: {}", path.display(), e);
+    }
+}
+
 fn read_active_worklist_authorization<R: tauri::Runtime>(
     app: &AppHandle<R>,
 ) -> Option<WorklistAuthorizationRecord> {
@@ -20579,8 +20642,9 @@ mod worklist_authorization_tests {
         apply_worklist_mutation, build_worklist_authorization_record, canonical_item_hash,
         classify_worklist_removals, draft_markdown_path, feedback_draft_path,
         inflight_claim_fully_covered, parse_worklist_authorization_message, resource_relative_path,
-        validate_post_commit_prune_status, validate_worklist_advance_status,
-        validate_worklist_mutate_authorization, worklist_draft_path,
+        turn_text_has_direct_edit_opt_out, validate_post_commit_prune_status,
+        validate_worklist_advance_status, validate_worklist_mutate_authorization,
+        worklist_draft_path,
     };
     use serde_json::json;
     use std::path::Path;
@@ -20672,6 +20736,18 @@ mod worklist_authorization_tests {
         assert_eq!(record.ids, ids(&["old-drop"]));
         assert!(record.mismatched_ids.is_empty());
         assert!(record.items.is_empty());
+    }
+
+    #[test]
+    fn direct_edit_opt_out_matches_explicit_phrases_only() {
+        assert!(turn_text_has_direct_edit_opt_out(
+            "create foo.bar on the Desktop. just do it."
+        ));
+        assert!(turn_text_has_direct_edit_opt_out("Skip the worklist"));
+        assert!(turn_text_has_direct_edit_opt_out("commit this directly"));
+        assert!(turn_text_has_direct_edit_opt_out("no worklist here"));
+        assert!(!turn_text_has_direct_edit_opt_out("looks good"));
+        assert!(!turn_text_has_direct_edit_opt_out("go ahead"));
     }
 
     #[test]

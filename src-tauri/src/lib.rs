@@ -11556,8 +11556,8 @@ const ENHANCE_HOOK_BUNDLE_REL: &str = "__shell/worklist-guard.py";
 // Bram-managed (presence of resources/.worklist-authorization.json).
 const ENHANCE_CODEX_HOOK_BUNDLE_REL: &str = "shell/worklist-guard-codex.py";
 const ENHANCE_CODEX_HOOK_INSTALL_REL: &str = ".bram/codex-worklist-guard.py";
-const ENHANCE_CODEX_TRUST_ACK_REL: &str = ".bram/codex-trust-ack";
 const ENHANCE_CODEX_CONFIG_REL: &str = ".codex/config.toml";
+const ENHANCE_CODEX_TRUST_ACK_LEGACY_REL: &str = ".bram/codex-trust-ack";
 // TOML-comment markers delimit the Bram block inside codex's
 // config.toml so re-runs can replace it without disturbing surrounding entries.
 const ENHANCE_CODEX_TOML_MARKER_START: &str = "# bram:start";
@@ -12356,8 +12356,8 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     // Codex side. Without this, a stale sidecar (bundle bumped after Setup
     // last ran) leaves `claude_installed` true and the Setup banner hidden,
     // even though Agent Coordination correctly flags the row as stale.
-    let claude_sidecar_current =
-        is_source_repo || (sidecar.exists() && hook_matches_bundle(app, &sidecar, "__shell/conventions.md"));
+    let claude_sidecar_current = is_source_repo
+        || (sidecar.exists() && hook_matches_bundle(app, &sidecar, "__shell/conventions.md"));
     let hook_script_exists = hook_script.exists();
     let hook_script_current =
         hook_script_exists && hook_matches_bundle(app, &hook_script, ENHANCE_HOOK_BUNDLE_REL);
@@ -12380,13 +12380,6 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let codex_instr_current = codex_config_path
         .as_ref()
         .map(|p| codex_instr_block_current(p))
-        .unwrap_or(false);
-    let codex_trust_ack = home_dir()
-        .and_then(|h| {
-            let stored = std::fs::read_to_string(h.join(ENHANCE_CODEX_TRUST_ACK_REL)).ok()?;
-            let current = hook_fingerprint(&h.join(ENHANCE_CODEX_HOOK_INSTALL_REL))?;
-            Some(stored.trim() == current)
-        })
         .unwrap_or(false);
     let core_installed = worklist_auth.exists();
     let claude_installed = claude_md_has_marker
@@ -12437,7 +12430,6 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         "codexHookCurrent": codex_hook_current,
         "codexAgentsCurrent": codex_agents_current,
         "codexInstrCurrent": codex_instr_current,
-        "codexTrustAck": codex_trust_ack,
         "hookRegistered": hook_registered,
         "fallbackMode": "watcher-revert",
         "claudeMdPath": claude_md.display().to_string(),
@@ -12503,6 +12495,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
     // disk == bundle at every managed path. Surfaced in the response so the
     // agent-tools-drawer can warn the user.
     let mut skipped: Vec<String> = Vec::new();
+    remove_legacy_codex_trust_ack();
 
     // Provider-neutral worklist authorization cache. Bram records the
     // latest structured `approved:` / `drop:` payload here so the desktop-side
@@ -12697,28 +12690,15 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
     serde_json::to_vec(&body).map_err(|e| e.to_string())
 }
 
-fn hook_fingerprint(path: &Path) -> Option<String> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let bytes = std::fs::read(path).ok()?;
-    let mut h = DefaultHasher::new();
-    bytes.hash(&mut h);
-    Some(format!("{:016x}", h.finish()))
-}
-
-fn write_codex_trust_ack() -> Result<(), String> {
-    let home = home_dir().ok_or("no HOME or USERPROFILE")?;
-    let hook = home.join(ENHANCE_CODEX_HOOK_INSTALL_REL);
-    let fp = hook_fingerprint(&hook)
-        .ok_or_else(|| format!("read {}: hook not installed", hook.display()))?;
-    let marker = home.join(ENHANCE_CODEX_TRUST_ACK_REL);
-    if let Some(parent) = marker.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+fn remove_legacy_codex_trust_ack() {
+    let Some(path) = home_dir().map(|h| h.join(ENHANCE_CODEX_TRUST_ACK_LEGACY_REL)) else {
+        return;
+    };
+    match std::fs::remove_file(&path) {
+        Ok(()) => eprintln!("[enhance] removed legacy {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => eprintln!("[enhance] remove legacy {}: {}", path.display(), e),
     }
-    std::fs::write(&marker, fp.as_bytes())
-        .map_err(|e| format!("write {}: {}", marker.display(), e))?;
-    Ok(())
 }
 
 struct CodexHookInstall {
@@ -19491,23 +19471,6 @@ fn route_request<R: tauri::Runtime>(
             }
         };
     }
-    if path == "__enhance/codex-trust-ack" {
-        return match write_codex_trust_ack() {
-            Ok(()) => {
-                emit_replayable_signal(app, "enhance-status-changed");
-                (
-                    200,
-                    "application/json; charset=utf-8",
-                    br#"{"ok":true}"#.to_vec(),
-                )
-            }
-            Err(e) => {
-                eprintln!("[http /__enhance/codex-trust-ack] {}", e);
-                (500, "text/plain; charset=utf-8", e.into_bytes())
-            }
-        };
-    }
-
     // PTY rolling-buffer hex dump — for debugging menu detection.
     // Returns the last 2KB of PTY_TAIL as a hexdump (offsets, hex bytes,
     // ASCII gutter). Use to inspect what claude actually wrote when a
@@ -21595,10 +21558,8 @@ pub fn run() {
             let agent_hints_dir = active_agent_hint_path(&app.handle())
                 .ok()
                 .and_then(|p| p.parent().map(|p| p.to_path_buf()));
-            // ~/.bram/ holds the codex-trust-ack marker. Ensure it exists at
-            // startup so the watcher can attach to it — without this, deleting
-            // the marker (the documented "force the banner back" gesture) would
-            // not trigger a refetch and the iframe would keep the stale state.
+            // ~/.bram/ holds Bram's user-global Codex hook. Ensure it exists at
+            // startup so the watcher can attach to user-global Bram changes.
             let bram_dir = home_dir().map(|h| h.join(".bram"));
             if let Some(ref bd) = bram_dir {
                 let _ = std::fs::create_dir_all(bd);

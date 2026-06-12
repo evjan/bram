@@ -2879,6 +2879,10 @@ fn should_suppress_codex_spinner_after_completion(
     turn_started_at_ms <= completion_at_ms
 }
 
+fn should_set_codex_jsonl_working(decision: &JsonlCompletionDecision) -> bool {
+    !decision.detected && matches!(decision.reason, "next-task-started" | "active-tool-call")
+}
+
 // Byte-level check for turn-activity glyphs without allocating a
 // String. Asterisk family is U+2700..U+277F (UTF-8 prefix 0xE2 0x9C);
 // braille patterns are U+2800..U+283F (prefix 0xE2 0xA0). In practice
@@ -2969,6 +2973,56 @@ fn agent_status_set_codex_working<R: tauri::Runtime>(
     }
 }
 
+fn agent_status_set_codex_jsonl_working<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    file_mtime_ms: i64,
+    turn_started_at_ms: Option<i64>,
+    reason: &str,
+) {
+    if !matches!(hinted_session_provider(app), Some(SessionProvider::Codex)) {
+        return;
+    }
+    let started_at_ms = turn_started_at_ms.unwrap_or(file_mtime_ms).max(0);
+    let elapsed_ms = unix_now_ms().saturating_sub(started_at_ms);
+    let next = AgentStatus {
+        provider: Some("codex".to_string()),
+        state: "working".to_string(),
+        verb: Some("working".to_string()),
+        elapsed_text: Some(format_elapsed_text(elapsed_ms)),
+        substate: None,
+        output_tokens_text: None,
+        updated_at_ms: unix_now_ms(),
+        source: Some("jsonl-non-final".to_string()),
+    };
+    let mut emit_payload: Option<AgentStatus> = None;
+    if let Ok(mut cur) = agent_status_cell().lock() {
+        let changed = cur.verb != next.verb
+            || cur.elapsed_text != next.elapsed_text
+            || cur.substate != next.substate
+            || cur.state != next.state
+            || cur.provider != next.provider;
+        if changed {
+            *cur = next.clone();
+            emit_payload = Some(next);
+        } else {
+            cur.updated_at_ms = next.updated_at_ms;
+        }
+    }
+    if let Some(payload) = emit_payload {
+        emit_replayable_payload(app, "agent-status-changed", &payload);
+    }
+    update_turn_state(app, "jsonl-non-final", reason, |s| {
+        s.provider = Some("codex".to_string());
+        s.phase = "working".to_string();
+        s.last_jsonl_activity_at_ms = file_mtime_ms;
+        s.last_jsonl_reason = Some(reason.to_string());
+        if let Some(ts) = turn_started_at_ms {
+            s.turn_stamp = Some(ts.to_string());
+        }
+        s.pending_menu = None;
+    });
+}
+
 fn agent_status_set_claude_jsonl_working<R: tauri::Runtime>(
     app: &AppHandle<R>,
     file_mtime_ms: i64,
@@ -3044,8 +3098,9 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     turn_state_note_pty_activity();
     let now = std::time::Instant::now();
     let has_activity_glyph = pty_chunk_has_turn_activity_glyph(chunk);
-    let has_codex_working_status = matches!(hinted_session_provider(app), Some(SessionProvider::Codex))
-        && pty_chunk_has_codex_working_status(chunk);
+    let has_codex_working_status =
+        matches!(hinted_session_provider(app), Some(SessionProvider::Codex))
+            && pty_chunk_has_codex_working_status(chunk);
     let has_spinner = has_activity_glyph || has_codex_working_status;
     let mut emit_now = false;
     let mut spinner_started = false;
@@ -4014,8 +4069,7 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
                     {
                         if final_byte == b'H' || final_byte == b'f' {
                             let params_end = j.saturating_sub(1).max(param_start);
-                            let (row, col) =
-                                parse_csi_h_row_col(&input[param_start..params_end]);
+                            let (row, col) = parse_csi_h_row_col(&input[param_start..params_end]);
                             // Only emit `\n` for the "start a new line" shape
                             // (`\x1b[<row>;1H`). A row advance to col > 1 is a
                             // mid-line cursor reposition — Claude TUI does
@@ -13748,6 +13802,14 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
         if provider == JsonlCompletionProvider::Claude && decision.reason == "non-final-assistant" {
             agent_status_set_claude_jsonl_working(app, file_mtime_ms, decision.reason);
         }
+        if provider == JsonlCompletionProvider::Codex && should_set_codex_jsonl_working(&decision) {
+            agent_status_set_codex_jsonl_working(
+                app,
+                file_mtime_ms,
+                latest_codex_user_ts_ms,
+                decision.reason,
+            );
+        }
     }
     if decision.detected && active_matches {
         match provider {
@@ -15684,7 +15746,8 @@ mod agent_status_tests {
     use super::{
         parse_claude_natural_end_banner, parse_claude_status_line, parse_claude_status_verb_only,
         pty_chunk_has_codex_working_status, should_clear_status_on_turn_activity_stop,
-        should_emit_finished_status, should_suppress_codex_spinner_after_completion,
+        should_emit_finished_status, should_set_codex_jsonl_working,
+        should_suppress_codex_spinner_after_completion, JsonlCompletionDecision,
     };
 
     #[test]
@@ -15849,6 +15912,26 @@ mod agent_status_tests {
         assert!(!pty_chunk_has_codex_working_status(
             "The agent is working on the request".as_bytes()
         ));
+    }
+
+    #[test]
+    fn codex_jsonl_working_starts_on_explicit_non_final_records() {
+        assert!(should_set_codex_jsonl_working(&JsonlCompletionDecision {
+            detected: false,
+            reason: "next-task-started",
+        }));
+        assert!(should_set_codex_jsonl_working(&JsonlCompletionDecision {
+            detected: false,
+            reason: "active-tool-call",
+        }));
+        assert!(!should_set_codex_jsonl_working(&JsonlCompletionDecision {
+            detected: true,
+            reason: "task_complete",
+        }));
+        assert!(!should_set_codex_jsonl_working(&JsonlCompletionDecision {
+            detected: false,
+            reason: "no-completion-record",
+        }));
     }
 }
 
@@ -16201,7 +16284,9 @@ Do you want to proceed?
         let lines: Vec<&str> = text.lines().collect();
         // The first menu row should NOT be fragmented into one-word lines.
         assert!(
-            lines.iter().any(|l| l.contains("Yes,") && l.contains("and") && l.contains("allow")),
+            lines
+                .iter()
+                .any(|l| l.contains("Yes,") && l.contains("and") && l.contains("allow")),
             "first line should keep all four words together, got {:?}",
             text
         );

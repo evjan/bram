@@ -3918,26 +3918,36 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
     });
 }
 
-// Parse the row parameter from a CSI H / CSI f parameter slice. Format:
-// `<row>;<col>` (either may be empty, both default to 1). Used only by
-// `strip_ansi`'s Windows-gated row-tracked newline-emit path. Defined
-// at module scope so it's testable on every platform — its callers are
+// Parse both `<row>` and `<col>` parameters from a CSI H / CSI f
+// parameter slice. Format: `<row>;<col>` (either may be empty, both
+// default to 1). The col component is needed by `strip_ansi`'s
+// Windows-gated path so it can distinguish line-start writes
+// (`\x1b[<row>;1H`, treated as `\n`) from mid-line cursor positioning
+// (`\x1b[<row>;<col>H` with col > 1, treated as a single space) —
+// Claude TUI on Windows draws menu rows and status rows with a mix of
+// both shapes within a single redraw, and emitting `\n` for every
+// forward row jump shreds the stripped output into per-character
+// lines that `parse_menu_options` can't reassemble. Defined at module
+// scope so it's testable on every platform — its callers are
 // `#[cfg(windows)]` but the parsing logic itself is OS-independent.
-fn parse_csi_h_row(params: &[u8]) -> u32 {
+// Refs #187 menu-miss-after-rebuild.
+fn parse_csi_h_row_col(params: &[u8]) -> (u32, u32) {
     if params.is_empty() {
-        return 1;
+        return (1, 1);
     }
-    let row_bytes = match params.iter().position(|&b| b == b';') {
-        Some(pos) => &params[..pos],
-        None => params,
+    let mut parts = params.splitn(2, |&b| b == b';');
+    let row_bytes = parts.next().unwrap_or(&[]);
+    let col_bytes = parts.next().unwrap_or(&[]);
+    let parse_one = |bytes: &[u8]| -> u32 {
+        if bytes.is_empty() {
+            return 1;
+        }
+        std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(1)
     };
-    if row_bytes.is_empty() {
-        return 1;
-    }
-    std::str::from_utf8(row_bytes)
-        .ok()
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(1)
+    (parse_one(row_bytes), parse_one(col_bytes))
 }
 
 // Strip ANSI escape sequences so literal-byte matchers aren't fragmented
@@ -4004,9 +4014,28 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
                     {
                         if final_byte == b'H' || final_byte == b'f' {
                             let params_end = j.saturating_sub(1).max(param_start);
-                            let row = parse_csi_h_row(&input[param_start..params_end]);
-                            if row > last_csi_row {
+                            let (row, col) =
+                                parse_csi_h_row_col(&input[param_start..params_end]);
+                            // Only emit `\n` for the "start a new line" shape
+                            // (`\x1b[<row>;1H`). A row advance to col > 1 is a
+                            // mid-line cursor reposition — Claude TUI does
+                            // this when re-drawing the same logical menu line
+                            // word-by-word at different column offsets, and a
+                            // newline there shreds the stripped output into
+                            // per-fragment lines that `parse_menu_options`
+                            // can't reassemble (live miss observed on the Read
+                            // `~\Desktop\foo.bar` permission menu — fp_head
+                            // decoded to `\nlo ia\n* v t\ni i`). Emit a space
+                            // for the mid-line case so word boundaries
+                            // survive without introducing line breaks; reset
+                            // the row tracker on backward jumps (redraws);
+                            // drop entirely for same-row repositioning.
+                            // Refs #187 menu-miss-after-Layer-1-rebuild.
+                            if row > last_csi_row && col == 1 {
                                 out.push(b'\n');
+                                last_csi_row = row;
+                            } else if row > last_csi_row {
+                                out.push(b' ');
                                 last_csi_row = row;
                             } else if row < last_csi_row {
                                 last_csi_row = row;
@@ -16137,10 +16166,9 @@ Do you want to proceed?
     fn strip_ansi_windows_csi_h_emits_newline_on_row_advance() {
         // Synthetic CSI H sequence that mirrors the shape captured in
         // `tests/fixtures/windows-conpty/bram-pty-menu-options-collapsed-raw.txt`:
-        // each menu row is positioned with `\x1b[<row>;<col>H` instead
-        // of a literal `\r\n`. The Windows-gated arm in strip_ansi
-        // emits a `\n` when the row parameter advances past the
-        // previously-emitted row.
+        // each menu row is positioned with `\x1b[<row>;1H` (col=1, i.e.
+        // start-of-line writes) instead of a literal `\r\n`. The
+        // Windows-gated arm in strip_ansi emits a `\n` only for those.
         let raw = b"\x1b[40;1H1. Yes\x1b[41;1H2. No\x1b[42;1H3. Cancel";
         let stripped = super::strip_ansi(raw);
         let text = std::str::from_utf8(&stripped).unwrap();
@@ -16154,16 +16182,48 @@ Do you want to proceed?
         );
     }
 
+    #[cfg(windows)]
     #[test]
-    fn parse_csi_h_row_parses_common_shapes() {
-        // Used by strip_ansi's Windows-gated CSI H handler.
-        assert_eq!(super::parse_csi_h_row(b""), 1);
-        assert_eq!(super::parse_csi_h_row(b";5"), 1);
-        assert_eq!(super::parse_csi_h_row(b"40"), 40);
-        assert_eq!(super::parse_csi_h_row(b"40;1"), 40);
-        assert_eq!(super::parse_csi_h_row(b"123;456"), 123);
-        // Malformed input falls back to 1 rather than panicking.
-        assert_eq!(super::parse_csi_h_row(b"abc"), 1);
+    fn strip_ansi_windows_csi_h_mid_line_position_does_not_split() {
+        // Regression from the foo.bar Read menu miss: Claude TUI draws a
+        // single logical line by emitting characters at successive row /
+        // col combinations where the col is NOT 1 — repositioning within
+        // an existing row region (e.g. word-by-word at columns 5, 11, 17
+        // on the same target row). The previous Layer 1 rule fired `\n`
+        // on any forward row advance, which shredded these mid-line
+        // positions into per-fragment lines that `parse_menu_options`
+        // could not reassemble. The new rule only emits `\n` when col=1
+        // (a true line-start write); mid-line positions emit a space so
+        // word boundaries survive without introducing breaks.
+        let raw = b"\x1b[40;1H1.\x1b[40;5HYes,\x1b[40;11Hand\x1b[40;17Hallow\x1b[41;1H2. No";
+        let stripped = super::strip_ansi(raw);
+        let text = std::str::from_utf8(&stripped).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        // The first menu row should NOT be fragmented into one-word lines.
+        assert!(
+            lines.iter().any(|l| l.contains("Yes,") && l.contains("and") && l.contains("allow")),
+            "first line should keep all four words together, got {:?}",
+            text
+        );
+        // The col=1 row jump to row 41 still emits a newline.
+        assert!(lines.iter().any(|l| l.contains("2. No")), "got {:?}", text);
+    }
+
+    #[test]
+    fn parse_csi_h_row_col_parses_both_components() {
+        assert_eq!(super::parse_csi_h_row_col(b""), (1, 1));
+        assert_eq!(super::parse_csi_h_row_col(b"40"), (40, 1));
+        assert_eq!(super::parse_csi_h_row_col(b"40;1"), (40, 1));
+        assert_eq!(super::parse_csi_h_row_col(b"40;5"), (40, 5));
+        assert_eq!(super::parse_csi_h_row_col(b";5"), (1, 5));
+        assert_eq!(super::parse_csi_h_row_col(b"123;456"), (123, 456));
+    }
+
+    #[test]
+    fn parse_csi_h_row_col_handles_malformed_input() {
+        // Malformed input falls back to (1, 1) rather than panicking.
+        assert_eq!(super::parse_csi_h_row_col(b"abc"), (1, 1));
+        assert_eq!(super::parse_csi_h_row_col(b"5;xyz"), (5, 1));
     }
 
     #[test]

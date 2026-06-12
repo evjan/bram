@@ -518,7 +518,7 @@
           borderRadius="$borderRadius"
           border="1px solid $color-warn-200"
           backgroundColor="$color-warn-50">
-          <Text fontSize="$fontSize-sm" color="$color-warn-800">
+          <Text fontSize="$fontSize-xs" color="$color-warn-800">
             Agent wants to use <Text fontFamily="$fontFamily-monospace">{effectivePendingMenu.tool}</Text>
           </Text>
           <Button
@@ -577,7 +577,7 @@
                     variant="outlined"
                     size="sm"
                     onClick="sendKeys($item.key + '\r')" />
-                  <Text>{$item.label}</Text>
+                  <Text fontSize="$fontSize-sm">{$item.label}</Text>
                 </HStack>
               </Items>
             </Theme>

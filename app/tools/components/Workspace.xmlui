@@ -1369,7 +1369,15 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
           <ChangeListener
             listenTo="{worklistVoiceSeq}"
             onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'new-item') appendVoiceTranscript(newItemBox, worklistVoiceText); newItemVoiceRecording = false; }" />
+          <HStack
+            when="{newItemHelp &amp;&amp; !openIssues.value}"
+            gap="$space-2"
+            verticalAlignment="center">
+            <Spinner />
+            <Text fontSize="$fontSize-sm" color="$color-text-secondary" value="Loading open issues…" />
+          </HStack>
           <Select
+            when="{!!openIssues.value}"
             placeholder="Optional: cite an open issue"
             data="{((openIssues.value) || []).filter(i => i.state === 'OPEN').map(i => ({value: i.number, label: '#' + i.number + ' ' + i.title}))}"
             initialValue="{newItemIssue}"

@@ -13486,7 +13486,13 @@ fn jsonl_completion_provider_for_path(path: &std::path::Path) -> Option<JsonlCom
             _ => {}
         }
     }
-    None
+    path.to_string_lossy()
+        .split(['/', '\\'])
+        .find_map(|component| match component {
+            ".claude" => Some(JsonlCompletionProvider::Claude),
+            ".codex" => Some(JsonlCompletionProvider::Codex),
+            _ => None,
+        })
 }
 
 fn jsonl_file_basename(path: &std::path::Path) -> String {

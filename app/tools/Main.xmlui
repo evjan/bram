@@ -279,7 +279,7 @@
   </NavPanel>
 
   <VStack
-    when="{enhanceStatus.value && enhanceStatus.value.activeProvider && enhanceStatus.value.providerNeedsSetup}"
+    when="{enhanceStatus.value && enhanceStatus.value.activeProvider && enhanceStatus.value.providerNeedsSetup && !setupCompleteProvider}"
     padding="$space-4"
     gap="$space-3"
     backgroundColor="$color-info-50"

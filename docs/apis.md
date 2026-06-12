@@ -134,7 +134,6 @@ when running in the Bram source repo itself (detected via
 | --- | --- | --- | --- | --- |
 | `/__enhance/status` | HTTP GET | — | `{ enhanced, claudeMd, sidecarExists, hookScriptExists, hookRegistered, … }` | agent pane iframe |
 | `/__enhance/run` | HTTP GET | — | `{ enhanced: true, wrote: [<path>, …] }` | agent pane iframe |
-| `/__enhance/codex-trust-ack` | HTTP GET | — | `{ ok: true }` (emits `enhance-status-changed` Tauri event) | agent pane iframe |
 
 ## 3. Worklist & authorization
 

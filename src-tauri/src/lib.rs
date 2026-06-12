@@ -4016,6 +4016,7 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
 // scope so it's testable on every platform — its callers are
 // `#[cfg(windows)]` but the parsing logic itself is OS-independent.
 // Refs #187 menu-miss-after-rebuild.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn parse_csi_h_row_col(params: &[u8]) -> (u32, u32) {
     if params.is_empty() {
         return (1, 1);
@@ -12351,6 +12352,12 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     // until Setup migrates it to the new path.
     let sidecar_exists =
         sidecar.exists() || proj.join(ENHANCE_SIDECAR_LEGACY_REL).exists() || is_source_repo;
+    // Whole-file currency check, parallel to `codex_agents_current` on the
+    // Codex side. Without this, a stale sidecar (bundle bumped after Setup
+    // last ran) leaves `claude_installed` true and the Setup banner hidden,
+    // even though Agent Coordination correctly flags the row as stale.
+    let claude_sidecar_current =
+        is_source_repo || (sidecar.exists() && hook_matches_bundle(app, &sidecar, "__shell/conventions.md"));
     let hook_script_exists = hook_script.exists();
     let hook_script_current =
         hook_script_exists && hook_matches_bundle(app, &hook_script, ENHANCE_HOOK_BUNDLE_REL);
@@ -12382,8 +12389,11 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         })
         .unwrap_or(false);
     let core_installed = worklist_auth.exists();
-    let claude_installed =
-        claude_md_has_marker && sidecar_exists && hook_script_current && hook_registered;
+    let claude_installed = claude_md_has_marker
+        && sidecar_exists
+        && claude_sidecar_current
+        && hook_script_current
+        && hook_registered;
     let codex_installed = core_installed
         && codex_agents_has_marker
         && codex_agents_current

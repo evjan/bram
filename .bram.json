@@ -3,7 +3,7 @@
     "agent": "agent"
   },
   "traces": {
-    "enabled": true,
+    "enabled": false,
     "inspectorTap": false
   },
   "ui": {

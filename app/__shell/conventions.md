@@ -701,7 +701,12 @@ from `gh issue view N --json title`; refresh if you iterate).
 Approving a TO COMMIT item with non-empty `closesIssues` opens a
 confirm dialog — one row per issue plus an optional close-comment
 textbox, with three actions: close after verifying the commit is
-visible on GitHub; push then verify and close; or commit only.
+visible on GitHub; push then verify and close; or commit only. The
+push-before-close path is branch-scoped, not item-scoped: it pushes
+the new worklist commit plus any unpublished commits already reachable
+from the current branch tip. The dialog must show that scope before
+confirmation, including a table of pending commits when any already
+exist.
 
 Issue-derived items (e.g. "Propose a worklist item to address #N
 ...") default to pairing the `issue-<N>-...` id with `closesIssues`

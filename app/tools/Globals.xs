@@ -998,6 +998,30 @@ function combineFeedbackWithCloseLines(base, lines, pushBeforeClose) {
   return baseTrim + '\n\n' + generated.join('\n');
 }
 
+function closeIssuePushScopeRows(item, commits) {
+  const rows = [];
+  if (item && item.id) {
+    rows.push({
+      sha: '(new)',
+      subject: item.id,
+      relation: 'Approved worklist item',
+    });
+  }
+  for (const c of (commits || [])) {
+    if (!c || c.pushed) continue;
+    rows.push({
+      sha: (c.sha || '').slice(0, 7),
+      subject: (c.commit && c.commit.message) || '',
+      relation: 'Already pending on this branch',
+    });
+  }
+  return rows;
+}
+
+function closeIssueExistingPendingCount(commits) {
+  return (commits || []).filter(function (c) { return c && !c.pushed; }).length;
+}
+
 // Worklist-hotspot instrumentation helpers (`Workspace.xmlui` per-item
 // Approve / Iterate / Drop + closeIssues dialog). Each helper calls
 // `App.mark(label)` — the xmlui-native, sandbox-safe replacement for

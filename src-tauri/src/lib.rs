@@ -283,6 +283,17 @@ fn encode_path_for_filename(p: &std::path::Path) -> String {
         .collect()
 }
 
+fn encode_path_for_filename_ascii_lossy(p: &std::path::Path) -> String {
+    p.to_string_lossy()
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' => '-',
+            c if c.is_ascii() => c,
+            _ => '-',
+        })
+        .collect()
+}
+
 fn determine_project_root() -> PathBuf {
     let args: Vec<String> = std::env::args().collect();
     let candidate: PathBuf = if args.len() >= 2 && !args[1].starts_with('-') {
@@ -8259,6 +8270,15 @@ struct SessionsMeta {
     provider: SessionProvider,
     count: usize,
     current_id: Option<String>,
+    #[serde(rename = "discoveryNotes", skip_serializing_if = "Vec::is_empty")]
+    discovery_notes: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct SessionsDirLookup {
+    chosen: PathBuf,
+    found: bool,
+    tried: Vec<PathBuf>,
 }
 
 fn active_agent_hint_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -8284,11 +8304,45 @@ fn active_agent_hint_mtime<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<std:
 }
 
 fn claude_sessions_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    Ok(claude_sessions_dir_lookup(app)?.chosen)
+}
+
+fn find_existing_claude_sessions_dir(
+    projects_root: &Path,
+    project_path: &Path,
+) -> SessionsDirLookup {
+    let strict = projects_root.join(encode_path_for_filename(project_path));
+    let lossy = projects_root.join(encode_path_for_filename_ascii_lossy(project_path));
+    let mut tried = vec![strict.clone()];
+    if lossy != strict {
+        tried.push(lossy.clone());
+    }
+
+    for candidate in &tried {
+        if candidate.is_dir() {
+            return SessionsDirLookup {
+                chosen: candidate.clone(),
+                found: true,
+                tried,
+            };
+        }
+    }
+
+    SessionsDirLookup {
+        chosen: strict,
+        found: false,
+        tried,
+    }
+}
+
+fn claude_sessions_dir_lookup<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<SessionsDirLookup, String> {
     let root = project_root(Some(app)).ok_or("could not resolve project root")?;
     let abs = strip_unc_prefix(root.canonicalize().map_err(|e| e.to_string())?);
-    let encoded = encode_path_for_filename(&abs);
     let home = home_dir().ok_or("no HOME or USERPROFILE")?;
-    Ok(home.join(".claude").join("projects").join(encoded))
+    let projects_root = home.join(".claude").join("projects");
+    Ok(find_existing_claude_sessions_dir(&projects_root, &abs))
 }
 
 // Best-effort label for a Claude session. Precedence (matches what
@@ -8525,7 +8579,8 @@ fn find_snippets(text: &str, q_lower: &str, max_count: usize) -> Vec<String> {
 fn discover_claude_sessions<R: tauri::Runtime>(
     app: &AppHandle<R>,
 ) -> Result<Vec<SessionRecord>, String> {
-    let dir = claude_sessions_dir(app)?;
+    let lookup = claude_sessions_dir_lookup(app)?;
+    let dir = lookup.chosen;
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -8563,6 +8618,26 @@ fn discover_claude_sessions<R: tauri::Runtime>(
     }
     sessions.sort_by(|a, b| b.mtime.cmp(&a.mtime));
     Ok(sessions)
+}
+
+fn claude_discovery_notes(lookup: &SessionsDirLookup) -> Vec<String> {
+    let mut notes = vec![format!(
+        "Discovery: {} (found={})",
+        lookup.chosen.display(),
+        lookup.found
+    )];
+    if lookup.tried.len() > 1 {
+        notes.push(format!(
+            "Also tried: {}",
+            lookup
+                .tried
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        ));
+    }
+    notes
 }
 
 fn discover_codex_sessions<R: tauri::Runtime>(
@@ -8645,10 +8720,18 @@ fn session_meta<R: tauri::Runtime>(
     preferred: Option<SessionProvider>,
 ) -> Result<SessionsMeta, String> {
     let (provider, sessions) = sessions_for_provider(app, preferred)?;
+    let discovery_notes = if provider == SessionProvider::Claude && sessions.is_empty() {
+        claude_sessions_dir_lookup(app)
+            .map(|lookup| claude_discovery_notes(&lookup))
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     Ok(SessionsMeta {
         provider,
         count: sessions.len(),
         current_id: sessions.first().map(|s| s.id.clone()),
+        discovery_notes,
     })
 }
 
@@ -16927,6 +17010,97 @@ mod turn_completion_tests {
             r"C:\Users\jon\AppData\Local\Temp\session.jsonl"
         ))
         .is_none());
+    }
+}
+
+#[cfg(test)]
+mod sessions_discovery_tests {
+    use super::{
+        encode_path_for_filename, encode_path_for_filename_ascii_lossy,
+        find_existing_claude_sessions_dir,
+    };
+    use std::path::{Path, PathBuf};
+
+    fn temp_projects_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "bram-sessions-discovery-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp projects root should be created");
+        root
+    }
+
+    #[test]
+    fn strict_project_path_encoding_preserves_non_ascii_characters() {
+        let encoded = encode_path_for_filename(Path::new("/Users/Måns/Projekt/åäö/Æ-é/项目"));
+
+        assert_eq!(encoded, "-Users-Måns-Projekt-åäö-Æ-é-项目");
+    }
+
+    #[test]
+    fn ascii_lossy_project_path_encoding_replaces_non_ascii_characters() {
+        let encoded =
+            encode_path_for_filename_ascii_lossy(Path::new("/Users/Måns/Projekt/åäö/Æ-é/项目"));
+
+        assert_eq!(encoded, "-Users-M-ns-Projekt-----------");
+    }
+
+    #[test]
+    fn claude_sessions_lookup_uses_strict_directory_when_it_exists() {
+        let root = temp_projects_root("strict");
+        let project = Path::new("/Users/Måns/Projekt");
+        let strict = root.join(encode_path_for_filename(project));
+        std::fs::create_dir_all(&strict).expect("strict dir should be created");
+
+        let lookup = find_existing_claude_sessions_dir(&root, project);
+
+        assert!(lookup.found);
+        assert_eq!(lookup.chosen, strict);
+        assert_eq!(lookup.tried.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn claude_sessions_lookup_falls_back_to_ascii_lossy_directory() {
+        let root = temp_projects_root("lossy");
+        let project = Path::new("/Users/Måns/Projekt");
+        let lossy = root.join(encode_path_for_filename_ascii_lossy(project));
+        std::fs::create_dir_all(&lossy).expect("lossy dir should be created");
+
+        let lookup = find_existing_claude_sessions_dir(&root, project);
+
+        assert!(lookup.found);
+        assert_eq!(lookup.chosen, lossy);
+        assert_eq!(lookup.tried.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn claude_sessions_lookup_reports_all_candidates_when_none_exist() {
+        let root = temp_projects_root("missing");
+        let project = Path::new("/Users/Måns/Projekt");
+
+        let lookup = find_existing_claude_sessions_dir(&root, project);
+
+        assert!(!lookup.found);
+        assert_eq!(lookup.chosen, root.join(encode_path_for_filename(project)));
+        assert_eq!(lookup.tried.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn claude_sessions_lookup_does_not_duplicate_ascii_only_candidates() {
+        let root = temp_projects_root("ascii");
+        let project = Path::new("/Users/jon/bram");
+
+        let lookup = find_existing_claude_sessions_dir(&root, project);
+
+        assert!(!lookup.found);
+        assert_eq!(lookup.tried.len(), 1);
+        assert_eq!(lookup.chosen, root.join("-Users-jon-bram"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 

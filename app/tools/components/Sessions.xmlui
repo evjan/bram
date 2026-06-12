@@ -130,6 +130,19 @@
         fontSize="$fontSize-sm"
         color="$textColor-secondary"
         value="{sessionsMeta.value.count > 0 ? ('Auto-detected provider: ' + sessionsMeta.value.provider + ' (' + sessionsMeta.value.count + ' session' + (sessionsMeta.value.count === 1 ? '' : 's') + ')') : ('Auto-detected provider: ' + sessionsMeta.value.provider + ' (no sessions yet)')}" />
+      <VStack
+        when="{sessionsMeta.value &amp;&amp; sessionsMeta.value.discoveryNotes &amp;&amp; sessionsMeta.value.discoveryNotes.length > 0}"
+        gap="$space-1"
+        padding="$space-2"
+        borderRadius="$borderRadius"
+        backgroundColor="$color-warning-50">
+        <Items data="{sessionsMeta.value.discoveryNotes}">
+          <Text
+            fontSize="$fontSize-xs"
+            color="$textColor-secondary"
+            value="{$item}" />
+        </Items>
+      </VStack>
 
       <HStack gap="$space-3" verticalAlignment="center">
         <RadioGroup

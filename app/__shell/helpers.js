@@ -407,17 +407,46 @@ window.isWorklistActionPayloadText = function (text) {
   );
 };
 window.logToHost = function (payload) {
+  // Master-flag short-circuit. Paired with `iframeTrace` in
+  // Globals.xs. When traces are off, skip the Tauri IPC invoke (the
+  // dominant per-event cost). Default-ON so behavior is preserved
+  // during the brief startup window before the self-init fetch
+  // below resolves the actual setting.
+  if (window.__bramTracesEnabled === false) return;
   var invoke = getTauriInvoke();
   if (!invoke) return;
   invoke("log_from_right_pane", { payload: payload }).catch(function () {});
 };
 
+// Self-init: read `traces.enabled` from `/__settings` once at iframe
+// load and cache the result on `window.__bramTracesEnabled`. The
+// `iframeTrace` (Globals.xs) and `logToHost` (above) bodies gate on
+// this flag so trace-off sessions skip the IPC roundtrip entirely
+// instead of paying the cost only for the host to drop the line.
+// Default-ON until the fetch resolves preserves current behavior
+// during the ~50 ms startup window. Iframe-reload re-runs this on
+// every settings change (existing watcher pattern), so live
+// reactivity isn't needed here.
+(function loadTracesEnabledFlag() {
+  if (typeof window === "undefined") return;
+  if (window.__bramTracesEnabled !== undefined) return;
+  window.__bramTracesEnabled = true;
+  if (typeof fetch !== "function") return;
+  fetch("/__settings")
+    .then(function (r) { return r && r.ok ? r.json() : null; })
+    .then(function (s) {
+      if (s && s.traces && typeof s.traces.enabled === "boolean") {
+        window.__bramTracesEnabled = s.traces.enabled;
+      }
+    })
+    .catch(function () {});
+})();
+
 // Interleave devtools console output + unhandled-error paths into
 // bram-trace.log via the iframe-trace channel. Catches what previously
 // only landed in the browser devtools panel (e.g. the toolbar
 // __toolbarPendingMenuPresent scope errors fixed in 4ad0716). Inherits
-// the host's traces.enabled master switch automatically — when traces
-// are off, logToHost still runs but the host emits nothing.
+// the master-flag short-circuit via the gate in `logToHost` above.
 //
 // Uses window.logToHost directly rather than the xs `iframeTrace`
 // function (which lives in Globals.xs and isn't reliably reachable

@@ -422,6 +422,13 @@ function isWaitingForAssistant(jsonlText) {
 // arbitrary per-event metadata (target, item, reason, paths, etc.).
 function iframeTrace(subkind, fields) {
   try {
+    // Master-flag short-circuit. `window.__bramTracesEnabled` is set by
+    // the self-init fetch of `/__settings` in helpers.js. When traces
+    // are off, skip payload allocation + IPC roundtrip entirely — the
+    // dominant per-event cost of this function. Default-ON (undefined
+    // is treated as on) so behavior is preserved during the brief
+    // startup window before the fetch resolves.
+    if (typeof window !== 'undefined' && window.__bramTracesEnabled === false) return;
     if (typeof logToHost !== 'function') return;
     const payload = { kind: 'iframe-trace', subkind: subkind, at: new Date().toISOString() };
     if (fields && typeof fields === 'object') {

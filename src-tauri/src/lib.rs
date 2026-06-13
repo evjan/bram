@@ -3444,6 +3444,159 @@ fn pty_menu_scan_last_log_cell() -> &'static Mutex<u128> {
     CELL.get_or_init(|| Mutex::new(0))
 }
 
+fn pty_scan_line_col(bytes: &[u8], pos: usize) -> (usize, usize) {
+    let bounded = pos.min(bytes.len());
+    let line = bytes[..bounded].iter().filter(|b| **b == b'\n').count();
+    let col = bytes[..bounded]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|p| bounded.saturating_sub(p + 1))
+        .unwrap_or(bounded);
+    (line, col)
+}
+
+fn pty_scan_anchor_ranges(stripped: &[u8]) -> String {
+    let anchors: [(&str, &[u8]); 3] = [("1", b"1."), ("2", b"2."), ("3", b"3.")];
+    anchors
+        .iter()
+        .map(|(label, needle)| {
+            stripped
+                .windows(needle.len())
+                .position(|w| w == *needle)
+                .map(|p| {
+                    let (line, col) = pty_scan_line_col(stripped, p);
+                    format!(
+                        "{}:{}..{}@{}:{}",
+                        label,
+                        p,
+                        (p + needle.len()).min(stripped.len()),
+                        line,
+                        col
+                    )
+                })
+                .unwrap_or_else(|| format!("{}:n/a", label))
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn parse_csi_first_u32(params: &[u8]) -> u32 {
+    if params.is_empty() {
+        return 1;
+    }
+    let first = params.split(|&b| b == b';').next().unwrap_or(&[]);
+    if first.is_empty() {
+        return 1;
+    }
+    std::str::from_utf8(first)
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(1)
+}
+
+fn pty_raw_layout_diagnostic(input: &[u8]) -> String {
+    let raw_lf = input.iter().filter(|b| **b == b'\n').count();
+    let raw_cr = input.iter().filter(|b| **b == b'\r').count();
+    let mut csi_total = 0usize;
+    let mut csi_hf = 0usize;
+    let mut csi_g = 0usize;
+    let mut csi_c = 0usize;
+    let mut csi_d = 0usize;
+    let mut csi_other = 0usize;
+    let mut row_forward = 0usize;
+    let mut row_back = 0usize;
+    let mut row_same = 0usize;
+    let mut col_abs = 0usize;
+    let mut col_rel = 0usize;
+    let mut max_row_delta = 0u32;
+    let mut min_row: Option<u32> = None;
+    let mut max_row: Option<u32> = None;
+    let mut last_row: Option<u32> = None;
+    let mut i = 0usize;
+    while i < input.len() {
+        if input[i] != 0x1B || i + 1 >= input.len() || input[i + 1] != b'[' {
+            i += 1;
+            continue;
+        }
+        let param_start = i + 2;
+        let mut j = param_start;
+        let mut final_byte = 0u8;
+        while j < input.len() {
+            let c = input[j];
+            j += 1;
+            if (0x40..=0x7E).contains(&c) {
+                final_byte = c;
+                break;
+            }
+        }
+        if final_byte == 0 {
+            break;
+        }
+        csi_total += 1;
+        let params_end = j.saturating_sub(1).max(param_start);
+        let params = &input[param_start..params_end];
+        match final_byte {
+            b'H' | b'f' => {
+                csi_hf += 1;
+                let (row, _col) = parse_csi_h_row_col(params);
+                min_row = Some(min_row.map(|r| r.min(row)).unwrap_or(row));
+                max_row = Some(max_row.map(|r| r.max(row)).unwrap_or(row));
+                if let Some(prev) = last_row {
+                    if row > prev {
+                        row_forward += 1;
+                    } else if row < prev {
+                        row_back += 1;
+                    } else {
+                        row_same += 1;
+                    }
+                    max_row_delta = max_row_delta.max(row.abs_diff(prev));
+                }
+                last_row = Some(row);
+            }
+            b'G' => {
+                csi_g += 1;
+                col_abs += 1;
+                let _col = parse_csi_first_u32(params);
+            }
+            b'C' => {
+                csi_c += 1;
+                col_rel += 1;
+            }
+            b'D' => {
+                csi_d += 1;
+                col_rel += 1;
+            }
+            _ => {
+                csi_other += 1;
+            }
+        }
+        i = j;
+    }
+    let row_span = match (min_row, max_row) {
+        (Some(min), Some(max)) => format!("{}..{}", min, max),
+        _ => "n/a".to_string(),
+    };
+    format!(
+        "raw_len={} raw_lf={} raw_cr={} csi_total={} csi_hf={} csi_g={} csi_c={} csi_d={} csi_other={} row_moves=+{}/-{}/={} row_span={} max_row_delta={} col_abs={} col_rel={}",
+        input.len(),
+        raw_lf,
+        raw_cr,
+        csi_total,
+        csi_hf,
+        csi_g,
+        csi_c,
+        csi_d,
+        csi_other,
+        row_forward,
+        row_back,
+        row_same,
+        row_span,
+        max_row_delta,
+        col_abs,
+        col_rel,
+    )
+}
+
 // Diagnostic summary of which menu-detection anchors are present in
 // the current PTY tail. Returns a compact `k=v` string suitable for
 // embedding in a `[pty-menu-scan]` trace line. Re-runs the same
@@ -3496,12 +3649,16 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
         }
         _ => "unknown",
     };
+    let stripped_lf = s.iter().filter(|b| **b == b'\n').count();
+    let stripped_cr = s.iter().filter(|b| **b == b'\r').count();
     let anchor_range = pos1
         .map(|p| format!("{}..{}", p, (p + 3).min(s.len())))
         .unwrap_or_else(|| "n/a".to_string());
     let needle2_range = needle2_after_pos1
         .map(|p| format!("{}..{}", p, (p + needle2.len()).min(s.len())))
         .unwrap_or_else(|| "n/a".to_string());
+    let opt_anchors = pty_scan_anchor_ranges(s);
+    let raw_layout = pty_raw_layout_diagnostic(tail);
     let stripped_len = s.len();
     let head_hex = s
         .iter()
@@ -3518,8 +3675,10 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
         .map(|b| format!("{:02x}", b))
         .collect::<String>();
     format!(
-        "stripped_len={} cursor={} numbered={} needle2_after_anchor={} needle2_anywhere={} header={} anchor_distance_ok={} codex_action={} format={} anchor_range={} needle2_range={} fp_head={} fp_tail={}",
+        "stripped_len={} stripped_lf={} stripped_cr={} cursor={} numbered={} needle2_after_anchor={} needle2_anywhere={} header={} anchor_distance_ok={} codex_action={} format={} anchor_range={} needle2_range={} opt_anchors={} {} fp_head={} fp_tail={}",
         stripped_len,
+        stripped_lf,
+        stripped_cr,
         pos1_cursor.is_some(),
         pos1_numbered.is_some(),
         needle2_after_pos1.is_some(),
@@ -3532,6 +3691,8 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
         span_format,
         anchor_range,
         needle2_range,
+        opt_anchors,
+        raw_layout,
         head_hex,
         tail_hex,
     )

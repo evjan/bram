@@ -1,0 +1,47 @@
+<Component
+  name="PastedImageStrip"
+  var.pendingPastedImageCount="{window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0}"
+  var.pendingPastedImagePaths="{window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []}"
+  var.stagingPastedImageCount="{window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0}"
+  var.fullscreenImage="{null}">
+  <Timer
+    initialDelay="0"
+    interval="250"
+    onTick="pendingPastedImageCount = window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0; pendingPastedImagePaths = window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0" />
+  <ModalDialog
+    when="{!!fullscreenImage}"
+    fullScreen="true"
+    onClose="fullscreenImage = null">
+    <Image
+      src="{(fullscreenImage || '').startsWith('data:') || (fullscreenImage || '').startsWith('http') ? fullscreenImage : '/__file?path=' + encodeURIComponent((fullscreenImage || '').startsWith('file://') ? (fullscreenImage || '').replace(/^file:\/\/(localhost)?/, '') : (fullscreenImage || ''))}"
+      fit="contain"
+      width="100%"
+      height="100%" />
+  </ModalDialog>
+  <HStack
+    gap="$space-2"
+    verticalAlignment="center"
+    when="{pendingPastedImageCount > 0 || stagingPastedImageCount > 0}">
+    <Items data="{pendingPastedImagePaths}">
+      <HStack gap="$space-1" verticalAlignment="center">
+        <Link onClick="fullscreenImage = $item" noIndicator="true">
+          <Badge variant="pill" value="image {$itemIndex + 1}" />
+        </Link>
+        <Button
+          label="×"
+          variant="ghost"
+          size="xs"
+          tooltip="Remove this image"
+          onClick="window.bramRemovePastedImagePath($item)" />
+      </HStack>
+    </Items>
+    <Badge
+      when="{pendingPastedImageCount === 0 &amp;&amp; stagingPastedImageCount > 0}"
+      variant="pill"
+      value="staging image" />
+    <Text
+      fontSize="$fontSize-xs"
+      color="$textColor-secondary"
+      value="{pendingPastedImageCount > 0 ? 'click image to preview; × to remove' : 'will be sent with your message'}" />
+  </HStack>
+</Component>

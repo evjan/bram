@@ -1,0 +1,34 @@
+<Component name="AgentLastResponse" var.fullscreenImage="{null}">
+  <DataSource id="agentLastResponseExchange" url="/__last-exchange" pollIntervalInSeconds="2" />
+  <ModalDialog
+    when="{!!fullscreenImage}"
+    fullScreen="true"
+    onClose="fullscreenImage = null">
+    <Image
+      src="{(fullscreenImage || '').startsWith('data:') || (fullscreenImage || '').startsWith('http') ? fullscreenImage : '/__file?path=' + encodeURIComponent((fullscreenImage || '').startsWith('file://') ? (fullscreenImage || '').replace(/^file:\/\/(localhost)?/, '') : (fullscreenImage || ''))}"
+      fit="contain"
+      width="100%"
+      height="100%" />
+  </ModalDialog>
+  <VStack
+    gap="$space-1"
+    when="{agentLastResponseExchange.value &amp;&amp; (agentLastResponseExchange.value.assistantText || (agentLastResponseExchange.value.assistantImages &amp;&amp; agentLastResponseExchange.value.assistantImages.length > 0))}">
+    <Text
+      fontWeight="$fontWeight-bold"
+      color="$color-success-700"
+      value="Agent: Last response" />
+    <Markdown content="{stripImagePaths(agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantText)}" />
+    <VStack
+      gap="$space-2"
+      when="{agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantImages &amp;&amp; agentLastResponseExchange.value.assistantImages.length > 0}">
+      <Items data="{agentLastResponseExchange.value.assistantImages}">
+        <Link onClick="fullscreenImage = $item" noIndicator="true">
+          <Image
+            src="{$item.startsWith('data:') || $item.startsWith('http') ? $item : '/__file?path=' + encodeURIComponent($item.startsWith('file://') ? $item.replace(/^file:\/\/(localhost)?/, '') : $item)}"
+            maxHeight="200px"
+            fit="contain" />
+        </Link>
+      </Items>
+    </VStack>
+  </VStack>
+</Component>

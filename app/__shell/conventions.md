@@ -258,8 +258,12 @@ serves an empty default; the Worklist tab creates the file (and
        Update the draft only if scope materially expanded. Item
        stays `applied`.
 
-     Bracket every iterate response with `POST /__iterate/begin`
-     (first action) and `POST /__iterate/end` (last action) — see
+     No agent-side bracket needed. The host detects the `iterate:`
+     prefix on the `toTurn` write path and sets the inflight sentinel
+     automatically; the same turn-finished detectors that clear
+     approve/drop sentinels clear iterate's too. Legacy
+     `/__iterate/begin` and `/__iterate/end` routes still work for
+     back-compat but are no longer required. See
      *Host-managed inflight sentinel*.
 
      The Iterate payload's per-item shape is `{id, hash, feedbackRef}`
@@ -347,13 +351,11 @@ two coordination dot-files instead:
    { "nonce": "<unique-per-request>", "route": "<route>", "body": { ... } }
    ```
 
-   `route` is one of `worklist-resolve`, `worklist-mutate`,
-   `iterate-begin`, `iterate-end` (alias `worklist-end`),
+   `route` is one of `worklist-resolve`, `worklist-mutate`, or
    `issue-close`. `body` matches the HTTP route:
    - `worklist-resolve` — omit, or `{ "ids": [...] }` to filter.
    - `worklist-mutate` — `{ "op": "advance", "ids": [...], "status": "applied" }`
      or `{ "op": "prune", "ids": [...] }`.
-   - `iterate-begin` / `iterate-end` — `{ "ids": [...] }`.
    - `issue-close` — `{ "number": N, "commit": "<full-sha>", "push": <bool> }`
      for the generated-comment verified path, or
      `{ "number": N, "comment": "<user-supplied>" }` for the
@@ -548,9 +550,12 @@ reference: `docs/apis.md` §11. Agent-side conventions:
   consumes the auth record) → do the work → `mutate op:"advance"`
   (clears the sentinel). No explicit `end` needed.
 - **`drop:`** → same shape with `op:"prune"`.
-- **`iterate:`** → bracket the response: `POST /__iterate/begin`
-  first action, `POST /__iterate/end` last. Required because iterate
-  has no side-effect write path like `resolve`.
+- **`iterate:`** → no agent-side bracket needed. The host detects the
+  `iterate:` prefix on the `toTurn` write path and sets the sentinel
+  automatically (parallel to how `resolve` sets it for approve/drop);
+  the same turn-finished detectors that clear approve/drop sentinels
+  clear iterate's too. Legacy `/__iterate/begin` and `/__iterate/end`
+  routes still work for back-compat but are no longer required.
 
 ### Failure modes
 
@@ -564,8 +569,11 @@ commonly:
 - **Approved/drop stuck:** `mutate` was never called, or errored
   before the clear. Recovery: call mutate manually, or restart Bram
   (`cleanup_stale_inflight_claim` runs at startup).
-- **Iterate stuck:** `/__iterate/end` was never called. Convention
-  violation — bracket every iterate response.
+- **Iterate stuck:** rare now that the host auto-detects the
+  `iterate:` prefix and the turn-finished clearer fires for all
+  sentinel kinds. If it does stick, host-side completion detectors
+  will clear it on the next normal turn end; the explicit
+  `/__iterate/end` route is still available as a manual unwind.
 - **Premature clear:** silence alone is not authoritative. PTY silence
   can request a sentinel clear, but the host first checks the latest
   provider JSONL completion detector. If JSONL says the assistant turn is

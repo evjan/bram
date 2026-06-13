@@ -3293,21 +3293,47 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // turn-end removes that risk class. The explicit end routes
         // still work for agents that want to clear early.
         if turn_end_silence_ms.map_or(false, |s| s >= MIN_SILENCE_FOR_SENTINEL_CLEAR_MS) {
-            let claimed_after = inflight_claim_ids_and_claimed_at(app)
-                .map(|(ids, claimed_at)| !ids.is_empty() && unix_now_ms() >= claimed_at)
+            let sentinel_state = inflight_claim_ids_and_claimed_at(app);
+            let claimed_after = sentinel_state
+                .as_ref()
+                .map(|(ids, claimed_at)| !ids.is_empty() && unix_now_ms() >= *claimed_at)
                 .unwrap_or(false);
-            record_turn_completion_monitor(
-                "pty-silence",
-                "pty",
-                "silence-threshold",
-                format!(
-                    "PTY turn activity stopped after {} ms of silence",
-                    turn_end_silence_ms.unwrap_or(0)
-                ),
-                unix_now_ms(),
-                claimed_after,
-            );
-            clear_active_sentinel(app);
+            // Freshness gate: if the sentinel was claimed within the last
+            // 2 seconds, it's almost certainly from a toTurn that just
+            // dispatched — clearing it now would clobber the next turn's
+            // spinner before the agent has had a chance to produce output.
+            // The silence-based clear is for *prior-turn* sentinels that
+            // didn't get explicitly cleared; a fresh sentinel can't be
+            // from that.
+            let sentinel_age_ms: i64 = sentinel_state
+                .as_ref()
+                .map(|(_ids, claimed_at)| unix_now_ms().saturating_sub(*claimed_at))
+                .unwrap_or(i64::MAX);
+            if sentinel_age_ms < 2000 {
+                if bram_trace_enabled() {
+                    append_bram_trace_line(
+                        app,
+                        "inflight-sentinel",
+                        &format!(
+                            "op=skip-clear source=pty-silence reason=fresh-sentinel age_ms={}",
+                            sentinel_age_ms
+                        ),
+                    );
+                }
+            } else {
+                record_turn_completion_monitor(
+                    "pty-silence",
+                    "pty",
+                    "silence-threshold",
+                    format!(
+                        "PTY turn activity stopped after {} ms of silence",
+                        turn_end_silence_ms.unwrap_or(0)
+                    ),
+                    unix_now_ms(),
+                    claimed_after,
+                );
+                clear_active_sentinel(app);
+            }
         }
     }
 }
@@ -6999,12 +7025,43 @@ fn drain_pty_intents<R: tauri::Runtime>(
     }
 }
 
+/// Auto-detect iterate payloads on the toTurn write path so the agent
+/// doesn't have to bracket every iterate response with explicit
+/// `/__iterate/begin` and `/__iterate/end` calls. Sets the inflight
+/// sentinel; the existing turn-finished clearer handles the unwind for
+/// free. Returns silently on any parse failure — non-iterate or
+/// malformed payloads are left alone.
+fn record_iterate_inflight_sentinel<R: tauri::Runtime>(app: &AppHandle<R>, turn_text: &str) {
+    let trimmed = turn_text.trim_start();
+    let Some(rest) = trimmed.strip_prefix("iterate:") else {
+        return;
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(rest.trim_start()) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let ids: Vec<String> = parsed
+        .get("items")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|it| it.get("id").and_then(|v| v.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if ids.is_empty() {
+        return;
+    }
+    write_inflight_claim_sentinel(app, &ids, "iterate");
+}
+
 fn write_pty_turn_intent<R: tauri::Runtime>(
     app: &AppHandle<R>,
     state: &State<'_, AppState>,
     data: &str,
 ) -> Result<(), String> {
     record_codex_direct_edit_authorization(app, data);
+    record_iterate_inflight_sentinel(app, data);
     if cfg!(windows) {
         pty_write_internal(app, state, "\x15", "pty-intent-toTurn-windows-clear")?;
         pty_write_internal(app, state, data, "pty-intent-toTurn-windows-payload")?;
@@ -10013,6 +10070,38 @@ fn read_last_exchange<R: tauri::Runtime>(
         let keep_from = tool_entries.len() - 5;
         tool_entries.drain(0..keep_from);
     }
+    // Iterate payloads carry only a `feedbackRef` (file path) in the
+    // structured turn line. Read the referenced feedback-drafts files
+    // and surface their prose as `iterateFeedback` so the You pane in
+    // ConversationPane can render the user's actual feedback (and
+    // preview any image markers it contains).
+    let mut iterate_feedback = String::new();
+    if user_text.trim_start().starts_with("iterate:") {
+        let rest = user_text
+            .trim_start()
+            .strip_prefix("iterate:")
+            .unwrap_or("")
+            .trim_start();
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(rest) {
+            if let Some(items) = parsed.get("items").and_then(|v| v.as_array()) {
+                if let Some(drafts_dir) = feedback_drafts_dir(app) {
+                    for item in items {
+                        let Some(fref) = item.get("feedbackRef").and_then(|v| v.as_str())
+                        else {
+                            continue;
+                        };
+                        let draft_path = drafts_dir.join(format!("{}.md", fref));
+                        if let Ok(content) = std::fs::read_to_string(&draft_path) {
+                            if !iterate_feedback.is_empty() {
+                                iterate_feedback.push_str("\n\n");
+                            }
+                            iterate_feedback.push_str(&content);
+                        }
+                    }
+                }
+            }
+        }
+    }
     let body = serde_json::json!({
         "userText": user_text,
         "assistantText": assistant_text,
@@ -10020,6 +10109,7 @@ fn read_last_exchange<R: tauri::Runtime>(
         "assistantImages": assistant_images,
         "tools": tool_entries,
         "provider": provider_str,
+        "iterateFeedback": iterate_feedback,
     });
     serde_json::to_vec(&body).map_err(|e| e.to_string())
 }
@@ -14094,6 +14184,31 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
     // the boundary-detected block earlier (above the inflight-claim
     // gate), so the row transitions on every real JSONL boundary
     // regardless of inflight coordination. Refs #179.
+    //
+    // Freshness gate: if the sentinel was claimed within the last 2 s,
+    // it almost certainly belongs to a turn that has only just started
+    // and not yet produced output. The end_turn signal we're seeing
+    // here is the PRIOR turn's marker still in the rolling tail —
+    // file_mtime advances because the new user message was just
+    // written, but the `decision.detected=true` is matching on the
+    // older assistant's end_turn line. Skip the clear in that case so
+    // the spinner survives until the genuine new-turn end_turn lands.
+    let sentinel_age_ms: i64 = unix_now_ms().saturating_sub(claimed_at);
+    if sentinel_age_ms < 2000 {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "inflight-sentinel",
+                &format!(
+                    "op=skip-clear source=jsonl-turn-end reason=fresh-sentinel age_ms={} mtime={} claimed={}",
+                    sentinel_age_ms,
+                    file_mtime_ms,
+                    serde_json::to_string(&claimed_ids).unwrap_or_else(|_| "[]".to_string())
+                ),
+            );
+        }
+        return;
+    }
     clear_inflight_claim_sentinel(app, &claimed_ids);
 }
 

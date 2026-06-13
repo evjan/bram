@@ -597,6 +597,42 @@ document.addEventListener("paste", function (event) {
     window.bramStagePastedImage(imageFiles[j]);
   }
 });
+function bramImageFilesFromDataTransfer(dt) {
+  if (!dt) return [];
+  var imageFiles = [];
+  var items = dt.items || [];
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (item.kind === "file" && /^image\//.test(item.type || "")) {
+      var f = item.getAsFile();
+      if (f) imageFiles.push(f);
+    }
+  }
+  if (imageFiles.length > 0) return imageFiles;
+  var files = dt.files || [];
+  for (var j = 0; j < files.length; j++) {
+    var file = files[j];
+    if (file && /^image\//.test(file.type || "")) imageFiles.push(file);
+  }
+  return imageFiles;
+}
+document.addEventListener("dragover", function (event) {
+  if (bramImageFilesFromDataTransfer(event.dataTransfer).length === 0) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+});
+document.addEventListener("drop", function (event) {
+  var imageFiles = bramImageFilesFromDataTransfer(event.dataTransfer);
+  if (imageFiles.length === 0) return;
+  window.bramPastedImageForCurrentTurn = true;
+  window.bramPastedImageTarget = window.bramCurrentPasteTarget
+    ? window.bramCurrentPasteTarget()
+    : "";
+  event.preventDefault();
+  for (var i = 0; i < imageFiles.length; i++) {
+    window.bramStagePastedImage(imageFiles[i]);
+  }
+});
 window.bramStagePastedImage = function (file) {
   if (!file) return Promise.reject(new Error("no file"));
   var type = file.type || "image/png";

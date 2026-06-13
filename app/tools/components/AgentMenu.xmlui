@@ -1,0 +1,89 @@
+<Component name="AgentMenu" var.menuTick="{0}">
+  <DataSource id="agentMenuTurnState" url="/__turn-state" pollIntervalInSeconds="1" />
+  <VStack
+    gap="$space-2"
+    onInit="subscribeTauriEvent('__bramAgentMenuTurnStateUnsub', 'turn-state-changed', (e) => { setAgentMenuFromTurnState((e &amp;&amp; e.payload) || {}, 'agent-menu'); menuTick = menuTick + 1; }); subscribeTauriEvent('__bramAgentMenuPtyUnsub', 'pty-menu-changed', (e) => { setAgentMenuFromEvent(e, 'agent-menu'); menuTick = menuTick + 1; })">
+    <VStack
+      gap="$space-2"
+      when="{menuTick >= 0 &amp;&amp; getAgentMenu(agentMenuTurnState.value)}"
+      var.effectivePendingMenu="{menuTick >= 0 ? getAgentMenu(agentMenuTurnState.value) : null}"
+      var.menuPreviewOpen="{false}"
+      padding="$space-3"
+      borderRadius="$borderRadius"
+      border="1px solid $color-warn-200"
+      backgroundColor="$color-warn-50">
+      <Text fontSize="$fontSize-xs" color="$color-warn-800">
+        Agent wants to use <Text fontFamily="$fontFamily-monospace">{effectivePendingMenu.tool}</Text>
+      </Text>
+      <Button
+        when="{effectivePendingMenu.toolCallSignature || effectivePendingMenu.toolCallContent || effectivePendingMenu.text}"
+        label="{menuPreviewOpen ? 'Hide preview' : 'Show preview'}"
+        variant="ghost"
+        size="xs"
+        onClick="menuPreviewOpen = !menuPreviewOpen" />
+      <VStack
+        when="{menuPreviewOpen &amp;&amp; effectivePendingMenu.toolCallSignature}"
+        maxHeight="20em"
+        overflowY="auto"
+        padding="$space-2"
+        borderRadius="$borderRadius"
+        backgroundColor="$color-surface-100">
+        <Text
+          when="{!effectivePendingMenu.toolCallDiff}"
+          value="{effectivePendingMenu.toolCallSignature}"
+          fontFamily="$fontFamily-monospace"
+          fontSize="$fontSize-sm"
+          preserveLinebreaks="true" />
+        <DiffView
+          when="{effectivePendingMenu.toolCallDiff}"
+          text="{(effectivePendingMenu.toolCallDiff || '').slice(0, 20000)}" />
+      </VStack>
+      <VStack
+        when="{menuPreviewOpen &amp;&amp; effectivePendingMenu.toolCallContent}"
+        maxHeight="20em"
+        overflowY="auto"
+        padding="$space-2"
+        borderRadius="$borderRadius"
+        backgroundColor="$color-surface-100">
+        <Markdown content="{effectivePendingMenu.toolCallContent}" />
+      </VStack>
+      <VStack
+        when="{menuPreviewOpen &amp;&amp; !effectivePendingMenu.toolCallSignature &amp;&amp; effectivePendingMenu.text}"
+        maxHeight="12em"
+        overflowY="auto"
+        padding="$space-2"
+        borderRadius="$borderRadius"
+        backgroundColor="$color-surface-100">
+        <Text
+          value="{effectivePendingMenu.text}"
+          fontFamily="$fontFamily-monospace"
+          fontSize="$fontSize-xs"
+          preserveLinebreaks="true" />
+      </VStack>
+      <VStack
+        when="{effectivePendingMenu.options &amp;&amp; effectivePendingMenu.options.length > 0}"
+        gap="$space-1">
+        <Theme paddingHorizontal-Button-sm="$space-3">
+          <Items data="{effectivePendingMenu.options}">
+            <HStack gap="$space-2" verticalAlignment="center">
+              <Button
+                label="{$item.key}"
+                variant="outlined"
+                size="sm"
+                onClick="sendKeys($item.key + '\r')" />
+              <Text fontSize="$fontSize-sm">{$item.label}</Text>
+            </HStack>
+          </Items>
+        </Theme>
+      </VStack>
+      <HStack
+        when="{!effectivePendingMenu.options || effectivePendingMenu.options.length === 0}"
+        gap="$space-2"
+        wrapContent="true">
+        <Button label="1. Yes" variant="outlined" size="sm" onClick="sendKeys('1\r')" />
+        <Button label="2. Yes, allow and don't ask again" variant="outlined" size="sm" onClick="sendKeys('2\r')" />
+        <Button label="3. No, and tell agent what to do" variant="outlined" size="sm" onClick="sendKeys('3\r')" />
+      </HStack>
+    </VStack>
+  </VStack>
+</Component>

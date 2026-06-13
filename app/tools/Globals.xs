@@ -78,13 +78,13 @@ function statusSignalDescription(signal) {
   };
   if (descriptions[signal]) return descriptions[signal];
   const s = signal || '';
-  if (s.indexOf('CLAUDE.md') >= 0) return 'Checks Bram guidance embedded for Claude. Missing, stale, or legacy marker blocks can leave Claude following old worklist rules.';
-  if (s.indexOf('AGENTS.md') >= 0) return 'Checks Bram guidance embedded for Codex. Missing, stale, or legacy marker blocks can leave Codex following old worklist rules.';
+  if (s.indexOf('CLAUDE.md') >= 0) return 'Checks Bram guidance embedded for Claude. Missing, stale, or legacy marker blocks can leave Claude following old coordination rules.';
+  if (s.indexOf('AGENTS.md') >= 0) return 'Checks Bram guidance embedded for Codex. Missing, stale, or legacy marker blocks can leave Codex following old coordination rules.';
   if (s.indexOf('settings.json') >= 0) return 'Checks Claude hook registration. The hook file can exist but still be ineffective if settings.json does not reference it.';
   if (s.indexOf('config.toml') >= 0) return 'Checks Codex global configuration managed by Bram Setup. Stale hook blocks or developer instructions can strand Codex on old coordination behavior.';
   if (s.indexOf('worklist-guard.py') >= 0) return 'Checks a Bram worklist guard script against the bundled version. Stale scripts can allow unsafe edits or block valid approved changes.';
   if (s.indexOf('bram-conventions.md') >= 0) return 'Checks the shared Bram conventions sidecar. Stale guidance means agents may follow outdated approval, commit, or cleanup rules.';
-  return 'Reports one coordination signal from Bram Status. Use its level, state, detail, and timestamp to decide whether setup, worklist flow, or agent communication needs attention.';
+  return 'Reports one coordination signal from Bram Status. Use its level, state, detail, and timestamp to decide whether setup, mode routing, or agent communication needs attention.';
 }
 
 function historyPhaseKind(phase) {
@@ -298,7 +298,7 @@ function rewriteXmluiDocUrls(text) {
 function extractImagePaths(text) {
   if (!text) return [];
   const paths = [];
-  const imagePath = '(?:/[^\]]+|[A-Za-z]:\\\\[^\]]+)\\.(?:png|jpg|jpeg|gif|webp)';
+  const imagePath = '(?:/[^\\]]+|[A-Za-z]:\\\\[^\\]]+)\\.(?:png|jpg|jpeg|gif|webp)';
   const re = new RegExp('\\[Image: source: (' + imagePath + ')\\]', 'gi');
   let m;
   while ((m = re.exec(text)) !== null) paths.push(m[1]);
@@ -306,7 +306,7 @@ function extractImagePaths(text) {
 }
 function stripImagePaths(text) {
   if (!text) return text;
-  const imagePath = '(?:/[^\]]+|[A-Za-z]:\\\\[^\]]+)\\.(?:png|jpg|jpeg|gif|webp)';
+  const imagePath = '(?:/[^\\]]+|[A-Za-z]:\\\\[^\\]]+)\\.(?:png|jpg|jpeg|gif|webp)';
   return text
     .replace(new RegExp('\\n*\\[Image: source: ' + imagePath + '\\]', 'gi'), '')
     .replace(/^(\s*Read this screenshot: @\S+\s*)+/, '')
@@ -473,6 +473,39 @@ function formatUserTurnForTranscript(text) {
     }
   }
   return text;
+}
+
+function worklistActionStatusLabel(item) {
+  const status = (item && item.status) || 'proposed';
+  if (status === 'applied') return 'To Commit';
+  if (status === 'proposed') return 'To Apply';
+  return status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Worklist';
+}
+
+function conversationPaneUserText(text) {
+  if (!text) return '';
+  const stripped = text.replace(/^(voice|talk):\s*/, '');
+  if (stripped !== text) return stripped;
+  const clean = stripImageMarkerPrefix(stripped);
+  const m = clean.match(/^(approved|drop|iterate):\s*(.*)$/s);
+  if (!m) return clean;
+  const kind = m[1];
+  try {
+    const data = JSON.parse(m[2]);
+    const items = data.items || data.ids || [];
+    // Action verb (Approved / Dropped / Iterated) plus item ids.
+    const action = worklistActionDisplay(kind, items);
+    // Collect per-item inline feedback strings. Approve/Drop carry feedback
+    // directly on each item; Iterate uses feedbackRef (rendered separately
+    // when the agent quotes it), so its inline `feedback` is usually empty.
+    const feedbacks = items
+      .map(it => (it && typeof it === 'object' && it.feedback) ? String(it.feedback).trim() : '')
+      .filter(s => s.length > 0);
+    if (feedbacks.length === 0) return action;
+    return action + '\n\n' + feedbacks.join('\n\n');
+  } catch (e) {
+    return clean;
+  }
 }
 
 function worklistActionDisplay(kind, items) {
@@ -1195,8 +1228,8 @@ function unifiedDiffFromEdit(input) {
   return head + hunk + body;
 }
 
-// Feedback tab helpers — parallel to the history* family. The Feedback
-// tab browses entries from /__feedback-history/list, each shaped as
+// Feedback route helpers — parallel to the history* family. The Feedback
+// component browses entries from /__feedback-history/list, each shaped as
 // { ts: <unix_ms>, itemId: <string>, fileName: <string> }.
 function feedbackHistoryItemTitle(entry) {
   return (entry && entry.itemId) || '(unknown item)';
@@ -1785,6 +1818,42 @@ function traceToolbarKey(key) {
       ? (Date.now() - toolbarMenuState.atMs)
       : -1
   });
+}
+
+var bramAgentMenu = null;
+var bramAgentMenuSuppressFallback = true;
+
+function setAgentMenuFromTurnState(turnState, surface) {
+  const p = turnState || {};
+  bramAgentMenu = p.pendingMenu || null;
+  bramAgentMenuSuppressFallback = !p.pendingMenu;
+  iframeTrace('listener-fired', {
+    context: 'turn-state-changed',
+    surface: surface || 'agent-menu',
+    phase: p.phase || '',
+    source: p.source || '',
+    menu: p.pendingMenu ? p.pendingMenu.tool : '',
+    assignedMenu: bramAgentMenu ? bramAgentMenu.tool : '',
+    suppressFallback: bramAgentMenuSuppressFallback
+  });
+}
+
+function setAgentMenuFromEvent(e, surface) {
+  bramAgentMenu = e && e.payload ? e.payload : null;
+  bramAgentMenuSuppressFallback = !bramAgentMenu;
+  iframeTrace('listener-fired', {
+    context: 'pty-menu-changed',
+    surface: surface || 'agent-menu',
+    tool: (bramAgentMenu && bramAgentMenu.tool) || '',
+    hasSignature: !!(bramAgentMenu && bramAgentMenu.toolCallSignature),
+    signatureChars: bramAgentMenu && bramAgentMenu.toolCallSignature ? bramAgentMenu.toolCallSignature.length : 0,
+    assignedMenu: bramAgentMenu ? bramAgentMenu.tool : '',
+    suppressFallback: bramAgentMenuSuppressFallback
+  });
+}
+
+function getAgentMenu(turnState) {
+  return bramAgentMenu || (!bramAgentMenuSuppressFallback && turnState && turnState.pendingMenu) || null;
 }
 
 function toggleVoiceForCurrentTarget(recording) {

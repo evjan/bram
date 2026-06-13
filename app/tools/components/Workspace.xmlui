@@ -16,8 +16,6 @@
   var.newItemTurnEnded="{false}"
   var.newItemIssue="{null}"
   var.newItemVoiceRecording="{false}"
-  var.pendingMenu="{null}"
-  var.pendingMenuSuppressFallback="{true}"
   var.agentIsWorking="{false}"
   var.openToolId="{null}"
   var.openTool="{null}"
@@ -42,6 +40,8 @@
   var.awaitingResponseSetAt="{restoreWorklistAwaitingSetAt()}"
   var.agentTurnEndedSinceSubmit="{false}"
   var.fullscreenImage="{null}"
+  var.messageVoiceRecording="{false}"
+  var.feedbackVoiceRecording="{false}"
   var.pendingPastedImageCount="{window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0}"
   var.pendingPastedImagePaths="{window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []}"
   var.stagingPastedImageCount="{window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0}"
@@ -50,6 +50,9 @@
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}"
   var.submittedKind="{restoreWorklistSubmittedKind()}"
   var.worklistMessageDraft="{restoreWorklistDraft()}">
+  <ChangeListener
+    listenTo="{conversationOpen ? 'open' : 'closed'}"
+    onDidChange="(c) => iframeTrace('worklist-conversation-open-change', {prev: c.prevValue || '', next: c.newValue || ''})" />
   <DataSource
     id="worklist"
     url="/__worklist"
@@ -354,17 +357,6 @@
       iframeTrace('listener-fired', {context: 'inflight-claim-changed'});
       inflightTick = inflightTick + 1;
     });
-    subscribeTauriEvent('__bramWorkspaceTurnStateUnsub', 'turn-state-changed', (e) => {
-      const p = (e &amp;&amp; e.payload) || {};
-      pendingMenu = p.pendingMenu || null;
-      pendingMenuSuppressFallback = !p.pendingMenu;
-      iframeTrace('listener-fired', {context: 'turn-state-changed', surface: 'worklist', phase: p.phase || '', source: p.source || '', menu: p.pendingMenu ? p.pendingMenu.tool : '', assignedMenu: pendingMenu ? pendingMenu.tool : '', suppressFallback: pendingMenuSuppressFallback});
-    });
-    subscribeTauriEvent('__bramPtyMenuUnsub', 'pty-menu-changed', (e) => {
-      pendingMenu = e &amp;&amp; e.payload ? e.payload : null;
-      pendingMenuSuppressFallback = !pendingMenu;
-      iframeTrace('listener-fired', {context: 'pty-menu-changed', surface: 'worklist', tool: (pendingMenu &amp;&amp; pendingMenu.tool) || '', hasSignature: !!(pendingMenu &amp;&amp; pendingMenu.toolCallSignature), signatureChars: pendingMenu &amp;&amp; pendingMenu.toolCallSignature ? pendingMenu.toolCallSignature.length : 0, assignedMenu: pendingMenu ? pendingMenu.tool : '', suppressFallback: pendingMenuSuppressFallback});
-    });
     subscribeTauriEvent('__bramConvPaneAgentStatusUnsub', 'agent-status-changed', (e) => {
       const p = e &amp;&amp; e.payload;
       agentIsWorking = !!(p &amp;&amp; p.state === 'working');
@@ -490,12 +482,12 @@
     <HSplitter
       height="100%"
       width="100%"
-      initialPrimarySize="{restoreSplitterSize('worklist', '50%')}"
+      initialPrimarySize="{conversationOpen ? restoreSplitterSize('worklist', '50%') : '100%'}"
       minPrimarySize="320px"
-      maxPrimarySize="-320px"
-      onResize="(px) => saveSplitterSize('worklist', px)">
+      maxPrimarySize="{conversationOpen ? '-320px' : '100%'}"
+      onResize="(px) => { if (conversationOpen) saveSplitterSize('worklist', px); }">
       <VStack gap="$space-3" paddingRight="$space-3" overflowY="auto">
-    <VStack gap="$space-3" when="{worklist.value}" var.effectivePendingMenu="{pendingMenu || (!pendingMenuSuppressFallback &amp;&amp; turnStateDS.value &amp;&amp; turnStateDS.value.pendingMenu)}">
+    <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">
         <HStack gap="$space-3" verticalAlignment="center">
           <Heading level="h2">Worklist</Heading>
@@ -512,89 +504,8 @@
             label="{conversationOpen ? 'Hide conversation' : 'Show conversation'}"
             variant="ghost"
             size="xs"
-            onClick="conversationOpen = toggleConversationOpen(conversationOpen)" />
+            onClick="iframeTrace('worklist-conversation-toggle-click', {source: 'worklist-header', open: !!conversationOpen}); conversationOpen = toggleConversationOpen(conversationOpen)" />
         </HStack>
-        <VStack
-          when="{effectivePendingMenu}"
-          var.menuPreviewOpen="{false}"
-          gap="$space-2"
-          padding="$space-3"
-          borderRadius="$borderRadius"
-          border="1px solid $color-warn-200"
-          backgroundColor="$color-warn-50">
-          <Text fontSize="$fontSize-xs" color="$color-warn-800">
-            Agent wants to use <Text fontFamily="$fontFamily-monospace">{effectivePendingMenu.tool}</Text>
-          </Text>
-          <Button
-            when="{effectivePendingMenu.toolCallSignature || effectivePendingMenu.toolCallContent || effectivePendingMenu.text}"
-            label="{menuPreviewOpen ? 'Hide preview' : 'Show preview'}"
-            variant="ghost"
-            size="xs"
-            onClick="menuPreviewOpen = !menuPreviewOpen" />
-          <VStack
-            when="{menuPreviewOpen &amp;&amp; effectivePendingMenu.toolCallSignature}"
-            maxHeight="20em"
-            overflowY="auto"
-            padding="$space-2"
-            borderRadius="$borderRadius"
-            backgroundColor="$color-surface-100">
-            <Text
-              when="{!effectivePendingMenu.toolCallDiff}"
-              value="{effectivePendingMenu.toolCallSignature}"
-              fontFamily="$fontFamily-monospace"
-              fontSize="$fontSize-sm"
-              preserveLinebreaks="true" />
-            <DiffView
-              when="{effectivePendingMenu.toolCallDiff}"
-              text="{(effectivePendingMenu.toolCallDiff || '').slice(0, 20000)}" />
-          </VStack>
-          <VStack
-            when="{menuPreviewOpen &amp;&amp; effectivePendingMenu.toolCallContent}"
-            maxHeight="20em"
-            overflowY="auto"
-            padding="$space-2"
-            borderRadius="$borderRadius"
-            backgroundColor="$color-surface-100">
-            <Markdown content="{effectivePendingMenu.toolCallContent}" />
-          </VStack>
-          <VStack
-            when="{menuPreviewOpen &amp;&amp; !effectivePendingMenu.toolCallSignature &amp;&amp; effectivePendingMenu.text}"
-            maxHeight="12em"
-            overflowY="auto"
-            padding="$space-2"
-            borderRadius="$borderRadius"
-            backgroundColor="$color-surface-100">
-            <Text
-              value="{effectivePendingMenu.text}"
-              fontFamily="$fontFamily-monospace"
-              fontSize="$fontSize-xs"
-              preserveLinebreaks="true" />
-          </VStack>
-          <VStack
-            when="{effectivePendingMenu.options &amp;&amp; effectivePendingMenu.options.length > 0}"
-            gap="$space-1">
-            <Theme paddingHorizontal-Button-sm="$space-3">
-              <Items data="{effectivePendingMenu.options}">
-                <HStack gap="$space-2" verticalAlignment="center">
-                  <Button
-                    label="{$item.key}"
-                    variant="outlined"
-                    size="sm"
-                    onClick="sendKeys($item.key + '\r')" />
-                  <Text fontSize="$fontSize-sm">{$item.label}</Text>
-                </HStack>
-              </Items>
-            </Theme>
-          </VStack>
-          <HStack
-            when="{!effectivePendingMenu.options || effectivePendingMenu.options.length === 0}"
-            gap="$space-2"
-            wrapContent="true">
-            <Button label="1. Yes" variant="outlined" size="sm" onClick="sendKeys('1\r')" />
-            <Button label="2. Yes, allow and don't ask again" variant="outlined" size="sm" onClick="sendKeys('2\r')" />
-            <Button label="3. No, and tell agent what to do" variant="outlined" size="sm" onClick="sendKeys('3\r')" />
-          </HStack>
-        </VStack>
         <VStack
           when="{worklist.value.exists && worklist.value.schemaError}"
           gap="$space-2"
@@ -759,7 +670,7 @@
                 <HStack
                   when="{selected === $item.id && feedbackExpanded}"
                   gap="$space-2"
-                  verticalAlignment="start">
+                  verticalAlignment="center">
                   <TextArea
                     id="feedbackBox"
                     initialValue="{selectedFeedback}"
@@ -776,7 +687,14 @@
                     enabled="{!submitting}" />
                   <ChangeListener
                     listenTo="{worklistVoiceSeq}"
-                    onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'feedback') appendVoiceTranscript(feedbackBox, worklistVoiceText); }" />
+                    onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'feedback') appendVoiceTranscript(feedbackBox, worklistVoiceText); feedbackVoiceRecording = false; }" />
+                  <Button
+                    label="{feedbackVoiceRecording ? '⏹' : '🎤'}"
+                    variant="ghost"
+                    size="xs"
+                    tooltip="Voice feedback"
+                    enabled="{!submitting}"
+                    onClick="setWorklistVoiceTarget('feedback'); feedbackVoiceRecording = toggleVoiceForCurrentTarget(feedbackVoiceRecording)" />
                   <Button
                     label="×"
                     variant="ghost"
@@ -845,32 +763,9 @@
                   fontStyle="italic"
                   color="$textColor-secondary"
                   value="{inflightActionLabel(((inflightClaim.value &amp;&amp; (inflightClaim.value.ids || []).includes($item.id)) ? inflightClaim.value.kind : '') || actionProgressKind) + '.'.repeat(1 + (actionProgressTick % 3))}" />
-                <HStack
-                  gap="$space-2"
-                  verticalAlignment="center"
-                  when="{selected === $item.id &amp;&amp; worklistVoiceTarget === 'feedback' &amp;&amp; (pendingPastedImageCount > 0 || stagingPastedImageCount > 0)}">
-                  <Items data="{pendingPastedImagePaths}">
-                    <HStack gap="$space-1" verticalAlignment="center">
-                      <Link onClick="fullscreenImage = $item" noIndicator="true">
-                        <Badge variant="pill" value="image {$itemIndex + 1}" />
-                      </Link>
-                      <Button
-                        label="×"
-                        variant="ghost"
-                        size="xs"
-                        tooltip="Remove this image"
-                        onClick="window.bramRemovePastedImagePath($item)" />
-                    </HStack>
-                  </Items>
-                  <Badge
-                    when="{pendingPastedImageCount === 0 &amp;&amp; stagingPastedImageCount > 0}"
-                    variant="pill"
-                    value="staging image" />
-                  <Text
-                    fontSize="$fontSize-xs"
-                    color="$textColor-secondary"
-                    value="{pendingPastedImageCount > 0 ? 'click image to preview; × to remove' : 'will be sent with your message'}" />
-                </HStack>
+                <Fragment when="{selected === $item.id &amp;&amp; worklistVoiceTarget === 'feedback'}">
+                  <PastedImageStrip />
+                </Fragment>
                 <VStack
                   when="{expandedItemId === $item.id}"
                   gap="$space-2"
@@ -915,14 +810,14 @@
       <!-- Form.persist restores unsent text across iframe reloads; TextArea.enterSubmits lets Enter submit the parent Form. -->
       <ChangeListener
         listenTo="{worklistVoiceSeq}"
-        onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'message-agent') appendVoiceTranscript(worklistInputBox, worklistVoiceText); }" />
+        onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'message-agent') appendVoiceTranscript(worklistInputBox, worklistVoiceText); messageVoiceRecording = false; }" />
       <Form
         id="worklistMessageForm"
         width="*"
-        onWillSubmit="() => { return !!(worklistMessageDraft && worklistMessageDraft.trim()); }"
-        onSubmit="() => { const sent = submitWorklistMessageFast(worklistMessageDraft); if (sent) { worklistMessageDraft = ''; worklistInputBox.setValue(''); clearWorklistDraft(); pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = setWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
+        onWillSubmit="() => { const message = ((worklistInputBox && worklistInputBox.value) || worklistMessageDraft || '').trim(); return !!message; }"
+        onSubmit="() => { const sent = submitWorklistMessageFast(((worklistInputBox && worklistInputBox.value) || worklistMessageDraft || '').trim()); if (sent) { worklistMessageDraft = ''; worklistInputBox.setValue(''); clearWorklistDraft(); pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = setWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
         <property name="buttonRowTemplate"><Fragment/></property>
-        <HStack gap="$space-2" verticalAlignment="end">
+        <HStack gap="$space-2" verticalAlignment="center">
           <TextArea
             id="worklistInputBox"
             initialValue="{worklistMessageDraft}"
@@ -937,33 +832,16 @@
             minRows="1"
             maxRows="6"
             width="*" />
+          <Button
+            label="{messageVoiceRecording ? '⏹' : '🎤'}"
+            variant="ghost"
+            tooltip="Voice message"
+            enabled="{!feedbackExpanded}"
+            onClick="setWorklistVoiceTarget('message-agent'); messageVoiceRecording = toggleVoiceForCurrentTarget(messageVoiceRecording)" />
         </HStack>
-        <HStack
-          gap="$space-2"
-          verticalAlignment="center"
-          when="{worklistVoiceTarget !== 'feedback' &amp;&amp; (pendingPastedImageCount > 0 || stagingPastedImageCount > 0)}">
-          <Items data="{pendingPastedImagePaths}">
-            <HStack gap="$space-1" verticalAlignment="center">
-              <Link onClick="fullscreenImage = $item" noIndicator="true">
-                <Badge variant="pill" value="image {$itemIndex + 1}" />
-              </Link>
-              <Button
-                label="×"
-                variant="ghost"
-                size="xs"
-                tooltip="Remove this image"
-                onClick="window.bramRemovePastedImagePath($item)" />
-            </HStack>
-          </Items>
-          <Badge
-            when="{pendingPastedImageCount === 0 &amp;&amp; stagingPastedImageCount > 0}"
-            variant="pill"
-            value="staging image" />
-          <Text
-            fontSize="$fontSize-xs"
-            color="$textColor-secondary"
-            value="{pendingPastedImageCount > 0 ? 'click image to preview; × to remove' : 'will be sent with your message'}" />
-        </HStack>
+        <Fragment when="{worklistVoiceTarget !== 'feedback'}">
+          <PastedImageStrip />
+        </Fragment>
         <Text
           when="{messageSentAtText}"
           fontSize="$fontSize-xs"
@@ -975,136 +853,19 @@
       <VStack
         when="{conversationOpen}"
         paddingLeft="$space-3"
-        gap="$space-3"
+        gap="$space-2"
         overflowY="auto"
-        var.conversationUserText="{worklistConversationUserText(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage, awaitingResponse, submittedItemId)}"
-        var.conversationExchangeMatchesSubmitted="{worklistSubmittedMatches(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText, submittedWorklistMessage)}"
-        var.conversationKey="{(((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') || submittedWorklistMessage || submittedItemId || '').trim()}"
-        var.conversationRawTools="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []}"
-        var.conversationTools="{(conversationRawTools &amp;&amp; conversationRawTools.length > 0) ? conversationRawTools : (stickyConversationTools || [])}"
-        var.conversationAssistantText="{awaitingResponse &amp;&amp; submittedKind === 'message' ? (conversationExchangeMatchesSubmitted ? ((((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') || (liveSubmittedAssistantKey === (submittedWorklistMessage || '').trim() ? liveSubmittedAssistantText : ''))).trim() : '') : (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || lastAssistantStableText || '')).trim()}"
-        var.conversationRawUserImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []}"
-        var.conversationSubmittedImages="{(submittedWorklistImages &amp;&amp; submittedWorklistImages.length > 0) ? submittedWorklistImages : (extractImagePaths(submittedWorklistMessage || '').length > 0 ? extractImagePaths(submittedWorklistMessage || '') : extractImagePaths(conversationUserText || ''))}"
-        var.conversationUserImages="{(conversationSubmittedImages &amp;&amp; conversationSubmittedImages.length > 0) ? conversationSubmittedImages : ((conversationRawUserImages &amp;&amp; conversationRawUserImages.length > 0) ? conversationRawUserImages : ((stickyConversationUserImagesKey === conversationKey) ? stickyConversationUserImages : []))}"
-        var.conversationAssistantImages="{(lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []}">
-        <ChangeListener
-          listenTo="{[
-            conversationUserText || '',
-            conversationKey || '',
-            (conversationRawUserImages || []).join('|'),
-            (conversationSubmittedImages || []).join('|'),
-            ((stickyConversationUserImagesKey === conversationKey) ? (stickyConversationUserImages || []).join('|') : ''),
-            (conversationUserImages || []).join('|')
-          ].join('::')}"
-          onDidChange="() => iframeTrace('conversation-images', {
-            userTextLen: (conversationUserText || '').length,
-            keyLen: (conversationKey || '').length,
-            rawCount: (conversationRawUserImages || []).length,
-            submittedCount: (conversationSubmittedImages || []).length,
-            stickyCount: ((stickyConversationUserImagesKey === conversationKey) ? (stickyConversationUserImages || []).length : 0),
-            finalCount: (conversationUserImages || []).length,
-            rawFirst: (conversationRawUserImages || [])[0] || '',
-            submittedFirst: (conversationSubmittedImages || [])[0] || '',
-            stickyFirst: ((stickyConversationUserImagesKey === conversationKey) ? ((stickyConversationUserImages || [])[0] || '') : ''),
-            finalFirst: (conversationUserImages || [])[0] || ''
-          })" />
-        <ChangeListener
-          listenTo="{conversationAssistantText}"
-          onDidChange="() => iframeTrace('conv-pane-assistant', {
-            awaiting: awaitingResponse ? 1 : 0,
-            matches: conversationExchangeMatchesSubmitted ? 1 : 0,
-            len: (conversationAssistantText || '').length,
-            preview: (conversationAssistantText || '').slice(0, 60),
-            exchAssistantLen: ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').length,
-            stableLen: (lastAssistantStableText || '').length
-          })" />
-        <VStack
-          gap="$space-1"
-          when="{conversationUserText || (conversationUserImages &amp;&amp; conversationUserImages.length > 0)}">
-          <Text
-            fontWeight="$fontWeight-bold"
-            color="$color-primary-700"
-            value="You" />
-          <Markdown content="{stripImagePaths(conversationUserText)}" />
-          <VStack
-            gap="$space-2"
-            when="{(conversationUserImages &amp;&amp; conversationUserImages.length > 0) || ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).length > 0 || extractImagePaths(((conversationUserText || '') + '\n' + (submittedWorklistMessage || ''))).length > 0}">
-            <Items data="{(conversationUserImages &amp;&amp; conversationUserImages.length > 0) ? conversationUserImages : ((((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).length > 0) ? ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []) : extractImagePaths(((conversationUserText || '') + '\n' + (submittedWorklistMessage || ''))))}">
-              <Link onClick="fullscreenImage = $item" noIndicator="true">
-                <Image
-                  src="{$item.startsWith('data:') || $item.startsWith('http') ? $item : '/__file?path=' + encodeURIComponent($item.startsWith('file://') ? $item.replace(/^file:\/\/(localhost)?/, '') : $item)}"
-                  maxHeight="200px"
-                  fit="contain" />
-              </Link>
-            </Items>
-          </VStack>
-        </VStack>
-        <VStack
-          gap="$space-1"
-          when="{conversationTools &amp;&amp; conversationTools.length > 0}">
-          <Text
-            fontWeight="$fontWeight-bold"
-            color="$color-success-700"
-            value="Agent: Tool uses" />
-          <ChangeListener
-            listenTo="{conversationTools &amp;&amp; conversationTools.length}"
-            onDidChange="() => { if (conversationToolsList) conversationToolsList.scrollToBottom(); }" />
-          <List
-            id="conversationToolsList"
-            data="{conversationTools}"
-            height="5.7rem"
-            fixedItemSize="true">
-            <VStack
-              gap="$space-1"
-              padding="$space-2"
-              borderRadius="$borderRadius"
-              border="1px solid $borderColor"
-              backgroundColor="$color-surface-100">
-              <Link onClick="openTool = $item; openToolId = $item.id" noIndicator="true">
-                <HStack gap="$space-2" verticalAlignment="center">
-                  <Text
-                    fontFamily="$fontFamily-monospace"
-                    fontSize="$fontSize-xs"
-                    fontWeight="$fontWeight-bold"
-                    paddingHorizontal="$space-1_5"
-                    paddingVertical="$space-0_5"
-                    borderRadius="$borderRadius"
-                    backgroundColor="$color-surface-200"
-                    value="{$item.name || 'Tool'}" />
-                  <Text fontSize="$fontSize-sm" value="{$item.summary || ''}" />
-                  <SpaceFiller />
-                  <Text fontFamily="$fontFamily-monospace" fontSize="$fontSize-xs" color="$textColor-secondary" value="↗" />
-                </HStack>
-              </Link>
-              <Text
-                when="{$item.errored &amp;&amp; $item.errorText}"
-                color="$color-danger-700"
-                fontSize="$fontSize-sm"
-                value="{$item.errorText}" />
-            </VStack>
-          </List>
-        </VStack>
-        <VStack gap="$space-3" opacity="{agentIsWorking &amp;&amp; (lastAssistantStableText || '') === staleAssistantBaseline ? 0.5 : 1.0}">
-        <VStack
-          gap="$space-1"
-          when="{conversationAssistantText || (conversationAssistantImages &amp;&amp; conversationAssistantImages.length > 0)}">
-          <Text
-            fontWeight="$fontWeight-bold"
-            color="$color-success-700"
-            value="Agent: Last response" />
-          <Markdown content="{stripImagePaths(conversationAssistantText)}" />
-          <VStack gap="$space-2" when="{conversationAssistantImages &amp;&amp; conversationAssistantImages.length > 0}">
-            <Items data="{conversationAssistantImages}">
-              <Link onClick="fullscreenImage = $item" noIndicator="true">
-                <Image
-                  src="{$item.startsWith('data:') || $item.startsWith('http') ? $item : '/__file?path=' + encodeURIComponent($item.startsWith('file://') ? $item.replace(/^file:\/\/(localhost)?/, '') : $item)}"
-                  maxHeight="200px"
-                  fit="contain" />
-              </Link>
-            </Items>
-          </VStack>
-        </VStack>
-        </VStack>
+        onInit="iframeTrace('worklist-conversation-pane-mounted', {open: !!conversationOpen, splitter: restoreSplitterSize('worklist', '50%')})">
+        <HStack gap="$space-2" verticalAlignment="center">
+          <SpaceFiller />
+          <Button
+            label="×"
+            variant="ghost"
+            size="xs"
+            tooltip="Hide conversation"
+            onClick="iframeTrace('worklist-conversation-toggle-click', {source: 'pane-close', open: !!conversationOpen}); conversationOpen = toggleConversationOpen(conversationOpen)" />
+        </HStack>
+        <ConversationPane />
       </VStack>
     </HSplitter>
 
@@ -1382,7 +1143,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
             data="{((openIssues.value) || []).filter(i => i.state === 'OPEN').map(i => ({value: i.number, label: '#' + i.number + ' ' + i.title}))}"
             initialValue="{newItemIssue}"
             onDidChange="(v) => newItemIssue = v" />
-          <HStack gap="$space-2" verticalAlignment="start">
+          <HStack gap="$space-2" verticalAlignment="center">
             <TextArea
               id="newItemBox"
               placeholder="Describe what the item should change"
@@ -1394,7 +1155,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
               onInit="setWorklistVoiceTarget('new-item')"
               onGotFocus="setWorklistVoiceTarget('new-item')" />
             <Button
-              label="{newItemVoiceRecording ? '⏹ stop' : '🎤 voice'}"
+              label="{newItemVoiceRecording ? '⏹' : '🎤'}"
               variant="{newItemVoiceRecording ? 'solid' : 'outlined'}"
               onClick="setWorklistVoiceTarget('new-item'); newItemVoiceRecording = toggleVoiceForCurrentTarget(newItemVoiceRecording)" />
           </HStack>

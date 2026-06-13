@@ -1822,33 +1822,79 @@ function traceToolbarKey(key) {
 
 var bramAgentMenu = null;
 var bramAgentMenuSuppressFallback = true;
+var bramAgentMenuLastHostMs = 0;
+var bramAgentMenuLastSource = '';
+
+function agentMenuHostMs(menu) {
+  return menu && typeof menu.atHostMs === 'number' ? menu.atHostMs : 0;
+}
+
+function agentMenuTraceFields(menu) {
+  const hostMs = agentMenuHostMs(menu);
+  return {
+    tool: (menu && menu.tool) || '',
+    hasSignature: !!(menu && menu.toolCallSignature),
+    signatureChars: menu && menu.toolCallSignature ? menu.toolCallSignature.length : 0,
+    assignedMenu: bramAgentMenu ? bramAgentMenu.tool : '',
+    suppressFallback: bramAgentMenuSuppressFallback,
+    at_host_ms: hostMs,
+    delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1,
+    cache_source: (menu && menu.cacheSource) || '',
+    last_host_ms: bramAgentMenuLastHostMs,
+    last_cache_source: bramAgentMenuLastSource,
+    stale: hostMs && bramAgentMenuLastHostMs && hostMs < bramAgentMenuLastHostMs ? 1 : 0
+  };
+}
+
+function applyAgentMenu(menu, suppressFallback, source) {
+  const hostMs = agentMenuHostMs(menu);
+  const stale = !!(hostMs && bramAgentMenuLastHostMs && hostMs < bramAgentMenuLastHostMs);
+  if (stale) {
+    iframeTrace('agent-menu-stale', {
+      incoming_host_ms: hostMs,
+      current_host_ms: bramAgentMenuLastHostMs,
+      incoming_source: (menu && menu.cacheSource) || source || '',
+      current_source: bramAgentMenuLastSource,
+      incoming_tool: (menu && menu.tool) || '',
+      current_tool: (bramAgentMenu && bramAgentMenu.tool) || ''
+    });
+    return true;
+  }
+  bramAgentMenu = menu || null;
+  bramAgentMenuSuppressFallback = suppressFallback;
+  if (hostMs) {
+    bramAgentMenuLastHostMs = hostMs;
+    bramAgentMenuLastSource = (menu && menu.cacheSource) || source || '';
+  } else if (!menu) {
+    bramAgentMenuLastHostMs = Date.now();
+    bramAgentMenuLastSource = source || '';
+  }
+  return false;
+}
 
 function setAgentMenuFromTurnState(turnState, surface) {
   const p = turnState || {};
-  bramAgentMenu = p.pendingMenu || null;
-  bramAgentMenuSuppressFallback = !p.pendingMenu;
+  const incoming = p.pendingMenu || null;
+  const stale = applyAgentMenu(incoming, !incoming, 'setAgentMenuFromTurnState');
   iframeTrace('listener-fired', {
     context: 'turn-state-changed',
     surface: surface || 'agent-menu',
     phase: p.phase || '',
     source: p.source || '',
     menu: p.pendingMenu ? p.pendingMenu.tool : '',
-    assignedMenu: bramAgentMenu ? bramAgentMenu.tool : '',
-    suppressFallback: bramAgentMenuSuppressFallback
+    stale,
+    ...agentMenuTraceFields(incoming)
   });
 }
 
 function setAgentMenuFromEvent(e, surface) {
-  bramAgentMenu = e && e.payload ? e.payload : null;
-  bramAgentMenuSuppressFallback = !bramAgentMenu;
+  const incoming = e && e.payload ? e.payload : null;
+  const stale = applyAgentMenu(incoming, !incoming, 'setAgentMenuFromEvent');
   iframeTrace('listener-fired', {
     context: 'pty-menu-changed',
     surface: surface || 'agent-menu',
-    tool: (bramAgentMenu && bramAgentMenu.tool) || '',
-    hasSignature: !!(bramAgentMenu && bramAgentMenu.toolCallSignature),
-    signatureChars: bramAgentMenu && bramAgentMenu.toolCallSignature ? bramAgentMenu.toolCallSignature.length : 0,
-    assignedMenu: bramAgentMenu ? bramAgentMenu.tool : '',
-    suppressFallback: bramAgentMenuSuppressFallback
+    stale,
+    ...agentMenuTraceFields(incoming)
   });
 }
 

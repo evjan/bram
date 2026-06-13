@@ -1113,7 +1113,13 @@ static PTY_MENU_SUPPRESSED: OnceLock<Mutex<Option<(String, std::time::Instant)>>
 // A subsequent TUI redraw clears the grace via the `detected.is_some()`
 // branch below; if no redraw ever brings the menu back into the tail
 // and 60s passes, dismiss legitimately.
-static PTY_MENU_EVICTION_GRACE: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+#[derive(Clone)]
+struct MenuEvictionGrace {
+    started: std::time::Instant,
+    tool: String,
+}
+
+static PTY_MENU_EVICTION_GRACE: OnceLock<Mutex<Option<MenuEvictionGrace>>> = OnceLock::new();
 const MENU_EVICTION_GRACE_MS: u128 = 60_000;
 
 // The loopback HTTP server's port, captured at setup. Used to inject
@@ -1147,6 +1153,10 @@ struct PtyMenu {
     // Write tool only; other tools leave this `None`.
     #[serde(rename = "toolCallContent", skip_serializing_if = "Option::is_none")]
     tool_call_content: Option<String>,
+    #[serde(rename = "cacheSource", skip_serializing_if = "Option::is_none")]
+    cache_source: Option<String>,
+    #[serde(rename = "atHostMs", skip_serializing_if = "Option::is_none")]
+    at_host_ms: Option<i64>,
     // Origin of the current `tool_call_signature` for trace introspection.
     // Not serialized to the iframe — purely a host-side bookkeeping field
     // surfaced via the [pty-menu] state=... trace lines.
@@ -1794,10 +1804,24 @@ fn session_provider_label(provider: SessionProvider) -> &'static str {
 
 fn turn_state_set_menu<R: tauri::Runtime>(
     app: &AppHandle<R>,
-    menu: Option<PtyMenu>,
+    mut menu: Option<PtyMenu>,
     source: &str,
     reason: &str,
 ) {
+    if let Some(m) = menu.as_mut() {
+        m.cache_source = Some(
+            match reason {
+                "detected" => "setAgentMenuFromEvent",
+                "dismissed" => "setAgentMenuFromEvent",
+                "signature-deferred-recheck" | "signature-watcher-recheck" => {
+                    "setAgentMenuFromTurnState"
+                }
+                _ => source,
+            }
+            .to_string(),
+        );
+        m.at_host_ms = Some(unix_now_ms());
+    }
     let phase = if menu.is_some() {
         "waiting-for-permission"
     } else {
@@ -1808,6 +1832,17 @@ fn turn_state_set_menu<R: tauri::Runtime>(
         s.phase = phase.to_string();
         s.pending_menu = menu;
     });
+}
+
+fn stamp_pty_menu_payload(
+    mut menu: Option<PtyMenu>,
+    cache_source: &'static str,
+) -> Option<PtyMenu> {
+    if let Some(m) = menu.as_mut() {
+        m.cache_source = Some(cache_source.to_string());
+        m.at_host_ms = Some(unix_now_ms());
+    }
+    menu
 }
 
 // Parsed snapshot of Claude's rotating status line. Drives the row's
@@ -3390,8 +3425,15 @@ fn pty_menu_suppressed_cell() -> &'static Mutex<Option<(String, std::time::Insta
     PTY_MENU_SUPPRESSED.get_or_init(|| Mutex::new(None))
 }
 
-fn pty_menu_eviction_grace_cell() -> &'static Mutex<Option<std::time::Instant>> {
+fn pty_menu_eviction_grace_cell() -> &'static Mutex<Option<MenuEvictionGrace>> {
     PTY_MENU_EVICTION_GRACE.get_or_init(|| Mutex::new(None))
+}
+
+fn pty_menu_eviction_grace_elapsed_ms() -> Option<u128> {
+    pty_menu_eviction_grace_cell()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|state| state.started.elapsed().as_millis()))
 }
 
 // Sampled timestamp for `[pty-menu-scan]` instrumentation. Throttles
@@ -3436,6 +3478,30 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
         (Some(p1), Some(p2)) => Some(p2 - p1 <= 512),
         _ => None,
     };
+    let span_format = match (pos1, needle2_after_pos1) {
+        (Some(p1), Some(p2)) => {
+            let end = (p2 + 200).min(s.len());
+            let span = &s[p1..end];
+            let newline_count = span.iter().filter(|b| **b == b'\n' || **b == b'\r').count();
+            let ratio_per_1000 = if span.is_empty() {
+                0
+            } else {
+                newline_count * 1000 / span.len()
+            };
+            if ratio_per_1000 >= 20 {
+                "vertical"
+            } else {
+                "horizontal"
+            }
+        }
+        _ => "unknown",
+    };
+    let anchor_range = pos1
+        .map(|p| format!("{}..{}", p, (p + 3).min(s.len())))
+        .unwrap_or_else(|| "n/a".to_string());
+    let needle2_range = needle2_after_pos1
+        .map(|p| format!("{}..{}", p, (p + needle2.len()).min(s.len())))
+        .unwrap_or_else(|| "n/a".to_string());
     let stripped_len = s.len();
     let head_hex = s
         .iter()
@@ -3452,7 +3518,7 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
         .map(|b| format!("{:02x}", b))
         .collect::<String>();
     format!(
-        "stripped_len={} cursor={} numbered={} needle2_after_anchor={} needle2_anywhere={} header={} anchor_distance_ok={} codex_action={} fp_head={} fp_tail={}",
+        "stripped_len={} cursor={} numbered={} needle2_after_anchor={} needle2_anywhere={} header={} anchor_distance_ok={} codex_action={} format={} anchor_range={} needle2_range={} fp_head={} fp_tail={}",
         stripped_len,
         pos1_cursor.is_some(),
         pos1_numbered.is_some(),
@@ -3463,6 +3529,9 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
             .map(|b| if b { "true" } else { "false" })
             .unwrap_or("n/a"),
         raw_codex_action,
+        span_format,
+        anchor_range,
+        needle2_range,
         head_hex,
         tail_hex,
     )
@@ -3625,6 +3694,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     // call back into pty_menu_cell (they don't today, but cheap to avoid).
     let mut emit_payload: Option<Option<PtyMenu>> = None;
     let mut recheck_target: Option<String> = None;
+    let mut expired_grace_elapsed_ms: Option<u128> = None;
 
     if let Ok(mut menu) = pty_menu_cell().lock() {
         let prev_menu = menu.as_ref().cloned();
@@ -3660,9 +3730,15 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // stabilization.
         if detected.is_none() && prev_menu.is_some() {
             if let Ok(mut grace) = pty_menu_eviction_grace_cell().lock() {
-                match *grace {
+                match grace.as_ref().cloned() {
                     None => {
-                        *grace = Some(std::time::Instant::now());
+                        *grace = Some(MenuEvictionGrace {
+                            started: std::time::Instant::now(),
+                            tool: prev_menu
+                                .as_ref()
+                                .map(|p| p.tool.clone())
+                                .unwrap_or_else(|| "?".to_string()),
+                        });
                         eprintln!(
                             "[pty-menu] eviction grace started for tool={}",
                             prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?")
@@ -3680,35 +3756,52 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                         }
                         return;
                     }
-                    Some(started) if started.elapsed().as_millis() < MENU_EVICTION_GRACE_MS => {
+                    Some(state) if state.started.elapsed().as_millis() < MENU_EVICTION_GRACE_MS => {
+                        let current_tool =
+                            prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?");
                         if bram_trace_enabled() {
+                            if state.tool != current_tool {
+                                append_bram_trace_line(
+                                    app,
+                                    "pty-menu",
+                                    &format!(
+                                        "state=hold-stacked previous_tool={} current_tool={} reason=buffer-evicted elapsed_ms={} grace_ms={}",
+                                        state.tool,
+                                        current_tool,
+                                        state.started.elapsed().as_millis(),
+                                        MENU_EVICTION_GRACE_MS
+                                    ),
+                                );
+                            }
                             append_bram_trace_line(
                                 app,
                                 "pty-menu",
                                 &format!(
                                     "state=holding tool={} reason=buffer-evicted elapsed_ms={} grace_ms={}",
-                                    prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?"),
-                                    started.elapsed().as_millis(),
+                                    current_tool,
+                                    state.started.elapsed().as_millis(),
                                     MENU_EVICTION_GRACE_MS
                                 ),
                             );
                         }
                         return;
                     }
-                    Some(started) => {
+                    Some(state) => {
+                        let elapsed_ms = state.started.elapsed().as_millis();
+                        expired_grace_elapsed_ms = Some(elapsed_ms);
                         *grace = None;
                         eprintln!(
                             "[pty-menu] eviction grace expired ({}ms); proceeding with dismiss",
-                            started.elapsed().as_millis()
+                            elapsed_ms
                         );
                         if bram_trace_enabled() {
                             append_bram_trace_line(
                                 app,
                                 "pty-menu",
                                 &format!(
-                                    "state=hold-expired tool={} reason=buffer-evicted elapsed_ms={}",
+                                    "state=hold-expired tool={} reason=grace-expired elapsed_ms={}",
                                     prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?"),
-                                    started.elapsed().as_millis()
+                                    elapsed_ms
                                 ),
                             );
                         }
@@ -3717,13 +3810,17 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             }
         } else if detected.is_some() {
             if let Ok(mut grace) = pty_menu_eviction_grace_cell().lock() {
-                if grace.is_some() {
+                if let Some(state) = grace.as_ref() {
                     eprintln!("[pty-menu] eviction grace cleared by re-detection");
                     if bram_trace_enabled() {
                         append_bram_trace_line(
                             app,
                             "pty-menu",
-                            "state=hold-cleared reason=redetected",
+                            &format!(
+                                "state=hold-cleared tool={} reason=redetected elapsed_ms={}",
+                                state.tool,
+                                state.started.elapsed().as_millis()
+                            ),
                         );
                     }
                     *grace = None;
@@ -3827,7 +3924,11 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                 (None, Some(prev)) if prev.tool != PENDING_TOOL => append_bram_trace_line(
                     app,
                     "pty-menu",
-                    &format!("state=dismissed tool={} reason=buffer-evicted", prev.tool),
+                    &format!(
+                        "state=dismissed tool={} reason=grace-expired elapsed_ms={}",
+                        prev.tool,
+                        expired_grace_elapsed_ms.unwrap_or(0)
+                    ),
                 ),
                 _ => {}
             }
@@ -3866,6 +3967,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     }
 
     if let Some(payload) = emit_payload {
+        let payload = stamp_pty_menu_payload(payload, "setAgentMenuFromEvent");
         turn_state_set_menu(app, payload.clone(), "pty-menu", "detected");
         emit_replayable_payload(app, "pty-menu-changed", &payload);
         trace_pty_menu_options(app, &payload);
@@ -3931,13 +4033,16 @@ fn try_signature_recheck_on_jsonl_change<R: tauri::Runtime>(app: &AppHandle<R>) 
         }
     }
     if let (Some(payload), Some(tool)) = (emit_payload, updated_tool) {
+        let payload = stamp_pty_menu_payload(payload, "setAgentMenuFromTurnState");
         if bram_trace_enabled() {
             append_bram_trace_line(
                 app,
                 "pty-menu",
                 &format!(
-                    "state=updated tool={} reason=signature-watcher-recheck signature_source=jsonl signature_chars={}",
-                    tool, updated_chars
+                    "state=updated tool={} reason=signature-watcher-recheck signature_source=jsonl signature_chars={} grace_elapsed_ms={}",
+                    tool,
+                    updated_chars,
+                    pty_menu_eviction_grace_elapsed_ms().unwrap_or(0)
                 ),
             );
         }
@@ -4054,11 +4159,15 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                         &app_handle,
                         "pty-menu",
                         &format!(
-                            "state=updated tool={} reason=signature-deferred-recheck signature_source=jsonl delay_ms={} signature_chars={}",
-                            target_tool, delay_ms, signature_chars
+                            "state=updated tool={} reason=signature-deferred-recheck signature_source=jsonl delay_ms={} signature_chars={} grace_elapsed_ms={}",
+                            target_tool,
+                            delay_ms,
+                            signature_chars,
+                            pty_menu_eviction_grace_elapsed_ms().unwrap_or(0)
                         ),
                     );
                 }
+                let payload = stamp_pty_menu_payload(payload, "setAgentMenuFromTurnState");
                 turn_state_set_menu(
                     &app_handle,
                     payload.clone(),
@@ -4913,6 +5022,8 @@ fn pty_menu_detect(raw_tail: &[u8]) -> Option<PtyMenu> {
                         tool_call_signature: signature,
                         tool_call_diff: None,
                         tool_call_content: None,
+                        cache_source: None,
+                        at_host_ms: None,
                         signature_source,
                     });
                 }
@@ -5002,6 +5113,8 @@ fn pty_menu_detect(raw_tail: &[u8]) -> Option<PtyMenu> {
             tool_call_signature: signature,
             tool_call_diff: None,
             tool_call_content: None,
+            cache_source: None,
+            at_host_ms: None,
             signature_source,
         })
     })();
@@ -5146,6 +5259,7 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
         tail.clear();
     }
     // User dismissal supersedes any pending eviction-grace deferral.
+    let grace_elapsed_ms = pty_menu_eviction_grace_elapsed_ms();
     if let Ok(mut grace) = pty_menu_eviction_grace_cell().lock() {
         *grace = None;
     }
@@ -5172,7 +5286,11 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
             append_bram_trace_line(
                 app,
                 "pty-menu",
-                &format!("state=dismissed tool={} reason=user-input", tool),
+                &format!(
+                    "state=dismissed tool={} reason=user-input grace_elapsed_ms={}",
+                    tool,
+                    grace_elapsed_ms.unwrap_or(0)
+                ),
             );
         }
         if let Ok(mut s) = pty_menu_suppressed_cell().lock() {
@@ -16756,6 +16874,8 @@ Do you want to proceed?
             tool_call_signature: None,
             tool_call_diff: None,
             tool_call_content: None,
+            cache_source: None,
+            at_host_ms: None,
             signature_source: None,
         };
         let after = super::PtyMenu {
@@ -16775,6 +16895,8 @@ Do you want to proceed?
             tool_call_signature: Some("Bash(pwd)".to_string()),
             tool_call_diff: None,
             tool_call_content: None,
+            cache_source: None,
+            at_host_ms: None,
             signature_source: Some("pty"),
         };
         let after = super::PtyMenu {
@@ -16808,6 +16930,8 @@ Do you want to proceed?
             tool_call_signature: Some("Bash(New-Item foo.bar)".to_string()),
             tool_call_diff: None,
             tool_call_content: None,
+            cache_source: None,
+            at_host_ms: None,
             signature_source: Some("pty"),
         };
         let same = base.clone();

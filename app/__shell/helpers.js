@@ -597,6 +597,7 @@ document.addEventListener("paste", function (event) {
     window.bramStagePastedImage(imageFiles[j]);
   }
 });
+// Drag-and-drop image intake — parallels the paste handler above.
 function bramImageFilesFromDataTransfer(dt) {
   if (!dt) return [];
   var imageFiles = [];

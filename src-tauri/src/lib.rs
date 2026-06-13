@@ -3121,15 +3121,25 @@ fn agent_status_set_codex_jsonl_working<R: tauri::Runtime>(
         emit_replayable_payload(app, "agent-status-changed", &payload);
     }
     update_turn_state(app, "jsonl-non-final", reason, |s| {
-        s.provider = Some("codex".to_string());
-        s.phase = "working".to_string();
-        s.last_jsonl_activity_at_ms = file_mtime_ms;
-        s.last_jsonl_reason = Some(reason.to_string());
-        if let Some(ts) = turn_started_at_ms {
-            s.turn_stamp = Some(ts.to_string());
-        }
-        s.pending_menu = None;
+        apply_codex_jsonl_working_turn_state(s, file_mtime_ms, turn_started_at_ms, reason);
     });
+}
+
+fn apply_codex_jsonl_working_turn_state(
+    s: &mut TurnState,
+    file_mtime_ms: i64,
+    turn_started_at_ms: Option<i64>,
+    reason: &str,
+) {
+    s.provider = Some("codex".to_string());
+    s.last_jsonl_activity_at_ms = file_mtime_ms;
+    s.last_jsonl_reason = Some(reason.to_string());
+    if let Some(ts) = turn_started_at_ms {
+        s.turn_stamp = Some(ts.to_string());
+    }
+    if s.pending_menu.is_none() {
+        s.phase = "working".to_string();
+    }
 }
 
 fn agent_status_set_claude_jsonl_working<R: tauri::Runtime>(
@@ -17271,6 +17281,48 @@ Do you want to proceed?
             &missing_signature,
             &base
         ));
+    }
+
+    #[test]
+    fn codex_jsonl_working_preserves_pending_permission_menu() {
+        let pending = super::PtyMenu {
+            tool: "Bash".to_string(),
+            text: "Action Required".to_string(),
+            options: vec![
+                super::MenuOption {
+                    key: "1".to_string(),
+                    label: "Yes, proceed (y)".to_string(),
+                },
+                super::MenuOption {
+                    key: "2".to_string(),
+                    label: "No, and tell Codex what to do differently (esc)".to_string(),
+                },
+            ],
+            tool_call_signature: Some("Bash(gh issue create --title test)".to_string()),
+            tool_call_diff: None,
+            tool_call_content: None,
+            cache_source: Some("setAgentMenuFromEvent".to_string()),
+            at_host_ms: Some(1781386752695),
+            signature_source: Some("pty"),
+        };
+        let mut state = super::TurnState::idle();
+        state.provider = Some("codex".to_string());
+        state.phase = "waiting-for-permission".to_string();
+        state.pending_menu = Some(pending.clone());
+
+        super::apply_codex_jsonl_working_turn_state(
+            &mut state,
+            1781386752831,
+            Some(1781386705079),
+            "active-tool-call",
+        );
+
+        assert_eq!(state.provider.as_deref(), Some("codex"));
+        assert_eq!(state.phase, "waiting-for-permission");
+        assert_eq!(state.pending_menu, Some(pending));
+        assert_eq!(state.last_jsonl_activity_at_ms, 1781386752831);
+        assert_eq!(state.last_jsonl_reason.as_deref(), Some("active-tool-call"));
+        assert_eq!(state.turn_stamp.as_deref(), Some("1781386705079"));
     }
 
     #[test]

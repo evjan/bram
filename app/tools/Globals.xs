@@ -31,7 +31,7 @@ function paragraphsContaining(text, query) {
 
 function currentSourceFile(pathname) {
   if (pathname === '/sessions') return 'components/Sessions.xmlui';
-  if (pathname === '/') return 'components/Transcript.xmlui';
+  if (pathname === '/') return 'components/Workspace.xmlui';
   if (pathname === '/worklist') return 'components/Workspace.xmlui';
   if (pathname === '/status') return 'components/Status.xmlui';
   return 'Main.xmlui';

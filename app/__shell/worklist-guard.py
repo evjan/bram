@@ -35,6 +35,60 @@ AUTH_REL = "resources/.worklist-authorization.json"
 BYPASS_TTL_SECONDS = 60 * 60  # direct-edit auth records are fresh for 1h
 
 
+_LIFECYCLE_PATHS_EXACT = {
+    "resources/worklist.json",
+    "resources/.worklist-authorization.json",
+    "resources/.inflight-claim.json",
+    "resources/.pty-intent.jsonl",
+    "resources/.worklist-intent.json",
+    "resources/.worklist-result.json",
+    "resources/.bram-port",
+    "resources/.bram-port.json",
+}
+_LIFECYCLE_PATHS_PREFIXES = (
+    "resources/worklist-drafts/",
+    "resources/feedback-drafts/",
+    "resources/feedback-history/",
+    "resources/bram-traces/",
+)
+
+
+def is_lifecycle_path(rel):
+    """True iff rel names a pure-coordination path whose writes are
+    implicitly authorized by the worklist lifecycle."""
+    if not isinstance(rel, str) or not rel:
+        return False
+    if rel in _LIFECYCLE_PATHS_EXACT:
+        return True
+    return any(rel.startswith(p) for p in _LIFECYCLE_PATHS_PREFIXES)
+
+
+def emit_allow_for_lifecycle(target_rel, reason="bram-lifecycle-channel"):
+    """Emit Claude's PreToolUse 'allow' decision so the user is not
+    prompted for permission on lifecycle bookkeeping writes.
+    Reference: https://docs.claude.com/en/docs/claude-code/hooks#pretooluse-decision-control
+    """
+    _trace_hook(
+        "PreToolUse",
+        os.environ.get("__BRAM_TRACE_TOOL", "Write"),
+        target_rel,
+        "allow",
+        reason,
+    )
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": (
+                f"Bram lifecycle channel ({target_rel}): implicitly authorized "
+                f"by the worklist flow, no per-write confirmation needed."
+            ),
+        }
+    }
+    print(json.dumps(output))
+    sys.exit(0)
+
+
 # Issue #176: detect the `gh ... --body @<...>` antipattern. `gh`'s --body
 # takes a literal string, but `@-` and `@path` look like stdin/file refs
 # (curl convention) and silently stash the literal text — comments render
@@ -434,11 +488,17 @@ def main():
         # ~/.codex/ or /tmp/). The worklist gate doesn't apply.
         sys.exit(0)
 
+    # Pre-Branch-1: lifecycle coordination paths the user already authorized
+    # implicitly. Emit allow-via-JSON so Claude does not surface a native
+    # permission menu on these bookkeeping writes. worklist.json itself
+    # is excluded so Branch 1 can still validate mechanical state changes.
+    if rel != WORKLIST_REL and is_lifecycle_path(rel):
+        emit_allow_for_lifecycle(rel, "bram-lifecycle-channel")
+
     # Branch 1: writes to resources/worklist.json — existing prune validation.
     if rel == WORKLIST_REL:
         if not os.path.exists(fp):
-            _trace_hook("PreToolUse", tool_name, rel, "allow", "worklist-bootstrap")
-            sys.exit(0)
+            emit_allow_for_lifecycle(rel, "worklist-bootstrap")
         with open(fp) as f:
             old = f.read()
         if payload["tool_name"] == "Write":
@@ -454,15 +514,13 @@ def main():
             inline_bad = worklist_items_with_inline_prose(new)
             if inline_bad:
                 deny_inline_prose(inline_bad)
-            _trace_hook("PreToolUse", tool_name, rel, "allow", "worklist-author")
-            sys.exit(0)
+            emit_allow_for_lifecycle(rel, "worklist-author")
         deny_mechanical_worklist_change(removed, status_changed)
 
-    # Branch 2: worklist draft prose files are part of proposal authoring.
-    # They are allowed before a corresponding metadata item exists.
+    # Branch 2: worklist draft prose files (already covered by the
+    # pre-Branch-1 lifecycle short-circuit; left as a guardrail).
     if is_worklist_draft(rel):
-        _trace_hook("PreToolUse", tool_name, rel, "allow", "worklist-draft")
-        sys.exit(0)
+        emit_allow_for_lifecycle(rel, "worklist-draft")
 
     # Branch 2: writes to any other project file — require worklist coverage,
     # fresh bypass, or explicit opt-out language in the last user message.

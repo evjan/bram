@@ -7055,6 +7055,56 @@ fn record_iterate_inflight_sentinel<R: tauri::Runtime>(app: &AppHandle<R>, turn_
     write_inflight_claim_sentinel(app, &ids, "iterate");
 }
 
+/// Detect a `skip-worklist:` prefix on the toTurn write path. When
+/// present, write a fresh `direct-edit` authorization record so the
+/// Claude and Codex worklist-guard hooks let tracked-file edits
+/// through for this turn (via their existing `fresh_bypass()` path).
+///
+/// The prefix is intentionally NOT stripped before the PTY write:
+/// the agent receives the literal `skip-worklist: ...` text and reads
+/// the prefix as a directive to skip its own propose-first logic.
+/// This is required for Codex, whose propose-first behavior is
+/// convention-driven and fires before any tool call (so the auth
+/// record alone is moot — Codex never reaches the hook). Same shape
+/// as how the agent reads `iterate:` / `approved:` / `drop:`
+/// prefixes today. See app/__shell/conventions.md for the
+/// agent-side contract.
+fn record_skip_worklist_authorization<R: tauri::Runtime>(app: &AppHandle<R>, turn_text: &str) {
+    let trimmed = turn_text.trim_start();
+    if trimmed.strip_prefix("skip-worklist:").is_none() {
+        return;
+    }
+    let Some(path) = worklist_auth_file(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("[worklist-auth] create {} failed: {}", parent.display(), e);
+            return;
+        }
+    }
+    let issued_at_ms = unix_now_ms();
+    let record = serde_json::json!({
+        "kind": "direct-edit",
+        "issued_at_ms": issued_at_ms,
+        "issuedAtMs": issued_at_ms,
+        "paths": ["*"],
+        "source": "host-skip-worklist-prefix",
+    });
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "auth-record",
+            "op=write kind=direct-edit ids=[] source=host-skip-worklist-prefix",
+        );
+    }
+    if let Ok(body) = serde_json::to_string_pretty(&record) {
+        if let Err(e) = std::fs::write(&path, format!("{}\n", body)) {
+            eprintln!("[worklist-auth] write {} failed: {}", path.display(), e);
+        }
+    }
+}
+
 fn write_pty_turn_intent<R: tauri::Runtime>(
     app: &AppHandle<R>,
     state: &State<'_, AppState>,
@@ -7062,6 +7112,7 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
 ) -> Result<(), String> {
     record_codex_direct_edit_authorization(app, data);
     record_iterate_inflight_sentinel(app, data);
+    record_skip_worklist_authorization(app, data);
     if cfg!(windows) {
         pty_write_internal(app, state, "\x15", "pty-intent-toTurn-windows-clear")?;
         pty_write_internal(app, state, data, "pty-intent-toTurn-windows-payload")?;

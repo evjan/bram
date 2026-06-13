@@ -66,6 +66,26 @@ change is "small":
  `PreToolUse` hook reads via `fresh_bypass()`. The phrases themselves are
  identical, so the user-facing contract is the same regardless of agent.
 
+- **`skip-worklist:` structured prefix on this turn.** The user's
+  turn begins literally with `skip-worklist: ` followed by the
+  request text. Same family as `approved:` / `drop:` / `iterate:`,
+  but for authorizing a direct edit rather than a lifecycle
+  transition. The user-facing affordance is the **Skip worklist**
+  button next to the Worklist tab's message-agent input — it prepends
+  the prefix and submits. Same convention as for Approve / Drop /
+  Iterate: tell users to click the button, do not instruct them to
+  type or paste the wire format. When the host's `toTurn` write path
+  sees the prefix it writes the same one-turn `direct-edit` record to
+  `resources/.worklist-authorization.json` that the prose opt-out
+  writes, then forwards the **entire turn text including the prefix**
+  to the agent (unlike `approved:` / `drop:` / `iterate:`, which the
+  agent is told not to mention but the prefix is left in place so the
+  agent can see it). Agents seeing a `skip-worklist:` prefix on their
+  turn must skip the propose-first convention and act on the rest of
+  the message as a direct edit; do not write a new worklist item.
+  The PreToolUse hook will allow the edits via the existing
+  `fresh_bypass()` path.
+
 - **Correcting code you just wrote in the current iteration.**
   If you wrote a typo or off-by-one in the last assistant turn and
   you're fixing it on the next turn, that's iteration on

@@ -842,11 +842,15 @@
         <Fragment when="{worklistVoiceTarget !== 'feedback'}">
           <PastedImageStrip />
         </Fragment>
-        <Text
-          when="{messageSentAtText}"
-          fontSize="$fontSize-xs"
-          color="$textColor-secondary"
-          value="{'sent ' + messageSentAtText}" />
+        <HStack gap="$space-2" verticalAlignment="center">
+          <Button
+            label="Skip worklist"
+            variant="ghost"
+            size="xs"
+            tooltip="Send and bypass propose-first for this turn — edit files directly. Use when you want a direct edit."
+            enabled="{!feedbackExpanded &amp;&amp; (((worklistInputBox &amp;&amp; worklistInputBox.value) || worklistMessageDraft || '').trim().length > 0)}"
+            onClick="(() => { const raw = ((worklistInputBox &amp;&amp; worklistInputBox.value) || worklistMessageDraft || '').trim(); if (!raw) return; const sent = submitWorklistMessageFast('skip-worklist: ' + raw); if (sent) { worklistMessageDraft = ''; worklistInputBox.setValue(''); clearWorklistDraft(); pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message-skip-worklist', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = setWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } })()" />
+        </HStack>
       </Form>
       </VStack>
 

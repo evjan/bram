@@ -170,6 +170,15 @@ When the prompt runs, Bram installs two layers:
 - A Claude adapter: `.claude/hooks/worklist-guard.py`, registered in `.claude/settings.json` to fire on `Write|Edit`. The hook denies edits to project files not covered by a proposed/applied worklist item (with explicit opt-out phrases in the last user message as the escape hatch), and validates worklist-prune authorization for changes to `resources/worklist.json` itself.
 - A codex adapter: `~/.bram/codex-worklist-guard.py`, registered in `~/.codex/config.toml` as a `PreToolUse` hook with matcher `^(apply_patch|Bash|Write|Edit|mcp__.*)$`. Same coverage logic as the Claude hook, broadened to catch codex's `apply_patch` tool, mutation-shaped Bash commands, and MCP filesystem write/edit/create/move calls. Setup also writes `developer_instructions` into the codex config so the gate prose lands in the developer-role context part of every session, not just the user-role `AGENTS.md`. Existing `~/.xmlui-desktop/codex-worklist-guard.py` installs remain accepted during migration; rerunning Setup rewrites the config to the Bram path.
 
+In the Bram source repo, the Claude guard's source of truth is
+`app/__shell/worklist-guard.py`. The `.claude/hooks/worklist-guard.py`
+file is the installed runtime copy, refreshed from the source bundle by
+Setup and by `src-tauri/build.rs` during Cargo builds. Functional edits
+belong in `app/__shell/worklist-guard.py`; editing the installed copy
+directly creates setup drift and may be overwritten. The Codex guard
+uses the same source/installed split: `app/shell/worklist-guard-codex.py`
+is canonical, `~/.bram/codex-worklist-guard.py` is installed.
+
 PreToolUse hooks are the generic extension point — both Claude Code and codex expose them — so the two adapters share the same shape: each runs *before* the agent invokes a tool, receives a JSON payload describing the pending call on stdin, and can exit 0 to allow, return a deny decision to block (stderr/permissionDecisionReason goes back to the agent as a tool error), or fail to launch.
 
 That means first-run setup is provider-aware in when it prompts but provider-symmetric in what it installs: launching either `claude` or `codex` and accepting the prompt sets up the shared core, the codex-side `AGENTS.md` guidance block, the codex `developer_instructions`, and the Claude and codex hook adapters.

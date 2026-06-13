@@ -23,6 +23,19 @@ XMLUI MCP server to be available, read the xmlui_rules,
 and follow them. The same holds if the app under development
 is XMLUI.
 
+### Guard source of truth
+
+When editing Bram's Claude worklist guard in this source repo,
+`app/__shell/worklist-guard.py` is canonical. The runtime copy at
+`.claude/hooks/worklist-guard.py` is an installed artifact that Setup
+and `src-tauri/build.rs` refresh from that canonical source. Do not
+make functional edits in `.claude/hooks/worklist-guard.py`; they will
+either be reported as setup drift or overwritten by the next sync.
+
+The Codex guard has a separate source/installed split:
+`app/shell/worklist-guard-codex.py` is canonical, while
+`~/.bram/codex-worklist-guard.py` is the installed runtime copy.
+
 ### XMLUI lookup order
 
 When you are figuring out how to do a thing in XMLUI, ask the XMLUI

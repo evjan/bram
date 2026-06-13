@@ -3480,6 +3480,152 @@ fn pty_scan_anchor_ranges(stripped: &[u8]) -> String {
         .join(",")
 }
 
+fn pty_raw_position_map(input: &[u8]) -> Vec<Option<(u32, u32)>> {
+    let mut map = Vec::with_capacity(input.len());
+    let mut row = 1u32;
+    let mut col = 1u32;
+    let mut i = 0usize;
+    #[cfg(windows)]
+    let mut last_csi_row: u32 = 0;
+    while i < input.len() {
+        let b = input[i];
+        if b == 0x1B && i + 1 < input.len() {
+            match input[i + 1] {
+                b'[' => {
+                    let param_start = i + 2;
+                    let mut j = param_start;
+                    let mut final_byte = 0u8;
+                    while j < input.len() {
+                        let c = input[j];
+                        j += 1;
+                        if (0x40..=0x7E).contains(&c) {
+                            final_byte = c;
+                            break;
+                        }
+                    }
+                    let params_end = j.saturating_sub(1).max(param_start);
+                    let params = &input[param_start..params_end];
+                    match final_byte {
+                        b'G' => {
+                            col = parse_csi_first_u32(params).max(1);
+                            map.push(Some((row, col)));
+                            col = col.saturating_add(1);
+                        }
+                        b'H' | b'f' => {
+                            let (next_row, next_col) = parse_csi_h_row_col(params);
+                            row = next_row.max(1);
+                            col = next_col.max(1);
+                            #[cfg(windows)]
+                            {
+                                if row > last_csi_row && col == 1 {
+                                    map.push(Some((row, col)));
+                                    col = col.saturating_add(1);
+                                    last_csi_row = row;
+                                } else if row > last_csi_row {
+                                    map.push(Some((row, col)));
+                                    col = col.saturating_add(1);
+                                    last_csi_row = row;
+                                } else if row < last_csi_row {
+                                    last_csi_row = row;
+                                }
+                            }
+                        }
+                        #[cfg(windows)]
+                        b'C' | b'D' => {
+                            let amount = parse_csi_first_u32(params).max(1);
+                            if final_byte == b'C' {
+                                col = col.saturating_add(amount);
+                            } else {
+                                col = col.saturating_sub(amount).max(1);
+                            }
+                            map.push(Some((row, col)));
+                            col = col.saturating_add(1);
+                        }
+                        #[cfg(not(windows))]
+                        b'C' => {
+                            col = col.saturating_add(parse_csi_first_u32(params).max(1));
+                        }
+                        #[cfg(not(windows))]
+                        b'D' => {
+                            col = col
+                                .saturating_sub(parse_csi_first_u32(params).max(1))
+                                .max(1);
+                        }
+                        _ => {}
+                    }
+                    i = j;
+                    continue;
+                }
+                b']' => {
+                    let mut j = i + 2;
+                    while j < input.len() {
+                        if input[j] == 0x07 {
+                            j += 1;
+                            break;
+                        }
+                        if input[j] == 0x1B && j + 1 < input.len() && input[j + 1] == b'\\' {
+                            j += 2;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    i = j;
+                    continue;
+                }
+                _ => {
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        map.push(Some((row, col)));
+        if b == b'\n' {
+            row = row.saturating_add(1);
+            col = 1;
+        } else if b == b'\r' {
+            col = 1;
+        } else {
+            col = col.saturating_add(1);
+        }
+        i += 1;
+    }
+    map
+}
+
+fn pty_scan_raw_anchor_ranges(
+    stripped: &[u8],
+    raw_positions: &[Option<(u32, u32)>],
+) -> (String, &'static str) {
+    let anchors: [(&str, &[u8]); 3] = [("1", b"1."), ("2", b"2."), ("3", b"3.")];
+    let mut rows: Vec<u32> = Vec::new();
+    let rendered = anchors
+        .iter()
+        .map(|(label, needle)| {
+            stripped
+                .windows(needle.len())
+                .position(|w| w == *needle)
+                .and_then(|p| {
+                    raw_positions.get(p).and_then(|pos| *pos).map(|(row, col)| {
+                        rows.push(row);
+                        format!("{}:{}..{}@{}:{}", label, p, p + needle.len(), row, col)
+                    })
+                })
+                .unwrap_or_else(|| format!("{}:n/a", label))
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    rows.sort_unstable();
+    rows.dedup();
+    let raw_format = if rows.len() >= 2 {
+        "vertical"
+    } else if rows.len() == 1 {
+        "horizontal"
+    } else {
+        "unknown"
+    };
+    (rendered, raw_format)
+}
+
 fn parse_csi_first_u32(params: &[u8]) -> u32 {
     if params.is_empty() {
         return 1;
@@ -3658,6 +3804,15 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
         .map(|p| format!("{}..{}", p, (p + needle2.len()).min(s.len())))
         .unwrap_or_else(|| "n/a".to_string());
     let opt_anchors = pty_scan_anchor_ranges(s);
+    let raw_positions = pty_raw_position_map(tail);
+    let (raw_opt_anchors, raw_format) = if raw_positions.len() == s.len() {
+        pty_scan_raw_anchor_ranges(s, &raw_positions)
+    } else {
+        (
+            format!("map-len-mismatch:{}!={}", raw_positions.len(), s.len()),
+            "unknown",
+        )
+    };
     let raw_layout = pty_raw_layout_diagnostic(tail);
     let stripped_len = s.len();
     let head_hex = s
@@ -3675,7 +3830,7 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
         .map(|b| format!("{:02x}", b))
         .collect::<String>();
     format!(
-        "stripped_len={} stripped_lf={} stripped_cr={} cursor={} numbered={} needle2_after_anchor={} needle2_anywhere={} header={} anchor_distance_ok={} codex_action={} format={} anchor_range={} needle2_range={} opt_anchors={} {} fp_head={} fp_tail={}",
+        "stripped_len={} stripped_lf={} stripped_cr={} cursor={} numbered={} needle2_after_anchor={} needle2_anywhere={} header={} anchor_distance_ok={} codex_action={} format={} raw_format={} anchor_range={} needle2_range={} opt_anchors={} raw_opt_anchors={} {} fp_head={} fp_tail={}",
         stripped_len,
         stripped_lf,
         stripped_cr,
@@ -3689,9 +3844,11 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
             .unwrap_or("n/a"),
         raw_codex_action,
         span_format,
+        raw_format,
         anchor_range,
         needle2_range,
         opt_anchors,
+        raw_opt_anchors,
         raw_layout,
         head_hex,
         tail_hex,
@@ -12822,12 +12979,12 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let claude_sidecar_current = is_source_repo
         || (sidecar.exists() && hook_matches_bundle(app, &sidecar, "__shell/conventions.md"));
     let hook_script_exists = hook_script.exists();
-    // In the source repo, the on-disk hook IS the canonical source —
-    // the embedded bundle is just a build-time snapshot, so byte-equality
-    // against it is meaningless when the user is actively editing the
-    // hook. Mirror the carve-out used for `claude_sidecar_current`.
-    let hook_script_current = is_source_repo
-        || (hook_script_exists && hook_matches_bundle(app, &hook_script, ENHANCE_HOOK_BUNDLE_REL));
+    // The source repo edits the hook in `app/__shell/worklist-guard.py`;
+    // `.claude/hooks/worklist-guard.py` is only the installed runtime copy.
+    // Keep comparing it against the bundle even in the source repo so setup
+    // status flags drift instead of hiding stale installed hooks.
+    let hook_script_current =
+        hook_script_exists && hook_matches_bundle(app, &hook_script, ENHANCE_HOOK_BUNDLE_REL);
     let hook_registered = settings_has_worklist_guard_hook(&settings);
     let codex_agents_has_marker = std::fs::read_to_string(&codex_agents)
         .map(|s| {

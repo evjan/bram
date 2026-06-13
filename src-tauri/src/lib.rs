@@ -12359,8 +12359,12 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let claude_sidecar_current = is_source_repo
         || (sidecar.exists() && hook_matches_bundle(app, &sidecar, "__shell/conventions.md"));
     let hook_script_exists = hook_script.exists();
-    let hook_script_current =
-        hook_script_exists && hook_matches_bundle(app, &hook_script, ENHANCE_HOOK_BUNDLE_REL);
+    // In the source repo, the on-disk hook IS the canonical source —
+    // the embedded bundle is just a build-time snapshot, so byte-equality
+    // against it is meaningless when the user is actively editing the
+    // hook. Mirror the carve-out used for `claude_sidecar_current`.
+    let hook_script_current = is_source_repo
+        || (hook_script_exists && hook_matches_bundle(app, &hook_script, ENHANCE_HOOK_BUNDLE_REL));
     let hook_registered = settings_has_worklist_guard_hook(&settings);
     let codex_agents_has_marker = std::fs::read_to_string(&codex_agents)
         .map(|s| {

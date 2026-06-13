@@ -67,6 +67,21 @@ fn extract_app_file<R: tauri::Runtime>(app: &AppHandle<R>, rel: &str) -> Result<
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(&target, file.contents()).map_err(|e| e.to_string())?;
+    if rel == ENHANCE_HOOK_BUNDLE_REL || rel == ENHANCE_CODEX_HOOK_BUNDLE_REL {
+        let is_source_repo = project_root(Some(app))
+            .map(|p| p.join(ENHANCE_SOURCE_BUNDLE_REL).exists())
+            .unwrap_or(false);
+        trace_hook_install_write(
+            app,
+            "startup-extract",
+            rel,
+            &target,
+            file.contents(),
+            is_source_repo,
+            file!(),
+            line!(),
+        );
+    }
     Ok(target)
 }
 
@@ -667,6 +682,35 @@ fn bram_trace_preview(data: &str, max: usize) -> String {
     }
     out.push('"');
     out
+}
+
+fn bytes_fingerprint(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let head: String = bytes.iter().take(8).map(|b| format!("{:02x}", b)).collect();
+    let tail_vec: Vec<u8> = bytes.iter().rev().take(8).copied().collect();
+    let tail: String = tail_vec
+        .iter()
+        .rev()
+        .map(|b| format!("{:02x}", b))
+        .collect();
+    format!(
+        "len:{}:fnv64:{:016x}:head:{}:tail:{}",
+        bytes.len(),
+        hash,
+        head,
+        tail
+    )
+}
+
+fn file_fingerprint(path: &Path) -> String {
+    match std::fs::read(path) {
+        Ok(bytes) => bytes_fingerprint(&bytes),
+        Err(e) => format!("unreadable:{}", e.kind()),
+    }
 }
 
 // True when the normalized turn submission begins with one of the
@@ -10137,8 +10181,7 @@ fn read_last_exchange<R: tauri::Runtime>(
             if let Some(items) = parsed.get("items").and_then(|v| v.as_array()) {
                 if let Some(drafts_dir) = feedback_drafts_dir(app) {
                     for item in items {
-                        let Some(fref) = item.get("feedbackRef").and_then(|v| v.as_str())
-                        else {
+                        let Some(fref) = item.get("feedbackRef").and_then(|v| v.as_str()) else {
                             continue;
                         };
                         let draft_path = drafts_dir.join(format!("{}.md", fref));
@@ -12626,6 +12669,67 @@ fn write_template_if_safe(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn trace_hook_install_write<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    reason: &str,
+    bundle_rel: &str,
+    path: &Path,
+    bytes: &[u8],
+    is_source_repo: bool,
+    source_file: &str,
+    source_line: u32,
+) {
+    if !bram_trace_enabled() {
+        return;
+    }
+    append_bram_trace_line(
+        app,
+        "hook-install",
+        &format!(
+            "reason={} source={} line={} bundle={} path={} bytes={} fingerprint={} is_source_repo={}",
+            reason,
+            source_file,
+            source_line,
+            bundle_rel,
+            path.display(),
+            bytes.len(),
+            bytes_fingerprint(bytes),
+            is_source_repo
+        ),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_hook_template_if_safe<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    path: &Path,
+    new_content: &[u8],
+    force: bool,
+    wrote: &mut Vec<String>,
+    skipped: &mut Vec<String>,
+    reason: &str,
+    bundle_rel: &str,
+    is_source_repo: bool,
+    source_file: &str,
+    source_line: u32,
+) -> Result<bool, String> {
+    let did_write = write_template_if_safe(path, new_content, force, wrote, skipped)?;
+    if did_write {
+        trace_hook_install_write(
+            app,
+            reason,
+            bundle_rel,
+            path,
+            new_content,
+            is_source_repo,
+            source_file,
+            source_line,
+        );
+    }
+    Ok(did_write)
+}
+
 fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec<u8>, String> {
     let proj = project_root(Some(app)).ok_or("no project root")?;
     // When running on the source repo, skip writes that would
@@ -12756,12 +12860,18 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
     // fresh write. On Windows there's no Unix permission bit to set,
     // so the binding is intentionally unused there.
     #[cfg_attr(not(unix), allow(unused_variables))]
-    let hook_written = write_template_if_safe(
+    let hook_written = write_hook_template_if_safe(
+        app,
         &hook_path,
         &hook_bytes,
         force || !is_source_repo,
         &mut wrote,
         &mut skipped,
+        "setup-install",
+        ENHANCE_HOOK_BUNDLE_REL,
+        is_source_repo,
+        file!(),
+        line!(),
     )?;
     #[cfg(unix)]
     if hook_written {
@@ -12858,6 +12968,9 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
     app: &AppHandle<R>,
 ) -> Result<CodexHookInstall, String> {
     let home = home_dir().ok_or("no HOME or USERPROFILE")?;
+    let is_source_repo = project_root(Some(app))
+        .map(|p| p.join(ENHANCE_SOURCE_BUNDLE_REL).exists())
+        .unwrap_or(false);
     let script_path = home.join(ENHANCE_CODEX_HOOK_INSTALL_REL);
     let config_path = home.join(ENHANCE_CODEX_CONFIG_REL);
     let mut wrote: Vec<String> = Vec::new();
@@ -12874,8 +12987,19 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
     // $HOME/.bram/ on every machine. Issue #174.
     // Same Unix-only chmod gate as the Claude hook above.
     #[cfg_attr(not(unix), allow(unused_variables))]
-    let codex_hook_written =
-        write_template_if_safe(&script_path, &script_bytes, true, &mut wrote, &mut skipped)?;
+    let codex_hook_written = write_hook_template_if_safe(
+        app,
+        &script_path,
+        &script_bytes,
+        true,
+        &mut wrote,
+        &mut skipped,
+        "setup-install",
+        ENHANCE_CODEX_HOOK_BUNDLE_REL,
+        is_source_repo,
+        file!(),
+        line!(),
+    )?;
     #[cfg(unix)]
     if codex_hook_written {
         use std::os::unix::fs::PermissionsExt;
@@ -21797,6 +21921,33 @@ pub fn run() {
                 // logical change. Refs #85.
                 let worklist_debounce = Duration::from_millis(200);
                 let mut pending_worklist_since: Option<Instant> = None;
+                let mut hook_fingerprints: HashMap<String, String> = HashMap::new();
+                for (rel, path) in [
+                    (
+                        "app/__shell/worklist-guard.py",
+                        proj_root_path.join("app/__shell/worklist-guard.py"),
+                    ),
+                    (
+                        ".claude/hooks/worklist-guard.py",
+                        proj_root_path.join(ENHANCE_HOOK_SCRIPT_REL),
+                    ),
+                    (
+                        "app/shell/worklist-guard-codex.py",
+                        proj_root_path.join("app/shell/worklist-guard-codex.py"),
+                    ),
+                ] {
+                    if path.exists() {
+                        hook_fingerprints.insert(rel.to_string(), file_fingerprint(&path));
+                    }
+                }
+                if let Some(path) = home_dir().map(|h| h.join(ENHANCE_CODEX_HOOK_INSTALL_REL)) {
+                    if path.exists() {
+                        hook_fingerprints.insert(
+                            "codex-worklist-guard.py".to_string(),
+                            file_fingerprint(&path),
+                        );
+                    }
+                }
                 use std::sync::mpsc::RecvTimeoutError;
                 loop {
                     let res = rx.recv_timeout(Duration::from_millis(100));
@@ -21849,6 +22000,27 @@ pub fn run() {
                     };
                     let dispatch_trace_path =
                         || event.paths.iter().find_map(|p| trace_rel_path(p));
+                    let hook_target_from_rel = |rel: &str| -> Option<String> {
+                        let base = rel
+                            .find(".tmp.")
+                            .map(|idx| &rel[..idx])
+                            .unwrap_or(rel);
+                        if base.ends_with("worklist-guard.py")
+                            || base.ends_with("worklist-guard-codex.py")
+                            || base.ends_with("codex-worklist-guard.py")
+                        {
+                            Some(base.to_string())
+                        } else {
+                            None
+                        }
+                    };
+                    let writer_source_from_rel = |rel: &str| -> String {
+                        rel.find(".tmp.")
+                            .and_then(|idx| rel[idx + 5..].split('.').next())
+                            .filter(|pid| !pid.is_empty())
+                            .map(|pid| format!("tmp-pid:{}", pid))
+                            .unwrap_or_else(|| "unknown".to_string())
+                    };
                     let trace_dispatch = |dispatch: &str, fields: &[(&str, String)]| {
                         if !bram_trace_enabled() {
                             return;
@@ -21901,6 +22073,62 @@ pub fn run() {
                                 &app_handle,
                                 "watcher",
                                 &format!("path={} change={} dedup=false", rel, change),
+                            );
+                        }
+                    }
+
+                    if bram_trace_enabled() {
+                        let change = notify_event_kind_label(&event.kind);
+                        for p in &event.paths {
+                            if p.starts_with(&proj_root_path) && in_ignored_dir(p) {
+                                continue;
+                            }
+                            let rel = p
+                                .strip_prefix(&proj_root_path)
+                                .ok()
+                                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                                .unwrap_or_else(|| {
+                                    p.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("")
+                                        .to_string()
+                                });
+                            let Some(target_rel) = hook_target_from_rel(&rel) else {
+                                continue;
+                            };
+                            let target_path = if rel.contains(".tmp.") {
+                                let target_name = Path::new(&target_rel)
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("");
+                                p.parent()
+                                    .map(|parent| parent.join(target_name))
+                                    .unwrap_or_else(|| p.to_path_buf())
+                            } else {
+                                p.to_path_buf()
+                            };
+                            let pre = hook_fingerprints
+                                .get(&target_rel)
+                                .cloned()
+                                .unwrap_or_else(|| "unknown".to_string());
+                            let post = file_fingerprint(&target_path);
+                            let post_size = std::fs::metadata(&target_path)
+                                .map(|m| m.len())
+                                .unwrap_or(0);
+                            hook_fingerprints.insert(target_rel.clone(), post.clone());
+                            append_bram_trace_line(
+                                &app_handle,
+                                "hook-write",
+                                &format!(
+                                    "target={} event_path={} change={} pre={} post={} post_size={} writer_source={}",
+                                    target_rel,
+                                    rel,
+                                    change,
+                                    pre,
+                                    post,
+                                    post_size,
+                                    writer_source_from_rel(&rel)
+                                ),
                             );
                         }
                     }

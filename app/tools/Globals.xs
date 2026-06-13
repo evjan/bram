@@ -1895,7 +1895,14 @@ function setAgentMenuFromTurnState(turnState, surface) {
 }
 
 function setAgentMenuFromEvent(e, surface) {
-  const incoming = e && e.payload ? e.payload : null;
+  // The host emits payload={} for dismissals — an empty object, not
+  // null. A bare truthy check left bramAgentMenu set to {} and only
+  // the downstream turn-state-changed event eventually cleared it,
+  // ~1.18s after the user's keystroke. Treating any payload without
+  // a `tool` field as a clear lets the pty-menu-changed subscriber
+  // clear the menu synchronously, in the same render tick.
+  const payload = e && e.payload ? e.payload : null;
+  const incoming = payload && payload.tool ? payload : null;
   const stale = applyAgentMenu(incoming, !incoming, 'setAgentMenuFromEvent');
   iframeTrace('listener-fired', {
     context: 'pty-menu-changed',

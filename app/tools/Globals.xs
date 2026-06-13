@@ -1498,6 +1498,13 @@ function withStagedImageMarkers(text, target) {
   if (!paths || paths.length === 0) return text;
   const lines = paths.map(p => 'Read this screenshot: @' + p + '\n[Image: source: ' + p + ']');
   const markers = lines.join('\n');
+  const skipPrefix = 'skip-worklist:';
+  const trimmedStart = (text || '').trimStart();
+  if (trimmedStart.startsWith(skipPrefix)) {
+    const leading = text.slice(0, text.length - trimmedStart.length);
+    const rest = trimmedStart.slice(skipPrefix.length).trimStart();
+    return leading + skipPrefix + ' ' + markers + (rest ? '\n\n' + rest : '');
+  }
   return text ? markers + '\n\n' + text : markers;
 }
 

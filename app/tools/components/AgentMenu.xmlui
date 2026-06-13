@@ -1,6 +1,7 @@
 <Component name="AgentMenu" var.menuTick="{0}">
   <DataSource id="agentMenuTurnState" url="/__turn-state" pollIntervalInSeconds="1" />
   <VStack
+    width="100%"
     gap="$space-2"
     onInit="subscribeTauriEvent('__bramAgentMenuTurnStateUnsub', 'turn-state-changed', (e) => { setAgentMenuFromTurnState((e &amp;&amp; e.payload) || {}, 'agent-menu'); menuTick = menuTick + 1; }); subscribeTauriEvent('__bramAgentMenuPtyUnsub', 'pty-menu-changed', (e) => { setAgentMenuFromEvent(e, 'agent-menu'); menuTick = menuTick + 1; })">
     <VStack
@@ -8,6 +9,7 @@
       when="{menuTick >= 0 &amp;&amp; getAgentMenu(agentMenuTurnState.value)}"
       var.effectivePendingMenu="{menuTick >= 0 ? getAgentMenu(agentMenuTurnState.value) : null}"
       var.menuPreviewOpen="{false}"
+      width="100%"
       padding="$space-3"
       borderRadius="$borderRadius"
       border="1px solid $color-warn-200"
@@ -62,16 +64,22 @@
       </VStack>
       <VStack
         when="{effectivePendingMenu.options &amp;&amp; effectivePendingMenu.options.length > 0}"
-        gap="$space-1">
+        gap="$space-1"
+        width="100%">
         <Theme paddingHorizontal-Button-sm="$space-3">
           <Items data="{effectivePendingMenu.options}">
-            <HStack gap="$space-2" verticalAlignment="center">
+            <HStack gap="$space-2" verticalAlignment="center" width="100%">
               <Button
                 label="{$item.key}"
                 variant="outlined"
                 size="sm"
                 onClick="sendKeys($item.key + '\r')" />
-              <Text fontSize="$fontSize-sm">{$item.label}</Text>
+              <Text
+                width="*"
+                value="{$item.label}"
+                fontSize="$fontSize-sm"
+                overflowMode="flow"
+                breakMode="word" />
             </HStack>
           </Items>
         </Theme>

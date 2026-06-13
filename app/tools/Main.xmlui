@@ -318,11 +318,10 @@
       onClick="setupCompleteProvider = ''" />
   </HStack>
 
-  <HStack>
-    <VStack maxWidth="48rem" width="*">
+  <HStack width="100%">
+    <VStack width="100%">
       <AgentMenu />
     </VStack>
-    <SpaceFiller />
   </HStack>
 
   <Pages fallbackPath="/worklist">

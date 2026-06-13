@@ -491,6 +491,45 @@ def worklist_state_changes(old_content, new_content):
     return removed, status_changed
 
 
+def worklist_version_from_text(text):
+    """Return (present, version) for a worklist.json text. `present` is
+    True iff JSON parsed and the top-level `version` field was an int.
+    `version` defaults to 0 when absent or malformed. Mirrors the Claude
+    hook's helper; keep in sync."""
+    try:
+        doc = json.loads(text)
+    except Exception:
+        return (False, 0)
+    if not isinstance(doc, dict):
+        return (False, 0)
+    v = doc.get("version")
+    if isinstance(v, int):
+        return (True, v)
+    return (False, 0)
+
+
+def _stale_worklist_version_error(old_version, new_version, new_present, tool_name):
+    if new_present:
+        detail = (
+            f"You set version={new_version}, but on-disk version is "
+            f"{old_version}. Expected version={old_version + 1}."
+        )
+    else:
+        detail = (
+            f"Your write is missing the `version` field. On-disk version "
+            f"is {old_version}; the new content must set version="
+            f"{old_version + 1}."
+        )
+    return (
+        f"{tool_name} blocked: stale base on resources/worklist.json. "
+        + detail
+        + " Re-read the file, base your edit on the current contents, "
+        "and include the bumped version field. This guards against "
+        "concurrent-writer races between your propose / apply_patch "
+        "and other agents or the /__worklist/mutate route."
+    )
+
+
 def _patch_removes_worklist_items(cwd, patch_text):
     old_items = {
         item["id"]: item
@@ -934,6 +973,16 @@ def main():
                 )
                 if removed or status_changed:
                     deny(_mechanical_worklist_change_error(removed, status_changed, "apply_patch"))
+                # Optimistic-concurrency check on the version field.
+                old_text = current_worklist_text(cwd)
+                old_has_version, old_version = worklist_version_from_text(old_text)
+                new_has_version, new_version = worklist_version_from_text(new_content)
+                if old_has_version and (
+                    not new_has_version or new_version != old_version + 1
+                ):
+                    deny(_stale_worklist_version_error(
+                        old_version, new_version, new_has_version, "apply_patch"
+                    ))
             else:
                 removed = _patch_removes_worklist_items(cwd, patch_body)
                 if removed:
@@ -1047,6 +1096,17 @@ def main():
                 )
                 if removed or status_changed:
                     deny(_mechanical_worklist_change_error(removed, status_changed, tool_name))
+                # Optimistic-concurrency check on the version field
+                # (parallel to the apply_patch branch above).
+                old_text = current_worklist_text(cwd)
+                old_has_version, old_version = worklist_version_from_text(old_text)
+                new_has_version, new_version = worklist_version_from_text(new_content)
+                if old_has_version and (
+                    not new_has_version or new_version != old_version + 1
+                ):
+                    deny(_stale_worklist_version_error(
+                        old_version, new_version, new_has_version, tool_name
+                    ))
         violations = []
         for t in candidate_paths:
             rel = normalize_target(cwd, t)

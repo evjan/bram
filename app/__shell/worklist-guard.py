@@ -361,6 +361,54 @@ def deny_coverage(target_rel, opt_out_attempted):
     sys.exit(2)
 
 
+def worklist_version_from_text(text):
+    """Return (present, version) for a worklist.json text. `present` is
+    True iff the JSON parsed and the top-level `version` field was an
+    integer. `version` defaults to 0 when absent or malformed."""
+    try:
+        doc = json.loads(text)
+    except Exception:
+        return (False, 0)
+    if not isinstance(doc, dict):
+        return (False, 0)
+    v = doc.get("version")
+    if isinstance(v, int):
+        return (True, v)
+    return (False, 0)
+
+
+def deny_stale_worklist_version(old_version, new_version, new_present):
+    if new_present:
+        detail = (
+            f"You set version={new_version}, but on-disk version is "
+            f"{old_version}. Expected version={old_version + 1}."
+        )
+    else:
+        detail = (
+            f"Your write is missing the `version` field. On-disk version "
+            f"is {old_version}; the new content must set version="
+            f"{old_version + 1}."
+        )
+    msg = (
+        "Blocked: stale base on resources/worklist.json. "
+        + detail
+        + "\n  - Re-read resources/worklist.json, base your edit on the "
+        "current contents, and include the bumped version field on the "
+        "write. This guards against concurrent-writer races between "
+        "your propose / Edit and other agents or the /__worklist/mutate "
+        "route."
+    )
+    _trace_hook(
+        "PreToolUse",
+        os.environ.get("__BRAM_TRACE_TOOL", "Write"),
+        WORKLIST_REL,
+        "deny",
+        "stale-worklist-version",
+    )
+    print(msg, file=sys.stderr)
+    sys.exit(2)
+
+
 def worklist_state_changes(old_items, new_items):
     removed = []
     status_changed = []
@@ -514,6 +562,19 @@ def main():
             inline_bad = worklist_items_with_inline_prose(new)
             if inline_bad:
                 deny_inline_prose(inline_bad)
+            # Optimistic-concurrency check: once the on-disk file carries
+            # a `version` field, every write must bump it by exactly 1.
+            # Skip the check when the on-disk file has no version yet
+            # (legacy file, pre-migration); a new write that introduces
+            # the field at version=1 is the natural migration path.
+            old_has_version, old_version = worklist_version_from_text(old)
+            new_has_version, new_version = worklist_version_from_text(new)
+            if old_has_version and (
+                not new_has_version or new_version != old_version + 1
+            ):
+                deny_stale_worklist_version(
+                    old_version, new_version, new_has_version
+                )
             emit_allow_for_lifecycle(rel, "worklist-author")
         deny_mechanical_worklist_change(removed, status_changed)
 

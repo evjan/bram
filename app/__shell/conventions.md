@@ -197,6 +197,26 @@ cover metadata + resolved prose together. If a draft file is missing,
 `/__worklist` returns empty `before` / `after` plus
 `"_draftMissing": true` and the UI shows a placeholder.
 
+`worklist.json` also carries a top-level `version` integer that guards
+against concurrent-writer races between agents and the
+`/__worklist/mutate` route. Every write to `worklist.json` MUST set
+`version: N+1` where `N` is the value present on disk at the moment
+you read it. The PreToolUse hooks (Claude and Codex both) compute the
+current on-disk version and deny the write if the new content does
+not bump it by exactly one. `/__worklist/mutate` does the same bump
+on its own RMW path under a serializing mutex. The flow for an agent
+proposing or refining items is:
+
+1. Read `worklist.json` and capture its `version`.
+2. Construct the new content with `version: <captured + 1>`.
+3. Write. If the hook denies with `reason=stale-worklist-version`,
+   re-read the file (another writer landed first), rebase your
+   change on the new contents, and retry.
+
+Files without a `version` field (legacy) are treated as version 0;
+the first write that introduces the field at version 1 is the
+natural migration path and the hooks allow it.
+
 Prose lives only in the draft file. Inline `before` / `after` keys
 in `worklist.json` are rejected by both guards — the proposal
 authoring channel writes metadata to `worklist.json` and prose to

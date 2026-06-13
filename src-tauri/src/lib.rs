@@ -14903,7 +14903,23 @@ fn cleanup_stale_pty_intents<R: tauri::Runtime>(app: &AppHandle<R>) {
 }
 
 fn empty_worklist_json() -> &'static str {
-    "{\n  \"description\": \"\",\n  \"items\": []\n}\n"
+    "{\n  \"description\": \"\",\n  \"version\": 0,\n  \"items\": []\n}\n"
+}
+
+// Monotonically-increasing integer field on resources/worklist.json that
+// guards against concurrent-writer races. Every write MUST set the field
+// to (current_disk_version + 1); the PreToolUse hooks check this on
+// direct Write/Edit writes from agents, and `/__worklist/mutate` does
+// the same on its own RMW path. A stale writer's version claim no longer
+// matches disk+1 and the hook denies the write, prompting a fresh read
+// and retry. Missing field is treated as version 0 for backward compat.
+fn worklist_version_from_doc(doc: &serde_json::Value) -> i64 {
+    doc.get("version").and_then(|v| v.as_i64()).unwrap_or(0)
+}
+
+fn worklist_mutate_cell() -> &'static Mutex<()> {
+    static CELL: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(()))
 }
 
 // Per-item content hash exposed via /__worklist. The UI reads it and
@@ -21202,6 +21218,14 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
     app: &AppHandle<R>,
     body: &[u8],
 ) -> (u16, &'static str, Vec<u8>) {
+    // Serialize concurrent mutates so the RMW (read worklist → apply op →
+    // write back) is atomic with respect to other mutate callers. Without
+    // this, two simultaneous prunes that each read the same v=N snapshot
+    // both compute v=N+1 results and the second write silently overwrites
+    // the first. Holds for the duration of this function. The version
+    // field check in the worklist-guard hooks catches the symmetric race
+    // between mutate and a direct Write/Edit by an agent.
+    let _mutate_guard = worklist_mutate_cell().lock();
     let req_json: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => {
@@ -21309,6 +21333,18 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
     }
     let affected = apply_worklist_mutation(items, op, &ids, new_status);
 
+    // Bump the optimistic-concurrency version field so a parallel direct
+    // Write/Edit by an agent built on the pre-mutate snapshot is rejected
+    // by the worklist-guard hook. The hook expects new_version ==
+    // disk_version + 1; by incrementing here, the disk version advances
+    // and any agent claim still pointing at the old version becomes stale.
+    let prior_version = worklist_version_from_doc(&wl);
+    if let Some(obj) = wl.as_object_mut() {
+        obj.insert(
+            "version".to_string(),
+            serde_json::Value::from(prior_version + 1),
+        );
+    }
     let new_text = serde_json::to_string_pretty(&wl).unwrap_or_default();
     let on_disk = format!("{}\n", new_text);
     // Claim this write BEFORE it lands so the worklist watcher recognizes

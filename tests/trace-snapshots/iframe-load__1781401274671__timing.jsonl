@@ -1,0 +1,388 @@
+[2026-06-14T01:40:36.411Z] [iframe] subkind=dom-click {"ariaLabel":"","at":"2026-06-14T01:40:36.410Z","disabled":false,"role":"","tagName":"BUTTON","x":643,"y":307}
+[2026-06-14T01:40:36.415Z] [iframe] subkind=voice-input {"at":"2026-06-14T01:40:36.414Z","stage":"start","target":"message-agent"}
+[2026-06-14T01:40:36.415Z] [voice] stage=voiceStart
+[2026-06-14T01:40:44.658Z] [iframe] subkind=dom-click {"ariaLabel":"","at":"2026-06-14T01:40:44.656Z","disabled":false,"role":"","tagName":"BUTTON","x":644,"y":301}
+[2026-06-14T01:40:44.663Z] [voice] stage=voiceStop
+[2026-06-14T01:40:45.667Z] [voice] stage=voice-into-result
+[2026-06-14T01:40:45.904Z] [iframe] subkind=voice-input {"at":"2026-06-14T01:40:45.902Z","chars":109,"cursorAtEnd":false,"focused":true,"rawChars":110,"stage":"append","target":"message-agent"}
+[2026-06-14T01:40:45.998Z] [iframe] subkind=voice-input {"at":"2026-06-14T01:40:45.997Z","stage":"stop","target":"message-agent"}
+[2026-06-14T01:40:48.273Z] [iframe] subkind=message-agent-submit {"at":"2026-06-14T01:40:48.271Z","chars":109,"sentAt":1781401248270,"stage":"before-toTurn"}
+[2026-06-14T01:40:48.274Z] [iframe] subkind=to-turn {"at":"2026-06-14T01:40:48.272Z","stage":"source","textLength":109,"textPreview":"Sorry, the recorder was not running. It is now. Boy, that looked like it really "}
+[2026-06-14T01:40:48.274Z] [iframe] subkind=to-turn {"at":"2026-06-14T01:40:48.273Z","stage":"sink","textLength":109,"textPreview":"Sorry, the recorder was not running. It is now. Boy, that looked like it really "}
+[2026-06-14T01:40:48.275Z] [pty-intent] op=enqueue id=intent-<UNIX_MS>-<N> kind=toTurn bytes=109
+[2026-06-14T01:40:48.275Z] [pty-out] bytes=124 preview="\x1b\x15\x1b[200~Sorry, is_structured=false caller_hint=pty-intent-toTurn
+[2026-06-14T01:40:48.275Z] [pty-intent] op=drain wrote=1 remaining=0
+[2026-06-14T01:40:48.276Z] [iframe] subkind=message-agent-submit {"at":"2026-06-14T01:40:48.274Z","chars":109,"sentAt":1781401248270,"stage":"after-toTurn"}
+[2026-06-14T01:40:48.349Z] [spinner-period] state=started
+[2026-06-14T01:40:48.467Z] [watcher] path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl change=modify dedup=false
+[2026-06-14T01:40:48.467Z] [watcher] dispatch=session-jsonl path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:48.467Z] [jsonl] file=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl bytes=27420107
+[2026-06-14T01:40:48.467Z] [jsonl-turn-end] op=poll-handoff source=watcher provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl activeClaim=none
+[2026-06-14T01:40:48.467Z] [jsonl-turn-end] op=enter provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:48.477Z] [jsonl-turn-end] op=scan provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl tailTypes=assistant,user,assistant,system,user,file-history-snapshot decision=end_turn detected=true
+[2026-06-14T01:40:48.477Z] [turn-state] from=finished to=finished provider=claude turn=1781401062732 source=jsonl reason=end_turn jsonlReason=end_turn emitted=false
+[2026-06-14T01:40:48.478Z] [finished-cue] source=jsonl provider=claude verb=(none) elapsed=(none)
+[2026-06-14T01:40:48.478Z] [turn-end-defer] op=schedule reason=pty-turn-finished grace_ms=500 provider=claude verb=(none)
+[2026-06-14T01:40:48.478Z] [jsonl-turn-end] op=skip provider=claude reason=no-active-sentinel decision=end_turn path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:48.478Z] [emit] kind=talk-session-changed payload_size=68 at_host_ms=1781401248478
+[2026-06-14T01:40:48.478Z] [event-remember] kind=talk-session-changed payload_size=68 source=payload
+[2026-06-14T01:40:48.628Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:48.627Z","at_host_ms":1781401248478,"context":"talk-session-changed","delta_to_emit_ms":149,"subscribers":2}
+[2026-06-14T01:40:48.630Z] [iframe] subkind=listener-fired {"at":"2026-06-14T01:40:48.629Z","at_host_ms":1781401248478,"context":"talk-session-changed","delta_to_emit_ms":150}
+[2026-06-14T01:40:48.645Z] [emit] kind=agent-status-changed payload_size=145 state=working source=pty-status-fallback
+[2026-06-14T01:40:48.646Z] [event-remember] kind=agent-status-changed payload_size=145 source=payload
+[2026-06-14T01:40:48.646Z] [turn-state] from=finished to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=end_turn emitted=true
+[2026-06-14T01:40:48.646Z] [emit] kind=turn-state-changed payload_size=356 source=pty-status-fallback
+[2026-06-14T01:40:48.646Z] [event-remember] kind=turn-state-changed payload_size=356 source=payload
+[2026-06-14T01:40:48.737Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:48.736Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:48.738Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:48.737Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:48.738Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:48.737Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:48.742Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:48.741Z","event_name":"turn-state-changed","subscribers":3}
+[2026-06-14T01:40:48.742Z] [iframe] subkind=listener-fired {"assignedMenu":"","at":"2026-06-14T01:40:48.742Z","at_host_ms":0,"cache_source":"","context":"turn-state-changed","delta_to_emit_ms":-1,"hasSignature":false,"last_cache_source":"setAgentMenuFromTurnState","last_host_ms":1781401248742,"menu":"","phase":"working","signatureChars":0,"source":"pty-status-fallback","stale":false,"suppressFallback":true,"surface":"agent-menu","tool":""}
+[2026-06-14T01:40:48.743Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:48.742Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":0}
+[2026-06-14T01:40:48.743Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:48.742Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":1}
+[2026-06-14T01:40:48.743Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:48.743Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":2}
+[2026-06-14T01:40:48.983Z] [turn-end-defer] op=fire reason=quiet started_ms=1781401248478 last_verb_ms=0 verb=(none)
+[2026-06-14T01:40:48.983Z] [agent-status] op=clear-pty-active source=pty-turn-finished provider=claude
+[2026-06-14T01:40:48.983Z] [emit] kind=agent-status-changed payload_size=144 state=finished source=pty-turn-finished
+[2026-06-14T01:40:48.983Z] [event-remember] kind=agent-status-changed payload_size=144 source=payload
+[2026-06-14T01:40:48.983Z] [turn-state] from=working to=finished provider=claude turn=1781401248316 source=agent-status reason=finished jsonlReason=end_turn emitted=true
+[2026-06-14T01:40:48.983Z] [emit] kind=turn-state-changed payload_size=351 source=agent-status
+[2026-06-14T01:40:48.983Z] [event-remember] kind=turn-state-changed payload_size=351 source=payload
+[2026-06-14T01:40:48.984Z] [emit] kind=agent-turn-killed payload_size=0
+[2026-06-14T01:40:49.019Z] [spinner-period] state=started
+[2026-06-14T01:40:49.140Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:49.139Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:49.141Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.139Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:49.141Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.140Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:49.143Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:49.143Z","event_name":"turn-state-changed","subscribers":3}
+[2026-06-14T01:40:49.144Z] [iframe] subkind=listener-fired {"assignedMenu":"","at":"2026-06-14T01:40:49.143Z","at_host_ms":0,"cache_source":"","context":"turn-state-changed","delta_to_emit_ms":-1,"hasSignature":false,"last_cache_source":"setAgentMenuFromTurnState","last_host_ms":1781401249143,"menu":"","phase":"finished","signatureChars":0,"source":"agent-status","stale":false,"suppressFallback":true,"surface":"agent-menu","tool":""}
+[2026-06-14T01:40:49.144Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.144Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":0}
+[2026-06-14T01:40:49.144Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.144Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":1}
+[2026-06-14T01:40:49.145Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.144Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":2}
+[2026-06-14T01:40:49.146Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:49.145Z","event_name":"agent-turn-killed","subscribers":1}
+[2026-06-14T01:40:49.146Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.146Z","elapsed_ms":0,"event_name":"agent-turn-killed","subscriber_index":0}
+[2026-06-14T01:40:49.534Z] [emit] kind=agent-status-changed payload_size=145 state=working source=pty-status-fallback
+[2026-06-14T01:40:49.535Z] [event-remember] kind=agent-status-changed payload_size=145 source=payload
+[2026-06-14T01:40:49.535Z] [turn-state] from=finished to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=end_turn emitted=true
+[2026-06-14T01:40:49.535Z] [emit] kind=turn-state-changed payload_size=356 source=pty-status-fallback
+[2026-06-14T01:40:49.535Z] [event-remember] kind=turn-state-changed payload_size=356 source=payload
+[2026-06-14T01:40:49.537Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:49.536Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:49.537Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.536Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:49.537Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.536Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:49.540Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:49.540Z","event_name":"turn-state-changed","subscribers":3}
+[2026-06-14T01:40:49.541Z] [iframe] subkind=listener-fired {"assignedMenu":"","at":"2026-06-14T01:40:49.540Z","at_host_ms":0,"cache_source":"","context":"turn-state-changed","delta_to_emit_ms":-1,"hasSignature":false,"last_cache_source":"setAgentMenuFromTurnState","last_host_ms":1781401249540,"menu":"","phase":"working","signatureChars":0,"source":"pty-status-fallback","stale":false,"suppressFallback":true,"surface":"agent-menu","tool":""}
+[2026-06-14T01:40:49.541Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.540Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":0}
+[2026-06-14T01:40:49.541Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.540Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":1}
+[2026-06-14T01:40:49.541Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:49.541Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":2}
+[2026-06-14T01:40:50.437Z] [emit] kind=agent-status-changed payload_size=145 state=working source=pty-status-fallback
+[2026-06-14T01:40:50.437Z] [event-remember] kind=agent-status-changed payload_size=145 source=payload
+[2026-06-14T01:40:50.437Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=end_turn emitted=false
+[2026-06-14T01:40:50.440Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:50.439Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:50.441Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:50.440Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:50.441Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:50.440Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:50.861Z] [emit] kind=agent-status-changed payload_size=151 state=working source=pty-status-fallback
+[2026-06-14T01:40:50.861Z] [event-remember] kind=agent-status-changed payload_size=151 source=payload
+[2026-06-14T01:40:50.861Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=end_turn emitted=false
+[2026-06-14T01:40:50.940Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:50.939Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:50.941Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:50.939Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:50.941Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:50.940Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:51.395Z] [emit] kind=agent-status-changed payload_size=151 state=working source=pty-status-fallback
+[2026-06-14T01:40:51.395Z] [event-remember] kind=agent-status-changed payload_size=151 source=payload
+[2026-06-14T01:40:51.395Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=end_turn emitted=false
+[2026-06-14T01:40:51.428Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:51.426Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:51.428Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:51.427Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:51.428Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:51.427Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:52.346Z] [emit] kind=agent-status-changed payload_size=151 state=working source=pty-status-fallback
+[2026-06-14T01:40:52.346Z] [event-remember] kind=agent-status-changed payload_size=151 source=payload
+[2026-06-14T01:40:52.346Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=end_turn emitted=false
+[2026-06-14T01:40:52.379Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:52.378Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:52.380Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:52.379Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:52.380Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:52.379Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:52.635Z] [iframe] subkind=refetch-called {"at":"2026-06-14T01:40:52.632Z","at_host_ms":1781401248478,"context":"talk-session-changed","delta_to_emit_ms":975}
+[2026-06-14T01:40:52.764Z] [emit] kind=agent-status-changed payload_size=150 state=working verb=Concocting source=pty-status
+[2026-06-14T01:40:52.764Z] [event-remember] kind=agent-status-changed payload_size=150 source=payload
+[2026-06-14T01:40:52.764Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status reason=working jsonlReason=end_turn emitted=false
+[2026-06-14T01:40:52.823Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:52.815Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:52.823Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:52.816Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:52.823Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:52.816Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:52.890Z] [watcher] path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl change=modify dedup=false
+[2026-06-14T01:40:52.890Z] [watcher] dispatch=session-jsonl path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:52.891Z] [jsonl] file=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl bytes=27423345
+[2026-06-14T01:40:52.891Z] [jsonl-turn-end] op=poll-handoff source=watcher provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl activeClaim=none
+[2026-06-14T01:40:52.891Z] [jsonl-turn-end] op=enter provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:52.904Z] [jsonl-turn-end] op=scan provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl tailTypes=assistant,system,user,file-history-snapshot,assistant,assistant decision=non-final-assistant detected=false
+[2026-06-14T01:40:52.904Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:52.904Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl-non-final reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:52.904Z] [jsonl-turn-end] op=skip provider=claude reason=no-active-sentinel decision=non-final-assistant path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:52.904Z] [emit] kind=talk-session-changed payload_size=68 at_host_ms=1781401252904
+[2026-06-14T01:40:52.904Z] [event-remember] kind=talk-session-changed payload_size=68 source=payload
+[2026-06-14T01:40:52.913Z] [watcher] path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl change=modify dedup=false
+[2026-06-14T01:40:52.913Z] [watcher] dispatch=session-jsonl path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:52.913Z] [jsonl] file=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl bytes=27423912
+[2026-06-14T01:40:52.913Z] [jsonl-turn-end] op=poll-handoff source=watcher provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl activeClaim=none
+[2026-06-14T01:40:52.913Z] [jsonl-turn-end] op=enter provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:52.920Z] [jsonl-turn-end] op=scan provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl tailTypes=assistant,assistant,last-prompt,ai-title,mode,permission-mode decision=non-final-assistant detected=false
+[2026-06-14T01:40:52.920Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:52.920Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl-non-final reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:52.920Z] [jsonl-turn-end] op=skip provider=claude reason=no-active-sentinel decision=non-final-assistant path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:52.921Z] [emit] kind=talk-session-changed payload_size=68 at_host_ms=1781401252921
+[2026-06-14T01:40:52.921Z] [event-remember] kind=talk-session-changed payload_size=68 source=payload
+[2026-06-14T01:40:52.967Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:52.966Z","at_host_ms":1781401252904,"context":"talk-session-changed","delta_to_emit_ms":62,"subscribers":2}
+[2026-06-14T01:40:52.969Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:52.968Z","at_host_ms":1781401252921,"context":"talk-session-changed","delta_to_emit_ms":47,"subscribers":2}
+[2026-06-14T01:40:53.101Z] [iframe] subkind=listener-fired {"at":"2026-06-14T01:40:53.100Z","at_host_ms":1781401252904,"context":"talk-session-changed","delta_to_emit_ms":63}
+[2026-06-14T01:40:53.102Z] [iframe] subkind=listener-fired {"at":"2026-06-14T01:40:53.100Z","at_host_ms":1781401252921,"context":"talk-session-changed","delta_to_emit_ms":48}
+[2026-06-14T01:40:53.103Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:40:53.102Z","awaiting":false,"displayToolsLen":0,"entries":1,"gateFires":false,"matchesSubmitted":false,"rawToolsLen":0,"source":"last-assistant-text","submittedKind":"","userImages":0}
+[2026-06-14T01:40:53.375Z] [watcher] path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl change=modify dedup=false
+[2026-06-14T01:40:53.375Z] [watcher] dispatch=session-jsonl path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:53.375Z] [jsonl] file=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl bytes=27424652
+[2026-06-14T01:40:53.375Z] [jsonl-turn-end] op=poll-handoff source=watcher provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl activeClaim=none
+[2026-06-14T01:40:53.375Z] [jsonl-turn-end] op=enter provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:53.382Z] [jsonl-turn-end] op=scan provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl tailTypes=assistant,last-prompt,ai-title,mode,permission-mode,user decision=non-final-assistant detected=false
+[2026-06-14T01:40:53.382Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:53.383Z] [emit] kind=agent-status-changed payload_size=155 state=working verb=Concocting source=jsonl-non-final
+[2026-06-14T01:40:53.383Z] [event-remember] kind=agent-status-changed payload_size=155 source=payload
+[2026-06-14T01:40:53.383Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl-non-final reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:53.383Z] [jsonl-turn-end] op=skip provider=claude reason=no-active-sentinel decision=non-final-assistant path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:53.383Z] [emit] kind=talk-session-changed payload_size=68 at_host_ms=1781401253383
+[2026-06-14T01:40:53.384Z] [event-remember] kind=talk-session-changed payload_size=68 source=payload
+[2026-06-14T01:40:53.398Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:53.396Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:53.398Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:53.397Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:53.399Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:53.397Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:53.401Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:53.401Z","at_host_ms":1781401253383,"context":"talk-session-changed","delta_to_emit_ms":18,"subscribers":2}
+[2026-06-14T01:40:53.402Z] [iframe] subkind=listener-fired {"at":"2026-06-14T01:40:53.401Z","at_host_ms":1781401253383,"context":"talk-session-changed","delta_to_emit_ms":18}
+[2026-06-14T01:40:53.447Z] [emit] kind=agent-status-changed payload_size=150 state=working verb=Concocting source=pty-status
+[2026-06-14T01:40:53.447Z] [event-remember] kind=agent-status-changed payload_size=150 source=payload
+[2026-06-14T01:40:53.447Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:53.519Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:53.518Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:53.519Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:53.518Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:53.520Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:53.519Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:53.805Z] [iframe] subkind=refetch-called {"at":"2026-06-14T01:40:53.803Z","at_host_ms":1781401253383,"context":"talk-session-changed","delta_to_emit_ms":420}
+[2026-06-14T01:40:54.652Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:40:54.650Z","awaiting":true,"displayToolsLen":0,"entries":0,"gateFires":true,"matchesSubmitted":false,"rawToolsLen":0,"source":"awaiting","submittedKind":"message","userImages":0}
+[2026-06-14T01:40:55.614Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:40:55.612Z","awaiting":true,"displayToolsLen":1,"entries":1,"gateFires":false,"matchesSubmitted":true,"rawToolsLen":1,"source":"awaiting","submittedKind":"message","userImages":0}
+[2026-06-14T01:40:55.727Z] [emit] kind=agent-status-changed payload_size=150 state=working verb=Concocting source=pty-status
+[2026-06-14T01:40:55.727Z] [event-remember] kind=agent-status-changed payload_size=150 source=payload
+[2026-06-14T01:40:55.727Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:55.729Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:55.727Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:55.729Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:55.728Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:55.729Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:55.728Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:55.765Z] [pty-menu-scan] op=fire stripped_len=3839 stripped_lf=693 stripped_cr=921 cursor=true numbered=false needle2_after_anchor=true needle2_anywhere=true header=true anchor_distance_ok=true codex_action=false format=vertical raw_format=vertical anchor_range=3699..3702 needle2_range=3713..3715 opt_anchors=1:3703..3705@688:5,2:3713..3715@689:1,3:2666..2668@681:90 raw_opt_anchors=1:3703..3705@689:5,2:3713..3715@690:5,3:2666..2668@682:35 raw_len=9863 raw_lf=693 raw_cr=921 csi_total=1040 csi_hf=0 csi_g=140 csi_c=146 csi_d=99 csi_other=655 row_moves=+0/-0/=0 row_span=n/a max_row_delta=0 col_abs=140 col_rel=245 fp_head=0dc2b70d0d0a0d0a0d0a0d0a0d0a0d0a fp_tail=2b6520746f206578706c61696e0d0d0a
+[2026-06-14T01:40:55.889Z] [pty-menu] state=shown tool=Bash reason=byte-pattern options=3 signature=present signature_source=pty signature_reason=no-unmatched-tool-use signature_chars=91 jsonl_tail_bytes=4194304
+[2026-06-14T01:40:55.889Z] [turn-state] from=working to=waiting-for-permission provider=claude turn=1781401248316 source=pty-menu reason=detected menu=Bash jsonlReason=non-final-assistant emitted=true
+[2026-06-14T01:40:55.889Z] [emit] kind=turn-state-changed payload_size=922 source=pty-menu
+[2026-06-14T01:40:55.889Z] [event-remember] kind=turn-state-changed payload_size=922 source=payload
+[2026-06-14T01:40:55.889Z] [emit] kind=pty-menu-changed payload_size=523
+[2026-06-14T01:40:55.889Z] [event-remember] kind=pty-menu-changed payload_size=523 source=payload
+[2026-06-14T01:40:55.889Z] [pty-menu-options] tool=Bash count=3 options=[1="Yes",
+[2026-06-14T01:40:55.893Z] [pty-menu-scan] op=fire stripped_len=3922 stripped_lf=712 stripped_cr=942 cursor=true numbered=false needle2_after_anchor=true needle2_anywhere=true header=true anchor_distance_ok=true codex_action=false format=vertical raw_format=vertical anchor_range=3699..3702 needle2_range=3713..3715 opt_anchors=1:3703..3705@688:5,2:3713..3715@689:1,3:2666..2668@681:90 raw_opt_anchors=1:3703..3705@689:5,2:3713..3715@690:5,3:2666..2668@682:35 raw_len=9998 raw_lf=712 raw_cr=942 csi_total=1051 csi_hf=0 csi_g=141 csi_c=147 csi_d=100 csi_other=663 row_moves=+0/-0/=0 row_span=n/a max_row_delta=0 col_abs=141 col_rel=247 fp_head=0dc2b70d0d0a0d0a0d0a0d0a0d0a0d0a fp_tail=0d0a0d0a0d0a0d0a0d0a0d0a0d0a0d0a
+[2026-06-14T01:40:55.978Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:55.977Z","event_name":"turn-state-changed","subscribers":3}
+[2026-06-14T01:40:55.978Z] [iframe] subkind=listener-fired {"assignedMenu":"Bash","at":"2026-06-14T01:40:55.978Z","at_host_ms":1781401255889,"cache_source":"setAgentMenuFromEvent","context":"turn-state-changed","delta_to_emit_ms":89,"hasSignature":true,"last_cache_source":"setAgentMenuFromEvent","last_host_ms":1781401255889,"menu":"Bash","phase":"waiting-for-permission","signatureChars":91,"source":"pty-menu","stale":false,"suppressFallback":false,"surface":"agent-menu","tool":"Bash"}
+[2026-06-14T01:40:55.979Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:55.978Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":0}
+[2026-06-14T01:40:55.979Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:55.978Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":1}
+[2026-06-14T01:40:55.979Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:55.978Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":2}
+[2026-06-14T01:40:55.980Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:55.980Z","event_name":"pty-menu-changed","subscribers":3}
+[2026-06-14T01:40:55.981Z] [iframe] subkind=listener-fired {"assignedMenu":"Bash","at":"2026-06-14T01:40:55.980Z","at_host_ms":1781401255889,"cache_source":"setAgentMenuFromEvent","context":"pty-menu-changed","delta_to_emit_ms":91,"hasSignature":true,"last_cache_source":"setAgentMenuFromEvent","last_host_ms":1781401255889,"signatureChars":91,"stale":false,"suppressFallback":false,"surface":"agent-menu","tool":"Bash"}
+[2026-06-14T01:40:55.981Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:55.980Z","elapsed_ms":1,"event_name":"pty-menu-changed","subscriber_index":0}
+[2026-06-14T01:40:55.981Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:55.981Z","elapsed_ms":0,"event_name":"pty-menu-changed","subscriber_index":1}
+[2026-06-14T01:40:55.981Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:55.981Z","elapsed_ms":0,"event_name":"pty-menu-changed","subscriber_index":2}
+[2026-06-14T01:40:57.963Z] [iframe] subkind=dom-click {"ariaLabel":"","at":"2026-06-14T01:40:57.962Z","disabled":false,"role":"","tagName":"BUTTON","x":125,"y":138}
+[2026-06-14T01:40:57.967Z] [pty-intent] op=enqueue id=intent-<UNIX_MS>-<N> kind=sendKeys bytes=2
+[2026-06-14T01:40:57.967Z] [pty-out] bytes=2 preview="1\r" is_structured=false caller_hint=pty-intent-sendKeys
+[2026-06-14T01:40:57.967Z] [pty-menu] state=dismissed tool=Bash reason=user-input grace_elapsed_ms=0
+[2026-06-14T01:40:57.968Z] [turn-state] from=waiting-for-permission to=working provider=claude turn=1781401248316 source=pty-menu reason=dismissed jsonlReason=non-final-assistant emitted=true
+[2026-06-14T01:40:57.968Z] [emit] kind=turn-state-changed payload_size=370 source=pty-menu
+[2026-06-14T01:40:57.968Z] [event-remember] kind=turn-state-changed payload_size=370 source=payload
+[2026-06-14T01:40:57.968Z] [emit] kind=pty-menu-changed payload_size=4
+[2026-06-14T01:40:57.968Z] [event-remember] kind=pty-menu-changed payload_size=4 source=payload
+[2026-06-14T01:40:57.968Z] [pty-intent] op=drain wrote=1 remaining=0
+[2026-06-14T01:40:57.969Z] [spinner-period] state=ended duration_ms=8949
+[2026-06-14T01:40:57.969Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:57.968Z","event_name":"turn-state-changed","subscribers":3}
+[2026-06-14T01:40:57.970Z] [iframe] subkind=listener-fired {"assignedMenu":"","at":"2026-06-14T01:40:57.969Z","at_host_ms":0,"cache_source":"","context":"turn-state-changed","delta_to_emit_ms":-1,"hasSignature":false,"last_cache_source":"setAgentMenuFromTurnState","last_host_ms":1781401257969,"menu":"","phase":"working","signatureChars":0,"source":"pty-menu","stale":false,"suppressFallback":true,"surface":"agent-menu","tool":""}
+[2026-06-14T01:40:57.971Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:57.969Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":0}
+[2026-06-14T01:40:57.971Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:57.970Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":1}
+[2026-06-14T01:40:57.971Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:57.970Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":2}
+[2026-06-14T01:40:57.973Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:57.972Z","event_name":"pty-menu-changed","subscribers":3}
+[2026-06-14T01:40:57.973Z] [iframe] subkind=listener-fired {"assignedMenu":"","at":"2026-06-14T01:40:57.973Z","at_host_ms":0,"cache_source":"","context":"pty-menu-changed","delta_to_emit_ms":-1,"hasSignature":false,"last_cache_source":"setAgentMenuFromEvent","last_host_ms":1781401257973,"signatureChars":0,"stale":false,"suppressFallback":true,"surface":"agent-menu","tool":""}
+[2026-06-14T01:40:57.974Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:57.973Z","elapsed_ms":0,"event_name":"pty-menu-changed","subscriber_index":0}
+[2026-06-14T01:40:57.974Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:57.973Z","elapsed_ms":0,"event_name":"pty-menu-changed","subscriber_index":1}
+[2026-06-14T01:40:57.974Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:57.973Z","elapsed_ms":0,"event_name":"pty-menu-changed","subscriber_index":2}
+[2026-06-14T01:40:57.977Z] [agent-status] op=skip-agent-turn-end source=pty-turn-activity-stop silence_ms=2213 reason=jsonl-non-final
+[2026-06-14T01:40:57.977Z] [emit] kind=agent-status-changed payload_size=159 state=working verb=Concocting source=pty-status-fallback
+[2026-06-14T01:40:57.977Z] [event-remember] kind=agent-status-changed payload_size=159 source=payload
+[2026-06-14T01:40:57.977Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:57.981Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:57.980Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:57.982Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:57.980Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:57.982Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:57.981Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:57.985Z] [spinner-period] state=started
+[2026-06-14T01:40:58.001Z] [emit] kind=agent-status-changed payload_size=147 state=working verb=Honking source=pty-status
+[2026-06-14T01:40:58.001Z] [event-remember] kind=agent-status-changed payload_size=147 source=payload
+[2026-06-14T01:40:58.001Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:58.097Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:58.095Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:58.097Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:58.096Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:58.097Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:58.096Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:58.356Z] [watcher] path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl change=modify dedup=false
+[2026-06-14T01:40:58.356Z] [watcher] dispatch=session-jsonl path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:58.357Z] [jsonl] file=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl bytes=27427261
+[2026-06-14T01:40:58.357Z] [jsonl-turn-end] op=poll-handoff source=watcher provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl activeClaim=none
+[2026-06-14T01:40:58.357Z] [jsonl-turn-end] op=enter provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:58.363Z] [jsonl-turn-end] op=scan provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl tailTypes=mode,permission-mode,user,assistant,user,attachment decision=non-final-assistant detected=false
+[2026-06-14T01:40:58.363Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:58.363Z] [emit] kind=agent-status-changed payload_size=153 state=working verb=Honking source=jsonl-non-final
+[2026-06-14T01:40:58.363Z] [event-remember] kind=agent-status-changed payload_size=153 source=payload
+[2026-06-14T01:40:58.363Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl-non-final reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:58.363Z] [jsonl-turn-end] op=skip provider=claude reason=no-active-sentinel decision=non-final-assistant path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:40:58.364Z] [emit] kind=talk-session-changed payload_size=68 at_host_ms=1781401258364
+[2026-06-14T01:40:58.364Z] [event-remember] kind=talk-session-changed payload_size=68 source=payload
+[2026-06-14T01:40:58.367Z] [emit] kind=agent-status-changed payload_size=147 state=working verb=Honking source=pty-status
+[2026-06-14T01:40:58.367Z] [event-remember] kind=agent-status-changed payload_size=147 source=payload
+[2026-06-14T01:40:58.368Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:40:58.381Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:58.380Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:58.382Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:58.381Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:58.382Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:58.381Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:58.384Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:58.384Z","at_host_ms":1781401258364,"context":"talk-session-changed","delta_to_emit_ms":20,"subscribers":2}
+[2026-06-14T01:40:58.386Z] [iframe] subkind=listener-fired {"at":"2026-06-14T01:40:58.385Z","at_host_ms":1781401258364,"context":"talk-session-changed","delta_to_emit_ms":21}
+[2026-06-14T01:40:58.387Z] [iframe] subkind=event-received {"at":"2026-06-14T01:40:58.386Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:40:58.387Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:58.386Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:40:58.387Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:40:58.387Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:40:58.795Z] [iframe] subkind=refetch-called {"at":"2026-06-14T01:40:58.793Z","at_host_ms":1781401258364,"context":"talk-session-changed","delta_to_emit_ms":429}
+[2026-06-14T01:40:59.186Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:40:59.184Z","awaiting":true,"displayToolsLen":1,"entries":0,"gateFires":true,"matchesSubmitted":false,"rawToolsLen":0,"source":"awaiting","submittedKind":"message","userImages":0}
+[2026-06-14T01:41:00.061Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:41:00.059Z","awaiting":true,"displayToolsLen":2,"entries":2,"gateFires":false,"matchesSubmitted":true,"rawToolsLen":2,"source":"awaiting","submittedKind":"message","userImages":0}
+[2026-06-14T01:41:00.558Z] [emit] kind=agent-status-changed payload_size=147 state=working verb=Honking source=pty-status
+[2026-06-14T01:41:00.559Z] [event-remember] kind=agent-status-changed payload_size=147 source=payload
+[2026-06-14T01:41:00.559Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:00.560Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:00.559Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:00.560Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:00.560Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:00.561Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:00.560Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:00.932Z] [watcher] path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl change=modify dedup=false
+[2026-06-14T01:41:00.932Z] [watcher] dispatch=session-jsonl path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:41:00.932Z] [jsonl] file=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl bytes=27429585
+[2026-06-14T01:41:00.932Z] [jsonl-turn-end] op=poll-handoff source=watcher provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl activeClaim=none
+[2026-06-14T01:41:00.932Z] [jsonl-turn-end] op=enter provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:41:00.939Z] [jsonl-turn-end] op=scan provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl tailTypes=user,assistant,user,attachment,assistant,user decision=non-final-assistant detected=false
+[2026-06-14T01:41:00.940Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:00.940Z] [emit] kind=agent-status-changed payload_size=153 state=working verb=Honking source=jsonl-non-final
+[2026-06-14T01:41:00.940Z] [event-remember] kind=agent-status-changed payload_size=153 source=payload
+[2026-06-14T01:41:00.940Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl-non-final reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:00.940Z] [jsonl-turn-end] op=skip provider=claude reason=no-active-sentinel decision=non-final-assistant path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:41:00.940Z] [emit] kind=talk-session-changed payload_size=68 at_host_ms=1781401260940
+[2026-06-14T01:41:00.940Z] [event-remember] kind=talk-session-changed payload_size=68 source=payload
+[2026-06-14T01:41:00.957Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:00.955Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:00.958Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:00.956Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:00.958Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:00.957Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:00.964Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:00.963Z","at_host_ms":1781401260940,"context":"talk-session-changed","delta_to_emit_ms":23,"subscribers":2}
+[2026-06-14T01:41:00.966Z] [iframe] subkind=listener-fired {"at":"2026-06-14T01:41:00.965Z","at_host_ms":1781401260940,"context":"talk-session-changed","delta_to_emit_ms":25}
+[2026-06-14T01:41:01.000Z] [emit] kind=agent-status-changed payload_size=147 state=working verb=Honking source=pty-status
+[2026-06-14T01:41:01.000Z] [event-remember] kind=agent-status-changed payload_size=147 source=payload
+[2026-06-14T01:41:01.000Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:01.054Z] [emit] kind=agent-status-changed payload_size=141 state=working verb=Honking source=pty-status
+[2026-06-14T01:41:01.054Z] [event-remember] kind=agent-status-changed payload_size=141 source=payload
+[2026-06-14T01:41:01.054Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:01.069Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:01.068Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:01.070Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:01.069Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:01.070Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:01.069Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:01.073Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:01.072Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:01.073Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:01.072Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:01.073Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:01.073Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:01.618Z] [iframe] subkind=refetch-called {"at":"2026-06-14T01:41:01.616Z","at_host_ms":1781401260940,"context":"talk-session-changed","delta_to_emit_ms":676}
+[2026-06-14T01:41:02.026Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:41:02.024Z","awaiting":true,"displayToolsLen":2,"entries":0,"gateFires":true,"matchesSubmitted":false,"rawToolsLen":0,"source":"awaiting","submittedKind":"message","userImages":0}
+[2026-06-14T01:41:02.791Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:41:02.789Z","awaiting":true,"displayToolsLen":3,"entries":3,"gateFires":false,"matchesSubmitted":true,"rawToolsLen":3,"source":"awaiting","submittedKind":"message","userImages":0}
+[2026-06-14T01:41:03.274Z] [emit] kind=agent-status-changed payload_size=151 state=working verb=Honking source=pty-status-fallback
+[2026-06-14T01:41:03.274Z] [event-remember] kind=agent-status-changed payload_size=151 source=payload
+[2026-06-14T01:41:03.274Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:03.276Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:03.274Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:03.276Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:03.275Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:03.276Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:03.275Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:03.348Z] [emit] kind=agent-status-changed payload_size=151 state=working verb=Honking source=pty-status-fallback
+[2026-06-14T01:41:03.348Z] [event-remember] kind=agent-status-changed payload_size=151 source=payload
+[2026-06-14T01:41:03.348Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:03.391Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:03.390Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:03.391Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:03.390Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:03.391Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:03.390Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:03.769Z] [watcher] path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl change=modify dedup=false
+[2026-06-14T01:41:03.769Z] [watcher] dispatch=session-jsonl path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:41:03.769Z] [jsonl] file=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl bytes=27431825
+[2026-06-14T01:41:03.769Z] [jsonl-turn-end] op=poll-handoff source=watcher provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl activeClaim=none
+[2026-06-14T01:41:03.769Z] [jsonl-turn-end] op=enter provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:41:03.775Z] [jsonl-turn-end] op=scan provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl tailTypes=user,attachment,assistant,user,assistant,user decision=non-final-assistant detected=false
+[2026-06-14T01:41:03.775Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:03.776Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl-non-final reason=non-final-assistant jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:03.776Z] [jsonl-turn-end] op=skip provider=claude reason=no-active-sentinel decision=non-final-assistant path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:41:03.776Z] [emit] kind=talk-session-changed payload_size=68 at_host_ms=1781401263776
+[2026-06-14T01:41:03.776Z] [event-remember] kind=talk-session-changed payload_size=68 source=payload
+[2026-06-14T01:41:03.778Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:03.777Z","at_host_ms":1781401263776,"context":"talk-session-changed","delta_to_emit_ms":1,"subscribers":2}
+[2026-06-14T01:41:03.780Z] [iframe] subkind=listener-fired {"at":"2026-06-14T01:41:03.779Z","at_host_ms":1781401263776,"context":"talk-session-changed","delta_to_emit_ms":3}
+[2026-06-14T01:41:04.184Z] [iframe] subkind=refetch-called {"at":"2026-06-14T01:41:04.182Z","at_host_ms":1781401263776,"context":"talk-session-changed","delta_to_emit_ms":406}
+[2026-06-14T01:41:04.319Z] [emit] kind=agent-status-changed payload_size=151 state=working verb=Honking source=pty-status-fallback
+[2026-06-14T01:41:04.319Z] [event-remember] kind=agent-status-changed payload_size=151 source=payload
+[2026-06-14T01:41:04.319Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:04.341Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:04.340Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:04.341Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:04.340Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:04.341Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:04.340Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:05.311Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:41:05.309Z","awaiting":true,"displayToolsLen":3,"entries":0,"gateFires":true,"matchesSubmitted":false,"rawToolsLen":0,"source":"awaiting","submittedKind":"message","userImages":0}
+[2026-06-14T01:41:05.342Z] [emit] kind=agent-status-changed payload_size=151 state=working verb=Honking source=pty-status-fallback
+[2026-06-14T01:41:05.342Z] [event-remember] kind=agent-status-changed payload_size=151 source=payload
+[2026-06-14T01:41:05.342Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:05.399Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:05.397Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:05.399Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:05.398Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:05.400Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:05.398Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:06.440Z] [emit] kind=agent-status-changed payload_size=151 state=working verb=Honking source=pty-status-fallback
+[2026-06-14T01:41:06.440Z] [event-remember] kind=agent-status-changed payload_size=151 source=payload
+[2026-06-14T01:41:06.440Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:06.453Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:06.452Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:06.454Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:06.453Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:06.454Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:06.453Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:06.460Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:41:06.459Z","awaiting":true,"displayToolsLen":3,"entries":3,"gateFires":false,"matchesSubmitted":true,"rawToolsLen":3,"source":"awaiting","submittedKind":"message","userImages":0}
+[2026-06-14T01:41:07.390Z] [emit] kind=agent-status-changed payload_size=151 state=working verb=Honking source=pty-status-fallback
+[2026-06-14T01:41:07.390Z] [event-remember] kind=agent-status-changed payload_size=151 source=payload
+[2026-06-14T01:41:07.390Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:07.391Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:07.390Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:07.392Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:07.391Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:07.392Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:07.391Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:08.350Z] [emit] kind=agent-status-changed payload_size=151 state=working verb=Honking source=pty-status-fallback
+[2026-06-14T01:41:08.350Z] [event-remember] kind=agent-status-changed payload_size=151 source=payload
+[2026-06-14T01:41:08.350Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status-fallback reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:08.352Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:08.351Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:08.352Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:08.351Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:08.352Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:08.352Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:09.224Z] [emit] kind=agent-status-changed payload_size=142 state=working verb=Honking source=pty-status
+[2026-06-14T01:41:09.224Z] [event-remember] kind=agent-status-changed payload_size=142 source=payload
+[2026-06-14T01:41:09.224Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=pty-status reason=working jsonlReason=non-final-assistant emitted=false
+[2026-06-14T01:41:09.225Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:09.224Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:09.226Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:09.225Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:09.226Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:09.225Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:09.432Z] [watcher] path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl change=modify dedup=false
+[2026-06-14T01:41:09.432Z] [watcher] dispatch=session-jsonl path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:41:09.432Z] [jsonl] file=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl bytes=27433564
+[2026-06-14T01:41:09.433Z] [jsonl-turn-end] op=poll-handoff source=watcher provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl activeClaim=none
+[2026-06-14T01:41:09.433Z] [jsonl-turn-end] op=enter provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:41:09.440Z] [jsonl-turn-end] op=scan provider=claude path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl tailTypes=assistant,user,assistant,user,assistant,system decision=end_turn detected=true
+[2026-06-14T01:41:09.440Z] [turn-state] from=working to=working provider=claude turn=1781401248316 source=jsonl reason=end_turn jsonlReason=end_turn emitted=false
+[2026-06-14T01:41:09.441Z] [finished-cue] source=jsonl provider=claude verb=(none) elapsed=(none)
+[2026-06-14T01:41:09.441Z] [turn-end-defer] op=schedule reason=pty-turn-finished grace_ms=500 provider=claude verb=(none)
+[2026-06-14T01:41:09.441Z] [jsonl-turn-end] op=skip provider=claude reason=no-active-sentinel decision=end_turn path=e89e7a02-9b64-46eb-8667-43b0d7325209.jsonl
+[2026-06-14T01:41:09.442Z] [emit] kind=talk-session-changed payload_size=68 at_host_ms=1781401269442
+[2026-06-14T01:41:09.442Z] [event-remember] kind=talk-session-changed payload_size=68 source=payload
+[2026-06-14T01:41:09.503Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:09.502Z","at_host_ms":1781401269442,"context":"talk-session-changed","delta_to_emit_ms":60,"subscribers":2}
+[2026-06-14T01:41:09.504Z] [iframe] subkind=listener-fired {"at":"2026-06-14T01:41:09.504Z","at_host_ms":1781401269442,"context":"talk-session-changed","delta_to_emit_ms":61}
+[2026-06-14T01:41:09.942Z] [turn-end-defer] op=fire reason=quiet started_ms=1781401269441 last_verb_ms=1781401269320 verb=(none)
+[2026-06-14T01:41:09.942Z] [agent-status] op=clear-pty-active source=pty-turn-finished provider=claude
+[2026-06-14T01:41:09.942Z] [emit] kind=agent-status-changed payload_size=144 state=finished source=pty-turn-finished
+[2026-06-14T01:41:09.942Z] [event-remember] kind=agent-status-changed payload_size=144 source=payload
+[2026-06-14T01:41:09.943Z] [turn-state] from=working to=finished provider=claude turn=1781401248316 source=agent-status reason=finished jsonlReason=end_turn emitted=true
+[2026-06-14T01:41:09.943Z] [emit] kind=turn-state-changed payload_size=363 source=agent-status
+[2026-06-14T01:41:09.943Z] [event-remember] kind=turn-state-changed payload_size=363 source=payload
+[2026-06-14T01:41:09.943Z] [emit] kind=agent-turn-killed payload_size=0
+[2026-06-14T01:41:09.995Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:09.994Z","event_name":"agent-status-changed","subscribers":2}
+[2026-06-14T01:41:09.996Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:09.995Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":0}
+[2026-06-14T01:41:09.996Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:09.995Z","elapsed_ms":0,"event_name":"agent-status-changed","subscriber_index":1}
+[2026-06-14T01:41:10.000Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:09.999Z","event_name":"turn-state-changed","subscribers":3}
+[2026-06-14T01:41:10.000Z] [iframe] subkind=listener-fired {"assignedMenu":"","at":"2026-06-14T01:41:10.000Z","at_host_ms":0,"cache_source":"","context":"turn-state-changed","delta_to_emit_ms":-1,"hasSignature":false,"last_cache_source":"setAgentMenuFromTurnState","last_host_ms":1781401270000,"menu":"","phase":"finished","signatureChars":0,"source":"agent-status","stale":false,"suppressFallback":true,"surface":"agent-menu","tool":""}
+[2026-06-14T01:41:10.001Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:10.000Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":0}
+[2026-06-14T01:41:10.001Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:10.000Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":1}
+[2026-06-14T01:41:10.001Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:10.001Z","elapsed_ms":0,"event_name":"turn-state-changed","subscriber_index":2}
+[2026-06-14T01:41:10.002Z] [iframe] subkind=event-received {"at":"2026-06-14T01:41:10.002Z","event_name":"agent-turn-killed","subscribers":1}
+[2026-06-14T01:41:10.003Z] [iframe] subkind=subscriber-fired {"at":"2026-06-14T01:41:10.002Z","elapsed_ms":0,"event_name":"agent-turn-killed","subscriber_index":0}
+[2026-06-14T01:41:10.589Z] [iframe] subkind=refetch-called {"at":"2026-06-14T01:41:10.587Z","at_host_ms":1781401269442,"context":"talk-session-changed","delta_to_emit_ms":668}
+[2026-06-14T01:41:10.848Z] [iframe] subkind=refetch-called {"at":"2026-06-14T01:41:10.847Z","context":"agent-status-changed","state":"finished"}
+[2026-06-14T01:41:10.852Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:41:10.851Z","awaiting":true,"displayToolsLen":3,"entries":0,"gateFires":true,"matchesSubmitted":false,"rawToolsLen":0,"source":"awaiting","submittedKind":"message","userImages":0}
+[2026-06-14T01:41:11.394Z] [iframe] subkind=clear-awaiting {"at":"2026-06-14T01:41:11.392Z","exchangeAssistantLen":0,"exchangeUserLen":0,"sinceSetMs":16847,"stableLen":111,"submittedLen":109,"via":"agent-turn-killed"}
+[2026-06-14T01:41:11.625Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:41:11.623Z","awaiting":false,"displayToolsLen":3,"entries":4,"gateFires":false,"matchesSubmitted":false,"rawToolsLen":0,"source":"last-assistant-text","submittedKind":"message","userImages":0}
+[2026-06-14T01:41:12.714Z] [iframe] subkind=conversation-sync {"assistantImages":0,"at":"2026-06-14T01:41:12.713Z","awaiting":false,"displayToolsLen":3,"entries":4,"gateFires":false,"matchesSubmitted":true,"rawToolsLen":3,"source":"last-exchange","submittedKind":"","userImages":0}

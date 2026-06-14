@@ -1170,6 +1170,29 @@ struct PtyMenu {
     signature_source: Option<&'static str>,
 }
 
+fn pty_menu_preview_source(menu: &PtyMenu) -> &'static str {
+    if menu.tool_call_signature.is_some() {
+        if menu.signature_source == Some("jsonl") {
+            "jsonl"
+        } else {
+            "signature"
+        }
+    } else if menu.tool_call_content.is_some() {
+        "jsonl"
+    } else {
+        "raw"
+    }
+}
+
+fn pty_menu_preview_chars(menu: &PtyMenu) -> usize {
+    menu.tool_call_signature
+        .as_deref()
+        .or_else(|| menu.tool_call_content.as_deref())
+        .unwrap_or(menu.text.as_str())
+        .chars()
+        .count()
+}
+
 // #182 incident 8 instrumentation. Adjacent trace line to every
 // `pty-menu-changed` emit that previews the parsed `options` array —
 // `tool=<name> count=<n> options=[key="label", key="label", ...]`.
@@ -1200,9 +1223,11 @@ fn trace_pty_menu_options<R: tauri::Runtime>(app: &AppHandle<R>, payload: &Optio
         app,
         "pty-menu-options",
         &format!(
-            "tool={} count={} options=[{}]",
+            "tool={} count={} text_source={} text_chars={} options=[{}]",
             menu.tool,
             menu.options.len(),
+            pty_menu_preview_source(menu),
+            pty_menu_preview_chars(menu),
             buf
         ),
     );
@@ -2563,10 +2588,7 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
 //
 // Resumes the moment `pty_menu_cell` is cleared (state=dismissed,
 // state=hold-expired, state=updated). No explicit unblock needed.
-fn maybe_emit_agent_status<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    payload: &AgentStatus,
-) {
+fn maybe_emit_agent_status<R: tauri::Runtime>(app: &AppHandle<R>, payload: &AgentStatus) {
     if pty_permission_menu_pending() {
         if bram_trace_enabled() {
             append_bram_trace_line(
@@ -4000,6 +4022,9 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         }
         menu.tool_call_diff = lookup.diff;
         menu.tool_call_content = lookup.content;
+        if menu.tool_call_signature.is_none() {
+            menu.text.clear();
+        }
     }
 
     // Post-click suppression: if the user just dismissed a menu for
@@ -4275,7 +4300,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                     app,
                     "pty-menu",
                     &format!(
-                        "state=shown tool={} reason=byte-pattern options={} signature={} signature_source={} signature_reason={} signature_chars={} jsonl_tail_bytes={}",
+                        "state=shown tool={} reason=byte-pattern options={} signature={} signature_source={} signature_reason={} signature_chars={} text_source={} text_chars={} jsonl_tail_bytes={}",
                         nm.tool,
                         nm.options.len(),
                         if nm.tool_call_signature.is_some() { "present" } else { "absent" },
@@ -4285,6 +4310,8 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                             .as_ref()
                             .map(|s| s.chars().count())
                             .unwrap_or_else(|| signature_trace.map(|t| t.2).unwrap_or(0)),
+                        pty_menu_preview_source(nm),
+                        pty_menu_preview_chars(nm),
                         signature_trace.map(|t| t.3).unwrap_or(0)
                     ),
                 ),
@@ -4394,6 +4421,7 @@ fn try_signature_recheck_on_jsonl_change<R: tauri::Runtime>(app: &AppHandle<R>) 
                     .unwrap_or(0);
                 m.tool_call_signature = lookup.signature.clone();
                 m.tool_call_diff = lookup.diff.clone();
+                m.tool_call_content = lookup.content.clone();
                 m.signature_source = Some("jsonl");
                 emit_payload = Some(menu.clone());
             }
@@ -4402,13 +4430,20 @@ fn try_signature_recheck_on_jsonl_change<R: tauri::Runtime>(app: &AppHandle<R>) 
     if let (Some(payload), Some(tool)) = (emit_payload, updated_tool) {
         let payload = stamp_pty_menu_payload(payload, "setAgentMenuFromTurnState");
         if bram_trace_enabled() {
+            let text_source = payload
+                .as_ref()
+                .map(pty_menu_preview_source)
+                .unwrap_or("raw");
+            let text_chars = payload.as_ref().map(pty_menu_preview_chars).unwrap_or(0);
             append_bram_trace_line(
                 app,
                 "pty-menu",
                 &format!(
-                    "state=updated tool={} reason=signature-watcher-recheck signature_source=jsonl signature_chars={} grace_elapsed_ms={}",
+                    "state=updated tool={} reason=signature-watcher-recheck signature_source=jsonl signature_chars={} text_source={} text_chars={} grace_elapsed_ms={}",
                     tool,
                     updated_chars,
+                    text_source,
+                    text_chars,
                     pty_menu_eviction_grace_elapsed_ms().unwrap_or(0)
                 ),
             );
@@ -4522,14 +4557,21 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                         .and_then(|p| p.tool_call_signature.as_ref())
                         .map(|s| s.chars().count())
                         .unwrap_or(0);
+                    let text_source = payload
+                        .as_ref()
+                        .map(pty_menu_preview_source)
+                        .unwrap_or("raw");
+                    let text_chars = payload.as_ref().map(pty_menu_preview_chars).unwrap_or(0);
                     append_bram_trace_line(
                         &app_handle,
                         "pty-menu",
                         &format!(
-                            "state=updated tool={} reason=signature-deferred-recheck signature_source=jsonl delay_ms={} signature_chars={} grace_elapsed_ms={}",
+                            "state=updated tool={} reason=signature-deferred-recheck signature_source=jsonl delay_ms={} signature_chars={} text_source={} text_chars={} grace_elapsed_ms={}",
                             target_tool,
                             delay_ms,
                             signature_chars,
+                            text_source,
+                            text_chars,
                             pty_menu_eviction_grace_elapsed_ms().unwrap_or(0)
                         ),
                     );
@@ -10782,7 +10824,6 @@ fn read_last_exchange<R: tauri::Runtime>(
     Ok(bytes)
 }
 
-
 // Host-side `is the agent waiting for the assistant to speak` derivation.
 // Mirrors the iframe helper isWaitingForAssistant(jsonlText) in Globals.xs:
 // returns true when the most recent meaningful record is a user message
@@ -16986,8 +17027,9 @@ mod pty_menu_tests {
         codex_tail_has_third_option_marker, extract_codex_command_signature,
         extract_pending_tool_call_from_jsonl, format_pending_tool_call,
         label_has_inner_numbered_marker, parse_menu_options, pty_menu_detect,
-        pty_menu_input_clears_inflight, pty_menu_same_identity_for_option_carry,
-        pty_output_clears_inflight, split_collapsed_option_lines,
+        pty_menu_input_clears_inflight, pty_menu_preview_chars, pty_menu_preview_source,
+        pty_menu_same_identity_for_option_carry, pty_output_clears_inflight,
+        split_collapsed_option_lines,
     };
     use serde_json::json;
 
@@ -17376,6 +17418,48 @@ Do you want to proceed?
 
         let call = extract_pending_tool_call_from_jsonl(text).expect("pending tool use");
         assert_eq!(format_pending_tool_call(&call), "Bash(touch /tmp/x.txt)");
+    }
+
+    #[test]
+    fn historical_wrapped_bash_command_uses_jsonl_preview_not_raw_tail() {
+        let command = r#"awk '/2026-06-13T22:5[34]/' /Users/jonudell/bram/resources/bram-traces/bram-trace.log | grep -E "listener-fired.*assignedMenu" | tail -10"#;
+        let text = format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"pending","name":"Bash","input":{{"command":{}}}}}]}}}}"#,
+            serde_json::to_string(command).unwrap()
+        );
+        let call = extract_pending_tool_call_from_jsonl(&text).expect("pending tool use");
+        let signature = format_pending_tool_call(&call);
+        assert_eq!(signature, format!("Bash({})", command));
+        assert!(signature.starts_with("Bash(awk '/2026-06-13T22:5[34]/'"));
+        assert!(!signature.contains("Find the menu cycle from the screenshot"));
+
+        let signatureless = super::PtyMenu {
+            tool: "Bash".to_string(),
+            text: String::new(),
+            options: vec![super::MenuOption {
+                key: "1".to_string(),
+                label: "Yes".to_string(),
+            }],
+            tool_call_signature: None,
+            tool_call_diff: None,
+            tool_call_content: None,
+            cache_source: None,
+            at_host_ms: None,
+            signature_source: None,
+        };
+        assert_eq!(pty_menu_preview_source(&signatureless), "raw");
+        assert_eq!(pty_menu_preview_chars(&signatureless), 0);
+
+        let jsonl_backed = super::PtyMenu {
+            tool_call_signature: Some(signature.clone()),
+            signature_source: Some("jsonl"),
+            ..signatureless
+        };
+        assert_eq!(pty_menu_preview_source(&jsonl_backed), "jsonl");
+        assert_eq!(
+            pty_menu_preview_chars(&jsonl_backed),
+            signature.chars().count()
+        );
     }
 
     #[test]

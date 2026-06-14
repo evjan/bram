@@ -9028,11 +9028,80 @@ fn find_existing_claude_sessions_dir(
         }
     }
 
+    if let Some(candidate) = find_claude_sessions_dir_by_jsonl_cwd(projects_root, project_path) {
+        if !tried.iter().any(|p| p == &candidate) {
+            tried.push(candidate.clone());
+        }
+        return SessionsDirLookup {
+            chosen: candidate,
+            found: true,
+            tried,
+        };
+    }
+
     SessionsDirLookup {
         chosen: strict,
         found: false,
         tried,
     }
+}
+
+fn find_claude_sessions_dir_by_jsonl_cwd(
+    projects_root: &Path,
+    project_path: &Path,
+) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(projects_root).ok()?;
+    let project_cwd = canonical_path_string(project_path);
+    let mut candidates: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect();
+    candidates.sort();
+
+    for candidate in candidates {
+        if claude_sessions_dir_has_project_cwd(&candidate, &project_cwd) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn claude_sessions_dir_has_project_cwd(dir: &Path, project_cwd: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
+            continue;
+        }
+        if claude_session_jsonl_has_project_cwd(&path, project_cwd) {
+            return true;
+        }
+    }
+    false
+}
+
+fn claude_session_jsonl_has_project_cwd(path: &Path, project_cwd: &str) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let reader = BufReader::new(file);
+    for line in reader.lines().take(50).flatten() {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let Some(cwd) = record.get("cwd").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if canonical_path_string(Path::new(cwd)) == project_cwd {
+            return true;
+        }
+    }
+    false
 }
 
 fn claude_sessions_dir_lookup<R: tauri::Runtime>(
@@ -18188,6 +18257,57 @@ mod sessions_discovery_tests {
 
         assert!(lookup.found);
         assert_eq!(lookup.chosen, lossy);
+        assert_eq!(lookup.tried.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn claude_sessions_lookup_falls_back_to_jsonl_cwd_match() {
+        let root = temp_projects_root("jsonl-cwd");
+        let project = Path::new(
+            "/Users/peternou/Programming/Historiska_O\u{308}sterska\u{308}r/Historiska-kvarter",
+        );
+        let actual =
+            root.join("-Users-peternou-Programming-Historiska--stersk-r-Historiska-kvarter");
+        std::fs::create_dir_all(&actual).expect("actual dir should be created");
+        std::fs::write(
+            actual.join("session.jsonl"),
+            format!(
+                "{{\"type\":\"user\",\"cwd\":\"{}\",\"message\":{{\"role\":\"user\",\"content\":\"Hej\"}}}}\n",
+                project.display()
+            ),
+        )
+        .expect("session fixture should be written");
+
+        let lookup = find_existing_claude_sessions_dir(&root, project);
+
+        assert!(lookup.found);
+        assert_eq!(lookup.chosen, actual);
+        assert_eq!(lookup.tried.len(), 3);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn claude_sessions_lookup_keeps_strict_precedence_over_jsonl_scan() {
+        let root = temp_projects_root("strict-before-scan");
+        let project = Path::new("/Users/Måns/Projekt");
+        let strict = root.join(encode_path_for_filename(project));
+        let scanned = root.join("-Users-M-ns-Projekt");
+        std::fs::create_dir_all(&strict).expect("strict dir should be created");
+        std::fs::create_dir_all(&scanned).expect("scanned dir should be created");
+        std::fs::write(
+            scanned.join("session.jsonl"),
+            format!(
+                "{{\"type\":\"user\",\"cwd\":\"{}\",\"message\":{{\"role\":\"user\",\"content\":\"Hej\"}}}}\n",
+                project.display()
+            ),
+        )
+        .expect("session fixture should be written");
+
+        let lookup = find_existing_claude_sessions_dir(&root, project);
+
+        assert!(lookup.found);
+        assert_eq!(lookup.chosen, strict);
         assert_eq!(lookup.tried.len(), 2);
         let _ = std::fs::remove_dir_all(root);
     }

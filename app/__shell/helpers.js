@@ -398,21 +398,28 @@ window.recordToolbarPendingMenuFromEvent = function (event) {
 window.getToolbarPendingMenuState = function () {
   return window.__bramToolbarMenuState || { present: false, atMs: 0 };
 };
-// Toolbar PTY subscribers — invoked as bare names from Main.xmlui's
-// onInit subscribeTauriEvent callbacks. No xs declaration needed; xs
-// bare-name resolution finds these directly on window (same pattern
-// as logToHost / toTurn / sendKeys). Removing the xs delegators that
-// previously wrapped these cuts one xs statement per Tauri event.
-window.setToolbarPendingMenuFromEvent = function (e) {
+// Toolbar PTY subscribers. Invoked via xs delegators in Globals.xs.
+//
+// Originally migrated in commit d532432 step 5: the xs declarations
+// were removed and Main.xmlui's bare-name calls were expected to
+// resolve directly to `window.setToolbarPendingMenuFromEvent` etc.
+// — that worked for the toolbar onClick handlers where the call is a
+// top-level expression, but XMLUI's expression engine analyzes
+// identifiers inside arrow-function bodies passed to
+// subscribeTauriEvent and silently aborts the registration when a
+// bare name has no xs declaration. Main.xmlui's onInit then stopped
+// running its remaining statements partway through (statement 5
+// onward), AgentMenu's mount cascade was disrupted, and menus
+// stopped appearing. The fix: distinct __bram-prefixed window
+// helpers paired with thin xs delegators below — the same pattern
+// every other migrated function uses.
+window.__bramSetToolbarPendingMenuFromEvent = function (e) {
   window.recordToolbarPendingMenuFromEvent(e);
 };
-window.setToolbarPendingMenuFromTurnState = function (turnState) {
+window.__bramSetToolbarPendingMenuFromTurnState = function (turnState) {
   window.recordToolbarPendingMenuFromEvent({ payload: turnState && turnState.pendingMenu });
 };
-// Toolbar onClick instrumentation (Main.xmlui buttons 1/2/3/Esc).
-// Reads getToolbarPendingMenuState (above) and emits via
-// window.__bramIframeTrace.
-window.traceToolbarKey = function (key) {
+window.__bramTraceToolbarKey = function (key) {
   var state = window.getToolbarPendingMenuState();
   window.__bramIframeTrace("toolbar-key", {
     key: key,

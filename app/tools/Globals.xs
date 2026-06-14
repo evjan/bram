@@ -821,6 +821,30 @@ function getAgentMenu(turnState) {
   return current || (!suppress && turnState && turnState.pendingMenu) || null;
 }
 
+// Toolbar PTY delegators. Required even though the actual work lives
+// on window.__bram*: XMLUI's expression engine analyzes identifiers
+// inside arrow-function bodies passed to subscribeTauriEvent (e.g.,
+// Main.xmlui's onInit), and a bare name with no xs declaration causes
+// silent registration failure that aborts the rest of the onInit and
+// cascades into AgentMenu's mount. With these declarations present
+// xs callers — Main.xmlui's subscriber arrows and the toolbar button
+// onClick handlers — resolve as expected.
+function setToolbarPendingMenuFromEvent(e) {
+  if (typeof window !== 'undefined' && typeof window.__bramSetToolbarPendingMenuFromEvent === 'function') {
+    window.__bramSetToolbarPendingMenuFromEvent(e);
+  }
+}
+function setToolbarPendingMenuFromTurnState(turnState) {
+  if (typeof window !== 'undefined' && typeof window.__bramSetToolbarPendingMenuFromTurnState === 'function') {
+    window.__bramSetToolbarPendingMenuFromTurnState(turnState);
+  }
+}
+function traceToolbarKey(key) {
+  if (typeof window !== 'undefined' && typeof window.__bramTraceToolbarKey === 'function') {
+    window.__bramTraceToolbarKey(key);
+  }
+}
+
 function toggleVoiceForCurrentTarget(recording) {
   if (recording) {
     voiceStop(t => {

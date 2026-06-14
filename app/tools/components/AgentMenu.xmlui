@@ -3,7 +3,7 @@
   <VStack
     width="100%"
     gap="$space-2"
-    onInit="subscribeTauriEvent('__bramAgentMenuTurnStateUnsub', 'turn-state-changed', (e) => menuTick = menuTick + 1); subscribeTauriEvent('__bramAgentMenuPtyUnsub', 'pty-menu-changed', (e) => menuTick = menuTick + 1)">
+    onInit="subscribeTauriEvent('__bramAgentMenuTurnStateUnsub', 'turn-state-changed', (e) => menuTick = menuTick + 1); subscribeTauriEvent('__bramAgentMenuPtyUnsub', 'pty-menu-changed', (e) => menuTick = menuTick + 1); menuTick = menuTick + 1">
     <VStack
       gap="$space-2"
       when="{menuTick >= 0 &amp;&amp; getAgentMenu(agentMenuTurnState.value)}"

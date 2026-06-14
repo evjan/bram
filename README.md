@@ -38,8 +38,8 @@ A small glossary of the terms used throughout this README, the conventions sidec
 | **app toolbar** | the top button row in the main app (reload target app · devtools · agent tools · terminal · A− · A+ · voice). |
 | **terminal** | the xterm.js area where Claude / Codex runs. |
 | **target app** | the project iframe where the app you are building runs. |
-| **agent pane** | the area where Bram guides the agent through the workflow — the tabs UI (Workspace, Transcript, Sessions, Status, Issues, Architecture, Settings). |
-| **agent nav** | the vertical menu on the left of the agent pane (Worklist, Issues, Commits, Transcript, Sessions, History, Feedback, Context, Status, Settings). |
+| **agent pane** | the area where Bram guides the agent through the workflow — the tabs UI (Worklist, Issues, Commits, Sessions, History, Context, Status, Settings). |
+| **agent nav** | the vertical menu on the left of the agent pane (Worklist, Issues, Commits, Sessions, History, Context, Status, Settings). |
 | **agent toolbar** | controls associated with the agent pane (per-view action bars: Refresh, Approve, etc.). |
 
 ### Workflow
@@ -111,9 +111,9 @@ On some Windows 11 setups, Smart App Control may block the unsigned binary — m
 
 ### Agent tools
 
-- **Transcript** — the current active-session transcript for Claude or Codex. It follows the current session and renders turns plus inline tool activity for both providers, but it is intentionally a reader, not a full realtime control surface. Use Sessions to browse/search older transcripts.
-
 - **Worklist** — the `proposed → applied → committed` approval surface that coordinates multi-step agent work. Each item is a small, independently approvable diff with a `before → after` summary. Select one item at a time (radio); three ghost actions act on it — **Approve** (TO APPLY → on-disk edits, transitions to TO COMMIT; TO COMMIT → git commit), **Iterate** (refine in place — agent revises the proposed text or edits the on-disk files per your feedback, item keeps its state), **Drop** (remove the item; for TO COMMIT, disk edits stay until you ask the agent to revert). Each row's `+ feedback` link expands a per-item message-to-agent textarea that travels with whichever action you click. The agent never advances state unilaterally. Bram always writes local `resources/worklist-history/` snapshots for auditability, while committing that directory is an opt-in repo policy.
+
+  The Worklist view also carries the live agent conversation surface: pending permission menus, current-turn tool uses, the last agent response, pasted or dropped image previews, and the message box used to ask the agent for a new worklist item or follow-up.
 
 - **Commits** — HSplitter list of recent commits on the left, selected commit on the right. Full-history search via `git log --grep` across subject, body, and author; matched commits expand to clickable hit-row snippets, and the target app stacks `snippetAroundLine` previews for every hit. The target app header is an `ExpandableItem` revealing the full commit message body. Unpushed commits surface a "Push" button; it runs `git push origin`, and on a non-fast-forward rejection it fetches `origin` and rebases the branch on `origin/<branch>` before retrying (linear history, no merge commits).
 
@@ -123,15 +123,13 @@ On some Windows 11 setups, Smart App Control may block the unsigned binary — m
 
 - **History** — browse the `resources/worklist-history/` snapshots Bram writes on every worklist change: the `proposed → applied → committed` audit trail, grouped by item phase, with summarized item prose so the reasoning behind past items survives after they're committed or dropped. Backed by `/__worklist-history/list` plus `/__worklist-history/search` for substring filtering.
 
-- **Feedback** — browse `resources/feedback-history/`, the archive of per-iterate feedback drafts that the worklist promotes out of `resources/feedback-drafts/` after each `advance` / `prune` mutation lands. Click a row to see the full markdown body. Same search shape as History — substring queries hit the markdown bodies. Backed by `/__feedback-history/list` / `/__feedback-history/content` / `/__feedback-history/search`.
-
 - **Context** — provider-aware HSplitter view of the active agent's durable local context sources. For Claude, that means `CLAUDE.md`, its `@`-imports, the per-project memory tree, hooks, and settings. For Codex, that means repo-local `AGENTS.md` when present plus Codex-side sources such as `~/.codex/config.toml`, project-local `.codex/` files, memories, and rules. Substring search shows grep-style hit snippets in the list and `snippetAroundLine` context on the right.
 
 - **Status** — a coordination-health view of the host↔agent plumbing: port-file consistency, loopback HTTP responsiveness, the inflight spinner sentinel, and the latest worklist authorization records. Use it to diagnose a stuck spinner or a refused loopback connection.
 
 - **Settings** — bidirectional view of `.bram.json`. Surfaces the agent-command (`shell.agent`), the worklist's batch-commit-actions toggle, and the target-app-minimized switch (drives the right-column splitter to give the agent pane maximum room while keeping the target app mounted). Edits persist to disk; hand-edits to `.bram.json` flow back through a `settings-changed` Tauri event without manual reload. Agent-command changes require a Bram restart to take effect (consumed at PTY spawn); the other settings apply live.
 
-The five search-capable tabs (Issues, Commits, Sessions, History, Feedback) all share a single `<SearchBox>` (250 ms debounce, ✕ to clear, inline spinner during fetch) and a single `<SearchHitModal>`. Clicking a hit opens the modal centered on the matched term within a 500-character window, with the match visibly highlighted. Diff renders across the Worklist TO COMMIT expander, the Transcript Edit/MultiEdit modal, and the Commits per-file patch are likewise unified through a single `<DiffView>` that goes through a backend `/__diff/annotate` route for word-level intra-line emphasis.
+The four search-capable tabs (Issues, Commits, Sessions, History) all share a single `<SearchBox>` (250 ms debounce, ✕ to clear, inline spinner during fetch) and a single `<SearchHitModal>`. Clicking a hit opens the modal centered on the matched term within a 500-character window, with the match visibly highlighted. Diff renders across the Worklist TO COMMIT expander and the Commits per-file patch through a single `<DiffView>` that goes through a backend `/__diff/annotate` route for word-level intra-line emphasis.
 
 The toolbar's `ⓘ` (top-right of the agent pane's AppHeader) opens a target app info modal with the current URL, version, project-server config, and a `README on GitHub` link to this document.
 

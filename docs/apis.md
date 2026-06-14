@@ -39,7 +39,8 @@ external local service.
 Bram hosts two iframes inside the parent shell: the **target app** (the project
 under development; any web app served by the project's HTTP server) and the
 **agent pane** (Bram's own agent pane at `app/tools/`,
-providing Transcript, Worklist, Commits, Issues, Sessions, and Context tabs).
+providing Worklist, Commits, Issues, Sessions, History, Context, Status, and
+Settings tabs).
 These surfaces use several transports:
 
 - **Tauri scheme routing** loads shell pages, project content, bundled assets,
@@ -260,14 +261,15 @@ when the cycle's `advance` / `prune` mutation lands,
 `promote_feedback_drafts_for_items` moves the file to
 `resources/feedback-history/<unix_ms>-<itemId>.md` so the draft
 directory stays small and the history dir accumulates a permanent
-record. The Feedback tab in the agent pane browses this archive.
+record. The backend keeps these routes for audit/history tooling; the primary
+user-facing feedback flow now lives on each Worklist item.
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `/__feedback-history/list` | HTTP GET | `limit=<n>` (default 120) | `[{ ts, itemId, fileName }, …]` (newest first) | agent pane iframe (Feedback tab) |
-| `/__feedback-history/content` | HTTP GET | `ts=<unix_ms>`, `itemId=<id>` | raw `.md` body, `text/markdown`; 400 on missing / unsafe params; 404 if no matching file | agent pane iframe (Feedback tab modal) |
-| `/__feedback-history/search` | HTTP GET | `q=<query>` (min 2 chars) | `{ results: [{ ts, itemId, fileName, snippet, body }, …] }`. `snippet` is a ~200-char window centered on the first match; `body` is the full `.md` body for the `<SearchHitModal>` 500-char centered window. | agent pane iframe (Feedback tab) |
-| `feedback-history-changed` | Tauri event | — | empty payload | agent pane iframe (Feedback DataSource refetch) |
+| `/__feedback-history/list` | HTTP GET | `limit=<n>` (default 120) | `[{ ts, itemId, fileName }, …]` (newest first) | agent pane iframe / history tooling |
+| `/__feedback-history/content` | HTTP GET | `ts=<unix_ms>`, `itemId=<id>` | raw `.md` body, `text/markdown`; 400 on missing / unsafe params; 404 if no matching file | agent pane iframe / history tooling |
+| `/__feedback-history/search` | HTTP GET | `q=<query>` (min 2 chars) | `{ results: [{ ts, itemId, fileName, snippet, body }, …] }`. `snippet` is a ~200-char window centered on the first match; `body` is the full `.md` body for the `<SearchHitModal>` 500-char centered window. | agent pane iframe / history tooling |
+| `feedback-history-changed` | Tauri event | — | empty payload | agent pane iframe DataSource refetch |
 
 - Filename schema is `<unix_ms>-<itemId>.md`. Uniqueness collisions
   (rare) get a `-<n>` suffix before `.md` via
@@ -299,8 +301,8 @@ providers, switched by the `provider=` query.
 | `/__last-assistant-text` | HTTP GET | — | `{ text, mtime, path, source }`. Host walks the current session JSONL's trailing 32 KB in reverse, returns the most recent assistant text. Replaces the per-fanout iframe-side `lastAssistantText(lastJsonl)` walk (250-300 ms cost per call) — see commit dcef719. | agent pane iframe (Workspace `Last agent response` panel) |
 | `/__current-turn-edits` | HTTP GET | — | `{ added, removed, filePath, kind, lastToolId }` for the current turn's edit aggregates. Same derive-at-the-boundary pattern: host parses the 64 KB tail once per request, iframe binds via DataSource instead of running `currentTurnEdits(lastJsonl)` on every fanout. | agent pane iframe (Workspace turn-edits hint) |
 | `/__waiting-for-assistant` | HTTP GET | — | `{ waiting: bool }` — true when the most recent meaningful JSONL record is a user message (`tool_result`-only records skipped). Mirror of the iframe `isWaitingForAssistant` helper. | agent pane iframe |
-| `/__session-turns` | HTTP GET | — | `[{ role, text, entries, images }, …]` — host-derived turn timeline. Mirror of the iframe `sessionTurns(jsonlText)` helper that walked the full JSONL per fanout. | agent pane iframe (Transcript tab) |
-| `/__tool-detail` | HTTP GET | `id=<toolId>` | `{ input, result }` or `null` for a single tool by id. Companion to `/__session-turns`; mirrors `getToolDetail(jsonlText, toolId)`. | agent pane iframe (Transcript tool-detail modal) |
+| `/__session-turns` | HTTP GET | — | `[{ role, text, entries, images }, …]` — host-derived turn timeline. Mirror of the iframe `sessionTurns(jsonlText)` helper that walked the full JSONL per fanout. | agent pane iframe (Workspace conversation components / compatibility consumers) |
+| `/__tool-detail` | HTTP GET | `id=<toolId>` | `{ input, result }` or `null` for a single tool by id. Companion to `/__session-turns`; mirrors `getToolDetail(jsonlText, toolId)`. | agent pane iframe (Workspace tool-use detail views / compatibility consumers) |
 
 - Provider directories: `~/.claude/projects/<encoded-cwd>/` for Claude
   Code (`claude_sessions_dir` at `lib.rs:1942`),
@@ -329,10 +331,10 @@ providers, switched by the `provider=` query.
 | Helper | Signature | Purpose |
 | --- | --- | --- |
 | `getLatestJsonl()` | `() => string \| null` | Read the current cumulative cache. Used by component `onInit` to bootstrap local `lastJsonl` before subscribing. |
-| `setLatestJsonl(value)` | `(string) => void` | Replace the cache. Called from the App-level `ChangeListener` on `reset: true` envelopes and from Transcript's "Show all" full-history fetch. Bypasses the cap. |
+| `setLatestJsonl(value)` | `(string) => void` | Replace the cache. Called from the App-level `ChangeListener` on `reset: true` envelopes. Bypasses the cap. |
 | `appendLatestJsonl(chunk)` | `(string) => void` | Append a delta chunk. Called from the App-level `ChangeListener` on `reset: false` envelopes. Enforces the 1.5 MB byte cap; head-trims at the next newline boundary to keep the buffer valid JSONL. Emits a `jsonl-cap-trim` trace event when the cap fires. |
 | `onLatestJsonlChange(fn)` | `((value) => void) => unsubscribe` | Subscribe to broadcasts. Returns an unsubscribe function. Used directly by code that wants multi-subscriber semantics on its own terms. |
-| `subscribeLatestJsonl(key, fn)` | `(string, (value) => void) => void` | Convenience wrapper: subscribe and remember the unsubscriber on `window[key]`. Hot-reload-safe (revokes the prior subscription before re-registering). Used by `Workspace.xmlui` (`__bramWorkspaceJsonlUnsub`) and `Transcript.xmlui` (`__bramTranscriptJsonlUnsub`). XMLUI's expression evaluator rejects `window.X = ...` left-values at the top level of an `onInit` handler with "Left value variable not found in the scope" — this wrapper keeps the property assignment inside plain JS. |
+| `subscribeLatestJsonl(key, fn)` | `(string, (value) => void) => void` | Convenience wrapper: subscribe and remember the unsubscriber on `window[key]`. Hot-reload-safe (revokes the prior subscription before re-registering). Used by `Workspace.xmlui` and its conversation components. XMLUI's expression evaluator rejects `window.X = ...` left-values at the top level of an `onInit` handler with "Left value variable not found in the scope" — this wrapper keeps the property assignment inside plain JS. |
 
 ## 6. Git & repo
 
@@ -350,7 +352,7 @@ The HTTP routes shell out to `git`; the IPC command shells out to
 | `/__file` | HTTP GET | `path=` | file body, `text/plain` | agent pane iframe |
 | `/__git/status` | HTTP GET | — | `{ ahead, behind, dirty }`. Runs `git fetch origin` first so `behind` reflects current remote (without it the Pull button can be dimmed while origin has new commits). | agent pane iframe (Commits tab Pull-button gating, Worklist tab dirty-tree banner) |
 | `/__git/pull-rebase` | HTTP POST | — | `{ ok: true }` on success / 500 plain text on error. Runs the equivalent of `git pull --rebase --autostash`. | agent pane iframe (Commits tab Pull button) |
-| `/__diff/annotate` | HTTP POST | body `{ diff: "<unified-diff-text>" }` | `[{ kind: "context" \| "hunk" \| "fileheader" \| "add" \| "del", text, segments? }, …]`. `segments` is set on paired 1:1 (-,+) lines and carries per-segment `{ text, bg? }` runs from `similar::TextDiff::from_words` for intra-line word emphasis. `bg` is a theme-variable string (`$color-danger-200` / `$color-success-200`). Diffs over `DIFF_ANNOTATE_LINE_CAP` (1500 lines) skip word-diffing and return plain per-line rows. | agent pane iframe (`<DiffView>` consumers: Workspace TO COMMIT, Transcript Edit modal, Commits per-file patch) |
+| `/__diff/annotate` | HTTP POST | body `{ diff: "<unified-diff-text>" }` | `[{ kind: "context" \| "hunk" \| "fileheader" \| "add" \| "del", text, segments? }, …]`. `segments` is set on paired 1:1 (-,+) lines and carries per-segment `{ text, bg? }` runs from `similar::TextDiff::from_words` for intra-line word emphasis. `bg` is a theme-variable string (`$color-danger-200` / `$color-success-200`). Diffs over `DIFF_ANNOTATE_LINE_CAP` (1500 lines) skip word-diffing and return plain per-line rows. | agent pane iframe (`<DiffView>` consumers: Workspace TO COMMIT, Commits per-file patch) |
 | `git_push` | IPC | — | `Result<(), String>` | iframe helpers (direct) |
 
 ## 7. Issues

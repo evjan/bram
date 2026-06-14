@@ -11010,7 +11010,10 @@ fn read_conversation_state<R: tauri::Runtime>(
 // the original file.seek + read_to_end(64 KB) implementation that
 // read_current_turn_edits used pre-cache.
 fn compute_current_turn_edits_from_text(text: &str) -> serde_json::Value {
-    let tail_start = text.len().saturating_sub(64 * 1024);
+    let mut tail_start = text.len().saturating_sub(64 * 1024);
+    while tail_start < text.len() && !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
     // Walk forward from the byte boundary to the nearest \n so we don't
     // start mid-record (which would always fail to parse and shift the
     // anchor by up to 64 KB on busy turns).
@@ -11274,6 +11277,24 @@ fn compute_current_turn_edits_from_text(text: &str) -> serde_json::Value {
         })
         .collect();
     serde_json::Value::Array(result)
+}
+
+#[cfg(test)]
+mod conversation_state_tests {
+    use super::compute_current_turn_edits_from_text;
+
+    #[test]
+    fn current_turn_edits_tail_start_handles_decomposed_unicode_boundary() {
+        let mut text = String::new();
+        text.push_str("prefix----");
+        text.push('O');
+        text.push('\u{308}');
+        text.push_str(&"a".repeat((64 * 1024) - 1));
+
+        let edits = compute_current_turn_edits_from_text(&text);
+
+        assert!(edits.as_array().is_some());
+    }
 }
 
 // ---------------------------------------------------------------------

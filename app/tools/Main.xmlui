@@ -256,7 +256,6 @@
     <NavLink label="Commits" to="/commits" />
     <NavLink label="Sessions" to="/sessions" />
     <NavLink label="History" to="/history" />
-    <NavLink label="Feedback" to="/feedback" />
     <NavLink label="Context" to="/context" />
     <NavLink label="Status" to="/status" />
     <NavLink label="Settings" to="/settings" />

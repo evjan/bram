@@ -2231,7 +2231,21 @@ function __bramListenWithDedup(ev, eventName, callback) {
   } catch (e) {}
   var store = null;
   try { store = parent.__bramTauriListenerUnsubs; } catch (e) {}
-  var stale = store ? store[eventName] : null;
+  // Dedup key must include iframe identity, not just eventName. Tools-pane
+  // and right-pane both register Tauri listeners against the parent webview
+  // (window.parent.__TAURI__.event), and each iframe's listener callback
+  // closes over its OWN __tauriEventSubscribers array. Keying by eventName
+  // alone made any later iframe's load drain the prior iframe's listener —
+  // leaving the orphaned iframe's subscriber array (AgentMenu + Toolbar +
+  // native, for the tools-pane) silently unwatched, so menus didn't render
+  // on cold start until a manual reload made the affected iframe the last
+  // to register. Same-iframe reloads still drain themselves (the original
+  // 4→5 stale-listener bug from commit d532432 stays fixed).
+  var iframeKey = (function () {
+    try { return window.location.pathname || ""; } catch (e) { return ""; }
+  })();
+  var storeKey = eventName + "::" + iframeKey;
+  var stale = store ? store[storeKey] : null;
   if (stale) {
     try {
       if (typeof stale === "function") {
@@ -2240,7 +2254,7 @@ function __bramListenWithDedup(ev, eventName, callback) {
         stale.then(function (fn) { if (typeof fn === "function") { try { fn(); } catch (e) {} } }, function () {});
       }
     } catch (e) {}
-    try { if (store) store[eventName] = null; } catch (e) {}
+    try { if (store) store[storeKey] = null; } catch (e) {}
     try {
       if (typeof window.logToHost === "function") {
         window.logToHost({
@@ -2248,6 +2262,7 @@ function __bramListenWithDedup(ev, eventName, callback) {
           subkind: "tauri-listener-dedup",
           at: new Date().toISOString(),
           event_name: eventName,
+          iframe_key: iframeKey,
           stage: "drained-stale",
         });
       }
@@ -2259,9 +2274,9 @@ function __bramListenWithDedup(ev, eventName, callback) {
   } catch (e) {
     return Promise.resolve(null);
   }
-  try { if (store) store[eventName] = listenResult; } catch (e) {}
+  try { if (store) store[storeKey] = listenResult; } catch (e) {}
   Promise.resolve(listenResult).then(function (unsub) {
-    try { if (store) store[eventName] = unsub; } catch (e) {}
+    try { if (store) store[storeKey] = unsub; } catch (e) {}
   }, function () {});
   return Promise.resolve(listenResult);
 }

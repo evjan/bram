@@ -2535,7 +2535,7 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
             ),
         );
     }
-    emit_replayable_payload(app, "agent-status-changed", &next);
+    maybe_emit_agent_status(app, &next);
     update_turn_state(app, "agent-status", "finished", |s| {
         s.provider = Some(provider.to_string());
         s.phase = "finished".to_string();
@@ -2544,6 +2544,45 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
         s.pending_menu = None;
     });
     true
+}
+
+// Suppress `agent-status-changed` Tauri emits while a PTY permission
+// menu is active. The agent's verb is essentially frozen during a
+// menu hold (the user is the bottleneck), but the verb-cycling emits
+// (`state=working verb=Wibbling source=pty-status` etc.) keep firing
+// every 1-2 s and produce 40-50% of the iframe's reactive load. That
+// load is what queues the AgentMenu's XMLUI ChangeListener behind 5-30
+// seconds of other re-evaluations, manifesting as the "menu never
+// appeared" perception even though `bramAgentMenu` was set
+// synchronously in the subscriber.
+//
+// turn-state-changed emits (which carry the actual waiting-for-permission
+// transition the iframe needs) are NOT routed through this gate. The
+// menu phase still flips immediately; the verb cycling is what we
+// drop.
+//
+// Resumes the moment `pty_menu_cell` is cleared (state=dismissed,
+// state=hold-expired, state=updated). No explicit unblock needed.
+fn maybe_emit_agent_status<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    payload: &AgentStatus,
+) {
+    if pty_permission_menu_pending() {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "agent-status",
+                &format!(
+                    "op=suppress reason=pty-menu-active state={} verb={} source={}",
+                    payload.state,
+                    payload.verb.as_deref().unwrap_or(""),
+                    payload.source.as_deref().unwrap_or("?")
+                ),
+            );
+        }
+        return;
+    }
+    emit_replayable_payload(app, "agent-status-changed", payload);
 }
 
 fn pty_permission_menu_pending() -> bool {
@@ -2870,7 +2909,7 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
         }
     }
     if let Some(payload) = emit_payload {
-        emit_replayable_payload(app, "agent-status-changed", &payload);
+        maybe_emit_agent_status(app, &payload);
         update_turn_state(
             app,
             payload.source.as_deref().unwrap_or("pty-status"),
@@ -3073,7 +3112,7 @@ fn agent_status_set_codex_working<R: tauri::Runtime>(
         }
     }
     if let Some(payload) = emit_payload {
-        emit_replayable_payload(app, "agent-status-changed", &payload);
+        maybe_emit_agent_status(app, &payload);
         update_turn_state(app, source, "codex-working", |s| {
             s.provider = Some("codex".to_string());
             s.phase = "working".to_string();
@@ -3118,7 +3157,7 @@ fn agent_status_set_codex_jsonl_working<R: tauri::Runtime>(
         }
     }
     if let Some(payload) = emit_payload {
-        emit_replayable_payload(app, "agent-status-changed", &payload);
+        maybe_emit_agent_status(app, &payload);
     }
     update_turn_state(app, "jsonl-non-final", reason, |s| {
         apply_codex_jsonl_working_turn_state(s, file_mtime_ms, turn_started_at_ms, reason);
@@ -3201,7 +3240,7 @@ fn agent_status_set_claude_jsonl_working<R: tauri::Runtime>(
         }
     }
     if let Some(payload) = emit_payload {
-        emit_replayable_payload(app, "agent-status-changed", &payload);
+        maybe_emit_agent_status(app, &payload);
     }
     update_turn_state(app, "jsonl-non-final", reason, |s| {
         s.provider = Some("claude".to_string());

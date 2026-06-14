@@ -304,9 +304,7 @@
     gap="$space-3"
     verticalAlignment="center">
     <Text fontSize="$fontSize-sm">
-      {setupCompleteProvider === 'claude'
-        ? 'Setup complete. Restart Claude to pick up the new hook.'
-        : 'Setup complete. Codex picks up the new config on its next turn. Restart Claude too if it is already open for this repo.'}
+      Setup complete. Restart Bram, then start Claude or Codex again in the terminal to pick up the new coordination files.
     </Text>
     <SpaceFiller />
     <Button

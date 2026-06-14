@@ -19,7 +19,8 @@ not enough.
 3. Start Claude in the project.
 4. Expect one Agent Coordination setup or refresh banner.
 5. Click setup or refresh.
-6. Expect the completion message to tell you to restart Claude.
+6. Expect the completion message to tell you to restart Bram, then start
+   Claude or Codex again in the terminal.
 7. Repeat the harmless edits to both trigger files.
 8. Start Codex in the project.
 9. Expect one Agent Coordination setup or refresh banner.
@@ -36,8 +37,8 @@ not enough.
 5. Click setup or refresh.
 6. Expect Codex to ask for hook review or approval in the terminal on a
    following turn.
-7. Expect the completion message to say Codex picks up the config on its next
-   turn, and to restart Claude too if Claude is already open for this repo.
+7. Expect the completion message to tell you to restart Bram, then start
+   Claude or Codex again in the terminal.
 8. Start Claude in the project without editing the trigger files again.
 9. Expect no Agent Coordination banner, because Codex setup refreshed the
    Claude-side file too.

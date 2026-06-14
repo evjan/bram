@@ -398,6 +398,28 @@ window.recordToolbarPendingMenuFromEvent = function (event) {
 window.getToolbarPendingMenuState = function () {
   return window.__bramToolbarMenuState || { present: false, atMs: 0 };
 };
+// Toolbar PTY subscribers — invoked as bare names from Main.xmlui's
+// onInit subscribeTauriEvent callbacks. No xs declaration needed; xs
+// bare-name resolution finds these directly on window (same pattern
+// as logToHost / toTurn / sendKeys). Removing the xs delegators that
+// previously wrapped these cuts one xs statement per Tauri event.
+window.setToolbarPendingMenuFromEvent = function (e) {
+  window.recordToolbarPendingMenuFromEvent(e);
+};
+window.setToolbarPendingMenuFromTurnState = function (turnState) {
+  window.recordToolbarPendingMenuFromEvent({ payload: turnState && turnState.pendingMenu });
+};
+// Toolbar onClick instrumentation (Main.xmlui buttons 1/2/3/Esc).
+// Reads getToolbarPendingMenuState (above) and emits via
+// window.__bramIframeTrace.
+window.traceToolbarKey = function (key) {
+  var state = window.getToolbarPendingMenuState();
+  window.__bramIframeTrace("toolbar-key", {
+    key: key,
+    menuPresent: state.present ? 1 : 0,
+    menuAgeMs: state.atMs ? (Date.now() - state.atMs) : -1,
+  });
+};
 // Pure helper hoisted from Globals.xs because the xs-script sandbox parser
 // rejects the regex-literal forms (`return /.../.test(...)` and
 // `String(...).match(/...\s/)`) — both produce "Error parsing code behind"
@@ -413,8 +435,8 @@ window.isWorklistActionPayloadText = function (text) {
   );
 };
 window.logToHost = function (payload) {
-  // Master-flag short-circuit. Paired with `iframeTrace` in
-  // Globals.xs. When traces are off, skip the Tauri IPC invoke (the
+  // Master-flag short-circuit. Paired with `window.iframeTrace`
+  // below. When traces are off, skip the Tauri IPC invoke (the
   // dominant per-event cost). Default-ON so behavior is preserved
   // during the brief startup window before the self-init fetch
   // below resolves the actual setting.
@@ -424,9 +446,1132 @@ window.logToHost = function (payload) {
   invoke("log_from_right_pane", { payload: payload }).catch(function () {});
 };
 
+// iframeTrace: the [iframe] category of the comms-path trace log
+// (issue #49). Forwards a structured record to the host's
+// `log_from_right_pane` Tauri command, which routes records whose
+// `kind` is `"iframe-trace"` into resources/bram-traces/bram-trace.log
+// when BRAM_TRACE=1 is set on the host. No-op when logToHost isn't
+// wired up. subkind is a token from the spec's maintained vocabulary
+// (click, inflight-set, inflight-clear, listener-fired, ...); fields
+// are arbitrary per-event metadata.
+//
+// Lives in plain JS so callers from XMLUI-evaluated arrow function
+// bodies and xs functions don't pay the per-statement-await cost of
+// processStatementQueueAsync
+// (xmlui/src/components-core/script-runner/process-statement-async.ts:115-166).
+// The xs declaration in Globals.xs is a thin delegator that calls
+// this; the window helper uses the `__bram` prefix to avoid the
+// trap where xs's `function iframeTrace` declaration overwrites
+// `window.iframeTrace` (browser scripts hoist top-level function
+// declarations onto window), which would turn the delegator's
+// `window.iframeTrace(...)` call into recursion-to-itself. Same
+// pattern as `window.__bramApplyAgentMenu` paired with the xs
+// `applyAgentMenu` delegator (commit ea9480e).
+window.__bramIframeTrace = function (subkind, fields) {
+  try {
+    if (window.__bramTracesEnabled === false) return;
+    if (typeof window.logToHost !== "function") return;
+    var payload = { kind: "iframe-trace", subkind: subkind, at: new Date().toISOString() };
+    if (fields && typeof fields === "object") {
+      Object.assign(payload, fields);
+    }
+    window.logToHost(payload);
+  } catch (e) {}
+};
+
+// Cascade-diagnosis instrumentation (refs #93). Emits a helper-call
+// record when a hot JSONL-walking helper exceeds the threshold. Cheap
+// paths (no-op early returns, cache hits) don't log because their _t0
+// measurement is sub-ms. Threshold deliberately low to catch
+// sub-frame stalls that compound across the cascade.
+window.__bramTraceHelperTiming = function (name, t0, extra) {
+  try {
+    var elapsed = (typeof performance !== "undefined" && performance.now)
+      ? performance.now() - t0
+      : Date.now() - t0;
+    if (elapsed < 2) return;
+    if (typeof window.logToHost !== "function") return;
+    var payload = {
+      kind: "iframe-trace",
+      subkind: "helper-call",
+      name: name,
+      ms: Math.round(elapsed),
+      at: new Date().toISOString(),
+    };
+    if (extra && typeof extra === "object") Object.assign(payload, extra);
+    window.logToHost(payload);
+  } catch (e) {}
+};
+
+// Plain-JS equivalents of XMLUI's xs-only readLocalStorage /
+// writeLocalStorage built-ins
+// (xmlui/src/components-core/appContext/local-storage-functions.ts).
+// Same dot-path semantics: the first segment is the localStorage entry
+// name, remaining segments are a property path inside the parsed JSON
+// object. Used by the __bram-prefixed localStorage shim helpers below
+// so they can run in plain JS without re-entering XMLUI's statement
+// queue. `bram.worklistMessageDraft` reads
+// `JSON.parse(localStorage.bram).worklistMessageDraft`. Splitter keys
+// like `bram.splitter.worklist` are two-level.
+function __bramSplitKey(key) {
+  var s = String(key);
+  var dot = s.indexOf(".");
+  return dot === -1 ? [s, undefined] : [s.substring(0, dot), s.substring(dot + 1)];
+}
+
+function __bramReadLS(key, fallback) {
+  try {
+    var parts = __bramSplitKey(key);
+    var raw = localStorage.getItem(parts[0]);
+    if (raw === null) return fallback;
+    var root;
+    try { root = JSON.parse(raw); } catch (e) { return fallback; }
+    if (parts[1] === undefined) return root;
+    var sub = parts[1].split(".");
+    var cur = root;
+    for (var i = 0; i < sub.length; i++) {
+      if (cur == null || typeof cur !== "object") return fallback;
+      cur = cur[sub[i]];
+    }
+    return cur === undefined ? fallback : cur;
+  } catch (e) { return fallback; }
+}
+
+function __bramWriteLS(key, value) {
+  try {
+    var parts = __bramSplitKey(key);
+    if (parts[1] === undefined) {
+      if (value === undefined) localStorage.removeItem(parts[0]);
+      else localStorage.setItem(parts[0], JSON.stringify(value));
+      return;
+    }
+    var raw = localStorage.getItem(parts[0]);
+    var root;
+    if (raw === null) {
+      root = {};
+    } else {
+      try { root = JSON.parse(raw); } catch (e) { root = {}; }
+      if (!root || typeof root !== "object") root = {};
+    }
+    var sub = parts[1].split(".");
+    var cur = root;
+    for (var i = 0; i < sub.length - 1; i++) {
+      var k = sub[i];
+      if (!cur[k] || typeof cur[k] !== "object") cur[k] = {};
+      cur = cur[k];
+    }
+    var last = sub[sub.length - 1];
+    if (value === undefined) delete cur[last];
+    else cur[last] = value;
+    localStorage.setItem(parts[0], JSON.stringify(root));
+  } catch (e) {}
+}
+
+// Worklist "message agent" persistence + lifecycle shims. Counterparts
+// for the xs delegators in Globals.xs (audit step 3, 2026-06-14).
+// Each is invoked through bare-name `restoreWorklistDraft(...)` from
+// xmlui markup or other xs code, which resolves to the xs delegator,
+// which routes here. The cost saving is per-call body collapse: each
+// of these used to run through processStatementQueueAsync's 3-await
+// loop for every statement in the body; now the entire body runs as
+// one plain-JS function call (one xs statement total).
+
+window.__bramRestoreWorklistDraft = function () {
+  return __bramReadLS("bram.worklistMessageDraft", "");
+};
+
+window.__bramPersistWorklistDraft = function (text) {
+  __bramWriteLS("bram.worklistMessageDraft", String(text || ""));
+};
+
+window.__bramClearWorklistDraft = function () {
+  __bramWriteLS("bram.worklistMessageDraft", "");
+};
+
+window.__bramRestoreConversationOpen = function () {
+  var raw = __bramReadLS("bram.conversationOpen", "1");
+  var result = raw !== "0";
+  window.__bramIframeTrace("conversation-open-restore", { raw: raw, open: result });
+  return result;
+};
+
+window.__bramToggleConversationOpen = function (current) {
+  var next = !current;
+  __bramWriteLS("bram.conversationOpen", next ? "1" : "0");
+  window.__bramIframeTrace("conversation-open-save", { open: next });
+  return next;
+};
+
+window.__bramRestoreWorklistUiState = function (field) {
+  var raw = __bramReadLS("bram.worklistUiState", "");
+  if (!raw) {
+    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, raw: "", result: field === "feedbackExpanded" ? false : "" });
+    if (field === "feedbackExpanded") return false;
+    return field === "selectedFeedback" ? "" : null;
+  }
+  var saved;
+  if (typeof raw === "object") {
+    saved = raw;
+  } else {
+    try { saved = JSON.parse(raw); } catch (e) { saved = null; }
+  }
+  if (!saved || typeof saved !== "object") {
+    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, raw: "invalid", result: field === "feedbackExpanded" ? false : "" });
+    if (field === "feedbackExpanded") return false;
+    return field === "selectedFeedback" ? "" : null;
+  }
+  if (field === "feedbackExpanded") {
+    var feResult = !!saved.feedbackExpanded;
+    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, result: feResult, selected: saved.selected || "", expandedItemId: saved.expandedItemId || "" });
+    return feResult;
+  }
+  if (field === "selectedFeedback") {
+    var sfResult = String(saved.selectedFeedback || "");
+    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, resultLength: sfResult.length, selected: saved.selected || "", expandedItemId: saved.expandedItemId || "" });
+    return sfResult;
+  }
+  if (field === "selected") {
+    var selResult = saved.selected || null;
+    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, result: selResult || "", expandedItemId: saved.expandedItemId || "", feedbackExpanded: !!saved.feedbackExpanded });
+    return selResult;
+  }
+  if (field === "expandedItemId") {
+    var exResult = saved.expandedItemId || null;
+    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, result: exResult || "", selected: saved.selected || "", feedbackExpanded: !!saved.feedbackExpanded });
+    return exResult;
+  }
+  return null;
+};
+
+window.__bramPersistWorklistUiState = function (selected, expandedItemId, feedbackExpanded, selectedFeedback) {
+  window.__bramIframeTrace("worklist-ui-state-save", {
+    selected: selected || "",
+    expandedItemId: expandedItemId || "",
+    feedbackExpanded: !!feedbackExpanded,
+    selectedFeedbackLength: (selectedFeedback || "").length,
+  });
+  __bramWriteLS("bram.worklistUiState", JSON.stringify({
+    selected: selected || null,
+    expandedItemId: expandedItemId || null,
+    feedbackExpanded: !!feedbackExpanded,
+    selectedFeedback: selectedFeedback || "",
+  }));
+};
+
+window.__bramClearWorklistUiState = function () {
+  window.__bramIframeTrace("worklist-ui-state-clear", {});
+  __bramWriteLS("bram.worklistUiState", "");
+};
+
+window.__bramRestoreWorklistAwaiting = function () {
+  var flag = __bramReadLS("bram.awaitingResponse", "");
+  var setAtRaw = __bramReadLS("bram.awaitingResponseSetAt", "");
+  var setAt = parseInt(setAtRaw, 10);
+  if (flag === "1" && !isNaN(setAt) && (Date.now() - setAt) < 300000) {
+    return true;
+  }
+  __bramWriteLS("bram.awaitingResponse", "");
+  __bramWriteLS("bram.awaitingResponseSetAt", "");
+  return false;
+};
+
+window.__bramRestoreWorklistAwaitingSetAt = function () {
+  var setAtRaw = __bramReadLS("bram.awaitingResponseSetAt", "");
+  var setAt = parseInt(setAtRaw, 10);
+  return isNaN(setAt) ? 0 : setAt;
+};
+
+window.__bramMarkAwaitingStarted = function () {
+  var now = Date.now();
+  __bramWriteLS("bram.awaitingResponse", "1");
+  __bramWriteLS("bram.awaitingResponseSetAt", String(now));
+  return now;
+};
+
+window.__bramRestoreWorklistSubmittedMessage = function () {
+  return __bramReadLS("bram.worklistSubmittedMessage", "");
+};
+
+window.__bramRestoreWorklistSubmittedKind = function () {
+  var kind = __bramReadLS("bram.worklistSubmittedKind", "");
+  return kind === "message" || kind === "action" ? kind : null;
+};
+
+window.__bramSetWorklistSubmittedKind = function (kind) {
+  if (kind === "message" || kind === "action") {
+    __bramWriteLS("bram.worklistSubmittedKind", kind);
+  } else {
+    __bramWriteLS("bram.worklistSubmittedKind", "");
+  }
+  return kind || null;
+};
+
+window.__bramRestoreWorklistSubmittedBaseline = function () {
+  var raw = __bramReadLS("bram.worklistSubmittedBaseline", "");
+  var n = parseInt(raw, 10);
+  return isNaN(n) ? 0 : n;
+};
+
+window.__bramClearWorklistAwaiting = function (clearDraft) {
+  __bramWriteLS("bram.awaitingResponse", "");
+  __bramWriteLS("bram.awaitingResponseSetAt", "");
+  window.__bramSetWorklistSubmittedKind(null);
+  if (clearDraft) {
+    __bramWriteLS("bram.worklistMessageDraft", "");
+  }
+};
+
+window.__bramRestoreSplitterSize = function (key, fallback) {
+  var raw = __bramReadLS("bram.splitter." + key, "");
+  var s = String(raw || "").trim();
+  var n = parseFloat(s);
+  var hasUnit = /(?:px|%)$/i.test(s);
+  var result = (!isNaN(n) && n > 0)
+    ? (hasUnit ? s : (n < 100 ? (n + "%") : (n + "px")))
+    : fallback;
+  window.__bramIframeTrace("splitter-restore", { key: key, raw: raw, result: result });
+  return result;
+};
+
+window.__bramSaveSplitterSize = function (key, sizes) {
+  if (Array.isArray(sizes)) {
+    var a = Number(sizes[0]);
+    var b = Number(sizes[1]);
+    var total = a + b;
+    var pct = total > 0 ? (a / total) * 100 : 0;
+    window.__bramIframeTrace("splitter-save", { key: key, sizes: sizes, pct: pct, unit: "%" });
+    if (pct > 0 && pct < 100) {
+      __bramWriteLS("bram.splitter." + key, String(Math.round(pct * 10) / 10) + "%");
+    }
+    return;
+  }
+  var px = Number(sizes);
+  window.__bramIframeTrace("splitter-save", { key: key, sizes: sizes, px: px, unit: "px" });
+  if (px > 0) {
+    __bramWriteLS("bram.splitter." + key, String(Math.round(px)) + "px");
+  }
+};
+
+// extractImagePaths — promoted from local to window in step 9 so other
+// window.__bram* helpers (sessionTurns / _parseLinesToTurns chain) can
+// share the same regex compile.
+window.__bramExtractImagePaths = function (text) {
+  if (!text) return [];
+  var paths = [];
+  var imagePath = "(?:/[^\\]]+|[A-Za-z]:\\\\[^\\]]+)\\.(?:png|jpg|jpeg|gif|webp)";
+  var re = new RegExp("\\[Image: source: (" + imagePath + ")\\]", "gi");
+  var m;
+  while ((m = re.exec(text)) !== null) paths.push(m[1]);
+  return paths;
+};
+function __bramExtractImagePaths(text) {
+  // Kept as a local alias so the step-3 submission trio above (defined
+  // before the window helper) still resolves.
+  return window.__bramExtractImagePaths(text);
+}
+
+// Submission trio. submitWorklistMessageFast needs the xs-side
+// voiceTarget (still an xs var; step 4 will mirror it onto window).
+// For now the xs delegator passes it as the third argument.
+window.__bramSubmitWorklistMessageFast = function (text, voiceTarget) {
+  if (!text || !text.trim()) return false;
+  var userTyped = text.trim();
+  var toSend = window.__bramWithStagedImageMarkers(userTyped, "message-agent", voiceTarget);
+  var sentAt = Date.now();
+  window.__bramIframeTrace("message-agent-submit", { stage: "before-toTurn", chars: toSend.length, sentAt: sentAt });
+  if (typeof window.toTurn === "function") window.toTurn(toSend);
+  window.__bramIframeTrace("message-agent-submit", { stage: "after-toTurn", chars: toSend.length, sentAt: sentAt });
+  var baseline = 0;
+  __bramWriteLS("bram.worklistMessageDraft", "");
+  __bramWriteLS("bram.worklistSubmittedMessage", userTyped);
+  __bramWriteLS("bram.worklistSubmittedBaseline", String(baseline || 0));
+  window.__bramSetWorklistSubmittedKind("message");
+  return { message: userTyped, images: __bramExtractImagePaths(toSend), baseline: baseline, sentAtText: new Date().toLocaleTimeString() };
+};
+
+window.__bramWithStagedImageMarkers = function (text, target, voiceTarget) {
+  var paths = window.bramConsumePastedImagePaths
+    ? window.bramConsumePastedImagePaths(target || voiceTarget || "")
+    : [];
+  if (!paths || paths.length === 0) return text;
+  var lines = paths.map(function (p) { return "Read this screenshot: @" + p + "\n[Image: source: " + p + "]"; });
+  var markers = lines.join("\n");
+  var skipPrefix = "skip-worklist:";
+  var trimmedStart = (text || "").trimStart();
+  if (trimmedStart.indexOf(skipPrefix) === 0) {
+    var leading = text.slice(0, text.length - trimmedStart.length);
+    var rest = trimmedStart.slice(skipPrefix.length).trimStart();
+    return leading + skipPrefix + " " + markers + (rest ? "\n\n" + rest : "");
+  }
+  return text ? markers + "\n\n" + text : markers;
+};
+
+// Pure predicate — voice-target whitelist for text-input destinations.
+// xs delegator in Globals.xs preserves the bare-name callability.
+window.__bramIsWorklistTextVoiceTarget = function (target) {
+  return ["message-agent", "feedback", "new-item", "new-issue"].indexOf(target || "") !== -1;
+};
+
+// Inflight + submitted-message helpers (audit step 6). All pure data
+// transforms; xs delegators in Globals.xs preserve bare-name calls.
+window.__bramInflightActionLabel = function (kind) {
+  if (kind === "approved") return "Approving";
+  if (kind === "iterate") return "Iterating";
+  if (kind === "drop") return "Dropping";
+  return "";
+};
+
+window.__bramStripImageMarkerPrefix = function (text) {
+  return (text || "").replace(/^(\s*Read this screenshot: @\S+\s*)+/, "").trim();
+};
+
+window.__bramWorklistSubmittedMatches = function (exchangeUserText, submitted) {
+  if (!submitted) return false;
+  var a = window.__bramStripImageMarkerPrefix(exchangeUserText || "").replace(/\s+/g, " ").trim();
+  var b = window.__bramStripImageMarkerPrefix(submitted || "").replace(/\s+/g, " ").trim();
+  return a === b;
+};
+
+window.__bramShouldClearOnAgentTurnKilled = function (awaitingResponseSetAt, exchangeUserText, submittedText) {
+  var submitted = (submittedText || "").trim();
+  if (submitted && !window.__bramWorklistSubmittedMatches(exchangeUserText, submitted)) {
+    window.__bramIframeTrace("awaiting-kill-suppressed", { reason: "exchange-stale" });
+    return false;
+  }
+  var sinceSet = Date.now() - (awaitingResponseSetAt || 0);
+  if (sinceSet > 750) return true;
+  window.__bramIframeTrace("awaiting-kill-suppressed", { reason: "within-window", sinceSet: sinceSet });
+  return false;
+};
+
+// Plain-JS equivalent of xs `App.mark(label)`. App.mark pushes a
+// `kind: "app:mark"` record to the Inspector buffer at window._xsLogs
+// (xmlui/src/components-core/appContext/app-utils.ts:49-53). The
+// pure-JS helpers below preserve the marks so Inspector exports stay
+// comparable across the migration.
+function __bramAppMark(label) {
+  try {
+    if (!window._xsLogs) return;
+    var perfTs = (typeof performance !== "undefined" && performance.now) ? performance.now() : 0;
+    window._xsLogs.push({ kind: "app:mark", ts: Date.now(), label: label, perfTs: perfTs });
+  } catch (e) {}
+}
+
+window.__bramFormatUserTurnForTranscript = function (text) {
+  if (!text) return "";
+  var stripped = text.replace(/^(voice|talk):\s*/, "");
+  if (stripped !== text) return stripped;
+  var m = text.match(/^(approved|drop|iterate):\s*([\s\S]*)$/);
+  if (m) {
+    try {
+      var data = JSON.parse(m[2]);
+      return window.__bramWorklistActionDisplay(m[1], data.items || data.ids || []);
+    } catch (e) {
+      return text;
+    }
+  }
+  return text;
+};
+
+window.__bramWorklistActionStatusLabel = function (item) {
+  var status = (item && item.status) || "proposed";
+  if (status === "applied") return "To Commit";
+  if (status === "proposed") return "To Apply";
+  return status ? status.charAt(0).toUpperCase() + status.slice(1) : "Worklist";
+};
+
+window.__bramConversationPaneUserText = function (text) {
+  if (!text) return "";
+  var stripped = text.replace(/^(voice|talk):\s*/, "");
+  if (stripped !== text) return stripped;
+  var clean = window.__bramStripImageMarkerPrefix(stripped);
+  var m = clean.match(/^(approved|drop|iterate):\s*([\s\S]*)$/);
+  if (!m) return clean;
+  var kind = m[1];
+  try {
+    var data = JSON.parse(m[2]);
+    var items = data.items || data.ids || [];
+    var action = window.__bramWorklistActionDisplay(kind, items);
+    var feedbacks = items
+      .map(function (it) { return (it && typeof it === "object" && it.feedback) ? String(it.feedback).trim() : ""; })
+      .filter(function (s) { return s.length > 0; });
+    if (feedbacks.length === 0) return action;
+    return action + "\n\n" + feedbacks.join("\n\n");
+  } catch (e) {
+    return clean;
+  }
+};
+
+window.__bramWorklistActionDisplay = function (kind, items) {
+  var action =
+    kind === "approved" ? "Approved" :
+    kind === "iterate" ? "Iterated" :
+    kind === "drop" ? "Dropped" :
+    "Submitted";
+  var ids = (items || []).map(function (i) {
+    if (typeof i === "string") return i;
+    return (i && i.id) || "";
+  }).filter(Boolean);
+  if (ids.length === 0) return action;
+  if (ids.length === 1) return action + " " + ids[0];
+  return action + " " + ids.length + " items: " + ids.join(", ");
+};
+
+window.__bramWorklistActionStatusSuffix = function (item) {
+  var status = (item && item.status) || "proposed";
+  if (status === "applied") return " to commit";
+  if (status === "proposed") return " to apply";
+  return "";
+};
+
+window.__bramWorklistActionConversationDisplay = function (kind, items, selectedId, feedback) {
+  var selected = (items || []).filter(function (i) { return i.id === selectedId; });
+  var suffix = selected.length === 1 ? window.__bramWorklistActionStatusSuffix(selected[0]) : "";
+  return window.__bramWorklistActionDisplay(kind, selected) + suffix;
+};
+
+window.__bramTraceIterateEnabled = function (submitting, selected, selectedFeedback) {
+  __bramAppMark("iterate-enabled");
+  return !submitting && !!selected && (selectedFeedback || "").trim().length > 0;
+};
+
+window.__bramTraceApproveDropEnabled = function (submitting, selected) {
+  __bramAppMark("approve-drop-enabled");
+  return !submitting && !!selected;
+};
+
+window.__bramBuildApprovePayload = function (items, selectedId, feedback) {
+  __bramAppMark("build-approve-payload");
+  return JSON.stringify({
+    items: (items || []).filter(function (i) { return i.id === selectedId; })
+      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback }; }),
+  });
+};
+
+window.__bramBuildIteratePayload = function (items, selectedId, feedback) {
+  __bramAppMark("build-iterate-payload");
+  // feedback may be either an inline string (backward-compat) or a
+  // `{ feedbackRef: "<id>" }` object (new, from queueFeedbackDraft).
+  return JSON.stringify({
+    items: (items || []).filter(function (i) { return i.id === selectedId; })
+      .map(function (i) {
+        return feedback && typeof feedback === "object" && feedback.feedbackRef
+          ? { id: i.id, hash: i.hash, feedbackRef: feedback.feedbackRef }
+          : { id: i.id, hash: i.hash, feedback: feedback };
+      }),
+  });
+};
+
+window.__bramBuildDropPayload = function (items, selectedId, feedback) {
+  __bramAppMark("build-drop-payload");
+  return JSON.stringify({
+    items: (items || []).filter(function (i) { return i.id === selectedId; })
+      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback }; }),
+  });
+};
+
+window.__bramBuildSingleItemApprovePayload = function (itemRef, feedback) {
+  __bramAppMark("build-single-item-approve-payload");
+  return JSON.stringify({
+    items: [{ id: itemRef.id, hash: itemRef.hash, feedback: feedback }],
+  });
+};
+
+window.__bramCountByStatus = function (items, status) {
+  return (items || []).filter(function (i) { return (i.status || "proposed") === status; }).length;
+};
+
+window.__bramBuildBatchApprovePayload = function (items, feedback) {
+  __bramAppMark("build-batch-approve-payload");
+  return JSON.stringify({
+    items: (items || []).filter(function (i) { return (i.status || "proposed") === "applied"; })
+      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback || "" }; }),
+  });
+};
+
+window.__bramBuildBatchDropPayload = function (items, feedback) {
+  __bramAppMark("build-batch-drop-payload");
+  return JSON.stringify({
+    items: (items || []).filter(function (i) { return (i.status || "proposed") === "applied"; })
+      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback || "" }; }),
+  });
+};
+
+// Step 9 — sessionTurns bundle. Image / markdown / tool parsers +
+// JSONL → turns parser + sessionTurns with its function-property memo.
+// All pure data transforms; internal calls dispatch to window.__bram*
+// directly so the whole chain stays in plain JS.
+
+window.__bramRewriteXmluiDocUrls = function (text) {
+  if (!text) return text;
+  return text
+    .replace(/https:\/\/docs\.xmlui\.org\/components\//g, "https://www.xmlui.org/docs/reference/components/")
+    .replace(/https:\/\/docs\.xmlui\.org\//g, "https://www.xmlui.org/docs/");
+};
+
+window.__bramStripImagePaths = function (text) {
+  if (!text) return text;
+  var imagePath = "(?:/[^\\]]+|[A-Za-z]:\\\\[^\\]]+)\\.(?:png|jpg|jpeg|gif|webp)";
+  return text
+    .replace(new RegExp("\\n*\\[Image: source: " + imagePath + "\\]", "gi"), "")
+    .replace(/^(\s*Read this screenshot: @\S+\s*)+/, "")
+    .trim();
+};
+
+window.__bramExtractMarkdownImages = function (text) {
+  if (!text) return [];
+  var urls = [];
+  var md = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+  var m;
+  while ((m = md.exec(text)) !== null) urls.push(m[1]);
+  var html = /<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi;
+  while ((m = html.exec(text)) !== null) urls.push(m[1]);
+  return urls;
+};
+
+window.__bramStripMarkdownImages = function (text) {
+  if (!text) return text;
+  return text
+    .replace(/\n*!\[[^\]]*\]\([^)\s]+(?:\s+"[^"]*")?\)/g, "")
+    .replace(/\n*<img\b[^>]*\bsrc=["'][^"']+["'][^>]*>/gi, "");
+};
+
+window.__bramToolSummary = function (name, input) {
+  if (!input || typeof input !== "object") return name || "";
+  if (name === "Edit" || name === "MultiEdit") {
+    return (input.file_path || "") + " edited";
+  }
+  if (name === "Write") {
+    var lines = (input.content || "").split("\n").length;
+    return (input.file_path || "") + " — wrote " + lines + " line" + (lines === 1 ? "" : "s");
+  }
+  if (name === "Bash") {
+    var cmd = input.command || "";
+    return cmd.length > 80 ? cmd.slice(0, 80) + "…" : cmd;
+  }
+  if (name === "Read") {
+    var s = input.file_path || "";
+    if (input.offset || input.limit) {
+      var start = input.offset || 1;
+      s += ":" + start;
+      if (input.limit) s += "-" + (start + input.limit - 1);
+    }
+    return s;
+  }
+  if (name === "Grep" || name === "Glob") {
+    return (input.pattern || "") + (input.path ? " in " + input.path : "");
+  }
+  if (name === "Task" || name === "Agent") {
+    return (input.subagent_type || "") + (input.description ? " — " + input.description : "");
+  }
+  return name || "";
+};
+
+window.__bramParseJsonString = function (value) {
+  if (typeof value !== "string") return null;
+  try {
+    return JSON.parse(value);
+  } catch (e) {
+    return null;
+  }
+};
+
+window.__bramCodexToolName = function (payload) {
+  if (!payload) return "";
+  if (payload.namespace) return payload.namespace.replace(/^mcp__/, "") + "." + (payload.name || "");
+  return payload.name || "";
+};
+
+window.__bramCodexToolInput = function (payload) {
+  if (!payload) return {};
+  if (payload.type === "function_call") {
+    var parsed = window.__bramParseJsonString(payload.arguments);
+    return parsed !== null ? parsed : (payload.arguments || {});
+  }
+  if (payload.type === "custom_tool_call") {
+    var parsed2 = window.__bramParseJsonString(payload.input);
+    return parsed2 !== null ? parsed2 : (payload.input || "");
+  }
+  return {};
+};
+
+window.__bramCodexToolSummary = function (payload) {
+  if (!payload) return "";
+  var name = window.__bramCodexToolName(payload);
+  var input = window.__bramCodexToolInput(payload);
+  if (payload.name === "exec_command" && input && typeof input === "object" && input.cmd) {
+    return input.cmd.length > 80 ? input.cmd.slice(0, 80) + "…" : input.cmd;
+  }
+  if (payload.name === "write_stdin" && input && typeof input === "object") {
+    var chars = input.chars || "";
+    var session = input.session_id ? ("session " + input.session_id) : "stdin";
+    if (!chars) return session;
+    var label = chars === "" ? "Esc" : chars.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+    return session + " ← " + (label.length > 40 ? label.slice(0, 40) + "…" : label);
+  }
+  if (payload.name === "apply_patch" && typeof input === "string") {
+    var m = input.match(/\*\*\* (?:Add|Update|Delete) File: ([^\n]+)/);
+    return m ? (m[1] + " patch") : "patch";
+  }
+  if (name.indexOf("filesystem.") === 0 && input && typeof input === "object" && input.path) {
+    return input.path;
+  }
+  if (name.indexOf("xmlui.") === 0 && input && typeof input === "object") {
+    return input.path || input.component || input.query || name;
+  }
+  if (input && typeof input === "object") return window.__bramToolSummary(payload.name || name, input);
+  return name;
+};
+
+window.__bramToolInputJsonLines = function (input, maxLines) {
+  var cap = maxLines || 20;
+  if (input === null || input === undefined) return { lines: [], remaining: 0 };
+  if (typeof input === "string") {
+    var allStr = input.split("\n");
+    return { lines: allStr.slice(0, cap), remaining: Math.max(0, allStr.length - cap) };
+  }
+  var json;
+  try {
+    json = JSON.stringify(input, null, 2);
+  } catch (e) {
+    return { lines: ["(unserializable input)"], remaining: 0 };
+  }
+  var all = json.split("\n");
+  return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
+};
+
+window.__bramToolResultText = function (content) {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(function (c) { return c && c.type === "text"; })
+      .map(function (c) { return c.text || ""; })
+      .join("\n");
+  }
+  return "";
+};
+
+window.__bramIsErrorResult = function (block) {
+  if (!block) return false;
+  if (block.is_error) return true;
+  var text = window.__bramToolResultText(block.content);
+  return text.indexOf("Error:") === 0 || text.indexOf("<tool_use_error>") === 0;
+};
+
+window.__bramCodexToolOutput = function (payload) {
+  if (!payload || (payload.type !== "function_call_output" && payload.type !== "custom_tool_call_output")) {
+    return null;
+  }
+  var raw = payload.output;
+  if (typeof raw !== "string") return { text: "", errored: false };
+  var parsed = window.__bramParseJsonString(raw);
+  if (parsed && typeof parsed === "object") {
+    var text = typeof parsed.output === "string"
+      ? parsed.output
+      : typeof parsed.stderr === "string"
+        ? parsed.stderr
+        : raw;
+    var exitCode = parsed.metadata && typeof parsed.metadata.exit_code === "number"
+      ? parsed.metadata.exit_code
+      : null;
+    return { text: text, errored: exitCode !== null && exitCode !== 0 };
+  }
+  var exitMatch = raw.match(/Process exited with code (\d+)/);
+  var ec = exitMatch ? parseInt(exitMatch[1], 10) : 0;
+  return { text: raw, errored: !!exitMatch && ec !== 0 };
+};
+
+window.__bramTurnsLooselyEqual = function (a, b) {
+  if (!a || !b) return false;
+  if (a.role !== b.role) return false;
+  if (a.text !== b.text) return false;
+  var ae = a.entries || [], be = b.entries || [];
+  if (ae.length !== be.length) return false;
+  for (var i = 0; i < ae.length; i++) {
+    var x = ae[i], y = be[i];
+    if (!x || !y) return false;
+    if (x.kind !== y.kind) return false;
+    if (x.kind === "text") {
+      if (x.text !== y.text) return false;
+    } else {
+      if (x.id !== y.id) return false;
+      if (!!x.errored !== !!y.errored) return false;
+    }
+  }
+  var ai = a.images || [], bi = b.images || [];
+  if (ai.length !== bi.length) return false;
+  return true;
+};
+
+window.__bramParseLinesToTurns = function (lines, toolIndex) {
+  toolIndex = toolIndex || {};
+  var turns = [];
+  for (var li = 0; li < lines.length; li++) {
+    var line = lines[li];
+    if (!line) continue;
+    var r;
+    try { r = JSON.parse(line); } catch (e) { continue; }
+    var role = null;
+    var entries = [];
+    var inlineImages = [];
+    if (r.type === "user" || r.type === "assistant") {
+      if (!r.message || !r.message.content) continue;
+      role = r.type;
+      var content = r.message.content;
+      if (typeof content === "string") {
+        if (content) entries.push({ kind: "text", text: content });
+      } else if (Array.isArray(content)) {
+        for (var ci = 0; ci < content.length; ci++) {
+          var c = content[ci];
+          if (!c) continue;
+          if (c.type === "text" && c.text) {
+            entries.push({ kind: "text", text: c.text });
+          } else if (c.type === "tool_use") {
+            var entry = {
+              kind: "tool",
+              id: c.id,
+              name: c.name,
+              summary: window.__bramToolSummary(c.name, c.input || {}),
+            };
+            entries.push(entry);
+            if (c.id) toolIndex[c.id] = entry;
+          } else if (c.type === "tool_result") {
+            var matching = c.tool_use_id && toolIndex[c.tool_use_id];
+            if (matching) {
+              matching.errored = window.__bramIsErrorResult(c);
+              if (matching.errored) {
+                var txt = window.__bramToolResultText(c.content);
+                matching.errorText = txt.split("\n")[0].slice(0, 200);
+              }
+            }
+          } else if (c.type === "image" && c.source && c.source.type === "base64" && c.source.data) {
+            var mt = c.source.media_type || "image/png";
+            inlineImages.push("data:" + mt + ";base64," + c.source.data);
+          }
+        }
+      }
+    } else if (r.type === "event_msg" && r.payload) {
+      if (r.payload.type === "user_message") role = "user";
+      if (r.payload.type === "agent_message") role = "assistant";
+      var t = r.payload.message || "";
+      if (t) entries.push({ kind: "text", text: t });
+    } else if (r.type === "response_item" && r.payload) {
+      var p = r.payload;
+      if (p.type === "function_call" || p.type === "custom_tool_call") {
+        role = "assistant";
+        var entry2 = {
+          kind: "tool",
+          id: p.call_id,
+          name: window.__bramCodexToolName(p),
+          summary: window.__bramCodexToolSummary(p),
+        };
+        entries.push(entry2);
+        if (p.call_id) toolIndex[p.call_id] = entry2;
+      } else if (p.type === "function_call_output" || p.type === "custom_tool_call_output") {
+        var matching2 = p.call_id && toolIndex[p.call_id];
+        if (matching2) {
+          var output = window.__bramCodexToolOutput(p);
+          matching2.errored = !!(output && output.errored);
+          if (output && output.text) {
+            var firstLine = output.text.split("\n")[0].slice(0, 200);
+            if (matching2.errored) matching2.errorText = firstLine;
+          }
+        }
+      }
+    }
+    if (!role) continue;
+    if (entries.length === 0 && inlineImages.length === 0) continue;
+    var originalJoined = entries.filter(function (e) { return e.kind === "text"; })
+      .map(function (e) { return e.text; }).join("\n\n");
+    var pathsFromText = window.__bramExtractImagePaths(originalJoined);
+    for (var ei = 0; ei < entries.length; ei++) {
+      var e2 = entries[ei];
+      if (e2.kind === "text") {
+        e2.text = window.__bramStripImagePaths(window.__bramRewriteXmluiDocUrls(e2.text));
+      }
+    }
+    var textJoined = entries.filter(function (e) { return e.kind === "text"; })
+      .map(function (e) { return e.text; }).join("\n\n");
+    if (role === "user" && inlineImages.length === 0 && entries.every(function (e) { return e.kind === "text"; })
+        && /^(\[Image: source: [^\]]+\]\s*)+$/.test(originalJoined.trim())) continue;
+    if (entries.length === 0 && inlineImages.length === 0) continue;
+    turns.push({
+      role: role,
+      text: textJoined,
+      entries: entries,
+      images: inlineImages.length > 0 ? inlineImages : pathsFromText,
+    });
+  }
+  return turns;
+};
+
+// sessionTurns with function-property memoization. Cache lives on the
+// window.__bramSessionTurns function object itself (._cacheKey /
+// ._cacheValue / ._parseCount), same shape as the xs original. Polled
+// JSONL identity check + incremental parse via prefix-extension are
+// preserved exactly.
+window.__bramSessionTurns = function (jsonlText) {
+  var fn = window.__bramSessionTurns;
+  if (!jsonlText) return fn._cacheValue || [];
+  if (fn._cacheKey === jsonlText && fn._cacheValue) {
+    return fn._cacheValue;
+  }
+  var prevKey = fn._cacheKey;
+  var prevValue = fn._cacheValue;
+  var now0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  if (prevKey && prevValue && jsonlText.length > prevKey.length &&
+      jsonlText.substring(0, prevKey.length) === prevKey) {
+    var suffix = jsonlText.substring(prevKey.length);
+    var toolIndex = {};
+    for (var ti = 0; ti < prevValue.length; ti++) {
+      var t = prevValue[ti];
+      var es = t.entries || [];
+      for (var ei = 0; ei < es.length; ei++) {
+        var e = es[ei];
+        if (e && e.kind === "tool" && e.id) toolIndex[e.id] = e;
+      }
+    }
+    var newTurns = window.__bramParseLinesToTurns(suffix.split("\n"), toolIndex);
+    fn._cacheKey = jsonlText;
+    fn._cacheValue = newTurns.length > 0 ? prevValue.concat(newTurns) : prevValue;
+    fn._parseCount = (fn._parseCount || 0) + 1;
+    var now1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+    var elapsed = now1 - now0;
+    if (elapsed > 2 || newTurns.length > 0) {
+      window.__bramIframeTrace("sessionTurns-parse", {
+        ms: Math.round(elapsed),
+        len: jsonlText.length,
+        suffixLen: suffix.length,
+        turns: fn._cacheValue.length,
+        newTurns: newTurns.length,
+        n: fn._parseCount,
+        path: "incremental",
+      });
+    }
+    return fn._cacheValue;
+  }
+  fn._parseCount = (fn._parseCount || 0) + 1;
+  var turns = window.__bramParseLinesToTurns(jsonlText.split("\n"));
+  var prev = fn._cacheValue || [];
+  for (var i = 0; i < turns.length && i < prev.length; i++) {
+    if (window.__bramTurnsLooselyEqual(turns[i], prev[i])) {
+      turns[i] = prev[i];
+    } else {
+      break;
+    }
+  }
+  fn._cacheKey = jsonlText;
+  fn._cacheValue = turns;
+  var now2 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  var elapsed2 = now2 - now0;
+  if (elapsed2 > 2) {
+    window.__bramIframeTrace("sessionTurns-parse", {
+      ms: Math.round(elapsed2),
+      len: jsonlText.length,
+      turns: turns.length,
+      n: fn._parseCount,
+      path: "full",
+    });
+  }
+  return turns;
+};
+
+// History helpers (audit step 8). All pure. Internal calls go through
+// the window.__bram* versions directly so the whole chain stays in
+// plain JS (xs delegators below are entry points only).
+
+window.__bramHistoryPhaseKind = function (phase) {
+  var summary = ((phase && phase.summary) || "").toLowerCase();
+  if (summary.indexOf("applied") >= 0) return "applied";
+  if (summary.indexOf("proposed") >= 0) return "proposed";
+  return "";
+};
+
+window.__bramHistoryDecodeJsonStringValue = function (raw) {
+  if (!raw) return "";
+  try {
+    return JSON.parse('"' + raw + '"');
+  } catch (err) {
+    return raw.replace(/\\n/g, "\n").replace(/\\"/g, '"');
+  }
+};
+
+window.__bramHistoryExtractProseFromDiff = function (diff) {
+  var lines = (diff || "").split("\n");
+  var before = "";
+  var after = "";
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var afterMatch = line.match(/^\+\s+"after":\s+"(.*)"[,]?$/);
+    if (afterMatch) {
+      after = window.__bramHistoryDecodeJsonStringValue(afterMatch[1].replace(/",?$/, ""));
+      continue;
+    }
+    var beforeMatch = line.match(/^\+\s+"before":\s+"(.*)"[,]?$/);
+    if (beforeMatch) {
+      before = window.__bramHistoryDecodeJsonStringValue(beforeMatch[1].replace(/",?$/, ""));
+    }
+  }
+  return after || before;
+};
+
+window.__bramHistoryLatestPhase = function (group) {
+  var phases = (group && group.phases) || [];
+  return phases.length > 0 ? phases[phases.length - 1] : null;
+};
+
+window.__bramHistoryCurrentItem = function (group) {
+  return (group && group.currentItem) || null;
+};
+
+window.__bramHistoryItemProse = function (item) {
+  if (!item) return "";
+  var after = typeof item.after === "string" ? item.after.trim() : "";
+  if (after) return after;
+  var before = typeof item.before === "string" ? item.before.trim() : "";
+  return before;
+};
+
+window.__bramHistoryCurrentProsePhase = function (group) {
+  var item = window.__bramHistoryCurrentItem(group);
+  var itemProse = window.__bramHistoryItemProse(item);
+  if (itemProse) {
+    return {
+      phase: window.__bramHistoryLatestPhase(group),
+      prose: itemProse,
+      source: "snapshot",
+    };
+  }
+  var phases = (group && group.phases) || [];
+  for (var i = phases.length - 1; i >= 0; i--) {
+    var prose = window.__bramHistoryExtractProseFromDiff(phases[i].diff || "");
+    if (prose) {
+      return { phase: phases[i], prose: prose, source: "diff" };
+    }
+  }
+  return { phase: null, prose: "", source: "" };
+};
+
+window.__bramHistoryCardProsePreview = function (group) {
+  var current = window.__bramHistoryCurrentProsePhase(group).prose || "";
+  var normalized = current.replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  if (normalized.length <= 240) return normalized;
+  return normalized.slice(0, 237).trimEnd() + "...";
+};
+
+window.__bramHistoryDateParts = function (iso) {
+  if (!iso) return { date: "", time: "" };
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) {
+    return { date: iso.slice(0, 10), time: iso.slice(11, 16) };
+  }
+  var pad = function (n) { return String(n).padStart(2, "0"); };
+  return {
+    date: d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()),
+    time: pad(d.getHours()) + ":" + pad(d.getMinutes()),
+  };
+};
+
+window.__bramHistoryDateRangeLine = function (group) {
+  var phases = (group && group.phases) || [];
+  if (!phases.length) return "";
+  var first = window.__bramHistoryDateParts((phases[0] || {}).iso || "");
+  var last = window.__bramHistoryDateParts((phases[phases.length - 1] || {}).iso || "");
+  if (first.date && first.date === last.date) {
+    return "On " + first.date + " from " + first.time + " to " + last.time;
+  }
+  return "From " + first.date + " " + first.time + " to " + last.date + " " + last.time;
+};
+
+window.__bramHistoryPhaseLabel = function (phase) {
+  var summary = ((phase && phase.summary) || "").toLowerCase();
+  if (summary.indexOf("committed") >= 0) return "Committed";
+  if (summary.indexOf("applied") >= 0) return "Applied";
+  if (summary.indexOf("proposed") >= 0) return "Proposed";
+  if (summary.indexOf("dropped") >= 0 || summary.indexOf("pruned") >= 0) return "Dropped";
+  return (phase && phase.summary) || "Changed";
+};
+
+window.__bramHistoryPhasePath = function (group) {
+  var phases = (group && group.phases) || [];
+  var labels = [];
+  for (var i = 0; i < phases.length; i++) {
+    var label = window.__bramHistoryPhaseLabel(phases[i]);
+    if (labels[labels.length - 1] !== label) labels.push(label);
+  }
+  return labels.join(" -> ");
+};
+
+window.__bramHistoryItemFieldMarkdown = function (group, field) {
+  var item = window.__bramHistoryCurrentItem(group);
+  var value = item && typeof item[field] === "string" ? item[field].trim() : "";
+  return value || "";
+};
+
+window.__bramHistoryItemFilesLine = function (group) {
+  var item = window.__bramHistoryCurrentItem(group);
+  if (!item) return "";
+  if (Array.isArray(item.files)) return item.files.join(", ");
+  if (typeof item.file === "string") return item.file;
+  return "";
+};
+
+window.__bramHistoryLatestProseChanged = function (group) {
+  var phase = window.__bramHistoryLatestPhase(group);
+  var diff = (phase && phase.diff) || "";
+  return diff.indexOf('"before"') >= 0 || diff.indexOf('"after"') >= 0;
+};
+
+window.__bramHistoryDraftWasMissing = function (group) {
+  var item = window.__bramHistoryCurrentItem(group);
+  return !!(item && item._draftMissing);
+};
+
+window.__bramHistoryItemFate = function (group) {
+  var phases = (group && group.phases) || [];
+  for (var i = phases.length - 1; i >= 0; i--) {
+    var summary = ((phases[i] && phases[i].summary) || "").toLowerCase();
+    if (summary.indexOf("committed") >= 0) return "Fate: committed.";
+    if (summary.indexOf("dropped") >= 0 || summary.indexOf("pruned") >= 0) return "Fate: dropped.";
+  }
+  return "Fate: still active.";
+};
+
+window.__bramInflightSentinelDecide = function (data, prevSubmitting, prevSubmittedItemId) {
+  var claimIds = (data && data.ids) || [];
+  if (claimIds.length > 0) {
+    var targeted = claimIds[0];
+    var transitioning = !prevSubmitting || prevSubmittedItemId !== targeted;
+    return {
+      kind: "submit",
+      submitting: transitioning ? true : prevSubmitting,
+      submittedItemId: transitioning ? targeted : prevSubmittedItemId,
+      actionProgressKind: (data && data.kind) || "",
+    };
+  } else if (prevSubmitting) {
+    return {
+      kind: "clear",
+      trace: { reason: "sentinel-cleared", item: prevSubmittedItemId || "" },
+    };
+  }
+  return { kind: "none" };
+};
+
+window.__bramRecordWorklistFeedbackConversation = function (text) {
+  if (!text || !text.trim()) return false;
+  var message = text.trim();
+  var baseline = 0;
+  __bramWriteLS("bram.worklistSubmittedMessage", message);
+  __bramWriteLS("bram.worklistSubmittedBaseline", String(baseline));
+  window.__bramSetWorklistSubmittedKind("action");
+  return { message: message, images: __bramExtractImagePaths(message), baseline: baseline, sentAtText: new Date().toLocaleTimeString() };
+};
+
 // Self-init: read `traces.enabled` from `/__settings` once at iframe
 // load and cache the result on `window.__bramTracesEnabled`. The
-// `iframeTrace` (Globals.xs) and `logToHost` (above) bodies gate on
+// `iframeTrace` (above) and `logToHost` (above) bodies gate on
 // this flag so trace-off sessions skip the IPC roundtrip entirely
 // instead of paying the cost only for the host to drop the line.
 // Default-ON until the fetch resolves preserves current behavior
@@ -454,10 +1599,10 @@ window.logToHost = function (payload) {
 // __toolbarPendingMenuPresent scope errors fixed in 4ad0716). Inherits
 // the master-flag short-circuit via the gate in `logToHost` above.
 //
-// Uses window.logToHost directly rather than the xs `iframeTrace`
-// function (which lives in Globals.xs and isn't reliably reachable
-// from plain JS at this load point). Payload shape matches what
-// iframeTrace produces: kind="iframe-trace", subkind=...
+// Uses window.logToHost directly rather than `window.iframeTrace`
+// above; payload shape is the same (kind="iframe-trace", subkind=...)
+// but the explicit logToHost call sidesteps a re-entrancy risk if
+// iframeTrace ever logged a console error.
 (function installConsoleInterleave() {
   if (typeof window.logToHost !== "function") return;
   if (window.__bramConsoleInterleaveInstalled) return;

@@ -29,14 +29,6 @@ function paragraphsContaining(text, query) {
   return hits.length > 0 ? hits.join('\n\n') : text;
 }
 
-function currentSourceFile(pathname) {
-  if (pathname === '/sessions') return 'components/Sessions.xmlui';
-  if (pathname === '/') return 'components/Workspace.xmlui';
-  if (pathname === '/worklist') return 'components/Workspace.xmlui';
-  if (pathname === '/status') return 'components/Status.xmlui';
-  return 'Main.xmlui';
-}
-
 function statusSectionSubhead(title) {
   const descriptions = {
     'Startup Run': 'first-minute load',
@@ -88,195 +80,55 @@ function statusSignalDescription(signal) {
 }
 
 function historyPhaseKind(phase) {
-  const summary = ((phase && phase.summary) || '').toLowerCase();
-  if (summary.indexOf('applied') >= 0) return 'applied';
-  if (summary.indexOf('proposed') >= 0) return 'proposed';
-  return '';
+  return window.__bramHistoryPhaseKind(phase);
 }
-
 function historyDecodeJsonStringValue(raw) {
-  if (!raw) return '';
-  try {
-    return JSON.parse('"' + raw + '"');
-  } catch (err) {
-    return raw.replace(/\\n/g, '\n').replace(/\\"/g, '"');
-  }
+  return window.__bramHistoryDecodeJsonStringValue(raw);
 }
-
 function historyExtractProseFromDiff(diff) {
-  const lines = (diff || '').split('\n');
-  let before = '';
-  let after = '';
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const afterMatch = line.match(/^\+\s+"after":\s+"(.*)"[,]?$/);
-    if (afterMatch) {
-      after = historyDecodeJsonStringValue(afterMatch[1].replace(/",?$/, ''));
-      continue;
-    }
-    const beforeMatch = line.match(/^\+\s+"before":\s+"(.*)"[,]?$/);
-    if (beforeMatch) {
-      before = historyDecodeJsonStringValue(beforeMatch[1].replace(/",?$/, ''));
-    }
-  }
-  return after || before;
+  return window.__bramHistoryExtractProseFromDiff(diff);
 }
-
 function historyCurrentProsePhase(group) {
-  const item = historyCurrentItem(group);
-  const itemProse = historyItemProse(item);
-  if (itemProse) {
-    return {
-      phase: historyLatestPhase(group),
-      prose: itemProse,
-      source: 'snapshot'
-    };
-  }
-  const phases = (group && group.phases) || [];
-  for (let i = phases.length - 1; i >= 0; i--) {
-    const prose = historyExtractProseFromDiff(phases[i].diff || '');
-    if (prose) {
-      return { phase: phases[i], prose, source: 'diff' };
-    }
-  }
-  return { phase: null, prose: '', source: '' };
+  return window.__bramHistoryCurrentProsePhase(group);
 }
-
 function historyLatestPhase(group) {
-  const phases = (group && group.phases) || [];
-  return phases.length > 0 ? phases[phases.length - 1] : null;
+  return window.__bramHistoryLatestPhase(group);
 }
-
 function historyCurrentItem(group) {
-  return (group && group.currentItem) || null;
+  return window.__bramHistoryCurrentItem(group);
 }
-
 function historyItemProse(item) {
-  if (!item) return '';
-  const after = typeof item.after === 'string' ? item.after.trim() : '';
-  if (after) return after;
-  const before = typeof item.before === 'string' ? item.before.trim() : '';
-  return before;
+  return window.__bramHistoryItemProse(item);
 }
-
-function historyCurrentProsePreview(group) {
-  const current = historyCurrentProsePhase(group).prose || '';
-  const lines = current.split('\n');
-  const preview = lines.slice(0, 8).join('\n');
-  if (preview.length <= 700) {
-    return preview;
-  }
-  return preview.slice(0, 700).trimEnd() + '\n...';
-}
-
 function historyCardProsePreview(group) {
-  const current = historyCurrentProsePhase(group).prose || '';
-  const normalized = current.replace(/\s+/g, ' ').trim();
-  if (!normalized) return '';
-  if (normalized.length <= 240) return normalized;
-  return normalized.slice(0, 237).trimEnd() + '...';
+  return window.__bramHistoryCardProsePreview(group);
 }
-
 function historyDateParts(iso) {
-  if (!iso) return { date: '', time: '' };
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) {
-    return { date: iso.slice(0, 10), time: iso.slice(11, 16) };
-  }
-  const pad = (n) => String(n).padStart(2, '0');
-  return {
-    date: d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()),
-    time: pad(d.getHours()) + ':' + pad(d.getMinutes())
-  };
+  return window.__bramHistoryDateParts(iso);
 }
-
 function historyDateRangeLine(group) {
-  const phases = (group && group.phases) || [];
-  if (!phases.length) return '';
-  const first = historyDateParts((phases[0] || {}).iso || '');
-  const last = historyDateParts((phases[phases.length - 1] || {}).iso || '');
-  if (first.date && first.date === last.date) {
-    return 'On ' + first.date + ' from ' + first.time + ' to ' + last.time;
-  }
-  return 'From ' + first.date + ' ' + first.time + ' to ' + last.date + ' ' + last.time;
+  return window.__bramHistoryDateRangeLine(group);
 }
-
 function historyPhaseLabel(phase) {
-  const summary = ((phase && phase.summary) || '').toLowerCase();
-  if (summary.indexOf('committed') >= 0) return 'Committed';
-  if (summary.indexOf('applied') >= 0) return 'Applied';
-  if (summary.indexOf('proposed') >= 0) return 'Proposed';
-  if (summary.indexOf('dropped') >= 0 || summary.indexOf('pruned') >= 0) return 'Dropped';
-  return (phase && phase.summary) || 'Changed';
+  return window.__bramHistoryPhaseLabel(phase);
 }
-
 function historyPhasePath(group) {
-  const phases = (group && group.phases) || [];
-  const labels = [];
-  for (let i = 0; i < phases.length; i++) {
-    const label = historyPhaseLabel(phases[i]);
-    if (labels[labels.length - 1] !== label) labels.push(label);
-  }
-  return labels.join(' -> ');
+  return window.__bramHistoryPhasePath(group);
 }
-
 function historyItemFieldMarkdown(group, field) {
-  const item = historyCurrentItem(group);
-  const value = item && typeof item[field] === 'string' ? item[field].trim() : '';
-  return value || '';
+  return window.__bramHistoryItemFieldMarkdown(group, field);
 }
-
 function historyItemFilesLine(group) {
-  const item = historyCurrentItem(group);
-  if (!item) return '';
-  if (Array.isArray(item.files)) return item.files.join(', ');
-  if (typeof item.file === 'string') return item.file;
-  return '';
+  return window.__bramHistoryItemFilesLine(group);
 }
-
-function historyProseProvenance(group) {
-  const current = historyCurrentProsePhase(group);
-  const kind = historyPhaseKind(current.phase) || historyPhaseKind({ summary: group && group.prosePhaseSummary });
-  const fate = historyItemFate(group);
-  if (historyDraftWasMissing(group)) {
-    return 'Draft missing:';
-  }
-  if (kind === 'applied') {
-    const changed = historyLatestProseChanged(group);
-    if (fate === 'Fate: committed.') {
-      return changed ? 'As committed, changed from proposal:' : 'As committed, unchanged from proposal:';
-    }
-    return changed ? 'As applied, changed from proposal:' : 'As applied, unchanged from proposal:';
-  }
-  if (kind === 'proposed') {
-    return fate === 'Fate: committed.' ? 'As committed:' : 'As proposed:';
-  }
-  return 'No prose:';
-}
-
 function historyLatestProseChanged(group) {
-  const phase = historyLatestPhase(group);
-  const diff = (phase && phase.diff) || '';
-  return diff.indexOf('"before"') >= 0 || diff.indexOf('"after"') >= 0;
+  return window.__bramHistoryLatestProseChanged(group);
 }
-
 function historyDraftWasMissing(group) {
-  const item = historyCurrentItem(group);
-  return !!(item && item._draftMissing);
+  return window.__bramHistoryDraftWasMissing(group);
 }
-
 function historyItemFate(group) {
-  const phases = (group && group.phases) || [];
-  for (let i = phases.length - 1; i >= 0; i--) {
-    const summary = ((phases[i] && phases[i].summary) || '').toLowerCase();
-    if (summary.indexOf('committed') >= 0) return 'Fate: committed.';
-    if (summary.indexOf('dropped') >= 0 || summary.indexOf('pruned') >= 0) return 'Fate: dropped.';
-  }
-  return 'Fate: still active.';
-}
-
-function historyItemJson(group) {
-  return JSON.stringify(group || {}, null, 2);
+  return window.__bramHistoryItemFate(group);
 }
 
 // Past transcripts often contain broken docs.xmlui.org/... URLs (the form the
@@ -284,174 +136,42 @@ function historyItemJson(group) {
 // www.xmlui.org/docs/... with a `reference/` segment for component pages.
 // Rewrite on the way to Markdown so links resolve when clicked.
 function rewriteXmluiDocUrls(text) {
-  if (!text) return text;
-  return text
-    .replace(/https:\/\/docs\.xmlui\.org\/components\//g, 'https://www.xmlui.org/docs/reference/components/')
-    .replace(/https:\/\/docs\.xmlui\.org\//g, 'https://www.xmlui.org/docs/');
+  return window.__bramRewriteXmluiDocUrls(text);
 }
-
-// XMLUI's Markdown sanitizes file:// URLs and rewrites their anchors into
-// non-clickable spans, so we can't get a working file-link out of Markdown.
-// Strip the image-source footers from the markdown text and return them as
-// a separate array; the Transcript component renders them as inline thumbnails
-// and Sessions as XMLUI Links.
 function extractImagePaths(text) {
-  if (!text) return [];
-  const paths = [];
-  const imagePath = '(?:/[^\\]]+|[A-Za-z]:\\\\[^\\]]+)\\.(?:png|jpg|jpeg|gif|webp)';
-  const re = new RegExp('\\[Image: source: (' + imagePath + ')\\]', 'gi');
-  let m;
-  while ((m = re.exec(text)) !== null) paths.push(m[1]);
-  return paths;
+  return window.__bramExtractImagePaths(text);
 }
 function stripImagePaths(text) {
-  if (!text) return text;
-  const imagePath = '(?:/[^\\]]+|[A-Za-z]:\\\\[^\\]]+)\\.(?:png|jpg|jpeg|gif|webp)';
-  return text
-    .replace(new RegExp('\\n*\\[Image: source: ' + imagePath + '\\]', 'gi'), '')
-    .replace(/^(\s*Read this screenshot: @\S+\s*)+/, '')
-    .trim();
+  return window.__bramStripImagePaths(text);
 }
-
-// Same shape as extractImagePaths/stripImagePaths but for GitHub-flavored
-// markdown: `![alt](url)` and `<img src="url">`. Used by Issues to mirror
-// Sessions' thumbnail-with-fullscreen pattern.
 function extractMarkdownImages(text) {
-  if (!text) return [];
-  const urls = [];
-  const md = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
-  let m;
-  while ((m = md.exec(text)) !== null) urls.push(m[1]);
-  const html = /<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi;
-  while ((m = html.exec(text)) !== null) urls.push(m[1]);
-  return urls;
+  return window.__bramExtractMarkdownImages(text);
 }
 function stripMarkdownImages(text) {
-  if (!text) return text;
-  return text
-    .replace(/\n*!\[[^\]]*\]\([^)\s]+(?:\s+"[^"]*")?\)/g, '')
-    .replace(/\n*<img\b[^>]*\bsrc=["'][^"']+["'][^>]*>/gi, '');
-}
-
-// True when the most recent textful turn in the session is a user turn —
-// i.e. the user has spoken (or a worklist button submitted via toTurn) but
-// the assistant has not yet emitted text. tool_use-only assistant records
-// and tool_result-only user records are skipped so a long tool cycle still
-// reads as "waiting". Used by Transcript's "agent is thinking" spinner.
-// Return the suffix of jsonlText containing the trailing `n` records.
-// Walks backward counting newlines; returns the whole text if there are
-// fewer than n records. Used as a stable, small cache key for helpers
-// that only need the trailing window of a session JSONL (issue #100
-// suffix-keying — keeps re-derivation O(suffix) instead of O(file) as
-// sessions grow into the megabytes). With the diff+cap pipeline the
-// shared cache is bounded at ~1.5 MB, but most helpers only need the
-// last 50-100 records regardless of buffer size.
-function _lastNRecords(jsonlText, n) {
-  if (!jsonlText || n <= 0) return '';
-  let pos = jsonlText.length;
-  // Skip a trailing newline so the last non-empty record counts.
-  if (pos > 0 && jsonlText.charCodeAt(pos - 1) === 10) pos--;
-  let count = 0;
-  while (pos > 0) {
-    pos--;
-    if (jsonlText.charCodeAt(pos) === 10) {
-      count++;
-      if (count >= n) return jsonlText.substring(pos + 1);
-    }
-  }
-  return jsonlText;
-}
-
-function isWaitingForAssistant(jsonlText) {
-  if (!jsonlText) return false;
-  // Identity fast-path: when this binding fires on every keystroke
-  // (TextArea `enabled` prop) lastJsonl is usually unchanged. O(1)
-  // identity check beats walking ~100 KB backward to compute the
-  // suffix on every keystroke.
-  if (isWaitingForAssistant._fullKey === jsonlText) {
-    return isWaitingForAssistant._cacheValue;
-  }
-  const _t0 = App.now();
-  // Suffix-keyed (issue #100): the answer depends only on the trailing
-  // few records — anything before the most recent text-bearing record
-  // is irrelevant. We cache on the suffix string so identical trailing
-  // content hits the cache even when the upstream JSONL has grown.
-  const suffix = _lastNRecords(jsonlText, 50);
-  if (isWaitingForAssistant._cacheKey === suffix) {
-    isWaitingForAssistant._fullKey = jsonlText;
-    return isWaitingForAssistant._cacheValue;
-  }
-  const lines = suffix.split('\n');
-  let lastRole = null;
-  for (const line of lines) {
-    if (!line) continue;
-    let r;
-    try { r = JSON.parse(line); } catch (e) { continue; }
-    if (r.type === 'user' && r.message && r.message.content) {
-      const content = r.message.content;
-      if (Array.isArray(content) && content.length > 0 &&
-          content.every(c => c && c.type === 'tool_result')) continue;
-      lastRole = 'user';
-    } else if (r.type === 'assistant' && r.message && r.message.content) {
-      const content = r.message.content;
-      if (typeof content === 'string') {
-        lastRole = 'assistant';
-      } else if (Array.isArray(content) && content.some(c => c && c.type === 'text')) {
-        lastRole = 'assistant';
-      }
-    } else if (r.type === 'event_msg' && r.payload) {
-      if (r.payload.type === 'user_message') lastRole = 'user';
-      if (r.payload.type === 'agent_message') lastRole = 'assistant';
-    }
-  }
-  const value = (lastRole === 'user');
-  isWaitingForAssistant._fullKey = jsonlText;
-  isWaitingForAssistant._cacheKey = suffix;
-  isWaitingForAssistant._cacheValue = value;
-  _traceHelperTiming('isWaitingForAssistant', _t0, { len: jsonlText.length, suffixLen: suffix.length, lines: lines.length });
-  return value;
+  return window.__bramStripMarkdownImages(text);
 }
 
 // Iframe-side trace helper for the [iframe] category of the comms-path
-// trace log (issue #49). Forwards a structured record to the host's
-// `log_from_right_pane` Tauri command, which routes records whose
-// `kind` is `"iframe-trace"` into resources/bram-traces/bram-trace.log when
-// BRAM_TRACE=1 is set on the host. No-op when logToHost isn't wired up.
-// subkind is a token from the spec's maintained vocabulary (click,
-// inflight-set, inflight-clear, listener-fired, ...); fields are
-// arbitrary per-event metadata (target, item, reason, paths, etc.).
+// iframeTrace and _traceHelperTiming bodies live in
+// app/__shell/helpers.js as plain JS (window.__bramIframeTrace,
+// window.__bramTraceHelperTiming). The `__bram` prefix is critical:
+// browser top-level `function iframeTrace(...)` declarations hoist
+// onto `window.iframeTrace`, so if the window helper were also named
+// `iframeTrace`, this xs declaration would overwrite the plain-JS
+// implementation, and the delegator's call would recurse into itself.
+// The prefixed name keeps the two namespaces independent. Same
+// pattern as `applyAgentMenu` / `window.__bramApplyAgentMenu` (commit
+// ea9480e).
 function iframeTrace(subkind, fields) {
-  try {
-    // Master-flag short-circuit. `window.__bramTracesEnabled` is set by
-    // the self-init fetch of `/__settings` in helpers.js. When traces
-    // are off, skip payload allocation + IPC roundtrip entirely — the
-    // dominant per-event cost of this function. Default-ON (undefined
-    // is treated as on) so behavior is preserved during the brief
-    // startup window before the fetch resolves.
-    if (typeof window !== 'undefined' && window.__bramTracesEnabled === false) return;
-    if (typeof logToHost !== 'function') return;
-    const payload = { kind: 'iframe-trace', subkind: subkind, at: new Date().toISOString() };
-    if (fields && typeof fields === 'object') {
-      Object.assign(payload, fields);
-    }
-    logToHost(payload);
-  } catch (e) {}
+  if (typeof window !== 'undefined' && typeof window.__bramIframeTrace === 'function') {
+    window.__bramIframeTrace(subkind, fields);
+  }
 }
 
-// Cascade-diagnosis instrumentation (refs #93). Emits a helper-call
-// record to bram-trace when a hot JSONL-walking helper exceeds the
-// threshold. Cheap paths (no-op early returns, cache hits) don't log
-// because their _t0 measurement is sub-ms. Threshold deliberately
-// low to catch sub-frame stalls that compound across the cascade.
 function _traceHelperTiming(name, t0, extra) {
-  try {
-    const _elapsed = App.now() - t0;
-    if (_elapsed < 2) return;
-    if (typeof logToHost !== 'function') return;
-    const payload = { kind: 'iframe-trace', subkind: 'helper-call', name: name, ms: Math.round(_elapsed), at: new Date().toISOString() };
-    if (extra && typeof extra === 'object') Object.assign(payload, extra);
-    logToHost(payload);
-  } catch (e) {}
+  if (typeof window !== 'undefined' && typeof window.__bramTraceHelperTiming === 'function') {
+    window.__bramTraceHelperTiming(name, t0, extra);
+  }
 }
 
 // Clean a user turn for transcript display: strip protocol prefixes
@@ -459,258 +179,61 @@ function _traceHelperTiming(name, t0, extra) {
 // summarize structured Worklist lifecycle payloads to a one-line
 // action + item label instead of dumping JSON. Anything else passes through.
 function formatUserTurnForTranscript(text) {
-  if (!text) return '';
-  const stripped = text.replace(/^(voice|talk):\s*/, '');
-  if (stripped !== text) return stripped;
-  const m = text.match(/^(approved|drop|iterate):\s*(.*)$/s);
-  if (m) {
-    const kind = m[1];
-    try {
-      const data = JSON.parse(m[2]);
-      return worklistActionDisplay(kind, data.items || data.ids || []);
-    } catch (e) {
-      return text;
-    }
-  }
-  return text;
+  return window.__bramFormatUserTurnForTranscript(text);
 }
-
 function worklistActionStatusLabel(item) {
-  const status = (item && item.status) || 'proposed';
-  if (status === 'applied') return 'To Commit';
-  if (status === 'proposed') return 'To Apply';
-  return status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Worklist';
+  return window.__bramWorklistActionStatusLabel(item);
 }
-
 function conversationPaneUserText(text) {
-  if (!text) return '';
-  const stripped = text.replace(/^(voice|talk):\s*/, '');
-  if (stripped !== text) return stripped;
-  const clean = stripImageMarkerPrefix(stripped);
-  const m = clean.match(/^(approved|drop|iterate):\s*(.*)$/s);
-  if (!m) return clean;
-  const kind = m[1];
-  try {
-    const data = JSON.parse(m[2]);
-    const items = data.items || data.ids || [];
-    // Action verb (Approved / Dropped / Iterated) plus item ids.
-    const action = worklistActionDisplay(kind, items);
-    // Collect per-item inline feedback strings. Approve/Drop carry feedback
-    // directly on each item; Iterate uses feedbackRef (rendered separately
-    // when the agent quotes it), so its inline `feedback` is usually empty.
-    const feedbacks = items
-      .map(it => (it && typeof it === 'object' && it.feedback) ? String(it.feedback).trim() : '')
-      .filter(s => s.length > 0);
-    if (feedbacks.length === 0) return action;
-    return action + '\n\n' + feedbacks.join('\n\n');
-  } catch (e) {
-    return clean;
-  }
+  return window.__bramConversationPaneUserText(text);
 }
-
 function worklistActionDisplay(kind, items) {
-  const action =
-    kind === 'approved' ? 'Approved' :
-    kind === 'iterate' ? 'Iterated' :
-    kind === 'drop' ? 'Dropped' :
-    'Submitted';
-  const ids = (items || []).map(i => {
-    if (typeof i === 'string') return i;
-    return (i && i.id) || '';
-  }).filter(Boolean);
-  if (ids.length === 0) return action;
-  if (ids.length === 1) return action + ' ' + ids[0];
-  return action + ' ' + ids.length + ' items: ' + ids.join(', ');
+  return window.__bramWorklistActionDisplay(kind, items);
 }
-
 function worklistActionStatusSuffix(item) {
-  const status = (item && item.status) || 'proposed';
-  if (status === 'applied') return ' to commit';
-  if (status === 'proposed') return ' to apply';
-  return '';
+  return window.__bramWorklistActionStatusSuffix(item);
 }
-
 function worklistActionConversationDisplay(kind, items, selectedId, feedback) {
-  const selected = (items || []).filter(i => i.id === selectedId);
-  const suffix = selected.length === 1 ? worklistActionStatusSuffix(selected[0]) : '';
-  return worklistActionDisplay(kind, selected) + suffix;
+  return window.__bramWorklistActionConversationDisplay(kind, items, selectedId, feedback);
 }
 
-// Compact one-line summary for a tool_use block. Falls back to the tool
-// name when the input shape is unfamiliar.
 function toolSummary(name, input) {
-  if (!input || typeof input !== 'object') return name || '';
-  if (name === 'Edit' || name === 'MultiEdit') {
-    return (input.file_path || '') + ' edited';
-  }
-  if (name === 'Write') {
-    const lines = (input.content || '').split('\n').length;
-    return (input.file_path || '') + ' — wrote ' + lines + ' line' + (lines === 1 ? '' : 's');
-  }
-  if (name === 'Bash') {
-    const cmd = input.command || '';
-    return cmd.length > 80 ? cmd.slice(0, 80) + '…' : cmd;
-  }
-  if (name === 'Read') {
-    let s = input.file_path || '';
-    if (input.offset || input.limit) {
-      const start = input.offset || 1;
-      s += ':' + start;
-      if (input.limit) s += '-' + (start + input.limit - 1);
-    }
-    return s;
-  }
-  if (name === 'Grep' || name === 'Glob') {
-    return (input.pattern || '') + (input.path ? ' in ' + input.path : '');
-  }
-  if (name === 'Task' || name === 'Agent') {
-    return (input.subagent_type || '') + (input.description ? ' — ' + input.description : '');
-  }
-  return name || '';
+  return window.__bramToolSummary(name, input);
 }
-
 function parseJsonString(value) {
-  if (typeof value !== 'string') return null;
-  try {
-    return JSON.parse(value);
-  } catch (e) {
-    return null;
-  }
+  return window.__bramParseJsonString(value);
 }
-
 function codexToolName(payload) {
-  if (!payload) return '';
-  if (payload.namespace) return payload.namespace.replace(/^mcp__/, '') + '.' + (payload.name || '');
-  return payload.name || '';
+  return window.__bramCodexToolName(payload);
 }
-
 function codexToolInput(payload) {
-  if (!payload) return {};
-  if (payload.type === 'function_call') {
-    const parsed = parseJsonString(payload.arguments);
-    return parsed !== null ? parsed : (payload.arguments || {});
-  }
-  if (payload.type === 'custom_tool_call') {
-    const parsed = parseJsonString(payload.input);
-    return parsed !== null ? parsed : (payload.input || '');
-  }
-  return {};
+  return window.__bramCodexToolInput(payload);
 }
 
 function codexToolSummary(payload) {
-  if (!payload) return '';
-  const name = codexToolName(payload);
-  const input = codexToolInput(payload);
-  if (payload.name === 'exec_command' && input && typeof input === 'object' && input.cmd) {
-    return input.cmd.length > 80 ? input.cmd.slice(0, 80) + '…' : input.cmd;
-  }
-  if (payload.name === 'write_stdin' && input && typeof input === 'object') {
-    const chars = input.chars || '';
-    const session = input.session_id ? ('session ' + input.session_id) : 'stdin';
-    if (!chars) return session;
-    const label = chars === '\u001b' ? 'Esc' : chars.replace(/\r/g, '\\r').replace(/\n/g, '\\n');
-    return session + ' ← ' + (label.length > 40 ? label.slice(0, 40) + '…' : label);
-  }
-  if (payload.name === 'apply_patch' && typeof input === 'string') {
-    const m = input.match(/\*\*\* (?:Add|Update|Delete) File: ([^\n]+)/);
-    return m ? (m[1] + ' patch') : 'patch';
-  }
-  if (name.startsWith('filesystem.') && input && typeof input === 'object' && input.path) {
-    return input.path;
-  }
-  if (name.startsWith('xmlui.') && input && typeof input === 'object') {
-    return input.path || input.component || input.query || name;
-  }
-  if (input && typeof input === 'object') return toolSummary(payload.name || name, input);
-  return name;
-}
-
-// First N lines of a Write tool's content, plus the leftover count for
-// the truncation footer.
-function writeBodyLines(input, maxLines) {
-  const cap = maxLines || 20;
-  if (!input || !input.content) return { lines: [], remaining: 0 };
-  const all = input.content.split('\n');
-  return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
+  return window.__bramCodexToolSummary(payload);
 }
 
 // Pretty-print arbitrary tool input as JSON, truncated to N lines.
 function toolInputJsonLines(input, maxLines) {
-  const cap = maxLines || 20;
-  if (input === null || input === undefined) return { lines: [], remaining: 0 };
-  if (typeof input === 'string') {
-    const all = input.split('\n');
-    return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
-  }
-  let json;
-  try {
-    json = JSON.stringify(input, null, 2);
-  } catch (e) {
-    return { lines: ['(unserializable input)'], remaining: 0 };
-  }
-  const all = json.split('\n');
-  return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
+  return window.__bramToolInputJsonLines(input, maxLines);
 }
 
 // Concatenate the text content of a tool_result block (handles both
 // string and array-of-blocks shapes).
 function toolResultText(content) {
-  if (!content) return '';
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter(c => c && c.type === 'text')
-      .map(c => c.text || '')
-      .join('\n');
-  }
-  return '';
+  return window.__bramToolResultText(content);
 }
 
 // True if a tool_result block carries an error (either flagged via
 // is_error or detected by an Error:/<tool_use_error> prefix). Used to
 // tint the inline result banner red.
 function isErrorResult(block) {
-  if (!block) return false;
-  if (block.is_error) return true;
-  const text = toolResultText(block.content);
-  return text.startsWith('Error:') || text.startsWith('<tool_use_error>');
+  return window.__bramIsErrorResult(block);
 }
 
 function codexToolOutput(payload) {
-  if (!payload || (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output')) {
-    return null;
-  }
-  const raw = payload.output;
-  if (typeof raw !== 'string') return { text: '', errored: false };
-  const parsed = parseJsonString(raw);
-  if (parsed && typeof parsed === 'object') {
-    const text = typeof parsed.output === 'string'
-      ? parsed.output
-      : typeof parsed.stderr === 'string'
-        ? parsed.stderr
-        : raw;
-    const exitCode = parsed.metadata && typeof parsed.metadata.exit_code === 'number'
-      ? parsed.metadata.exit_code
-      : null;
-    return { text, errored: exitCode !== null && exitCode !== 0 };
-  }
-  const exitMatch = raw.match(/Process exited with code (\d+)/);
-  const exitCode = exitMatch ? parseInt(exitMatch[1], 10) : 0;
-  return { text: raw, errored: !!exitMatch && exitCode !== 0 };
-}
-
-// Find a tool entry by id across all turns. Used by Transcript to render the
-// open-tool modal — we keep `openToolId` as the source of truth and
-// derive the entry from it on each render.
-function findToolInTurns(turns, toolId) {
-  if (!turns || !toolId) return null;
-  for (const t of turns) {
-    if (!t || !t.entries) continue;
-    for (const e of t.entries) {
-      if (e && e.kind === 'tool' && e.id === toolId) return e;
-    }
-  }
-  return null;
+  return window.__bramCodexToolOutput(payload);
 }
 
 // Shallow turn equality: enough to tell "unchanged turn" from
@@ -718,47 +241,7 @@ function findToolInTurns(turns, toolId) {
 // to preserve object refs for stable turns so XMLUI's Items doesn't
 // re-mount the whole list on every poll.
 function turnsLooselyEqual(a, b) {
-  if (!a || !b) return false;
-  if (a.role !== b.role) return false;
-  if (a.text !== b.text) return false;
-  const ae = a.entries || [], be = b.entries || [];
-  if (ae.length !== be.length) return false;
-  for (let i = 0; i < ae.length; i++) {
-    const x = ae[i], y = be[i];
-    if (!x || !y) return false;
-    if (x.kind !== y.kind) return false;
-    if (x.kind === 'text') {
-      if (x.text !== y.text) return false;
-    } else {
-      // tool: id is stable, errored/result may change between polls
-      if (x.id !== y.id) return false;
-      if (!!x.errored !== !!y.errored) return false;
-    }
-  }
-  const ai = a.images || [], bi = b.images || [];
-  if (ai.length !== bi.length) return false;
-  return true;
-}
-
-// Return the last N turns, reusing the previous result by reference when
-// every visible turn is still the same object. `sessionTurns` already
-// preserves stable refs across polls, so on a steady-state idle session
-// every element of `prev` and `cur` matches and we hand back the same
-// array — XMLUI's Items can then skip remounting the visible list.
-function visibleTurns(turns, n) {
-  if (!turns || !n) return visibleTurns._cacheValue || [];
-  const start = Math.max(0, turns.length - n);
-  const prev = visibleTurns._cacheValue;
-  if (prev && prev.length === turns.length - start) {
-    let same = true;
-    for (let i = 0; i < prev.length; i++) {
-      if (prev[i] !== turns[start + i]) { same = false; break; }
-    }
-    if (same) return prev;
-  }
-  const out = turns.slice(start);
-  visibleTurns._cacheValue = out;
-  return out;
+  return window.__bramTurnsLooselyEqual(a, b);
 }
 
 // Parse a slice of JSONL lines into the turn-list shape sessionTurns
@@ -769,206 +252,11 @@ function visibleTurns(turns, n) {
 // the caller's responsibility). Extracted from sessionTurns so the
 // full-parse and incremental paths share it (issue #100).
 function _parseLinesToTurns(lines, toolIndex) {
-  toolIndex = toolIndex || {};
-  const turns = [];
-  for (const line of lines) {
-    if (!line) continue;
-    let r;
-    try { r = JSON.parse(line); } catch (e) { continue; }
-    let role = null;
-    const entries = [];
-    const inlineImages = [];
-    if (r.type === 'user' || r.type === 'assistant') {
-      if (!r.message || !r.message.content) continue;
-      role = r.type;
-      const content = r.message.content;
-      if (typeof content === 'string') {
-        if (content) entries.push({ kind: 'text', text: content });
-      } else if (Array.isArray(content)) {
-        for (const c of content) {
-          if (!c) continue;
-          if (c.type === 'text' && c.text) {
-            entries.push({ kind: 'text', text: c.text });
-          } else if (c.type === 'tool_use') {
-            // Keep entries lightweight — only what the collapsed row
-            // needs. Full input/result are fetched on expand via
-            // getToolDetail.
-            const entry = {
-              kind: 'tool',
-              id: c.id,
-              name: c.name,
-              summary: toolSummary(c.name, c.input || {}),
-            };
-            entries.push(entry);
-            if (c.id) toolIndex[c.id] = entry;
-          } else if (c.type === 'tool_result') {
-            const matching = c.tool_use_id && toolIndex[c.tool_use_id];
-            if (matching) {
-              matching.errored = isErrorResult(c);
-              if (matching.errored) {
-                const txt = toolResultText(c.content);
-                matching.errorText = txt.split('\n')[0].slice(0, 200);
-              }
-            }
-          } else if (c.type === 'image' && c.source && c.source.type === 'base64' && c.source.data) {
-            const mt = c.source.media_type || 'image/png';
-            inlineImages.push('data:' + mt + ';base64,' + c.source.data);
-          }
-        }
-      }
-    } else if (r.type === 'event_msg' && r.payload) {
-      if (r.payload.type === 'user_message') role = 'user';
-      if (r.payload.type === 'agent_message') role = 'assistant';
-      const t = r.payload.message || '';
-      if (t) entries.push({ kind: 'text', text: t });
-    } else if (r.type === 'response_item' && r.payload) {
-      const p = r.payload;
-      if (p.type === 'function_call' || p.type === 'custom_tool_call') {
-        role = 'assistant';
-        const entry = {
-          kind: 'tool',
-          id: p.call_id,
-          name: codexToolName(p),
-          summary: codexToolSummary(p),
-        };
-        entries.push(entry);
-        if (p.call_id) toolIndex[p.call_id] = entry;
-      } else if (p.type === 'function_call_output' || p.type === 'custom_tool_call_output') {
-        const matching = p.call_id && toolIndex[p.call_id];
-        if (matching) {
-          const output = codexToolOutput(p);
-          matching.errored = !!(output && output.errored);
-          if (output && output.text) {
-            const firstLine = output.text.split('\n')[0].slice(0, 200);
-            if (matching.errored) matching.errorText = firstLine;
-          }
-        }
-      }
-    }
-    if (!role) continue;
-    if (entries.length === 0 && inlineImages.length === 0) continue;
-    // Capture image paths from the ORIGINAL text before stripping — strip
-    // and extract operate on the same patterns, so we have to read before
-    // we clean. (Was previously running extract on already-stripped text,
-    // which made the [Image: source: ...] fallback dead code.)
-    const originalJoined = entries.filter(e => e.kind === 'text').map(e => e.text).join('\n\n');
-    const pathsFromText = extractImagePaths(originalJoined);
-    // Apply text rewrites + strip image-path footers from text entries.
-    for (const e of entries) {
-      if (e.kind === 'text') {
-        e.text = stripImagePaths(rewriteXmluiDocUrls(e.text));
-      }
-    }
-    const textJoined = entries.filter(e => e.kind === 'text').map(e => e.text).join('\n\n');
-    // Skip user turns that are pure image-path bookkeeping (preserved from prior behavior).
-    if (role === 'user' && inlineImages.length === 0 && entries.every(e => e.kind === 'text')
-        && /^(\[Image: source: [^\]]+\]\s*)+$/.test(originalJoined.trim())) continue;
-    // After tool_result filtering, a user turn may have nothing left.
-    if (entries.length === 0 && inlineImages.length === 0) continue;
-    turns.push({
-      role,
-      text: textJoined,
-      entries,
-      images: inlineImages.length > 0 ? inlineImages : pathsFromText,
-    });
-  }
-  return turns;
+  return window.__bramParseLinesToTurns(lines, toolIndex);
 }
 
 function sessionTurns(jsonlText) {
-  // Sticky empty: during a refetch the DataSource value can briefly be
-  // null/undefined. Returning [] would blank the transcript and cause a
-  // dramatic flash; instead, hold the last result until the new value
-  // arrives.
-  if (!jsonlText) return sessionTurns._cacheValue || [];
-  // Function-property memoization: skip the reparse when the polled
-  // JSONL hasn't changed since last call. Identity comparison is enough
-  // because the DataSource hands us a fresh string only when the file
-  // actually grew.
-  if (sessionTurns._cacheKey === jsonlText && sessionTurns._cacheValue) {
-    return sessionTurns._cacheValue;
-  }
-
-  // Incremental parse (issue #100): if the prior cacheKey is a strict
-  // prefix of the new jsonlText, parse only the suffix and concat onto
-  // the prior turns. Existing turn objects are reused by reference so
-  // XMLUI's reactivity sees only the new turns as changed. Works
-  // because the diff-based latest-tail (issue #100) hands us
-  // append-only growth between cap-trims. The cap-trim case breaks
-  // the prefix property (new buffer is a suffix of old, not a prefix),
-  // which falls through to full parse below — correct, just costly on
-  // that one tick.
-  const prevKey = sessionTurns._cacheKey;
-  const prevValue = sessionTurns._cacheValue;
-  if (prevKey && prevValue && jsonlText.length > prevKey.length &&
-      jsonlText.substring(0, prevKey.length) === prevKey) {
-    const _t0 = App.now();
-    const suffix = jsonlText.substring(prevKey.length);
-    // Pre-populate toolIndex from prior tool entries so suffix
-    // tool_results can locate their originating tool_use.
-    const toolIndex = {};
-    for (const t of prevValue) {
-      for (const e of (t.entries || [])) {
-        if (e && e.kind === 'tool' && e.id) toolIndex[e.id] = e;
-      }
-    }
-    const newTurns = _parseLinesToTurns(suffix.split('\n'), toolIndex);
-    sessionTurns._cacheKey = jsonlText;
-    sessionTurns._cacheValue = newTurns.length > 0
-      ? prevValue.concat(newTurns)
-      : prevValue;
-    sessionTurns._parseCount = (sessionTurns._parseCount || 0) + 1;
-    const _elapsed = App.now() - _t0;
-    if (_elapsed > 2 || newTurns.length > 0) {
-      iframeTrace('sessionTurns-parse', {
-        ms: Math.round(_elapsed),
-        len: jsonlText.length,
-        suffixLen: suffix.length,
-        turns: sessionTurns._cacheValue.length,
-        newTurns: newTurns.length,
-        n: sessionTurns._parseCount,
-        path: 'incremental',
-      });
-    }
-    return sessionTurns._cacheValue;
-  }
-
-  // Full-parse fallback: no prior cache, or new jsonlText doesn't
-  // extend the prior key (session rotation, cap-trim head-drop, etc.).
-  // Instrumentation: log cache-miss parses. Tracks how often we do real
-  // work and how long it takes. App.now is the xmlui-native managed
-  // replacement for performance.now (banned under strictDomSandbox).
-  const _t0 = App.now();
-  sessionTurns._parseCount = (sessionTurns._parseCount || 0) + 1;
-  const turns = _parseLinesToTurns(jsonlText.split('\n'));
-  // Structural-share with the previous result: for each turn that's
-  // structurally equal to the previous turn at the same index, reuse
-  // the previous reference. XMLUI's reactivity treats reference
-  // equality as "unchanged", so the Items in Transcript skips re-mounting
-  // those turns — eliminating the per-poll flash. JSONL is append-only
-  // in practice, so the first N-K turns are typically identical and
-  // only the last few are new or growing.
-  const prev = sessionTurns._cacheValue || [];
-  for (let i = 0; i < turns.length && i < prev.length; i++) {
-    if (turnsLooselyEqual(turns[i], prev[i])) {
-      turns[i] = prev[i];
-    } else {
-      break;
-    }
-  }
-  sessionTurns._cacheKey = jsonlText;
-  sessionTurns._cacheValue = turns;
-  const _elapsed = App.now() - _t0;
-  if (_elapsed > 2) {
-    iframeTrace('sessionTurns-parse', {
-      ms: Math.round(_elapsed),
-      len: jsonlText.length,
-      turns: turns.length,
-      n: sessionTurns._parseCount,
-      path: 'full',
-    });
-  }
-  return turns;
+  return window.__bramSessionTurns(jsonlText);
 }
 
 // Worklist close-issue dialog state helpers. The dialog opens when a TO COMMIT
@@ -1066,75 +354,31 @@ function closeIssueExistingPendingCount(commits) {
 // record with `ts` (Unix ms) and `perfTs` to the inspector buffer,
 // directly mergeable with bram-trace.log on the same Unix-ms clock.
 function traceIterateEnabled(submitting, selected, selectedFeedback) {
-  App.mark('iterate-enabled');
-  return !submitting && !!selected && (selectedFeedback || '').trim().length > 0;
+  return window.__bramTraceIterateEnabled(submitting, selected, selectedFeedback);
 }
-
 function traceApproveDropEnabled(submitting, selected) {
-  App.mark('approve-drop-enabled');
-  return !submitting && !!selected;
+  return window.__bramTraceApproveDropEnabled(submitting, selected);
 }
-
 function buildApprovePayload(items, selectedId, feedback) {
-  App.mark('build-approve-payload');
-  return JSON.stringify({
-    items: (items || []).filter(function (i) { return i.id === selectedId; })
-      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback }; })
-  });
+  return window.__bramBuildApprovePayload(items, selectedId, feedback);
 }
-
 function buildIteratePayload(items, selectedId, feedback) {
-  App.mark('build-iterate-payload');
-  // feedback may be either an inline string (backward-compat, used by
-  // any caller that hasn't migrated to the backing-store flow yet) or
-  // a `{ feedbackRef: "<id>" }` object (new, used by the Iterate click
-  // after queueFeedbackDraft has written the draft to disk). See #144.
-  return JSON.stringify({
-    items: (items || []).filter(function (i) { return i.id === selectedId; })
-      .map(function (i) {
-        return feedback && typeof feedback === 'object' && feedback.feedbackRef
-          ? { id: i.id, hash: i.hash, feedbackRef: feedback.feedbackRef }
-          : { id: i.id, hash: i.hash, feedback: feedback };
-      })
-  });
+  return window.__bramBuildIteratePayload(items, selectedId, feedback);
 }
-
 function buildDropPayload(items, selectedId, feedback) {
-  App.mark('build-drop-payload');
-  return JSON.stringify({
-    items: (items || []).filter(function (i) { return i.id === selectedId; })
-      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback }; })
-  });
+  return window.__bramBuildDropPayload(items, selectedId, feedback);
 }
-
 function buildSingleItemApprovePayload(itemRef, feedback) {
-  App.mark('build-single-item-approve-payload');
-  return JSON.stringify({
-    items: [{ id: itemRef.id, hash: itemRef.hash, feedback: feedback }]
-  });
+  return window.__bramBuildSingleItemApprovePayload(itemRef, feedback);
 }
-
-// Batch actions (issue #97): one approved:/drop: payload over every
-// item in a status group. Scoped to 'applied' (TO COMMIT) — see the
-// Approve all / Drop all bar in Workspace.xmlui.
 function countByStatus(items, status) {
-  return (items || []).filter(function (i) { return (i.status || 'proposed') === status; }).length;
+  return window.__bramCountByStatus(items, status);
 }
-
 function buildBatchApprovePayload(items, feedback) {
-  App.mark('build-batch-approve-payload');
-  return JSON.stringify({
-    items: (items || []).filter(function (i) { return (i.status || 'proposed') === 'applied'; })
-      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback || '' }; })
-  });
+  return window.__bramBuildBatchApprovePayload(items, feedback);
 }
-
 function buildBatchDropPayload(items, feedback) {
-  App.mark('build-batch-drop-payload');
-  return JSON.stringify({
-    items: (items || []).filter(function (i) { return (i.status || 'proposed') === 'applied'; })
-      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback || '' }; })
-  });
+  return window.__bramBuildBatchDropPayload(items, feedback);
 }
 
 function settingsAgent(s) {
@@ -1310,221 +554,69 @@ function searchHitBestBody(query, candidates) {
 // ---- Worklist "message agent" box: persistence + lifecycle helpers ----
 // Kept here so Workspace.xmlui can stay markup-only per xmlui_rules #9.
 
+// Worklist message-agent persistence + lifecycle. Bodies live in
+// app/__shell/helpers.js as plain JS (window.__bram*). Same migration
+// shape and naming convention as the iframeTrace / agent-menu work:
+// distinct `__bram`-prefixed window names dodge the trap where xs
+// `function foo` would hoist onto `window.foo` and overwrite the
+// helpers.js implementation
+// (see memory: xs-to-window-migration-name-collision).
 function restoreWorklistDraft() {
-  return readLocalStorage('bram.worklistMessageDraft', '');
+  return window.__bramRestoreWorklistDraft();
 }
-
 function persistWorklistDraft(text) {
-  writeLocalStorage('bram.worklistMessageDraft', String(text || ''));
+  window.__bramPersistWorklistDraft(text);
 }
-
 function clearWorklistDraft() {
-  writeLocalStorage('bram.worklistMessageDraft', '');
+  window.__bramClearWorklistDraft();
 }
-
 function restoreConversationOpen() {
-  const raw = readLocalStorage('bram.conversationOpen', '1');
-  const result = raw !== '0';
-  iframeTrace('conversation-open-restore', { raw, open: result });
-  return result;
+  return window.__bramRestoreConversationOpen();
 }
-
 function toggleConversationOpen(current) {
-  const next = !current;
-  writeLocalStorage('bram.conversationOpen', next ? '1' : '0');
-  iframeTrace('conversation-open-save', { open: next });
-  return next;
+  return window.__bramToggleConversationOpen(current);
 }
-
 function restoreWorklistUiState(field) {
-  const raw = readLocalStorage('bram.worklistUiState', '');
-  if (!raw) {
-    iframeTrace('worklist-ui-state-restore', { field, raw: '', result: field === 'feedbackExpanded' ? false : '' });
-    if (field === 'feedbackExpanded') return false;
-    return field === 'selectedFeedback' ? '' : null;
-  }
-  let saved;
-  try { saved = JSON.parse(raw); } catch (e) { saved = null; }
-  if (!saved || typeof saved !== 'object') {
-    iframeTrace('worklist-ui-state-restore', { field, raw: 'invalid', result: field === 'feedbackExpanded' ? false : '' });
-    if (field === 'feedbackExpanded') return false;
-    return field === 'selectedFeedback' ? '' : null;
-  }
-  if (field === 'feedbackExpanded') {
-    const result = !!saved.feedbackExpanded;
-    iframeTrace('worklist-ui-state-restore', { field, result, selected: saved.selected || '', expandedItemId: saved.expandedItemId || '' });
-    return result;
-  }
-  if (field === 'selectedFeedback') {
-    const result = String(saved.selectedFeedback || '');
-    iframeTrace('worklist-ui-state-restore', { field, resultLength: result.length, selected: saved.selected || '', expandedItemId: saved.expandedItemId || '' });
-    return result;
-  }
-  if (field === 'selected') {
-    const result = saved.selected || null;
-    iframeTrace('worklist-ui-state-restore', { field, result: result || '', expandedItemId: saved.expandedItemId || '', feedbackExpanded: !!saved.feedbackExpanded });
-    return result;
-  }
-  if (field === 'expandedItemId') {
-    const result = saved.expandedItemId || null;
-    iframeTrace('worklist-ui-state-restore', { field, result: result || '', selected: saved.selected || '', feedbackExpanded: !!saved.feedbackExpanded });
-    return result;
-  }
-  return null;
+  return window.__bramRestoreWorklistUiState(field);
 }
-
 function persistWorklistUiState(selected, expandedItemId, feedbackExpanded, selectedFeedback) {
-  iframeTrace('worklist-ui-state-save', {
-    selected: selected || '',
-    expandedItemId: expandedItemId || '',
-    feedbackExpanded: !!feedbackExpanded,
-    selectedFeedbackLength: (selectedFeedback || '').length
-  });
-  writeLocalStorage('bram.worklistUiState', JSON.stringify({
-    selected: selected || null,
-    expandedItemId: expandedItemId || null,
-    feedbackExpanded: !!feedbackExpanded,
-    selectedFeedback: selectedFeedback || ''
-  }));
+  window.__bramPersistWorklistUiState(selected, expandedItemId, feedbackExpanded, selectedFeedback);
 }
-
 function clearWorklistUiState() {
-  iframeTrace('worklist-ui-state-clear', {});
-  writeLocalStorage('bram.worklistUiState', '');
+  window.__bramClearWorklistUiState();
 }
-
-// Recency-gated restore of the awaiting gate so hot-reloading the
-// iframe in the middle of a real turn doesn't drop the user back to
-// the stale prior agent text. Window deliberately generous (5 min)
-// to cover long agent turns; out-of-window entries get cleared so
-// a long-dead Bram session can't sticky-lock the gate.
 function restoreWorklistAwaiting() {
-  const flag = readLocalStorage('bram.awaitingResponse', '');
-  const setAtRaw = readLocalStorage('bram.awaitingResponseSetAt', '');
-  const setAt = parseInt(setAtRaw, 10);
-  if (flag === '1' && !isNaN(setAt) && (Date.now() - setAt) < 300000) {
-    return true;
-  }
-  writeLocalStorage('bram.awaitingResponse', '');
-  writeLocalStorage('bram.awaitingResponseSetAt', '');
-  return false;
+  return window.__bramRestoreWorklistAwaiting();
 }
-
 function restoreWorklistAwaitingSetAt() {
-  const setAtRaw = readLocalStorage('bram.awaitingResponseSetAt', '');
-  const setAt = parseInt(setAtRaw, 10);
-  return isNaN(setAt) ? 0 : setAt;
+  return window.__bramRestoreWorklistAwaitingSetAt();
 }
-
-// Write the awaiting-started state to localStorage so a hot-reload
-// can re-hydrate it within the recency window. Returns the timestamp
-// it wrote so call sites can sync the in-memory awaitingResponseSetAt
-// var to the persisted value.
 function markAwaitingStarted() {
-  const now = Date.now();
-  writeLocalStorage('bram.awaitingResponse', '1');
-  writeLocalStorage('bram.awaitingResponseSetAt', String(now));
-  return now;
+  return window.__bramMarkAwaitingStarted();
 }
-
 function restoreWorklistSubmittedMessage() {
-  return readLocalStorage('bram.worklistSubmittedMessage', '');
+  return window.__bramRestoreWorklistSubmittedMessage();
 }
-
 function restoreWorklistSubmittedKind() {
-  const kind = readLocalStorage('bram.worklistSubmittedKind', '');
-  return kind === 'message' || kind === 'action' ? kind : null;
+  return window.__bramRestoreWorklistSubmittedKind();
 }
-
 function setWorklistSubmittedKind(kind) {
-  if (kind === 'message' || kind === 'action') {
-    writeLocalStorage('bram.worklistSubmittedKind', kind);
-  } else {
-    writeLocalStorage('bram.worklistSubmittedKind', '');
-  }
-  return kind || null;
+  return window.__bramSetWorklistSubmittedKind(kind);
 }
-
 function restoreWorklistSubmittedBaseline() {
-  const raw = readLocalStorage('bram.worklistSubmittedBaseline', '');
-  const n = parseInt(raw, 10);
-  return isNaN(n) ? 0 : n;
+  return window.__bramRestoreWorklistSubmittedBaseline();
 }
-
-function submitWorklistMessage(text, baseline) {
-  if (!text || !text.trim()) return false;
-  const message = text.trim();
-  const sentAt = Date.now();
-  iframeTrace('message-agent-submit', { stage: 'before-toTurn', chars: message.length, sentAt });
-  toTurn(message);
-  iframeTrace('message-agent-submit', { stage: 'after-toTurn', chars: message.length, sentAt });
-  writeLocalStorage('bram.awaitingResponse', '');
-  writeLocalStorage('bram.worklistMessageDraft', '');
-  writeLocalStorage('bram.worklistSubmittedMessage', message);
-  writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
-  setWorklistSubmittedKind('message');
-  return message;
-}
-
 function submitWorklistMessageFast(text) {
-  if (!text || !text.trim()) return false;
-  const userTyped = text.trim();
-  const toSend = withStagedImageMarkers(userTyped, 'message-agent');
-  const sentAt = Date.now();
-  iframeTrace('message-agent-submit', { stage: 'before-toTurn', chars: toSend.length, sentAt });
-  toTurn(toSend);
-  iframeTrace('message-agent-submit', { stage: 'after-toTurn', chars: toSend.length, sentAt });
-  const baseline = 0;
-  writeLocalStorage('bram.worklistMessageDraft', '');
-  // Track the user-typed text (not the marker-augmented send), so it matches
-  // the stripped `userText` the JSONL extractor returns and
-  // `conversationExchangeMatchesSubmitted` resolves true. Mismatch keeps
-  // awaitingResponse stuck (it clears on exchange-match) and gates
-  // conversationUserImages to [] during awaiting.
-  writeLocalStorage('bram.worklistSubmittedMessage', userTyped);
-  writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline || 0));
-  setWorklistSubmittedKind('message');
-  return { message: userTyped, images: extractImagePaths(toSend), baseline, sentAtText: new Date().toLocaleTimeString() };
+  return window.__bramSubmitWorklistMessageFast(text, worklistVoiceTarget);
 }
-
-// Drain any clipboard-staged image paths and prepend the dual marker format
-// captureScreenshot also uses: `@<path>` triggers claude-code's Read tool,
-// `[Image: source: <path>]` is what st_extract_image_paths matches for the
-// thumbnail strip in the conversation pane.
 function withStagedImageMarkers(text, target) {
-  const paths = window.bramConsumePastedImagePaths
-    ? window.bramConsumePastedImagePaths(target || worklistVoiceTarget || '')
-    : [];
-  if (!paths || paths.length === 0) return text;
-  const lines = paths.map(p => 'Read this screenshot: @' + p + '\n[Image: source: ' + p + ']');
-  const markers = lines.join('\n');
-  const skipPrefix = 'skip-worklist:';
-  const trimmedStart = (text || '').trimStart();
-  if (trimmedStart.startsWith(skipPrefix)) {
-    const leading = text.slice(0, text.length - trimmedStart.length);
-    const rest = trimmedStart.slice(skipPrefix.length).trimStart();
-    return leading + skipPrefix + ' ' + markers + (rest ? '\n\n' + rest : '');
-  }
-  return text ? markers + '\n\n' + text : markers;
+  return window.__bramWithStagedImageMarkers(text, target, worklistVoiceTarget);
 }
-
 function recordWorklistFeedbackConversation(text) {
-  if (!text || !text.trim()) return false;
-  const message = text.trim();
-  const baseline = 0;
-  writeLocalStorage('bram.worklistSubmittedMessage', message);
-  writeLocalStorage('bram.worklistSubmittedBaseline', String(baseline));
-  setWorklistSubmittedKind('action');
-  return { message, images: extractImagePaths(message), baseline, sentAtText: new Date().toLocaleTimeString() };
+  return window.__bramRecordWorklistFeedbackConversation(text);
 }
-
 function clearWorklistAwaiting(clearDraft) {
-  writeLocalStorage('bram.awaitingResponse', '');
-  writeLocalStorage('bram.awaitingResponseSetAt', '');
-  setWorklistSubmittedKind(null);
-  if (clearDraft) {
-    writeLocalStorage('bram.worklistMessageDraft', '');
-  }
+  window.__bramClearWorklistAwaiting(clearDraft);
 }
 
 // Mirrors toTurn's `s.replace(/\s+/g, ' ').trim()` collapse in
@@ -1536,85 +628,16 @@ function clearWorklistAwaiting(clearDraft) {
 // the in-flight item ("Approving", "Iterating", "Dropping"). Returns '' for
 // unknown / missing kind so the calling markup hides cleanly.
 function inflightActionLabel(kind) {
-  if (kind === 'approved') return 'Approving';
-  if (kind === 'iterate') return 'Iterating';
-  if (kind === 'drop') return 'Dropping';
-  return '';
+  return window.__bramInflightActionLabel(kind);
 }
-
-// Strip the screenshot-paste marker prefix that submitWorklistMessageFast
-// prepends to outgoing messages. The JSONL parser removes `[Image: source: ...]`
-// but leaves the `Read this screenshot: @<path>` prefix in userText (claude-code
-// needs the `@<path>` to fire its Read tool). For exchange-match purposes we
-// reduce both sides to just the user-typed text.
 function stripImageMarkerPrefix(text) {
-  return (text || '').replace(/^(\s*Read this screenshot: @\S+\s*)+/, '').trim();
+  return window.__bramStripImageMarkerPrefix(text);
 }
-
 function worklistSubmittedMatches(exchangeUserText, submitted) {
-  if (!submitted) return false;
-  const norm = s => stripImageMarkerPrefix(s || '').replace(/\s+/g, ' ').trim();
-  return norm(exchangeUserText) === norm(submitted);
+  return window.__bramWorklistSubmittedMatches(exchangeUserText, submitted);
 }
-
-function worklistConversationUserText(exchangeUserText, submitted, awaiting, submittedItemId) {
-  App.mark('worklist:conv-user-text:start');
-  // Strip the `Read this screenshot: @<path>` marker prefix that
-  // submitWorklistMessageFast prepended on the way out. The JSONL extractor
-  // already removes `[Image: source: ...]` but leaves the `@<path>` prefix
-  // in userText. Without this strip, the conversation pane's "You" element
-  // flaps between the marker-augmented exchange text (long) and the typed
-  // submittedWorklistMessage (short) as lastExchangeDS refetches return
-  // empty mid-cycle. Stripping unifies both branches to the typed text.
-  const exchange = stripImageMarkerPrefix(String(exchangeUserText || '')).trim();
-  const display = String(submitted || '').trim();
-  const exchangeIsPayload = isWorklistActionPayloadText(exchange);
-  let result;
-  let branch;
-  if (awaiting && display) {
-    result = display;
-    branch = 'awaiting+display';
-  } else if (exchangeIsPayload) {
-    if (display) {
-      result = display;
-      branch = 'payload+display';
-    } else {
-      result = formatUserTurnForTranscript(exchange);
-      branch = 'payload+summary';
-    }
-  } else {
-    result = (exchange || display).trim();
-    branch = 'fallback';
-  }
-  App.mark('worklist:conv-user-text:branch=' + branch +
-    '|awaiting=' + (awaiting ? '1' : '0') +
-    '|isPayload=' + (exchangeIsPayload ? '1' : '0') +
-    '|exchangeStart=' + exchange.slice(0, 16).replace(/\|/g, '_') +
-    '|displayStart=' + display.slice(0, 16).replace(/\|/g, '_') +
-    '|resultStart=' + (result || '').slice(0, 40).replace(/\|/g, '_'));
-  App.measure('worklist:conv-user-text:dur', 'worklist:conv-user-text:start');
-  return result;
-}
-
-// Returns true when the agent-turn-killed event should actually clear
-// awaitingResponse. Returns false (and emits the suppression trace) when
-// the kill arrived within the grace window — the host emits `agent-turn-
-// killed` immediately when a structured iterate/approve/drop/new-item
-// payload "kills" the prior idle turn, which would otherwise flip
-// awaitingResponse off and reveal the stale prior agent text via the
-// fallback chain. Legitimate user-triggered kills come much later.
 function shouldClearOnAgentTurnKilled(awaitingResponseSetAt, exchangeUserText, submittedText) {
-  const submitted = (submittedText || '').trim();
-  if (submitted && !worklistSubmittedMatches(exchangeUserText, submitted)) {
-    iframeTrace('awaiting-kill-suppressed', { reason: 'exchange-stale' });
-    return false;
-  }
-  const sinceSet = Date.now() - (awaitingResponseSetAt || 0);
-  if (sinceSet > 750) {
-    return true;
-  }
-  iframeTrace('awaiting-kill-suppressed', { reason: 'within-window', sinceSet });
-  return false;
+  return window.__bramShouldClearOnAgentTurnKilled(awaitingResponseSetAt, exchangeUserText, submittedText);
 }
 
 // Per-tab splitter persistence. XMLUI's documented `resize` event
@@ -1631,33 +654,10 @@ function shouldClearOnAgentTurnKilled(awaitingResponseSetAt, exchangeUserText, s
 // issues). The outer-shell `bram.splitter.shell` key is owned by
 // app/main.js and uses native localStorage flat keys.
 function restoreSplitterSize(key, fallback) {
-  const raw = readLocalStorage('bram.splitter.' + key, '');
-  const s = String(raw || '').trim();
-  const n = parseFloat(s);
-  const hasUnit = /(?:px|%)$/i.test(s);
-  const result = (!isNaN(n) && n > 0)
-    ? (hasUnit ? s : (n < 100 ? (n + '%') : (n + 'px')))
-    : fallback;
-  iframeTrace('splitter-restore', { key, raw, result });
-  return result;
+  return window.__bramRestoreSplitterSize(key, fallback);
 }
 function saveSplitterSize(key, sizes) {
-  if (Array.isArray(sizes)) {
-    const a = Number(sizes[0]);
-    const b = Number(sizes[1]);
-    const total = a + b;
-    const pct = total > 0 ? (a / total) * 100 : 0;
-    iframeTrace('splitter-save', { key, sizes, pct, unit: '%' });
-    if (pct > 0 && pct < 100) {
-      writeLocalStorage('bram.splitter.' + key, String(Math.round(pct * 10) / 10) + '%');
-    }
-    return;
-  }
-  const px = Number(sizes);
-  iframeTrace('splitter-save', { key, sizes, px, unit: 'px' });
-  if (px > 0) {
-    writeLocalStorage('bram.splitter.' + key, String(Math.round(px)) + 'px');
-  }
+  window.__bramSaveSplitterSize(key, sizes);
 }
 
 var worklistVoiceTarget = '';
@@ -1666,12 +666,7 @@ var worklistVoiceSeq = 0;
 var bramWorklistVoiceTarget = '';
 
 function isWorklistTextVoiceTarget(target) {
-  return [
-    'message-agent',
-    'feedback',
-    'new-item',
-    'new-issue'
-  ].includes(target || '');
+  return window.__bramIsWorklistTextVoiceTarget(target);
 }
 
 function setWorklistVoiceTarget(target) {
@@ -1722,23 +717,7 @@ window.bramCurrentPasteTarget = function () {
 //     matching). The reactive listener below covers every other
 //     path that unmounts the feedback panel.
 function inflightSentinelDecide(data, prevSubmitting, prevSubmittedItemId) {
-  const claimIds = (data && data.ids) || [];
-  if (claimIds.length > 0) {
-    const targeted = claimIds[0];
-    const transitioning = !prevSubmitting || prevSubmittedItemId !== targeted;
-    return {
-      kind: 'submit',
-      submitting: transitioning ? true : prevSubmitting,
-      submittedItemId: transitioning ? targeted : prevSubmittedItemId,
-      actionProgressKind: (data && data.kind) || ''
-    };
-  } else if (prevSubmitting) {
-    return {
-      kind: 'clear',
-      trace: { reason: 'sentinel-cleared', item: prevSubmittedItemId || '' }
-    };
-  }
-  return { kind: 'none' };
+  return window.__bramInflightSentinelDecide(data, prevSubmitting, prevSubmittedItemId);
 }
 
 // Reset worklistVoiceTarget to 'message-agent' whenever the feedback
@@ -1758,15 +737,6 @@ function resetVoiceTargetIfFeedbackPanelGone(selected, feedbackExpanded) {
   if (!selected || !feedbackExpanded) {
     setWorklistVoiceTarget('message-agent');
   }
-}
-
-function restoreTextSelection(control, selection, currentLength, appendedLength) {
-  if (!control || !selection) return false;
-  const atEnd = selection.start === currentLength && selection.end === currentLength;
-  const start = atEnd ? selection.start + appendedLength : selection.start;
-  const end = atEnd ? selection.end + appendedLength : selection.end;
-  control.setSelectionRange(start, end, selection.direction || 'none');
-  return true;
 }
 
 function appendVoiceTranscript(component, transcript) {
@@ -1808,24 +778,12 @@ function appendVoiceTranscript(component, transcript) {
 // clicks a toolbar button (1/2/3/Yes/No/Esc), so post-hoc analysis
 // can tell whether the click landed on a menu that was actually
 // still open vs one the host had already cleared.
-function setToolbarPendingMenuFromEvent(e) {
-  recordToolbarPendingMenuFromEvent(e);
-}
-
-function setToolbarPendingMenuFromTurnState(turnState) {
-  recordToolbarPendingMenuFromEvent({ payload: turnState && turnState.pendingMenu });
-}
-
-function traceToolbarKey(key) {
-  const toolbarMenuState = getToolbarPendingMenuState();
-  iframeTrace('toolbar-key', {
-    key,
-    menuPresent: toolbarMenuState.present ? 1 : 0,
-    menuAgeMs: toolbarMenuState.atMs
-      ? (Date.now() - toolbarMenuState.atMs)
-      : -1
-  });
-}
+// setToolbarPendingMenuFromEvent / setToolbarPendingMenuFromTurnState /
+// traceToolbarKey live in app/__shell/helpers.js as window globals.
+// xs callers (Main.xmlui's subscribeTauriEvent callbacks and the
+// toolbar onClick handlers) resolve them via bare-name window lookup
+// — same pattern as logToHost / toTurn / sendKeys. No xs declarations
+// here so there's no statement-queue cost or hoist-collision risk.
 
 // Menu state moved into helpers.js (window.bramAgentMenu et al). The
 // xs setters below are thin delegators kept for any caller still
@@ -1883,187 +841,9 @@ function toggleVoiceForCurrentTarget(recording) {
   return true;
 }
 
-function worklistSubmittedAssistant(exchange, submittedMessage) {
-  const submitted = worklistMessageKey(submittedMessage);
-  if (!submitted || !exchange) return '';
-  const userText = worklistMessageKey((exchange && exchange.userText) || '');
-  if (userText !== submitted) return '';
-  return ((exchange && exchange.assistantText) || '').trim();
-}
-
-function worklistConversationSource(turnEntries, latestAssistantText, exchange, submittedMessage, awaiting, baseline) {
-  if (turnEntries && turnEntries.length > 0) return 'session-turns';
-  if (worklistShouldShowSubmitted([], submittedMessage, awaiting, baseline)) return 'awaiting';
-  if (String(latestAssistantText || '').trim()) return 'last-assistant-text';
-  if (worklistSubmittedAssistant(exchange, submittedMessage)) return 'last-exchange';
-  return 'none';
-}
-
-function worklistAssistantFallbackText(turnEntries, latestAssistantText, exchange, submittedMessage, awaiting, baseline) {
-  if (turnEntries && turnEntries.length > 0) return '';
-  if (worklistShouldShowSubmitted([], submittedMessage, awaiting, baseline)) return '';
-  const latest = String(latestAssistantText || '').trim();
-  if (latest) return latest;
-  return worklistSubmittedAssistant(exchange, submittedMessage);
-}
-
-function worklistMessageKey(text) {
-  return String(text || '').replace(/\s+/g, ' ').trim();
-}
-
-function worklistTurnText(turn) {
-  if (!turn) return '';
-  const entries = turn.entries || [];
-  const parts = [];
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
-    if (entry && entry.kind === 'text' && entry.text) {
-      parts.push(entry.text);
-    }
-  }
-  return parts.join('\n');
-}
-
-function worklistSubmittedAgentEntries(turns, submittedMessage) {
-  const submitted = worklistMessageKey(submittedMessage);
-  if (!submitted || !turns || !turns.length) return [];
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const turn = turns[i];
-    if (!turn || turn.role !== 'user') continue;
-    if (worklistMessageKey(worklistTurnText(turn)) !== submitted) continue;
-    return worklistAgentEntriesAfterUser(turns, i);
-  }
-  return [];
-}
-
-function worklistAgentEntriesAfterUser(turns, userIndex) {
-  const entries = [];
-  const seenToolIds = {};
-  let lastTextKey = '';
-  if (!turns || userIndex < 0) return entries;
-  for (let i = userIndex + 1; i < turns.length; i++) {
-    const turn = turns[i];
-    if (!turn) continue;
-    if (turn.role === 'user') break;
-    if (turn.role !== 'assistant') continue;
-    const turnEntries = turn.entries || [];
-    for (let j = 0; j < turnEntries.length; j++) {
-      const entry = turnEntries[j];
-      if (!entry) continue;
-      if (entry.kind === 'text') {
-        const textKey = worklistMessageKey(entry.text || '');
-        if (!textKey || textKey === lastTextKey) continue;
-        lastTextKey = textKey;
-        entries.push(entry);
-        continue;
-      }
-      lastTextKey = '';
-      if (entry.kind === 'tool' && entry.id) {
-        if (seenToolIds[entry.id]) continue;
-        seenToolIds[entry.id] = true;
-      }
-      entries.push(entry);
-    }
-  }
-  return entries;
-}
-
-const COMPACTION_SUMMARY_PREFIX =
-  'This session is being continued from a previous conversation that ran out of context.';
-
-function isCompactionSyntheticUserTurn(turn) {
-  if (!turn || turn.role !== 'user') return false;
-  return worklistTurnText(turn).trim().startsWith(COMPACTION_SUMMARY_PREFIX);
-}
-
-function worklistLatestUserIndex(turns) {
-  if (!turns || !turns.length) return -1;
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const turn = turns[i];
-    if (turn && turn.role === 'user' && worklistTurnText(turn).trim()) {
-      if (isCompactionSyntheticUserTurn(turn)) return -1;
-      return i;
-    }
-  }
-  return -1;
-}
-
-function worklistLatestUserText(turns) {
-  const idx = worklistLatestUserIndex(turns);
-  if (idx < 0) return '';
-  return worklistTurnText(turns[idx]).trim();
-}
-
 // isWorklistActionPayloadText lives in app/__shell/helpers.js as a
 // window helper — the xs-script parser choked on regex-literal versions
 // here. Bare-name calls resolve via the window scope (same as toTurn,
 // logToHost, queueFeedbackDraft).
 
-function worklistLatestAgentEntries(turns) {
-  return worklistAgentEntriesAfterUser(turns, worklistLatestUserIndex(turns));
-}
 
-function worklistNormalizeForMatch(text) {
-  return (text || '').replace(/\s+/g, ' ').trim();
-}
-
-function worklistUserTurnCount(turns) {
-  if (!turns || !turns.length) return 0;
-  let n = 0;
-  for (let i = 0; i < turns.length; i++) {
-    const turn = turns[i];
-    if (turn && turn.role === 'user' && worklistTurnText(turn).trim() && !isCompactionSyntheticUserTurn(turn)) {
-      n++;
-    }
-  }
-  return n;
-}
-
-function worklistLatestMatchesSubmitted(turns, submittedMessage, baseline) {
-  const submitted = worklistNormalizeForMatch(submittedMessage);
-  if (!submitted) return false;
-  if (worklistUserTurnCount(turns) <= (baseline || 0)) return false;
-  const latest = worklistNormalizeForMatch(worklistLatestUserText(turns));
-  if (!latest) return false;
-  return latest.startsWith(submitted) || submitted.startsWith(latest);
-}
-
-function worklistShouldShowSubmitted(turns, submittedMessage, awaiting, baseline) {
-  return !!(awaiting && submittedMessage);
-}
-
-function worklistDisplayUserText(turns, submittedMessage, awaiting, baseline) {
-  if (worklistShouldShowSubmitted(turns, submittedMessage, awaiting, baseline)) {
-    return submittedMessage;
-  }
-  if (submittedMessage) return submittedMessage;
-  return worklistLatestUserText(turns) || '';
-}
-
-function worklistDisplayAgentEntries(turns, submittedMessage, awaiting, baseline) {
-  const submittedEntries = worklistSubmittedAgentEntries(turns, submittedMessage);
-  if (submittedEntries.length > 0) return submittedEntries;
-  if (submittedMessage && isWorklistActionPayloadText(worklistLatestUserText(turns))) {
-    return worklistLatestAgentEntries(turns);
-  }
-  if (worklistShouldShowSubmitted(turns, submittedMessage, awaiting, baseline)) {
-    return [];
-  }
-  return worklistLatestAgentEntries(turns);
-}
-
-// Build the payload object for the pty-menu-changed iframeTrace.
-// Inline ternaries inside object literals trip XMLUI's expression
-// parser ("Unclosed expression"), so this is split out per rule #9.
-function ptyMenuTracePayload(menu) {
-  const tool = (menu && menu.tool) || '';
-  const hasSig = !!(menu && menu.toolCallSignature);
-  const sigChars = hasSig ? menu.toolCallSignature.length : 0;
-  return {
-    context: 'pty-menu-changed',
-    surface: 'worklist',
-    tool: tool,
-    hasSignature: hasSig,
-    signatureChars: sigChars,
-  };
-}

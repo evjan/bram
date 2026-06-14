@@ -10517,86 +10517,77 @@ fn freshest_session_path<R: tauri::Runtime>(
     Ok(best.map(|(p, _)| p))
 }
 
-fn read_last_assistant_text<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    preferred: Option<SessionProvider>,
-) -> Result<Vec<u8>, String> {
-    let Some(path) = latest_session_path(app, preferred)? else {
-        return Ok(br#"{"text":"","source":"session-turns"}"#.to_vec());
-    };
-    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-    let modified_ms = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let turns = st_parse_lines_to_turns(&text);
-    let mut found = String::new();
-    for turn in turns.iter().rev() {
-        if turn.get("role").and_then(|v| v.as_str()) == Some("assistant") {
-            if let Some(text) = turn.get("text").and_then(|v| v.as_str()) {
-                if !text.trim().is_empty() {
-                    found = text.to_string();
-                    break;
-                }
-            }
-        }
-    }
-    let body = serde_json::json!({
-        "text": found,
-        "source": "session-turns",
-        "path": path.to_string_lossy().to_string(),
-        "mtime": modified_ms,
-    });
-    serde_json::to_vec(&body).map_err(|e| e.to_string())
+// Shared cache for the three conversation-derived routes plus the
+// combined /__conversation-state endpoint. Workspace's
+// lastAssistantTick++ used to fan out to /__last-assistant-text +
+// /__current-turn-edits + /__last-exchange — three full JSONL parses
+// per tick. With the cache, one parse per JSONL change powers all
+// four routes; subsequent requests at the same `(path, mtime, len)`
+// return cached bytes directly. AgentToolUses, ConversationPane, and
+// AgentLastResponse continue to poll the legacy routes; with the
+// shared cache their 2 s polls hit cached bytes between JSONL
+// updates instead of re-parsing.
+struct ConversationStateCache {
+    path: std::path::PathBuf,
+    mtime_ms: i64,
+    len: u64,
+    last_assistant_text_bytes: Vec<u8>,
+    last_exchange_bytes: Vec<u8>,
+    current_turn_edits_bytes: Vec<u8>,
+    conversation_state_bytes: Vec<u8>,
 }
 
-// Companion to read_last_assistant_text: returns the most recent USER
-// message text plus the most recent ASSISTANT message text (which may be
-// empty if the assistant hasn't responded yet) plus the active provider
-// label. Used by the Worklist tab's "You said" / "Claude said" panel.
-fn read_last_exchange<R: tauri::Runtime>(
+fn conversation_state_cache_cell() -> &'static Mutex<Option<ConversationStateCache>> {
+    static CELL: OnceLock<Mutex<Option<ConversationStateCache>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(None))
+}
+
+// Build a fresh cache entry by reading + parsing the session JSONL
+// once and computing all four pre-serialized payloads. Called only on
+// cache miss; cache hits skip this entirely.
+fn build_conversation_cache_entry<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,
-) -> Result<Vec<u8>, String> {
+    path: std::path::PathBuf,
+    mtime_ms: i64,
+    len: u64,
+) -> Result<ConversationStateCache, String> {
     let provider = preferred.or_else(|| hinted_session_provider(app));
     let provider_str = match provider {
         Some(SessionProvider::Claude) => "claude",
         Some(SessionProvider::Codex) => "codex",
         None => "",
     };
-    let Some(path) = latest_session_path(app, preferred)? else {
-        let body = serde_json::json!({
-            "userText": "",
-            "assistantText": "",
-            "tools": [],
-            "provider": provider_str,
-        });
-        return serde_json::to_vec(&body).map_err(|e| e.to_string());
-    };
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let turns = st_parse_lines_to_turns(&text);
+
+    // last_assistant_text sub-payload
+    let mut last_assistant = String::new();
+    for turn in turns.iter().rev() {
+        if turn.get("role").and_then(|v| v.as_str()) == Some("assistant") {
+            if let Some(t) = turn.get("text").and_then(|v| v.as_str()) {
+                if !t.trim().is_empty() {
+                    last_assistant = t.to_string();
+                    break;
+                }
+            }
+        }
+    }
+    let last_assistant_value = serde_json::json!({
+        "text": last_assistant,
+        "source": "session-turns",
+        "path": path.to_string_lossy().to_string(),
+        "mtime": mtime_ms,
+    });
+    let last_assistant_text_bytes =
+        serde_json::to_vec(&last_assistant_value).map_err(|e| e.to_string())?;
+
+    // last_exchange sub-payload (port of the original read_last_exchange body)
     let mut user_text = String::new();
     let mut assistant_text = String::new();
     let mut user_images: Vec<String> = Vec::new();
     let mut assistant_images: Vec<String> = Vec::new();
     let mut tool_entries: Vec<serde_json::Value> = Vec::new();
-    // Walk forward from the most recent user. Anchoring on the user
-    // (not the most recent assistant with non-empty text) is what makes
-    // an in-progress turn visible: Claude's mid-turn assistant records
-    // carry only `[tool_use]` or `[thinking]` content, so their parsed
-    // `text` is empty until the final `[text] stop_reason=end_turn`
-    // line lands. The pre-walk-forward shape skipped every such turn
-    // and jumped back to the *previous* completed exchange, leaving
-    // the Worklist conversation panel stale until end-of-turn. With
-    // user-anchored forward walk, every assistant entry since the
-    // user message is in scope; the latest non-empty assistant text
-    // wins (or stays empty if none yet), and tool entries accumulate
-    // as they arrive. Codex worked under the old shape because its
-    // `event_msg agent_message` records carry incremental text; this
-    // change keeps Codex parity and adds Claude in-progress visibility.
     let mut user_idx: Option<usize> = None;
     for (i, turn) in turns.iter().enumerate().rev() {
         if turn.get("role").and_then(|v| v.as_str()) == Some("user") {
@@ -10650,11 +10641,6 @@ fn read_last_exchange<R: tauri::Runtime>(
         let keep_from = tool_entries.len() - 5;
         tool_entries.drain(0..keep_from);
     }
-    // Iterate payloads carry only a `feedbackRef` (file path) in the
-    // structured turn line. Read the referenced feedback-drafts files
-    // and surface their prose as `iterateFeedback` so the You pane in
-    // ConversationPane can render the user's actual feedback (and
-    // preview any image markers it contains).
     let mut iterate_feedback = String::new();
     if user_text.trim_start().starts_with("iterate:") {
         let rest = user_text
@@ -10681,7 +10667,7 @@ fn read_last_exchange<R: tauri::Runtime>(
             }
         }
     }
-    let body = serde_json::json!({
+    let last_exchange_value = serde_json::json!({
         "userText": user_text,
         "assistantText": assistant_text,
         "userImages": user_images,
@@ -10690,8 +10676,112 @@ fn read_last_exchange<R: tauri::Runtime>(
         "provider": provider_str,
         "iterateFeedback": iterate_feedback,
     });
-    serde_json::to_vec(&body).map_err(|e| e.to_string())
+    let last_exchange_bytes =
+        serde_json::to_vec(&last_exchange_value).map_err(|e| e.to_string())?;
+
+    // current_turn_edits sub-payload — reuse legacy 64KB-tail derivation
+    // for byte-for-byte parity with the existing route.
+    let current_turn_edits_value = compute_current_turn_edits_from_text(&text);
+    let current_turn_edits_bytes =
+        serde_json::to_vec(&current_turn_edits_value).map_err(|e| e.to_string())?;
+
+    // Combined /__conversation-state payload.
+    let combined = serde_json::json!({
+        "lastAssistantText": last_assistant_value,
+        "lastExchange": last_exchange_value,
+        "currentTurnEdits": current_turn_edits_value,
+    });
+    let conversation_state_bytes = serde_json::to_vec(&combined).map_err(|e| e.to_string())?;
+
+    Ok(ConversationStateCache {
+        path,
+        mtime_ms,
+        len,
+        last_assistant_text_bytes,
+        last_exchange_bytes,
+        current_turn_edits_bytes,
+        conversation_state_bytes,
+    })
 }
+
+// Resolve the active session path + its (mtime, len) used as the
+// cache key. Centralised so all four conversation routes agree on
+// what counts as "the same file in the same state".
+fn resolve_conversation_path_meta<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> Result<Option<(std::path::PathBuf, i64, u64)>, String> {
+    let Some(path) = latest_session_path(app, preferred)? else {
+        return Ok(None);
+    };
+    let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+    let mtime_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Ok(Some((path, mtime_ms, metadata.len())))
+}
+
+fn read_last_assistant_text<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> Result<Vec<u8>, String> {
+    let Some((path, mtime_ms, len)) = resolve_conversation_path_meta(app, preferred)? else {
+        return Ok(br#"{"text":"","source":"session-turns"}"#.to_vec());
+    };
+    {
+        let cache = conversation_state_cache_cell().lock().unwrap();
+        if let Some(c) = cache.as_ref() {
+            if c.path == path && c.mtime_ms == mtime_ms && c.len == len {
+                return Ok(c.last_assistant_text_bytes.clone());
+            }
+        }
+    }
+    let entry = build_conversation_cache_entry(app, preferred, path, mtime_ms, len)?;
+    let bytes = entry.last_assistant_text_bytes.clone();
+    *conversation_state_cache_cell().lock().unwrap() = Some(entry);
+    Ok(bytes)
+}
+
+// Companion to read_last_assistant_text: returns the most recent USER
+// message text plus the most recent ASSISTANT message text (which may be
+// empty if the assistant hasn't responded yet) plus the active provider
+// label. Used by the Worklist tab's "You said" / "Claude said" panel.
+fn read_last_exchange<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> Result<Vec<u8>, String> {
+    let provider = preferred.or_else(|| hinted_session_provider(app));
+    let provider_str = match provider {
+        Some(SessionProvider::Claude) => "claude",
+        Some(SessionProvider::Codex) => "codex",
+        None => "",
+    };
+    let Some((path, mtime_ms, len)) = resolve_conversation_path_meta(app, preferred)? else {
+        let body = serde_json::json!({
+            "userText": "",
+            "assistantText": "",
+            "tools": [],
+            "provider": provider_str,
+        });
+        return serde_json::to_vec(&body).map_err(|e| e.to_string());
+    };
+    {
+        let cache = conversation_state_cache_cell().lock().unwrap();
+        if let Some(c) = cache.as_ref() {
+            if c.path == path && c.mtime_ms == mtime_ms && c.len == len {
+                return Ok(c.last_exchange_bytes.clone());
+            }
+        }
+    }
+    let entry = build_conversation_cache_entry(app, preferred, path, mtime_ms, len)?;
+    let bytes = entry.last_exchange_bytes.clone();
+    *conversation_state_cache_cell().lock().unwrap() = Some(entry);
+    Ok(bytes)
+}
+
 
 // Host-side `is the agent waiting for the assistant to speak` derivation.
 // Mirrors the iframe helper isWaitingForAssistant(jsonlText) in Globals.xs:
@@ -10809,25 +10899,86 @@ fn read_waiting_for_assistant<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<V
 // current turn or no session.
 fn read_current_turn_edits<R: tauri::Runtime>(
     app: &AppHandle<R>,
-    _preferred: Option<SessionProvider>,
+    preferred: Option<SessionProvider>,
 ) -> Result<Vec<u8>, String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let Some(path) = freshest_session_path(app)? else {
+    let Some((path, mtime_ms, len)) = resolve_conversation_path_meta(app, preferred)? else {
         return Ok(b"[]".to_vec());
     };
-    let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-    let file_size = file.metadata().map_err(|e| e.to_string())?.len();
-    // 64 KB tail covers ~100 records comfortably even with Codex's
-    // verbose apply_patch payloads. Bigger than read_last_assistant_text's
-    // 32 KB because patch records can be heavy.
-    let want: u64 = 64 * 1024;
-    let read_from = file_size.saturating_sub(want);
-    file.seek(SeekFrom::Start(read_from))
-        .map_err(|e| e.to_string())?;
-    let mut tail = Vec::with_capacity((file_size - read_from) as usize);
-    file.read_to_end(&mut tail).map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&tail);
-    let lines: Vec<&str> = text.lines().collect();
+    {
+        let cache = conversation_state_cache_cell().lock().unwrap();
+        if let Some(c) = cache.as_ref() {
+            if c.path == path && c.mtime_ms == mtime_ms && c.len == len {
+                return Ok(c.current_turn_edits_bytes.clone());
+            }
+        }
+    }
+    let entry = build_conversation_cache_entry(app, preferred, path, mtime_ms, len)?;
+    let bytes = entry.current_turn_edits_bytes.clone();
+    *conversation_state_cache_cell().lock().unwrap() = Some(entry);
+    Ok(bytes)
+}
+
+// /__conversation-state — combined endpoint. Workspace.xmlui binds one
+// DataSource (conversationStateDS) to this route on lastAssistantTick++,
+// replacing the previous fan-out to /__last-assistant-text,
+// /__last-exchange, and /__current-turn-edits. Returns nested
+// { lastAssistantText, lastExchange, currentTurnEdits } so accessor
+// paths in Workspace's existing bindings map directly across.
+fn read_conversation_state<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    preferred: Option<SessionProvider>,
+) -> Result<Vec<u8>, String> {
+    let provider = preferred.or_else(|| hinted_session_provider(app));
+    let provider_str = match provider {
+        Some(SessionProvider::Claude) => "claude",
+        Some(SessionProvider::Codex) => "codex",
+        None => "",
+    };
+    let Some((path, mtime_ms, len)) = resolve_conversation_path_meta(app, preferred)? else {
+        let body = serde_json::json!({
+            "lastAssistantText": { "text": "", "source": "session-turns" },
+            "lastExchange": {
+                "userText": "",
+                "assistantText": "",
+                "userImages": [],
+                "assistantImages": [],
+                "tools": [],
+                "provider": provider_str,
+                "iterateFeedback": "",
+            },
+            "currentTurnEdits": [],
+        });
+        return serde_json::to_vec(&body).map_err(|e| e.to_string());
+    };
+    {
+        let cache = conversation_state_cache_cell().lock().unwrap();
+        if let Some(c) = cache.as_ref() {
+            if c.path == path && c.mtime_ms == mtime_ms && c.len == len {
+                return Ok(c.conversation_state_bytes.clone());
+            }
+        }
+    }
+    let entry = build_conversation_cache_entry(app, preferred, path, mtime_ms, len)?;
+    let bytes = entry.conversation_state_bytes.clone();
+    *conversation_state_cache_cell().lock().unwrap() = Some(entry);
+    Ok(bytes)
+}
+
+// Extract current-turn edit aggregates from an in-memory session JSONL
+// text. Uses the last 64 KB of the text for byte-for-byte parity with
+// the original file.seek + read_to_end(64 KB) implementation that
+// read_current_turn_edits used pre-cache.
+fn compute_current_turn_edits_from_text(text: &str) -> serde_json::Value {
+    let tail_start = text.len().saturating_sub(64 * 1024);
+    // Walk forward from the byte boundary to the nearest \n so we don't
+    // start mid-record (which would always fail to parse and shift the
+    // anchor by up to 64 KB on busy turns).
+    let aligned_start = match text[tail_start..].find('\n') {
+        Some(nl) if tail_start > 0 => tail_start + nl + 1,
+        _ => tail_start,
+    };
+    let tail = &text[aligned_start..];
+    let lines: Vec<&str> = tail.lines().collect();
 
     // Walk backward to the most recent user-message boundary.
     // tool_result-only Claude user records don't count as the boundary
@@ -11081,7 +11232,7 @@ fn read_current_turn_edits<R: tauri::Runtime>(
             })
         })
         .collect();
-    serde_json::to_vec(&result).map_err(|e| e.to_string())
+    serde_json::Value::Array(result)
 }
 
 // ---------------------------------------------------------------------
@@ -20016,6 +20167,21 @@ fn route_request<R: tauri::Runtime>(
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
             Err(e) => {
                 eprintln!("[http /__last-assistant-text] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
+    // Combined conversation-derived state for Workspace.xmlui's single
+    // conversationStateDS binding. Returns nested
+    // { lastAssistantText, lastExchange, currentTurnEdits }. Backed by
+    // the shared (path, mtime, len) cache so repeat requests against an
+    // unchanged JSONL skip the parse entirely.
+    if path == "__conversation-state" {
+        return match read_conversation_state(app, None) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__conversation-state] {}", e);
                 (500, "text/plain; charset=utf-8", e.into_bytes())
             }
         };

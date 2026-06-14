@@ -181,27 +181,26 @@
        parsed turn stream Transcript uses. Refetch is driven by JSONL
        fanout plus the shell's talk-session bridge so Workspace does not
        lag behind the terminal between throttled fanout ticks. -->
+  <!-- Combined conversation-derived state. Single backend route that
+       returns the lastAssistantText, lastExchange, and currentTurnEdits
+       sub-payloads from one JSONL parse per tick instead of three. The
+       route is backed by a (path, mtime, len) cache so unchanged JSONL
+       serves from memory; under active agent generation the parse
+       happens once per JSONL growth, not once per consumer. The legacy
+       /__last-assistant-text, /__last-exchange, /__current-turn-edits
+       routes still exist (and share the same cache) for the polling
+       consumers in AgentToolUses / ConversationPane / AgentLastResponse. -->
   <DataSource
-    id="lastAssistantTextDS"
-    url="/__last-assistant-text?t={lastAssistantTick}"
+    id="conversationStateDS"
+    url="/__conversation-state?t={lastAssistantTick}"
     onLoaded="(data) => {
-      const text = data && data.text;
+      const text = data && data.lastAssistantText && data.lastAssistantText.text;
       if (text && text !== lastAssistantStableText) {
         lastAssistantStableText = text;
       }
     }" />
-  <!-- Same derive-at-the-boundary shape as lastAssistantTextDS: replaces
-       the iframe's currentTurnEdits(lastJsonl) walk which had started
-       exceeding XMLUI's 1000 ms sync-evaluation timeout on busy turns
-       (the in-flight feedback panel under each item triggers it during
-       a submitting cycle). Reuses lastAssistantTick so the Workspace
-       response and edit panels refetch together. -->
-  <DataSource
-    id="currentTurnEditsDS"
-    url="/__current-turn-edits?t={lastAssistantTick}" />
 
   <DataSource id="turnStateDS" url="/__turn-state" pollIntervalInSeconds="1" />
-  <DataSource id="lastExchangeDS" url="/__last-exchange?t={lastAssistantTick}" when="{conversationOpen}" />
   <Timer
     initialDelay="0"
     interval="250"
@@ -224,14 +223,14 @@
     listenTo="{awaitingResponse}"
     onDidChange="(c) => { if (c.newValue &amp;&amp; !c.prevValue) { agentTurnEndedSinceSubmit = false; } }" />
   <ChangeListener
-    listenTo="{((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '') + ':' + ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '') + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []).join('|')) + ':' + (((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (submittedItemId || '') + ':' + (submittedKind || '') + ':' + (awaitingResponse ? '1' : '0')}"
+    listenTo="{((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '') + ':' + ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantText) || '') + ':' + (((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userImages) || []).join('|')) + ':' + (((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantImages) || []).join('|')) + ':' + (((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools) || []).map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (submittedItemId || '') + ':' + (submittedKind || '') + ':' + (awaitingResponse ? '1' : '0')}"
     onDidChange="() => {
       const submitted = (submittedWorklistMessage || '').trim();
-      const exchangeUser = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').trim();
-      const exchangeAssistant = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').trim();
-      const exchangeUserImages = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userImages) || []);
-      const exchangeAssistantImages = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantImages) || []);
-      const exchangeTools = ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.tools) || []).slice(-3);
+      const exchangeUser = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '').trim();
+      const exchangeAssistant = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantText) || '').trim();
+      const exchangeUserImages = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userImages) || []);
+      const exchangeAssistantImages = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantImages) || []);
+      const exchangeTools = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools) || []).slice(-3);
       const exchangeMatchesSubmitted = worklistSubmittedMatches(exchangeUser, submitted);
       const conversationKey = exchangeUser || submitted || (submittedItemId || '');
       if (exchangeTools.length > 0) {
@@ -337,13 +336,13 @@
       }
     });
     subscribeTauriEvent('__bramWorkspaceAgentTurnKilledUnsub', 'agent-turn-killed', () => {
-      if (awaitingResponse &amp;&amp; shouldClearOnAgentTurnKilled(awaitingResponseSetAt, (lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '', submittedWorklistMessage)) {
+      if (awaitingResponse &amp;&amp; shouldClearOnAgentTurnKilled(awaitingResponseSetAt, (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '', submittedWorklistMessage)) {
         iframeTrace('clear-awaiting', {
           via: 'agent-turn-killed',
           sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1,
           stableLen: (lastAssistantStableText || '').length,
-          exchangeUserLen: ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.userText) || '').length,
-          exchangeAssistantLen: ((lastExchangeDS.value &amp;&amp; lastExchangeDS.value.assistantText) || '').length,
+          exchangeUserLen: ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '').length,
+          exchangeAssistantLen: ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantText) || '').length,
           submittedLen: (submittedWorklistMessage || '').length
         });
         awaitingResponse = false;
@@ -622,14 +621,15 @@
                 </HStack>
                 <!-- In-flight feedback panel: shows files touched in the
                      agent's current turn while a cycle targets this
-                     item. Driven by /__current-turn-edits (host-side
-                     derivation); replaces the iframe currentTurnEdits
-                     walk that had started timing out on busy turns. -->
+                     item. Reads from conversationStateDS.currentTurnEdits
+                     (host-side derivation backed by the shared parse cache);
+                     replaces the iframe currentTurnEdits walk that had
+                     started timing out on busy turns. -->
                 <VStack
                   when="{submitting && submittedItemId === $item.id}"
                   gap="$space-0_5"
                   paddingLeft="$space-3"
-                  var.turnEdits="{currentTurnEditsDS.value || []}">
+                  var.turnEdits="{(conversationStateDS.value &amp;&amp; conversationStateDS.value.currentTurnEdits) || []}">
                   <Text
                     when="{turnEdits.length > 0}"
                     fontSize="$fontSize-xs"

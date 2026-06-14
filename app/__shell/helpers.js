@@ -146,19 +146,25 @@ window._xsLogs = window._xsLogs || [];
     if (drift > batch.maxDrift) batch.maxDrift = drift;
     if (drift >= DRIFT_THRESHOLD_MS) batch.spikes += 1;
     if (batch.fires >= 50) {
-      try {
-        window.logToHost({
-          kind: "iframe-trace",
-          subkind: "heartbeat-batch",
-          fires: batch.fires,
-          spanMs: Date.now() - batch.sinceMs,
-          sumDriftMs: Math.round(batch.sumDrift),
-          avgDriftMs: Math.round(batch.sumDrift / batch.fires),
-          maxDriftMs: Math.round(batch.maxDrift),
-          spikes: batch.spikes,
-          at: new Date().toISOString(),
-        });
-      } catch (e) {}
+      // Gate: skip the emit while a PTY menu is pending.
+      // window.__bramMenuPending mirrors bramAgentMenu (set by
+      // Globals.xs applyAgentMenu). Reset still runs so a fresh
+      // window starts post-dismiss.
+      if (!window.__bramMenuPending) {
+        try {
+          window.logToHost({
+            kind: "iframe-trace",
+            subkind: "heartbeat-batch",
+            fires: batch.fires,
+            spanMs: Date.now() - batch.sinceMs,
+            sumDriftMs: Math.round(batch.sumDrift),
+            avgDriftMs: Math.round(batch.sumDrift / batch.fires),
+            maxDriftMs: Math.round(batch.maxDrift),
+            spikes: batch.spikes,
+            at: new Date().toISOString(),
+          });
+        } catch (e) {}
+      }
       batch = { fires: 0, sumDrift: 0, maxDrift: 0, spikes: 0, sinceMs: 0 };
     }
   }
@@ -167,7 +173,7 @@ window._xsLogs = window._xsLogs || [];
     var drift = now - last - TICK_MS;
     last = now;
     batchTick(drift);
-    if (drift >= DRIFT_THRESHOLD_MS) {
+    if (drift >= DRIFT_THRESHOLD_MS && !window.__bramMenuPending) {
       try {
         window.logToHost({
           kind: "iframe-trace",
@@ -512,6 +518,142 @@ window.logToHost = function (payload) {
     });
   });
 })();
+// Setter for window.__bramMenuPending, called from Globals.xs
+// applyAgentMenu. XMLUI's expression engine can't handle
+// `window.__bramMenuPending = ...` as an assignment target (it parses
+// the LHS as a bare variable and emits "Left value variable
+// (__bramMenuPending) not found in the scope"), but function calls on
+// window members evaluate fine. Bridging through this setter keeps
+// the assignment in plain-JS scope.
+window.__bramSetMenuPending = function (v) {
+  window.__bramMenuPending = !!v;
+};
+
+// Plain-JS wrappers for the AgentMenu pty-menu-changed and
+// turn-state-changed subscriber callbacks (registered in
+// AgentMenu.xmlui onInit). XMLUI's expression engine runs subscriber
+// arrow-function bodies through processStatementQueueAsync
+// (xmlui/src/components-core/script-runner/process-statement-async.ts:115-166),
+// which `await`s three times per statement — onStatementStarted,
+// processStatementAsync, onStatementCompleted. Under iframe load
+// each await is a microtask boundary that yields to the event
+// loop, queueing the body behind pending macrotasks (DataSource
+// polls, ChangeListener fires, JSONL broadcasts). End-to-end:
+// 2-3 s between subscriber-fired (callback wrapper returns in 0 ms)
+// and listener-fired (the iframeTrace inside setAgentMenuFromEvent
+// actually emits). Collapsing the body to one window function call
+// keeps applyAgentMenu, agentMenuTraceFields, iframeTrace, and the
+// menu-pending mirror all on the synchronous JS side so the entire
+// chain is one XMLUI statement instead of N.
+// Native plain-JS AgentMenu state + handlers. Source of truth lives
+// on window so xs scope can read it (Globals.xs getAgentMenu,
+// Main.xmlui suppression gates) and JS scope can write it without
+// going through XMLUI's expression engine.
+//
+// XMLUI evaluates xs function bodies via processStatementQueueAsync,
+// awaiting three times per statement
+// (xmlui/src/components-core/script-runner/process-statement-async.ts:115-166).
+// Under iframe load — DataSource polls, ChangeListener fires, JSONL
+// pipeline — each await yields to the event loop and the body
+// serialises behind pending macrotasks. The full menu-state update
+// (apply + trace) used to take 2-3 s end-to-end despite the JS-level
+// subscriber wrapper returning in 0 ms. Doing the work natively
+// here, before the XMLUI subscriber runs, drops that to the IPC
+// delivery floor.
+if (typeof window.bramAgentMenu === "undefined") window.bramAgentMenu = null;
+if (typeof window.bramAgentMenuSuppressFallback === "undefined") window.bramAgentMenuSuppressFallback = true;
+if (typeof window.bramAgentMenuLastHostMs === "undefined") window.bramAgentMenuLastHostMs = 0;
+if (typeof window.bramAgentMenuLastSource === "undefined") window.bramAgentMenuLastSource = "";
+
+function __bramAgentMenuHostMs(menu) {
+  return menu && typeof menu.atHostMs === "number" ? menu.atHostMs : 0;
+}
+
+function __bramAgentMenuTraceFields(menu) {
+  var hostMs = __bramAgentMenuHostMs(menu);
+  return {
+    tool: (menu && menu.tool) || "",
+    hasSignature: !!(menu && menu.toolCallSignature),
+    signatureChars: menu && menu.toolCallSignature ? menu.toolCallSignature.length : 0,
+    assignedMenu: window.bramAgentMenu ? window.bramAgentMenu.tool : "",
+    suppressFallback: window.bramAgentMenuSuppressFallback,
+    at_host_ms: hostMs,
+    delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1,
+    cache_source: (menu && menu.cacheSource) || "",
+    last_host_ms: window.bramAgentMenuLastHostMs,
+    last_cache_source: window.bramAgentMenuLastSource,
+    stale: hostMs && window.bramAgentMenuLastHostMs && hostMs < window.bramAgentMenuLastHostMs ? 1 : 0,
+  };
+}
+
+function __bramEmitMenuTrace(subkind, fields) {
+  if (typeof window.logToHost !== "function") return;
+  var payload = { kind: "iframe-trace", subkind: subkind, at: new Date().toISOString() };
+  Object.keys(fields || {}).forEach(function (k) {
+    if (fields[k] !== undefined) payload[k] = fields[k];
+  });
+  window.logToHost(payload);
+}
+
+window.__bramApplyAgentMenu = function (menu, suppressFallback, source) {
+  var hostMs = __bramAgentMenuHostMs(menu);
+  var stale = !!(hostMs && window.bramAgentMenuLastHostMs && hostMs < window.bramAgentMenuLastHostMs);
+  if (stale) {
+    __bramEmitMenuTrace("agent-menu-stale", {
+      incoming_host_ms: hostMs,
+      current_host_ms: window.bramAgentMenuLastHostMs,
+      incoming_source: (menu && menu.cacheSource) || source || "",
+      current_source: window.bramAgentMenuLastSource,
+      incoming_tool: (menu && menu.tool) || "",
+      current_tool: (window.bramAgentMenu && window.bramAgentMenu.tool) || "",
+    });
+    return true;
+  }
+  window.bramAgentMenu = menu || null;
+  window.bramAgentMenuSuppressFallback = suppressFallback;
+  window.__bramMenuPending = !!menu;
+  if (hostMs) {
+    window.bramAgentMenuLastHostMs = hostMs;
+    window.bramAgentMenuLastSource = (menu && menu.cacheSource) || source || "";
+  } else if (!menu) {
+    window.bramAgentMenuLastHostMs = Date.now();
+    window.bramAgentMenuLastSource = source || "";
+  }
+  return false;
+};
+
+window.__bramSetAgentMenuFromEvent = function (e, surface) {
+  var payload = e && e.payload ? e.payload : null;
+  var incoming = payload && payload.tool ? payload : null;
+  var stale = window.__bramApplyAgentMenu(incoming, !incoming, "setAgentMenuFromEvent");
+  var fields = __bramAgentMenuTraceFields(incoming);
+  fields.context = "pty-menu-changed";
+  fields.surface = surface || "agent-menu";
+  fields.stale = stale;
+  __bramEmitMenuTrace("listener-fired", fields);
+};
+
+window.__bramSetAgentMenuFromTurnState = function (turnState, surface) {
+  var p = turnState || {};
+  var incoming = p.pendingMenu || null;
+  var stale = window.__bramApplyAgentMenu(incoming, !incoming, "setAgentMenuFromTurnState");
+  var fields = __bramAgentMenuTraceFields(incoming);
+  fields.context = "turn-state-changed";
+  fields.surface = surface || "agent-menu";
+  fields.phase = p.phase || "";
+  fields.source = p.source || "";
+  fields.menu = p.pendingMenu ? p.pendingMenu.tool : "";
+  fields.stale = stale;
+  __bramEmitMenuTrace("listener-fired", fields);
+};
+
+// Native subscriber registration lives further down in this file
+// (search "__bramNativePtyMenuUnsub"). subscribeTauriEvent is defined
+// later than this block, so calling it here at top level throws and
+// aborts the rest of the script — taking down voice helpers, the
+// console-interleave, and the Tauri-listener machinery itself
+// (incident 2026-06-14: blank menus + voice broken). Register after
+// subscribeTauriEvent exists.
 window.openExternal = function (url) {
   var invoke = getTauriInvoke();
   if (!invoke) return;
@@ -884,7 +1026,7 @@ function __tscBatchTick(elapsedMs) {
   if (elapsedMs > __tscBatch.maxMs) __tscBatch.maxMs = elapsedMs;
   if (__tscBatch.count >= 10) {
     try {
-      if (typeof window.logToHost === "function") {
+      if (typeof window.logToHost === "function" && !window.__bramMenuPending) {
         window.logToHost({
           kind: "iframe-trace",
           subkind: "talk-session-batch",
@@ -1036,6 +1178,24 @@ window.subscribeTauriEvent = function (key, eventName, fn) {
   return window[key];
 };
 
+// Native plain-JS subscribers for the AgentMenu pipeline. Counterpart
+// to window.__bramApplyAgentMenu / window.__bramSetAgentMenuFrom*
+// defined earlier in this file. Registered here, AFTER
+// window.subscribeTauriEvent exists, but BEFORE AgentMenu.xmlui's
+// onInit calls subscribeTauriEvent with its trivial menuTick-bumping
+// callback. Subscribers are dispatched by __ensureTauriEventListener
+// in registration order, so the native handler updates
+// window.bramAgentMenu in plain JS before the XMLUI subscriber's
+// menuTick++ statement gets queued for evaluation. AgentMenu's
+// `when={menuTick >= 0 && getAgentMenu(...)}` re-evaluation reads the
+// already-updated window state.
+window.subscribeTauriEvent("__bramNativePtyMenuUnsub", "pty-menu-changed", function (e) {
+  window.__bramSetAgentMenuFromEvent(e, "agent-menu");
+});
+window.subscribeTauriEvent("__bramNativeTurnStateUnsub", "turn-state-changed", function (e) {
+  window.__bramSetAgentMenuFromTurnState((e && e.payload) || {}, "agent-menu");
+});
+
 // Shared cache for the latest session-tail JSONL. A helper-side poller
 // fetches /__sessions/latest-tail and calls setLatestJsonl() on each
 // new value; both the Worklist tab (Workspace.xmlui) and the Transcript
@@ -1064,7 +1224,7 @@ window.setLatestJsonl = function (value) {
   // route at a time, n is typically 1 after a single tab visit, 2 after
   // both tabs have been visited in this iframe session.
   try {
-    if (window.logToHost) {
+    if (window.logToHost && !window.__bramMenuPending) {
       window.logToHost({
         kind: "iframe-trace",
         subkind: "jsonl-broadcast",
@@ -1123,7 +1283,7 @@ window.startLatestJsonlPolling = function (key, getProvider) {
         if (!env || stopped) return;
         var content = env.content || "";
         try {
-          if (typeof window.logToHost === "function") {
+          if (typeof window.logToHost === "function" && !window.__bramMenuPending) {
             window.logToHost({
               kind: "iframe-trace",
               subkind: "jsonl-fanout",
@@ -1223,7 +1383,7 @@ window.appendLatestJsonl = function (chunk) {
   window.setLatestJsonl(combined);
   var t3 = performance.now();
   try {
-    if (window.logToHost) {
+    if (window.logToHost && !window.__bramMenuPending) {
       window.logToHost({
         kind: "iframe-trace",
         subkind: "jsonl-pipeline-ms",

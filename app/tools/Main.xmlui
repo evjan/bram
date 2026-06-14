@@ -7,13 +7,13 @@
     id="mainAgentStatus"
     url="/__agent-status"
     pollIntervalInSeconds="1"
-    onLoaded="(data) => iframeTrace('agent-header-status-loaded', {
+    onLoaded="(data) => { if (!window.bramAgentMenu) iframeTrace('agent-header-status-loaded', {
       state: (data &amp;&amp; data.state) || '',
       verb: (data &amp;&amp; data.verb) || '',
       provider: (data &amp;&amp; data.provider) || '',
       source: (data &amp;&amp; data.source) || '',
       elapsed: (data &amp;&amp; data.elapsedText) || ''
-    })" />
+    }); }" />
   <DataSource id="turnState" url="/__turn-state" pollIntervalInSeconds="1" />
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
@@ -31,7 +31,7 @@
         : (s.state === 'finished'
           ? 'finished'
           : ((mainAgentStatus.value || enhanceStatus.value) &amp;&amp; provider ? 'idle-provider' : 'none'));
-      iframeTrace('agent-header-branch', {
+      if (!window.bramAgentMenu) iframeTrace('agent-header-branch', {
         branch,
         state: s.state || '',
         verb: s.verb || '',

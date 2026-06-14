@@ -1827,93 +1827,40 @@ function traceToolbarKey(key) {
   });
 }
 
-var bramAgentMenu = null;
-var bramAgentMenuSuppressFallback = true;
-var bramAgentMenuLastHostMs = 0;
-var bramAgentMenuLastSource = '';
-
-function agentMenuHostMs(menu) {
-  return menu && typeof menu.atHostMs === 'number' ? menu.atHostMs : 0;
-}
-
-function agentMenuTraceFields(menu) {
-  const hostMs = agentMenuHostMs(menu);
-  return {
-    tool: (menu && menu.tool) || '',
-    hasSignature: !!(menu && menu.toolCallSignature),
-    signatureChars: menu && menu.toolCallSignature ? menu.toolCallSignature.length : 0,
-    assignedMenu: bramAgentMenu ? bramAgentMenu.tool : '',
-    suppressFallback: bramAgentMenuSuppressFallback,
-    at_host_ms: hostMs,
-    delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1,
-    cache_source: (menu && menu.cacheSource) || '',
-    last_host_ms: bramAgentMenuLastHostMs,
-    last_cache_source: bramAgentMenuLastSource,
-    stale: hostMs && bramAgentMenuLastHostMs && hostMs < bramAgentMenuLastHostMs ? 1 : 0
-  };
-}
+// Menu state moved into helpers.js (window.bramAgentMenu et al). The
+// xs setters below are thin delegators kept for any caller still
+// hitting them from xs scope; the actual work, including
+// `listener-fired` trace emission, lives in window.__bramApply* /
+// window.__bramSetAgentMenu* and runs in plain JS to skip XMLUI's
+// processStatementQueueAsync per-statement awaits
+// (xmlui/src/components-core/script-runner/process-statement-async.ts:115-166).
+// Source of truth: window.bramAgentMenu. Read it directly from xs
+// (this file) and from xmlui markup (Main.xmlui suppression gates,
+// AgentMenu.xmlui via getAgentMenu).
 
 function applyAgentMenu(menu, suppressFallback, source) {
-  const hostMs = agentMenuHostMs(menu);
-  const stale = !!(hostMs && bramAgentMenuLastHostMs && hostMs < bramAgentMenuLastHostMs);
-  if (stale) {
-    iframeTrace('agent-menu-stale', {
-      incoming_host_ms: hostMs,
-      current_host_ms: bramAgentMenuLastHostMs,
-      incoming_source: (menu && menu.cacheSource) || source || '',
-      current_source: bramAgentMenuLastSource,
-      incoming_tool: (menu && menu.tool) || '',
-      current_tool: (bramAgentMenu && bramAgentMenu.tool) || ''
-    });
-    return true;
-  }
-  bramAgentMenu = menu || null;
-  bramAgentMenuSuppressFallback = suppressFallback;
-  if (hostMs) {
-    bramAgentMenuLastHostMs = hostMs;
-    bramAgentMenuLastSource = (menu && menu.cacheSource) || source || '';
-  } else if (!menu) {
-    bramAgentMenuLastHostMs = Date.now();
-    bramAgentMenuLastSource = source || '';
+  if (typeof window !== 'undefined' && typeof window.__bramApplyAgentMenu === 'function') {
+    return window.__bramApplyAgentMenu(menu, suppressFallback, source);
   }
   return false;
 }
 
 function setAgentMenuFromTurnState(turnState, surface) {
-  const p = turnState || {};
-  const incoming = p.pendingMenu || null;
-  const stale = applyAgentMenu(incoming, !incoming, 'setAgentMenuFromTurnState');
-  iframeTrace('listener-fired', {
-    context: 'turn-state-changed',
-    surface: surface || 'agent-menu',
-    phase: p.phase || '',
-    source: p.source || '',
-    menu: p.pendingMenu ? p.pendingMenu.tool : '',
-    stale,
-    ...agentMenuTraceFields(incoming)
-  });
+  if (typeof window !== 'undefined' && typeof window.__bramSetAgentMenuFromTurnState === 'function') {
+    window.__bramSetAgentMenuFromTurnState(turnState, surface);
+  }
 }
 
 function setAgentMenuFromEvent(e, surface) {
-  // The host emits payload={} for dismissals — an empty object, not
-  // null. A bare truthy check left bramAgentMenu set to {} and only
-  // the downstream turn-state-changed event eventually cleared it,
-  // ~1.18s after the user's keystroke. Treating any payload without
-  // a `tool` field as a clear lets the pty-menu-changed subscriber
-  // clear the menu synchronously, in the same render tick.
-  const payload = e && e.payload ? e.payload : null;
-  const incoming = payload && payload.tool ? payload : null;
-  const stale = applyAgentMenu(incoming, !incoming, 'setAgentMenuFromEvent');
-  iframeTrace('listener-fired', {
-    context: 'pty-menu-changed',
-    surface: surface || 'agent-menu',
-    stale,
-    ...agentMenuTraceFields(incoming)
-  });
+  if (typeof window !== 'undefined' && typeof window.__bramSetAgentMenuFromEvent === 'function') {
+    window.__bramSetAgentMenuFromEvent(e, surface);
+  }
 }
 
 function getAgentMenu(turnState) {
-  return bramAgentMenu || (!bramAgentMenuSuppressFallback && turnState && turnState.pendingMenu) || null;
+  const current = (typeof window !== 'undefined') ? window.bramAgentMenu : null;
+  const suppress = (typeof window !== 'undefined') ? window.bramAgentMenuSuppressFallback : true;
+  return current || (!suppress && turnState && turnState.pendingMenu) || null;
 }
 
 function toggleVoiceForCurrentTarget(recording) {

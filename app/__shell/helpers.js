@@ -583,17 +583,42 @@ function __bramWriteLS(key, value) {
 // loop for every statement in the body; now the entire body runs as
 // one plain-JS function call (one xs statement total).
 
+var __bramWorklistDraftPersistTimer = null;
+var __bramWorklistDraftPending = null;
+
+function __bramFlushWorklistDraft() {
+  if (__bramWorklistDraftPersistTimer) {
+    clearTimeout(__bramWorklistDraftPersistTimer);
+    __bramWorklistDraftPersistTimer = null;
+  }
+  if (__bramWorklistDraftPending !== null) {
+    __bramWriteLS("bram.worklistMessageDraft", __bramWorklistDraftPending);
+    __bramWorklistDraftPending = null;
+  }
+}
+
 window.__bramRestoreWorklistDraft = function () {
   return __bramReadLS("bram.worklistMessageDraft", "");
 };
 
 window.__bramPersistWorklistDraft = function (text) {
-  __bramWriteLS("bram.worklistMessageDraft", String(text || ""));
+  __bramWorklistDraftPending = String(text || "");
+  if (__bramWorklistDraftPersistTimer) clearTimeout(__bramWorklistDraftPersistTimer);
+  __bramWorklistDraftPersistTimer = setTimeout(__bramFlushWorklistDraft, 400);
 };
 
 window.__bramClearWorklistDraft = function () {
+  if (__bramWorklistDraftPersistTimer) {
+    clearTimeout(__bramWorklistDraftPersistTimer);
+    __bramWorklistDraftPersistTimer = null;
+  }
+  __bramWorklistDraftPending = null;
   __bramWriteLS("bram.worklistMessageDraft", "");
 };
+
+window.__bramFlushWorklistDraft = __bramFlushWorklistDraft;
+
+window.addEventListener("beforeunload", __bramFlushWorklistDraft);
 
 window.__bramRestoreConversationOpen = function () {
   var raw = __bramReadLS("bram.conversationOpen", "1");

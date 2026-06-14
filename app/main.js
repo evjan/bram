@@ -577,7 +577,6 @@ ptyChannel.onmessage = (chunk) => {
 };
 
 term.onData((data) => {
-  console.log("terminal onData", { data });
   invoke("pty_write", { data }).catch((e) => console.error("pty_write", e));
 });
 

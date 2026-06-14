@@ -2187,9 +2187,80 @@ function __tscBatchTick(elapsedMs) {
     __tscBatch = { count: 0, totalMs: 0, maxMs: 0, sinceMs: 0 };
   }
 }
+// Parent-window-scoped Tauri-listener dedup, fixing the iframe-reload
+// accumulation leak.
+//
+// Both ev.listen() call sites in this file (the direct
+// talk-session-changed listener below and the dynamic one inside
+// __ensureTauriEventListener) register on `window.parent.__TAURI__.event`,
+// which lives on the parent shell webview and PERSISTS across iframe
+// reloads. The iframe's own module-level state
+// (__tauriEventListening / __tauriEventSubscribers) re-initialises on
+// every load, so each fresh load thought no listener existed and
+// registered another one — old closures from prior loads stayed live
+// on the parent registry. One host emit then fanned out to N copies
+// of every subscriber, multiplying refetch-called fires, debounce
+// schedules, DataSource reloads, etc.
+//
+// Symptom we measured during the Globals.xs migration (commit d532432):
+// listener-fired count per pty-menu-changed event grew from 4 → 5
+// across two manual reloads of the same Bram session. Same pattern
+// for talk-session-changed.
+//
+// Fix: keep a parent-window-scoped map of eventName → unsub function
+// (or pending listen() promise). On each iframe load, drain the
+// stale entry before calling ev.listen() again. Trace the drain so
+// we can verify the dedup is firing.
+function __bramListenWithDedup(ev, eventName, callback) {
+  if (!ev || typeof ev.listen !== "function") return Promise.resolve(null);
+  var parent;
+  try {
+    parent = (window.parent && window.parent !== window) ? window.parent : window;
+  } catch (e) {
+    parent = window;
+  }
+  try {
+    if (!parent.__bramTauriListenerUnsubs) parent.__bramTauriListenerUnsubs = {};
+  } catch (e) {}
+  var store = null;
+  try { store = parent.__bramTauriListenerUnsubs; } catch (e) {}
+  var stale = store ? store[eventName] : null;
+  if (stale) {
+    try {
+      if (typeof stale === "function") {
+        try { stale(); } catch (e) {}
+      } else if (stale && typeof stale.then === "function") {
+        stale.then(function (fn) { if (typeof fn === "function") { try { fn(); } catch (e) {} } }, function () {});
+      }
+    } catch (e) {}
+    try { if (store) store[eventName] = null; } catch (e) {}
+    try {
+      if (typeof window.logToHost === "function") {
+        window.logToHost({
+          kind: "iframe-trace",
+          subkind: "tauri-listener-dedup",
+          at: new Date().toISOString(),
+          event_name: eventName,
+          stage: "drained-stale",
+        });
+      }
+    } catch (e) {}
+  }
+  var listenResult;
+  try {
+    listenResult = ev.listen(eventName, callback);
+  } catch (e) {
+    return Promise.resolve(null);
+  }
+  try { if (store) store[eventName] = listenResult; } catch (e) {}
+  Promise.resolve(listenResult).then(function (unsub) {
+    try { if (store) store[eventName] = unsub; } catch (e) {}
+  }, function () {});
+  return Promise.resolve(listenResult);
+}
 try {
   if (window.parent && window.parent.__TAURI__ && window.parent.__TAURI__.event) {
-    window.parent.__TAURI__.event.listen("talk-session-changed", function (event) {
+    __bramListenWithDedup(window.parent.__TAURI__.event, "talk-session-changed", function (event) {
       var t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
       // Per-emit correlation id from the host (see Rust
       // emit_talk_session_changed). Logged here so the trace records
@@ -2244,7 +2315,7 @@ function __ensureTauriEventListener(eventName) {
   if (!ev || typeof ev.listen !== "function") return Promise.resolve(false);
   __tauriEventListening[eventName] = true;
   try {
-    var listenResult = ev.listen(eventName, function (e) {
+    var listenResult = __bramListenWithDedup(ev, eventName, function (e) {
       var subs = __tauriEventSubscribers[eventName] || [];
       try {
         if (typeof window.logToHost === "function") {

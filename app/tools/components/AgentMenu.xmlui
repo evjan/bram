@@ -1,5 +1,5 @@
 <Component name="AgentMenu" var.menuTick="{0}">
-  <DataSource id="agentMenuTurnState" url="/__turn-state" pollIntervalInSeconds="1" />
+  <DataSource id="agentMenuTurnState" url="/__turn-state" pollIntervalInSeconds="3" />
   <VStack
     width="100%"
     gap="$space-2"

@@ -6,7 +6,7 @@
   <DataSource
     id="mainAgentStatus"
     url="/__agent-status"
-    pollIntervalInSeconds="1"
+    pollIntervalInSeconds="3"
     onLoaded="(data) => { if (!window.bramAgentMenu) iframeTrace('agent-header-status-loaded', {
       state: (data &amp;&amp; data.state) || '',
       verb: (data &amp;&amp; data.verb) || '',
@@ -14,7 +14,7 @@
       source: (data &amp;&amp; data.source) || '',
       elapsed: (data &amp;&amp; data.elapsedText) || ''
     }); }" />
-  <DataSource id="turnState" url="/__turn-state" pollIntervalInSeconds="1" />
+  <DataSource id="turnState" url="/__turn-state" pollIntervalInSeconds="3" />
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
     onDidChange="(c) => { if (c.newValue) { if ($pathname !== '/') navigate('/'); window.scrollAllToTop(); } }" />

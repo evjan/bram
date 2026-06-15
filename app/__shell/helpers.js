@@ -2134,37 +2134,52 @@ window.voiceStart = function (onStarted) {
 };
 window.voiceStop = function (callback) {
   var requestId = window._voiceSession;
+  var stopAtMs = Date.now();
   window._voiceSession = null;
   _voiceRemoveStartedListener();
   if (!requestId) {
-    _voiceLog("voiceStop-no-session");
+    _voiceLog("voiceStop-no-session", { stopAtMs: stopAtMs });
     if (typeof callback === "function") callback("");
     return;
   }
-  _voiceLog("voiceStop", { requestId: requestId });
+  _voiceLog("voiceStop", { requestId: requestId, stopAtMs: stopAtMs });
   function onResult(ev) {
     var data = ev && ev.data;
     if (!data || data.type !== "voice-into-result") return;
+    var resultAtMs = Date.now();
     if (data.requestId !== requestId) {
       _voiceLog("voice-into-result-mismatch", {
         expected: requestId,
         received: data.requestId,
+        stopAtMs: stopAtMs,
+        stopToResultMs: resultAtMs - stopAtMs,
         transcriptPreview: String(data.transcript || "").slice(0, 80),
       });
       return;
     }
     window.removeEventListener("message", onResult);
     var transcript = String(data.transcript || "");
+    var resultStopAtMs = Number(data.stopAtMs || stopAtMs);
+    var voiceMeta = {
+      requestId: requestId,
+      stopAtMs: resultStopAtMs,
+      stopToResultMs: resultAtMs - resultStopAtMs,
+      parentStopToDeliverMs:
+        typeof data.stopToDeliverMs === "number" ? data.stopToDeliverMs : null,
+    };
     _voiceLog("voice-into-result", {
       requestId: requestId,
+      stopAtMs: resultStopAtMs,
+      stopToResultMs: voiceMeta.stopToResultMs,
+      parentStopToDeliverMs: voiceMeta.parentStopToDeliverMs,
       transcriptLength: transcript.length,
       transcriptPreview: transcript.slice(0, 80),
     });
-    if (typeof callback === "function") callback(transcript);
+    if (typeof callback === "function") callback(transcript, voiceMeta);
   }
   window.addEventListener("message", onResult);
   window.parent.postMessage(
-    { type: "right-pane", kind: "voice-stop", requestId: requestId },
+    { type: "right-pane", kind: "voice-stop", requestId: requestId, stopAtMs: stopAtMs },
     "*",
   );
 };

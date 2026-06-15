@@ -949,6 +949,8 @@ const { listen } = window.__TAURI__.event;
   // active === "toolbar"    → toolbar mic; transcript → pty_write
   // active === { source, requestId } → iframe round-trip; transcript → postMessage
   let active = null;
+  let activeStopAtMs = null;
+  let activeStopReceivedAtMs = null;
   // Synthetic requestId for toolbar sessions — keeps log entries correlated
   // even though the toolbar path never receives an iframe-supplied id.
   let toolbarRequestId = null;
@@ -963,10 +965,12 @@ const { listen } = window.__TAURI__.event;
     toolbarBtn.dataset.state = state;
     toolbarBtn.innerHTML =
       state === "recording"
-        ? "&#x23F9; stop"
+        ? "&#x23F9;"
+        : state === "processing"
+          ? '<span class="voice-spinner" aria-label="Processing voice input"></span>'
         : state === "starting"
-          ? "&#x23F3; starting"
-          : "&#x1F3A4; voice";
+          ? "&#x23F3;"
+          : "&#x1F3A4;";
   };
   setToolbarState("idle");
 
@@ -1086,8 +1090,14 @@ const { listen } = window.__TAURI__.event;
   const deliverTranscript = (transcript) => {
     const reqId = currentRequestId();
     const text = String(transcript || "");
+    const focusTerminalAfterDelivery = active === "toolbar";
+    const deliveredAtMs = Date.now();
+    const stopToDeliverMs =
+      typeof activeStopAtMs === "number" ? deliveredAtMs - activeStopAtMs : null;
     voiceLog("deliverTranscript", {
       requestId: reqId,
+      stopAtMs: activeStopAtMs,
+      stopToDeliverMs: stopToDeliverMs,
       target:
         active === "toolbar"
           ? "toolbar"
@@ -1105,6 +1115,8 @@ const { listen } = window.__TAURI__.event;
             type: "voice-into-result",
             requestId: active.requestId,
             transcript: text,
+            stopAtMs: activeStopAtMs,
+            stopToDeliverMs: stopToDeliverMs,
           },
           "*",
         );
@@ -1130,8 +1142,23 @@ const { listen } = window.__TAURI__.event;
       });
     }
     active = null;
+    activeStopAtMs = null;
+    activeStopReceivedAtMs = null;
     toolbarRequestId = null;
     if (toolbarBtn.dataset.state !== "idle") setToolbarState("idle");
+    if (focusTerminalAfterDelivery) {
+      requestAnimationFrame(() => {
+        try {
+          term.focus();
+          voiceLog("deliverTranscript-terminal-focus", { requestId: reqId });
+        } catch (e) {
+          voiceLog("deliverTranscript-terminal-focus-error", {
+            requestId: reqId,
+            error: String(e),
+          });
+        }
+      });
+    }
   };
 
   const startRecording = async (target) => {
@@ -1165,6 +1192,8 @@ const { listen } = window.__TAURI__.event;
       return;
     }
     active = target;
+    activeStopAtMs = null;
+    activeStopReceivedAtMs = null;
     const isToolbar = target === "toolbar";
     if (isToolbar) toolbarRequestId = incomingId;
     if (isToolbar) setToolbarState("starting");
@@ -1251,6 +1280,7 @@ const { listen } = window.__TAURI__.event;
     };
     mediaRecorder.onstop = async () => {
       const reqId = currentRequestId();
+      const onstopAtMs = Date.now();
       stopStream();
       const blobType =
         (mediaRecorder && mediaRecorder.mimeType) ||
@@ -1260,6 +1290,9 @@ const { listen } = window.__TAURI__.event;
       audioChunks = [];
       voiceLog("mediaRecorder-onstop", {
         requestId: reqId,
+        stopAtMs: activeStopAtMs,
+        stopToOnstopMs:
+          typeof activeStopAtMs === "number" ? onstopAtMs - activeStopAtMs : null,
         blobSize: blob.size,
         mimeType: blob.type,
         mediaRecorderState: mediaRecorder ? mediaRecorder.state : "null",
@@ -1279,6 +1312,9 @@ const { listen } = window.__TAURI__.event;
         const reqStart = Date.now();
         voiceLog("whisper-request", {
           requestId: reqId,
+          stopAtMs: activeStopAtMs,
+          stopToRequestMs:
+            typeof activeStopAtMs === "number" ? reqStart - activeStopAtMs : null,
           blobSize: blob.size,
         });
         const res = await fetch(WHISPER_URL, { method: "POST", body: formData });
@@ -1291,6 +1327,9 @@ const { listen } = window.__TAURI__.event;
         }
         voiceLog("whisper-response", {
           requestId: reqId,
+          stopAtMs: activeStopAtMs,
+          stopToResponseMs:
+            typeof activeStopAtMs === "number" ? Date.now() - activeStopAtMs : null,
           httpStatus: httpStatus,
           elapsedMs: Date.now() - reqStart,
           transcriptLength: transcript.length,
@@ -1349,9 +1388,14 @@ const { listen } = window.__TAURI__.event;
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = (stopAtMs, source) => {
+    activeStopAtMs = typeof stopAtMs === "number" ? stopAtMs : Date.now();
+    activeStopReceivedAtMs = Date.now();
     voiceLog("stopRecording", {
       requestId: currentRequestId(),
+      source: source || "unknown",
+      stopAtMs: activeStopAtMs,
+      stopToParentReceiveMs: activeStopReceivedAtMs - activeStopAtMs,
       mediaRecorderState: mediaRecorder ? mediaRecorder.state : "null",
     });
     if (mediaRecorder && mediaRecorder.state === "recording") {
@@ -1360,17 +1404,19 @@ const { listen } = window.__TAURI__.event;
       voiceLog("stopRecording-no-active-recorder", {
         requestId: currentRequestId(),
       });
+      deliverTranscript("");
     }
   };
 
   toolbarBtn.addEventListener("click", () => {
     const state = toolbarBtn.dataset.state;
     if (state === "recording") {
-      stopRecording();
+      setToolbarState("processing");
+      stopRecording(Date.now(), "toolbar-click");
     } else if (state === "idle") {
       startRecording("toolbar");
     }
-    // ignore clicks while "starting"
+    // ignore clicks while starting or processing
   });
 
   window.addEventListener("keydown", (ev) => {
@@ -1389,7 +1435,12 @@ const { listen } = window.__TAURI__.event;
       voiceLog("iframe-voice-start", { requestId: d.requestId });
       startRecording({ source: ev.source, requestId: d.requestId });
     } else if (d.kind === "voice-stop") {
-      voiceLog("iframe-voice-stop", { requestId: d.requestId });
+      const stopAtMs = typeof d.stopAtMs === "number" ? d.stopAtMs : Date.now();
+      voiceLog("iframe-voice-stop", {
+        requestId: d.requestId,
+        stopAtMs: stopAtMs,
+        stopToParentReceiveMs: Date.now() - stopAtMs,
+      });
       if (
         !active ||
         active === "toolbar" ||
@@ -1400,6 +1451,7 @@ const { listen } = window.__TAURI__.event;
       ) {
         voiceLog("iframe-voice-stop-ignored", {
           requestId: d.requestId,
+          stopAtMs: stopAtMs,
           activeWas:
             active === null ? null : active === "toolbar" ? "toolbar" : "iframe",
           activeRequestId: currentRequestId(),
@@ -1410,13 +1462,19 @@ const { listen } = window.__TAURI__.event;
         try {
           ev.source &&
             ev.source.postMessage(
-              { type: "voice-into-result", requestId: d.requestId, transcript: "" },
+              {
+                type: "voice-into-result",
+                requestId: d.requestId,
+                transcript: "",
+                stopAtMs: stopAtMs,
+                stopToDeliverMs: Date.now() - stopAtMs,
+              },
               "*",
             );
         } catch (_) {}
         return;
       }
-      stopRecording();
+      stopRecording(stopAtMs, "iframe-message");
     }
   });
 })();

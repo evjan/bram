@@ -701,12 +701,15 @@
                   <ChangeListener
                     listenTo="{worklistVoiceSeq}"
                     onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'feedback') appendVoiceTranscript(feedbackBox, worklistVoiceText); feedbackVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
+                  <Theme size-Spinner="0.85em">
+                    <Spinner when="{isWorklistVoiceProcessingTarget('feedback')}" />
+                  </Theme>
                   <Button
                     label="{feedbackVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
                     variant="ghost"
                     size="xs"
                     tooltip="Voice feedback"
-                    enabled="{!submitting}"
+                    enabled="{!submitting &amp;&amp; !isWorklistVoiceProcessingTarget('feedback')}"
                     onClick="setWorklistVoiceTarget('feedback'); feedbackVoiceRecording = toggleVoiceForCurrentTarget(feedbackVoiceRecording)" />
                   <Button
                     label="×"
@@ -849,8 +852,11 @@
             label="{messageVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
             variant="ghost"
             tooltip="Voice message"
-            enabled="{!feedbackExpanded}"
+            enabled="{!feedbackExpanded &amp;&amp; !isWorklistVoiceProcessingTarget('message-agent')}"
             onClick="setWorklistVoiceTarget('message-agent'); messageVoiceRecording = toggleVoiceForCurrentTarget(messageVoiceRecording)" />
+          <Theme size-Spinner="0.85em">
+            <Spinner when="{isWorklistVoiceProcessingTarget('message-agent')}" />
+          </Theme>
         </HStack>
         <Fragment when="{worklistVoiceTarget !== 'feedback'}">
           <PastedImageStrip />
@@ -1183,7 +1189,11 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
             <Button
               label="{newItemVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
               variant="{newItemVoiceRecording ? 'solid' : 'outlined'}"
+              enabled="{!isWorklistVoiceProcessingTarget('new-item')}"
               onClick="setWorklistVoiceTarget('new-item'); newItemVoiceRecording = toggleVoiceForCurrentTarget(newItemVoiceRecording)" />
+            <Theme size-Spinner="0.85em">
+              <Spinner when="{isWorklistVoiceProcessingTarget('new-item')}" />
+            </Theme>
           </HStack>
           <HStack gap="$space-2">
             <Button

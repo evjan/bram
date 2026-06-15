@@ -668,7 +668,10 @@ function saveSplitterSize(key, sizes) {
 
 var worklistVoiceTarget = '';
 var worklistVoiceText = '';
+var worklistVoiceMeta = null;
 var worklistVoiceSeq = 0;
+var worklistVoiceProcessing = false;
+var worklistVoiceProcessingTarget = '';
 // True between mediaRecorder actually starting in the parent shell and the
 // user clicking stop / a transcript arriving. Drives the tri-state voice
 // buttons so they show ⏳ during the start-up gap (parent runs
@@ -689,6 +692,10 @@ function setWorklistVoiceTarget(target) {
   if (worklistVoiceTarget === next) return;
   worklistVoiceTarget = next;
   iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'target' });
+}
+
+function isWorklistVoiceProcessingTarget(target) {
+  return !!worklistVoiceProcessing && worklistVoiceProcessingTarget === (target || '');
 }
 
 window.bramCurrentPasteTarget = function () {
@@ -755,6 +762,7 @@ function resetVoiceTargetIfFeedbackPanelGone(selected, feedbackExpanded) {
 
 function appendVoiceTranscript(component, transcript) {
   if (!component || !transcript) return false;
+  const meta = worklistVoiceMeta || {};
   const current = String(component.value || '');
   const cleaned = transcript.replace(/\r?\n/g, ' ').replace(/[ \t]+/g, ' ').trim();
   if (!cleaned) return false;
@@ -776,6 +784,12 @@ function appendVoiceTranscript(component, transcript) {
     iframeTrace('voice-input', {
       target: worklistVoiceTarget || 'message-agent',
       stage: 'append',
+      requestId: meta.requestId || null,
+      stopAtMs: meta.stopAtMs || null,
+      stopToAppendMs: typeof meta.stopAtMs === 'number' ? Date.now() - meta.stopAtMs : null,
+      stopToResultMs: typeof meta.stopToResultMs === 'number' ? meta.stopToResultMs : null,
+      parentStopToDeliverMs:
+        typeof meta.parentStopToDeliverMs === 'number' ? meta.parentStopToDeliverMs : null,
       chars: cleaned.length,
       rawChars: transcript.length,
       focused,
@@ -861,22 +875,41 @@ function traceToolbarKey(key) {
 
 function toggleVoiceForCurrentTarget(recording) {
   if (recording) {
+    const stoppingTarget = worklistVoiceTarget || '';
     worklistVoiceRecordingActive = false;
-    voiceStop(t => {
-      if (!t) return;
+    worklistVoiceProcessing = true;
+    worklistVoiceProcessingTarget = stoppingTarget;
+    iframeTrace('voice-input', { target: stoppingTarget || 'terminal', stage: 'processing-start' });
+    voiceStop((t, meta) => {
+      worklistVoiceProcessing = false;
+      worklistVoiceProcessingTarget = '';
+      if (!t) {
+        iframeTrace('voice-input', { target: stoppingTarget || 'terminal', stage: 'processing-empty' });
+        return;
+      }
       if (isWorklistTextVoiceTarget(worklistVoiceTarget)) {
         worklistVoiceText = t;
+        worklistVoiceMeta = meta || null;
         worklistVoiceSeq = worklistVoiceSeq + 1;
-        iframeTrace('voice-input', { target: worklistVoiceTarget || 'message-agent', stage: 'stop' });
+        iframeTrace('voice-input', {
+          target: worklistVoiceTarget || 'message-agent',
+          stage: 'stop',
+          requestId: meta && meta.requestId ? meta.requestId : null,
+          stopAtMs: meta && meta.stopAtMs ? meta.stopAtMs : null,
+          stopToResultMs: meta && typeof meta.stopToResultMs === 'number' ? meta.stopToResultMs : null
+        });
       } else {
         iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'fallback-terminal' });
         toTurn('voice: ' + t);
       }
+      iframeTrace('voice-input', { target: stoppingTarget || 'terminal', stage: 'processing-end' });
     });
     return false;
   }
   iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'start' });
   worklistVoiceRecordingActive = false;
+  worklistVoiceProcessing = false;
+  worklistVoiceProcessingTarget = '';
   voiceStart(() => {
     worklistVoiceRecordingActive = true;
     iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'recording-started' });
@@ -888,4 +921,3 @@ function toggleVoiceForCurrentTarget(recording) {
 // window helper — the xs-script parser choked on regex-literal versions
 // here. Bare-name calls resolve via the window scope (same as toTurn,
 // logToHost, queueFeedbackDraft).
-

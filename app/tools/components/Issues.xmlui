@@ -122,9 +122,13 @@
             onGotFocus="setWorklistVoiceTarget('new-issue')"
             onDidChange="(v) => { newIssueText = v; setWorklistVoiceTarget('new-issue'); }" />
           <Button
-            label="{newIssueVoiceRecording ? (worklistVoiceRecordingActive ? '⏹ stop' : '⏳ starting') : '🎤 voice'}"
+            label="{newIssueVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
             variant="{newIssueVoiceRecording ? 'solid' : 'outlined'}"
+            enabled="{!isWorklistVoiceProcessingTarget('new-issue')}"
             onClick="setWorklistVoiceTarget('new-issue'); newIssueVoiceRecording = toggleVoiceForCurrentTarget(newIssueVoiceRecording)" />
+          <Theme size-Spinner="0.85em">
+            <Spinner when="{isWorklistVoiceProcessingTarget('new-issue')}" />
+          </Theme>
         </HStack>
         <HStack gap="$space-2">
           <Button

@@ -321,16 +321,18 @@
     </VStack>
   </HStack>
 
-  <Pages fallbackPath="/worklist">
-    <Page url="/"><Workspace activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
-    <Page url="/worklist"><Workspace activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
-    <Page url="/status"><Status /></Page>
-    <Page url="/settings"><Settings /></Page>
-    <Page url="/sessions"><Sessions /></Page>
-    <Page url="/history"><History /></Page>
-    <Page url="/feedback"><Feedback /></Page>
-    <Page url="/context"><Context activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
-    <Page url="/issues"><Issues /></Page>
-    <Page url="/commits"><Commits /></Page>
-  </Pages>
+  <Theme paddingVertical-Pages="0" paddingVertical-content-App="0">
+    <Pages fallbackPath="/worklist">
+      <Page url="/"><Workspace activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
+      <Page url="/worklist"><Workspace activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
+      <Page url="/status"><Status /></Page>
+      <Page url="/settings"><Settings /></Page>
+      <Page url="/sessions"><Sessions /></Page>
+      <Page url="/history"><History /></Page>
+      <Page url="/feedback"><Feedback /></Page>
+      <Page url="/context"><Context activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
+      <Page url="/issues"><Issues /></Page>
+      <Page url="/commits"><Commits /></Page>
+    </Pages>
+  </Theme>
 </App>

@@ -10927,8 +10927,8 @@ fn build_conversation_cache_entry<R: tauri::Runtime>(
             }
         }
     }
-    if tool_entries.len() > 5 {
-        let keep_from = tool_entries.len() - 5;
+    if tool_entries.len() > 10 {
+        let keep_from = tool_entries.len() - 10;
         tool_entries.drain(0..keep_from);
     }
     let mut iterate_feedback = String::new();

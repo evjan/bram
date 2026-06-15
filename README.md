@@ -253,7 +253,7 @@ the running agent.
 
 Bram supports two ways to dictate instead of type:
 
-- **🎤 Whisper buttons (recommended).** Local, low-latency dictation via [`whisper-server`](https://github.com/ggml-org/whisper.cpp/tree/master/examples/server). Click the 🎤 button in the parent-shell toolbar (or the agent pane) to start recording, click again to send; the transcript arrives in the terminal as a `voice: ...` line so it's distinguishable from typed input. This is the better experience — lower latency, your choice of model, good transcription quality — but it needs local setup and is **tested on macOS for now**, not yet proven on Linux or Windows.
+- **🎤 Whisper buttons (recommended).** Local, low-latency dictation via [`whisper-server`](https://github.com/ggml-org/whisper.cpp/tree/master/examples/server). Click the 🎤 button in the parent-shell toolbar (or the agent pane) to start recording, click again to send; the transcript arrives in the terminal as a `voice: ...` line so it's distinguishable from typed input. This is the better experience — lower latency, your choice of model, good transcription quality — but it needs local setup.
 - **The agent's native `/voice` command.** No local setup, but support varies by agent and platform. It's the zero-install fallback, and the working path where the Whisper button isn't proven yet.
 
 Bram spawns the local `whisper-server` on the first record click and kills it on app exit — you don't manage the process; you just need the binary, `ffmpeg`, and a model file installed.
@@ -269,9 +269,21 @@ curl -L -o ~/.local/share/whisper-models/ggml-small.en.bin \
 
 `small.en` is ~466 MB, English-only, real-time on Apple Silicon. Swap in a different model from the same Hugging Face repo for other size/accuracy/language tradeoffs. The bundled `Info.plist` declares `NSMicrophoneUsageDescription`, so first use triggers the standard macOS mic-permission prompt. The model path the app loads is `~/.local/share/whisper-models/ggml-small.en.bin`.
 
-### Linux / Windows — not yet proven
+### Windows / WSL
 
-The same `whisper-server` + `ffmpeg` + model setup is expected to work on non-WSL Linux but is untested, and the button flow isn't proven on Windows yet. Install pointers live in git history and at <https://github.com/ggml-org/whisper.cpp>; meanwhile use the agent's `/voice` command. If you get the 🎤 path working on either, please open an issue.
+On Windows, Bram launches `whisper-server` inside WSL with `wsl.exe sh -lc` and still talks to it through `http://127.0.0.1:18080` from the WebView. Install `whisper-server`, `ffmpeg`, and the model file in WSL using the same model path:
+
+```bash
+mkdir -p ~/.local/share/whisper-models
+curl -L -o ~/.local/share/whisper-models/ggml-small.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
+```
+
+If you already have a compatible server listening on port `18080`, Bram uses it instead of starting a new one.
+
+### Linux
+
+The same `whisper-server` + `ffmpeg` + model setup is expected to work on non-WSL Linux, using the host process path and port `18080`.
 
 ## Screen capture
 

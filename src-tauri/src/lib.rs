@@ -156,6 +156,61 @@ fn expand_tilde(p: &str) -> String {
     p.to_string()
 }
 
+fn shell_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+fn wsl_model_path_arg(model_path: &str) -> String {
+    if let Some(rest) = model_path.strip_prefix("~/") {
+        format!(
+            "\"$HOME/{}\"",
+            rest.replace('\\', "\\\\").replace('"', "\\\"")
+        )
+    } else {
+        shell_single_quote(model_path)
+    }
+}
+
+fn wsl_distro_args() -> Vec<String> {
+    match first_nonempty_env(&["BRAM_WSL_DISTRO"]) {
+        Some(distro) => vec!["-d".to_string(), distro, "--".to_string()],
+        None => Vec::new(),
+    }
+}
+
+fn command_output_lossy(output: &std::process::Output) -> String {
+    let mut text = String::new();
+    text.push_str(&String::from_utf8_lossy(&output.stdout));
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    text.replace('\0', "").trim().to_string()
+}
+
+fn whisper_trace<R: tauri::Runtime>(app: &AppHandle<R>, body: &str) {
+    eprintln!("[whisper] {}", body);
+    append_bram_trace_line(app, "whisper", body);
+}
+
+fn trace_whisper_env<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let mut body = format!(
+        "env platform={} arch={}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    if cfg!(target_os = "windows") {
+        let distro =
+            first_nonempty_env(&["BRAM_WSL_DISTRO"]).unwrap_or_else(|| "(default)".to_string());
+        let version = std::process::Command::new("wsl.exe")
+            .arg("--version")
+            .output()
+            .ok()
+            .map(|out| command_output_lossy(&out))
+            .and_then(|s| s.lines().next().map(|line| line.to_string()))
+            .unwrap_or_else(|| "(unavailable)".to_string());
+        body.push_str(&format!(" wsl_distro={} wsl_version={:?}", distro, version));
+    }
+    whisper_trace(app, &body);
+}
+
 // Active project root — resolved once at startup from a CLI arg
 // (bram /path/to/project) or std::env::current_dir(). Read by
 // the HTTP server, watcher, git/sessions/PTY commands.
@@ -8199,6 +8254,14 @@ fn whisper_start(
         }
     }
     let model = expand_tilde(&model_path);
+    whisper_trace(
+        &app,
+        &format!(
+            "start requested model_path={} port=18080 wsl_distro={}",
+            model_path,
+            first_nonempty_env(&["BRAM_WSL_DISTRO"]).unwrap_or_else(|| "(default)".to_string())
+        ),
+    );
     // Keep whisper-server's transcoded WAV temp files outside the
     // watched project tree (otherwise the watcher fires right-pane-reload
     // mid-recording).
@@ -8209,59 +8272,174 @@ fn whisper_start(
         .join("whisper");
     std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
     let tmp_dir_str = tmp_dir.to_string_lossy().to_string();
-    let candidates = ["whisper-server", "/opt/homebrew/bin/whisper-server"];
-    let mut last_err = String::new();
-    for bin in &candidates {
-        match std::process::Command::new(bin)
-            .arg("-m")
+    let mut candidates: Vec<(String, std::process::Command)> = Vec::new();
+    if cfg!(target_os = "windows") {
+        let wsl_tmp_dir = "/tmp/bram-whisper";
+        let script = format!(
+            "mkdir -p {} && exec whisper-server -m {} --convert --tmp-dir {} --port 18080",
+            shell_single_quote(wsl_tmp_dir),
+            wsl_model_path_arg(&model_path),
+            shell_single_quote(wsl_tmp_dir)
+        );
+        let mut cmd = std::process::Command::new("wsl.exe");
+        let distro_args = wsl_distro_args();
+        cmd.args(&distro_args).arg("bash").arg("-lc").arg(script);
+        let label = match first_nonempty_env(&["BRAM_WSL_DISTRO"]) {
+            Some(distro) => format!("wsl.exe -d {} -- bash -lc whisper-server", distro),
+            None => "wsl.exe bash -lc whisper-server".to_string(),
+        };
+        candidates.push((label, cmd));
+    }
+    for bin in ["whisper-server", "/opt/homebrew/bin/whisper-server"] {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.arg("-m")
             .arg(&model)
             .arg("--convert")
             .arg("--tmp-dir")
             .arg(&tmp_dir_str)
             .arg("--port")
-            .arg("18080")
+            .arg("18080");
+        candidates.push((bin.to_string(), cmd));
+    }
+    let mut last_err = String::new();
+    for (label, mut cmd) in candidates {
+        whisper_trace(&app, &format!("spawn-attempt label={:?}", label));
+        match cmd
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
             .spawn()
         {
-            Ok(child) => {
+            Ok(mut child) => {
                 let pid = child.id();
-                eprintln!(
-                    "[whisper] spawned {} pid={} --port 18080 -m {} --tmp-dir {}",
-                    bin, pid, model, tmp_dir_str
+                whisper_trace(
+                    &app,
+                    &format!(
+                        "spawned {} pid={} --port 18080 -m {} --tmp-dir {}",
+                        label, pid, model_path, tmp_dir_str
+                    ),
                 );
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        let mut stderr = String::new();
+                        if let Some(mut pipe) = child.stderr.take() {
+                            let _ = pipe.read_to_string(&mut stderr);
+                        }
+                        let stderr = bram_trace_preview(&stderr.replace('\0', ""), 1024);
+                        let code = status
+                            .code()
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "signal".to_string());
+                        whisper_trace(
+                            &app,
+                            &format!(
+                                "early-exit pid={} code={} elapsed_ms=500 stderr={:?}",
+                                pid, code, stderr
+                            ),
+                        );
+                        last_err =
+                            format!("{} exited early code={} stderr={}", label, code, stderr);
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(e) => whisper_trace(
+                        &app,
+                        &format!(
+                            "early-exit-check-failed pid={} error={:?}",
+                            pid,
+                            e.to_string()
+                        ),
+                    ),
+                }
                 *guard = Some(child);
                 return Ok(pid);
             }
-            Err(e) => last_err = format!("{}: {}", bin, e),
+            Err(e) => {
+                whisper_trace(
+                    &app,
+                    &format!("spawn-error label={:?} error={:?}", label, e.to_string()),
+                );
+                last_err = format!("{}: {}", label, e);
+            }
         }
     }
     Err(format!("failed to spawn whisper-server: {}", last_err))
 }
 
 #[tauri::command]
-fn whisper_stop(state: State<'_, WhisperState>) -> Result<(), String> {
+fn whisper_stop(app: AppHandle, state: State<'_, WhisperState>) -> Result<(), String> {
     let mut guard = state.0.lock().unwrap();
     if let Some(mut child) = guard.take() {
+        let started = std::time::Instant::now();
         let pid = child.id();
-        let _ = child.kill();
-        let _ = child.wait();
-        eprintln!("[whisper] killed pid={}", pid);
+        let kill_result = child.kill();
+        whisper_trace(
+            &app,
+            &format!(
+                "kill phase=child-kill pid={} ok={}",
+                pid,
+                kill_result.is_ok()
+            ),
+        );
+        let wait_started = std::time::Instant::now();
+        let wait_result = child.wait();
+        whisper_trace(
+            &app,
+            &format!(
+                "kill phase=wait pid={} ok={} elapsed_ms={}",
+                pid,
+                wait_result.is_ok(),
+                wait_started.elapsed().as_millis()
+            ),
+        );
+        whisper_trace(
+            &app,
+            &format!(
+                "kill phase=done pid={} total_elapsed_ms={}",
+                pid,
+                started.elapsed().as_millis()
+            ),
+        );
     }
     Ok(())
 }
 
 #[tauri::command]
-fn whisper_status(state: State<'_, WhisperState>) -> WhisperStatusReport {
+fn whisper_status(app: AppHandle, state: State<'_, WhisperState>) -> WhisperStatusReport {
     let mut guard = state.0.lock().unwrap();
     if let Some(child) = guard.as_mut() {
         match child.try_wait() {
-            Ok(None) => WhisperStatusReport {
-                running: true,
-                pid: Some(child.id()),
-            },
+            Ok(None) => {
+                let http_live = if cfg!(target_os = "windows") {
+                    matches!(probe_port_http(18080, "/"), PortStatus::Live)
+                } else {
+                    true
+                };
+                whisper_trace(
+                    &app,
+                    &format!(
+                        "status running={} pid={} http_probe={}",
+                        http_live,
+                        child.id(),
+                        if cfg!(target_os = "windows") {
+                            if http_live {
+                                "ok"
+                            } else {
+                                "fail"
+                            }
+                        } else {
+                            "skipped"
+                        }
+                    ),
+                );
+                WhisperStatusReport {
+                    running: http_live,
+                    pid: Some(child.id()),
+                }
+            }
             _ => {
                 *guard = None;
+                whisper_trace(&app, "status running=false pid=null http_probe=skipped");
                 WhisperStatusReport {
                     running: false,
                     pid: None,
@@ -8269,6 +8447,7 @@ fn whisper_status(state: State<'_, WhisperState>) -> WhisperStatusReport {
             }
         }
     } else {
+        whisper_trace(&app, "status running=false pid=null http_probe=skipped");
         WhisperStatusReport {
             running: false,
             pid: None,
@@ -22609,6 +22788,7 @@ pub fn run() {
                 remove_bram_port_files(proj);
             }
             prepare_bram_trace_log(app.handle());
+            trace_whisper_env(app.handle());
             if bram_trace_enabled() {
                 append_bram_trace_line(
                     app.handle(),
@@ -23384,10 +23564,36 @@ pub fn run() {
                     let state = app.state::<WhisperState>();
                     let mut guard = state.0.lock().unwrap();
                     if let Some(mut child) = guard.take() {
+                        let started = std::time::Instant::now();
                         let pid = child.id();
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        eprintln!("[whisper] killed pid={} on exit", pid);
+                        let kill_result = child.kill();
+                        whisper_trace(
+                            app,
+                            &format!(
+                                "kill phase=child-kill pid={} ok={} reason=app-exit",
+                                pid,
+                                kill_result.is_ok()
+                            ),
+                        );
+                        let wait_started = std::time::Instant::now();
+                        let wait_result = child.wait();
+                        whisper_trace(
+                            app,
+                            &format!(
+                                "kill phase=wait pid={} ok={} elapsed_ms={} reason=app-exit",
+                                pid,
+                                wait_result.is_ok(),
+                                wait_started.elapsed().as_millis()
+                            ),
+                        );
+                        whisper_trace(
+                            app,
+                            &format!(
+                                "kill phase=done pid={} total_elapsed_ms={} reason=app-exit",
+                                pid,
+                                started.elapsed().as_millis()
+                            ),
+                        );
                     }
                 }
                 {

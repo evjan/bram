@@ -390,11 +390,11 @@ Context tab in the agent pane.
 
 Whisper subprocess lifecycle. The parent shell auto-starts the server
 on first record click; the IPC commands are also the only way to stop
-or query state. No HTTP surface — voice is parent-shell-only.
+or query state. The transcription HTTP server listens at `http://127.0.0.1:18080`; on Windows the IPC launcher starts it inside WSL with `wsl.exe`.
 
 | Surface | Kind | Query / params | Response | Consumer |
 | --- | --- | --- | --- | --- |
-| `whisper_start` | IPC | `{ modelPath }` | `Result<(), String>` | parent shell |
+| `whisper_start` | IPC | `{ modelPath }` | `Result<u32, String>` | parent shell |
 | `whisper_stop` | IPC | — | `Result<(), String>` | parent shell |
 | `whisper_status` | IPC | — | `WhisperStatusReport` | parent shell |
 

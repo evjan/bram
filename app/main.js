@@ -910,6 +910,8 @@ const { listen } = window.__TAURI__.event;
 (() => {
   const WHISPER_HOST = "http://127.0.0.1:18080";
   const WHISPER_URL = WHISPER_HOST + "/inference";
+  // Host-native macOS/Linux launch expands this on the host. Windows launch
+  // sends it to WSL so it resolves under the WSL user's home directory.
   const MODEL_PATH = "~/.local/share/whisper-models/ggml-small.en.bin";
   const READY_TIMEOUT_MS = 15000;
   const READY_POLL_MS = 300;
@@ -925,10 +927,12 @@ const { listen } = window.__TAURI__.event;
     try {
       invoke(
         "log_from_right_pane",
-        Object.assign(
-          { kind: "voice-host", stage, at: new Date().toISOString() },
-          payload || {},
-        ),
+        {
+          payload: Object.assign(
+            { kind: "voice-host", stage, at: new Date().toISOString() },
+            payload || {},
+          ),
+        },
       ).catch(() => {});
     } catch (e) {}
   };
@@ -966,29 +970,109 @@ const { listen } = window.__TAURI__.event;
   };
   setToolbarState("idle");
 
+  const mediaRecorderConfig = () => {
+    const opusWebm = "audio/webm;codecs=opus";
+    if (
+      window.MediaRecorder &&
+      typeof MediaRecorder.isTypeSupported === "function" &&
+      MediaRecorder.isTypeSupported(opusWebm)
+    ) {
+      return { options: { mimeType: opusWebm }, codecHint: opusWebm };
+    }
+    return { options: undefined, codecHint: "default" };
+  };
+
+  const probeWhisperServer = async (stage) => {
+    try {
+      const res = await fetch(WHISPER_HOST + "/", {
+        method: "GET",
+        cache: "no-store",
+      });
+      voiceLog(stage, { httpStatus: res.status, ready: res.ok });
+      return res.ok;
+    } catch (e) {
+      voiceLog(stage + "-error", { error: String(e) });
+      return false;
+    }
+  };
+
   const ensureServerRunning = async () => {
+    const startedAt = Date.now();
+    let polls = 0;
+    voiceLog("ensure-server-enter");
+    if (await probeWhisperServer("whisper-preflight")) {
+      voiceLog("ensure-server-ready", {
+        elapsedMs: Date.now() - startedAt,
+        source: "preflight",
+      });
+      return true;
+    }
     let status;
     try {
       status = await invoke("whisper_status");
     } catch (e) {
       console.error("whisper_status", e);
+      voiceLog("whisper-status-error", { error: String(e) });
       return false;
     }
-    if (status && status.running) return true;
+    voiceLog("whisper-status", {
+      running: !!(status && status.running),
+      pid: status && status.pid ? status.pid : null,
+    });
+    voiceLog("ensure-server-status-result", {
+      running: !!(status && status.running),
+      pid: status && status.pid ? status.pid : null,
+    });
+    if (status && status.running) {
+      voiceLog("ensure-server-ready", {
+        elapsedMs: Date.now() - startedAt,
+        source: "status",
+      });
+      return true;
+    }
     try {
-      await invoke("whisper_start", { modelPath: MODEL_PATH });
+      voiceLog("ensure-server-start-invoked", { modelPath: MODEL_PATH });
+      const pid = await invoke("whisper_start", { modelPath: MODEL_PATH });
+      voiceLog("whisper-started", { pid });
     } catch (e) {
       console.error("whisper_start", e);
+      voiceLog("whisper-start-error", { error: String(e) });
+      voiceLog("ensure-server-start-error", { error: String(e) });
       return false;
     }
     const deadline = Date.now() + READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
+      polls += 1;
       try {
         const res = await fetch(WHISPER_HOST + "/", { method: "GET" });
-        if (res.ok) return true;
-      } catch (_) {}
+        voiceLog("ensure-server-poll-tick", {
+          elapsedMs: Date.now() - startedAt,
+          fetchOk: true,
+          httpStatus: res.status,
+          poll: polls,
+        });
+        if (res.ok) {
+          voiceLog("whisper-ready", { httpStatus: res.status });
+          voiceLog("ensure-server-ready", { elapsedMs: Date.now() - startedAt });
+          return true;
+        }
+        voiceLog("whisper-ready-poll", { httpStatus: res.status });
+      } catch (e) {
+        voiceLog("ensure-server-poll-tick", {
+          elapsedMs: Date.now() - startedAt,
+          fetchOk: false,
+          error: String(e),
+          poll: polls,
+        });
+        voiceLog("whisper-ready-poll-error", { error: String(e) });
+      }
       await new Promise((r) => setTimeout(r, READY_POLL_MS));
     }
+    voiceLog("whisper-ready-timeout", { timeoutMs: READY_TIMEOUT_MS });
+    voiceLog("ensure-server-timeout", {
+      elapsedMs: Date.now() - startedAt,
+      totalPolls: polls,
+    });
     return false;
   };
 
@@ -1087,6 +1171,7 @@ const { listen } = window.__TAURI__.event;
     const ready = await ensureServerRunning();
     if (!ready) {
       console.error("whisper-server did not become ready");
+      voiceLog("startRecording-not-ready", { requestId: incomingId });
       const t = active;
       active = null;
       if (isToolbar) setToolbarState("idle");
@@ -1101,9 +1186,18 @@ const { listen } = window.__TAURI__.event;
       return;
     }
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("navigator.mediaDevices.getUserMedia unavailable");
+      }
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
       console.error("getUserMedia", e);
+      voiceLog("getUserMedia-error", {
+        requestId: incomingId,
+        error: String(e),
+        name: e && e.name ? e.name : "",
+        message: e && e.message ? e.message : "",
+      });
       const t = active;
       active = null;
       if (isToolbar) setToolbarState("idle");
@@ -1117,19 +1211,59 @@ const { listen } = window.__TAURI__.event;
       }
       return;
     }
+    voiceLog("getUserMedia-ok", {
+      requestId: incomingId,
+      tracks: stream && typeof stream.getAudioTracks === "function"
+        ? stream.getAudioTracks().length
+        : null,
+    });
     audioChunks = [];
-    mediaRecorder = new MediaRecorder(stream);
+    const recorderConfig = mediaRecorderConfig();
+    try {
+      mediaRecorder = new MediaRecorder(stream, recorderConfig.options);
+    } catch (e) {
+      console.error("MediaRecorder", e);
+      voiceLog("mediaRecorder-create-error", {
+        requestId: incomingId,
+        error: String(e),
+      });
+      stopStream();
+      const t = active;
+      active = null;
+      if (isToolbar) setToolbarState("idle");
+      if (t && typeof t === "object" && t.source) {
+        try {
+          t.source.postMessage(
+            { type: "voice-into-result", requestId: t.requestId, transcript: "" },
+            "*",
+          );
+        } catch (_) {}
+      }
+      return;
+    }
     mediaRecorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) audioChunks.push(e.data);
+      const size = e.data && e.data.size ? e.data.size : 0;
+      voiceLog("mediaRecorder-data", {
+        requestId: currentRequestId(),
+        chunkSize: size,
+      });
+      if (size > 0) audioChunks.push(e.data);
     };
     mediaRecorder.onstop = async () => {
       const reqId = currentRequestId();
       stopStream();
-      const blob = new Blob(audioChunks, { type: "audio/webm" });
+      const blobType =
+        (mediaRecorder && mediaRecorder.mimeType) ||
+        (recorderConfig.options && recorderConfig.options.mimeType) ||
+        "audio/webm";
+      const blob = new Blob(audioChunks, { type: blobType });
       audioChunks = [];
       voiceLog("mediaRecorder-onstop", {
         requestId: reqId,
         blobSize: blob.size,
+        mimeType: blob.type,
+        mediaRecorderState: mediaRecorder ? mediaRecorder.state : "null",
+        codecHint: recorderConfig.codecHint,
       });
       if (blob.size === 0) {
         voiceLog("transcribe-skipped-empty-blob", { requestId: reqId });
@@ -1164,7 +1298,12 @@ const { listen } = window.__TAURI__.event;
         });
       } catch (e) {
         console.error("transcribe", e);
-        voiceLog("whisper-error", { requestId: reqId, error: String(e) });
+        voiceLog("whisper-error", {
+          requestId: reqId,
+          error: String(e),
+          errorName: e && e.name ? e.name : "",
+          errorMessage: e && e.message ? e.message : "",
+        });
       }
       // Stale-duplicate detection: warn if whisper returned exactly the same
       // text as a recent prior response. This is the prime suspect behind
@@ -1203,6 +1342,10 @@ const { listen } = window.__TAURI__.event;
     });
     if (mediaRecorder && mediaRecorder.state === "recording") {
       mediaRecorder.stop();
+    } else {
+      voiceLog("stopRecording-no-active-recorder", {
+        requestId: currentRequestId(),
+      });
     }
   };
 
@@ -1245,6 +1388,10 @@ const { listen } = window.__TAURI__.event;
           requestId: d.requestId,
           activeWas:
             active === null ? null : active === "toolbar" ? "toolbar" : "iframe",
+          activeRequestId: currentRequestId(),
+          hasSource: !!ev.source,
+          sourceMatches:
+            !!(active && typeof active === "object" && ev.source && active.source === ev.source),
         });
         try {
           ev.source &&

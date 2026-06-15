@@ -1,5 +1,26 @@
-<Component name="AgentLastResponse" var.fullscreenImage="{null}">
+<Component name="AgentLastResponse" var.fullscreenImage="{null}" var.replyArriving="{false}" var.lastResponseCueKey="{null}">
   <DataSource id="agentLastResponseExchange" url="/__last-exchange" pollIntervalInSeconds="2" />
+  <ChangeListener
+    listenTo="{((agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantText) || '') + '|' + (((agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantImages) || []).join('|'))}"
+    onDidChange="(change) => {
+      const nextKey = change.newValue || '';
+      if (lastResponseCueKey === null) {
+        lastResponseCueKey = nextKey;
+        return;
+      }
+      if (nextKey && nextKey !== lastResponseCueKey) {
+        lastResponseCueKey = nextKey;
+        replyArriving = true;
+      } else {
+        lastResponseCueKey = nextKey;
+      }
+    }" />
+  <Timer
+    enabled="{replyArriving}"
+    initialDelay="360"
+    interval="360"
+    once="true"
+    onTick="replyArriving = false" />
   <ModalDialog
     when="{!!fullscreenImage}"
     fullScreen="true"
@@ -12,6 +33,8 @@
   </ModalDialog>
   <VStack
     gap="$space-1"
+    opacity="{replyArriving ? 0.55 : 1}"
+    transition="opacity 560ms ease-out"
     when="{agentLastResponseExchange.value &amp;&amp; (agentLastResponseExchange.value.assistantText || (agentLastResponseExchange.value.assistantImages &amp;&amp; agentLastResponseExchange.value.assistantImages.length > 0))}">
     <Text
       fontWeight="$fontWeight-bold"

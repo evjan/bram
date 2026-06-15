@@ -159,6 +159,13 @@
           feedbackDraftsById = nextDrafts;
           persistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById});
         }
+        if (awaitingResponse) {
+          iframeTrace('clear-awaiting', { via: 'inflight-clear', submittedKind: submittedKind || '', sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1 });
+          awaitingResponse = false;
+          liveSubmittedAssistantText = '';
+          liveSubmittedAssistantKey = '';
+          clearWorklistAwaiting(false);
+        }
         submitting = false;
         submittedItemId = null;
         submittedKind = null;
@@ -326,8 +333,8 @@
         lastAssistantTickAt = Date.now();
         lastAssistantTick = lastAssistantTick + 1;
         agentTurnEndedSinceSubmit = true;
-        if (submittedKind === 'message') {
-          iframeTrace('clear-awaiting', { via: 'agent-turn-end-message', sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1 });
+        if (!submitting) {
+          iframeTrace('clear-awaiting', { via: 'agent-turn-end', submittedKind: submittedKind || '', sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1 });
           awaitingResponse = false;
           submittedKind = null;
           liveSubmittedAssistantText = '';

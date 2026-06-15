@@ -2077,6 +2077,7 @@ window.bramStagingPastedImageCount = function () {
 // attached during expression evaluation; passing a callback function as an argument
 // works, since the callback is invoked from plain JS later.
 window._voiceSession = null;
+window._voiceStartedListener = null;
 function _voiceLog(stage, payload) {
   try {
     window.logToHost(
@@ -2087,17 +2088,45 @@ function _voiceLog(stage, payload) {
     );
   } catch (e) {}
 }
-window.voiceStart = function () {
+function _voiceRemoveStartedListener() {
+  if (window._voiceStartedListener) {
+    try {
+      window.removeEventListener("message", window._voiceStartedListener);
+    } catch (e) {}
+    window._voiceStartedListener = null;
+  }
+}
+window.voiceStart = function (onStarted) {
   if (window._voiceSession) {
     _voiceLog("voiceStart-rejected-already-active", {
       currentSession: window._voiceSession,
     });
     return;
   }
+  _voiceRemoveStartedListener();
   var requestId =
     "voice-" + Date.now() + "-" + Math.random().toString(36).slice(2);
   window._voiceSession = requestId;
   _voiceLog("voiceStart", { requestId: requestId });
+  function onStartedMsg(ev) {
+    var data = ev && ev.data;
+    if (!data || data.type !== "voice-recording-started") return;
+    if (data.requestId !== requestId) return;
+    window.removeEventListener("message", onStartedMsg);
+    if (window._voiceStartedListener === onStartedMsg) {
+      window._voiceStartedListener = null;
+    }
+    if (window._voiceSession !== requestId) {
+      _voiceLog("voice-recording-started-stale", { requestId: requestId });
+      return;
+    }
+    _voiceLog("voice-recording-started", { requestId: requestId });
+    if (typeof onStarted === "function") {
+      try { onStarted(); } catch (e) {}
+    }
+  }
+  window._voiceStartedListener = onStartedMsg;
+  window.addEventListener("message", onStartedMsg);
   window.parent.postMessage(
     { type: "right-pane", kind: "voice-start", requestId: requestId },
     "*",
@@ -2106,6 +2135,7 @@ window.voiceStart = function () {
 window.voiceStop = function (callback) {
   var requestId = window._voiceSession;
   window._voiceSession = null;
+  _voiceRemoveStartedListener();
   if (!requestId) {
     _voiceLog("voiceStop-no-session");
     if (typeof callback === "function") callback("");

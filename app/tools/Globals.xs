@@ -669,6 +669,14 @@ function saveSplitterSize(key, sizes) {
 var worklistVoiceTarget = '';
 var worklistVoiceText = '';
 var worklistVoiceSeq = 0;
+// True between mediaRecorder actually starting in the parent shell and the
+// user clicking stop / a transcript arriving. Drives the tri-state voice
+// buttons so they show ⏳ during the start-up gap (parent runs
+// ensureServerRunning + getUserMedia + new MediaRecorder before
+// mediaRecorder.start() fires) instead of ⏹ instantly. Without this the
+// iframe button flips to ⏹ synchronously and users start speaking into a
+// not-yet-recording stream, losing the first phoneme(s).
+var worklistVoiceRecordingActive = false;
 var bramWorklistVoiceTarget = '';
 
 function isWorklistTextVoiceTarget(target) {
@@ -853,6 +861,7 @@ function traceToolbarKey(key) {
 
 function toggleVoiceForCurrentTarget(recording) {
   if (recording) {
+    worklistVoiceRecordingActive = false;
     voiceStop(t => {
       if (!t) return;
       if (isWorklistTextVoiceTarget(worklistVoiceTarget)) {
@@ -867,7 +876,11 @@ function toggleVoiceForCurrentTarget(recording) {
     return false;
   }
   iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'start' });
-  voiceStart();
+  worklistVoiceRecordingActive = false;
+  voiceStart(() => {
+    worklistVoiceRecordingActive = true;
+    iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'recording-started' });
+  });
   return true;
 }
 

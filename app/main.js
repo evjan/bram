@@ -1332,7 +1332,21 @@ const { listen } = window.__TAURI__.event;
     };
     mediaRecorder.start();
     voiceLog("mediaRecorder-start", { requestId: incomingId });
-    if (isToolbar) setToolbarState("recording");
+    if (isToolbar) {
+      setToolbarState("recording");
+    } else if (active && typeof active === "object" && active.source) {
+      try {
+        active.source.postMessage(
+          { type: "voice-recording-started", requestId: active.requestId },
+          "*",
+        );
+      } catch (e) {
+        voiceLog("voice-recording-started-postmessage-error", {
+          requestId: incomingId,
+          error: String(e),
+        });
+      }
+    }
   };
 
   const stopRecording = () => {

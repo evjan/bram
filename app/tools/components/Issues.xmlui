@@ -107,7 +107,7 @@
         <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="Ask the agent to file an issue" />
         <ChangeListener
           listenTo="{worklistVoiceSeq}"
-          onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'new-issue') { appendVoiceTranscript(newIssueBox, worklistVoiceText); newIssueText = newIssueBox.value || ''; } newIssueVoiceRecording = false; }" />
+          onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'new-issue') { appendVoiceTranscript(newIssueBox, worklistVoiceText); newIssueText = newIssueBox.value || ''; } newIssueVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
         <HStack gap="$space-2" verticalAlignment="start">
           <TextArea
             id="newIssueBox"
@@ -122,7 +122,7 @@
             onGotFocus="setWorklistVoiceTarget('new-issue')"
             onDidChange="(v) => { newIssueText = v; setWorklistVoiceTarget('new-issue'); }" />
           <Button
-            label="{newIssueVoiceRecording ? '⏹ stop' : '🎤 voice'}"
+            label="{newIssueVoiceRecording ? (worklistVoiceRecordingActive ? '⏹ stop' : '⏳ starting') : '🎤 voice'}"
             variant="{newIssueVoiceRecording ? 'solid' : 'outlined'}"
             onClick="setWorklistVoiceTarget('new-issue'); newIssueVoiceRecording = toggleVoiceForCurrentTarget(newIssueVoiceRecording)" />
         </HStack>

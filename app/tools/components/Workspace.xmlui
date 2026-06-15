@@ -700,9 +700,9 @@
                     enabled="{!submitting}" />
                   <ChangeListener
                     listenTo="{worklistVoiceSeq}"
-                    onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'feedback') appendVoiceTranscript(feedbackBox, worklistVoiceText); feedbackVoiceRecording = false; }" />
+                    onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'feedback') appendVoiceTranscript(feedbackBox, worklistVoiceText); feedbackVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
                   <Button
-                    label="{feedbackVoiceRecording ? '⏹' : '🎤'}"
+                    label="{feedbackVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
                     variant="ghost"
                     size="xs"
                     tooltip="Voice feedback"
@@ -823,7 +823,7 @@
       <!-- Form.persist restores unsent text across iframe reloads; TextArea.enterSubmits lets Enter submit the parent Form. -->
       <ChangeListener
         listenTo="{worklistVoiceSeq}"
-        onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'message-agent') appendVoiceTranscript(worklistInputBox, worklistVoiceText); messageVoiceRecording = false; }" />
+        onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'message-agent') appendVoiceTranscript(worklistInputBox, worklistVoiceText); messageVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
       <Form
         id="worklistMessageForm"
         width="*"
@@ -846,7 +846,7 @@
             maxRows="6"
             width="*" />
           <Button
-            label="{messageVoiceRecording ? '⏹' : '🎤'}"
+            label="{messageVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
             variant="ghost"
             tooltip="Voice message"
             enabled="{!feedbackExpanded}"
@@ -1155,7 +1155,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
           <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="Ask the agent to propose an item" />
           <ChangeListener
             listenTo="{worklistVoiceSeq}"
-            onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'new-item') appendVoiceTranscript(newItemBox, worklistVoiceText); newItemVoiceRecording = false; }" />
+            onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'new-item') appendVoiceTranscript(newItemBox, worklistVoiceText); newItemVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
           <HStack
             when="{newItemHelp &amp;&amp; !openIssues.value}"
             gap="$space-2"
@@ -1181,7 +1181,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
               onInit="setWorklistVoiceTarget('new-item')"
               onGotFocus="setWorklistVoiceTarget('new-item')" />
             <Button
-              label="{newItemVoiceRecording ? '⏹' : '🎤'}"
+              label="{newItemVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
               variant="{newItemVoiceRecording ? 'solid' : 'outlined'}"
               onClick="setWorklistVoiceTarget('new-item'); newItemVoiceRecording = toggleVoiceForCurrentTarget(newItemVoiceRecording)" />
           </HStack>

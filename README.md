@@ -271,15 +271,33 @@ curl -L -o ~/.local/share/whisper-models/ggml-small.en.bin \
 
 ### Windows / WSL
 
-On Windows, Bram launches `whisper-server` inside WSL with `wsl.exe sh -lc` and still talks to it through `http://127.0.0.1:18080` from the WebView. Install `whisper-server`, `ffmpeg`, and the model file in WSL using the same model path:
+On Windows, Bram launches `whisper-server` inside WSL via `wsl.exe bash -lc` and talks to it through `http://127.0.0.1:18080` from the WebView. WSL2 forwards that loopback port to Windows automatically, so the request path is the same as on macOS once the server is running.
+
+**Prerequisite: WSL2 with Ubuntu.** If you don't already have it, open PowerShell and run `wsl --install`, which installs WSL and the default Ubuntu distro. Restart when prompted, then complete Ubuntu's first-run setup (pick a Linux username and password). Microsoft's full install doc: <https://learn.microsoft.com/en-us/windows/wsl/install>.
+
+**One-time setup inside Ubuntu.** Open Ubuntu (Start menu → Ubuntu, or run `wsl` from PowerShell), then paste this whole block. The `cmake` build takes a few minutes on modern hardware; the model download is ~466 MB.
 
 ```bash
+sudo apt update
+sudo apt install -y build-essential cmake ffmpeg git curl
+git clone https://github.com/ggml-org/whisper.cpp.git
+cd whisper.cpp
+cmake -B build
+cmake --build build -j --config Release
+sudo cp build/bin/whisper-server /usr/local/bin/
 mkdir -p ~/.local/share/whisper-models
 curl -L -o ~/.local/share/whisper-models/ggml-small.en.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
 ```
 
-If you already have a compatible server listening on port `18080`, Bram uses it instead of starting a new one.
+That's the whole install. Bram handles starting/stopping `whisper-server` on its own — first 🎤 click after launching Bram spawns it inside WSL (the button shows ⏳ for ~2-3 s while the model loads), and every click after that is fast until Bram exits.
+
+**Notes:**
+
+- **Mic permission.** WebView2 inherits the standard Windows microphone prompt. On first 🎤 click Windows asks to allow mic access; click **Yes**.
+- **Multiple WSL distros.** If Ubuntu isn't your default distro, set `BRAM_WSL_DISTRO=Ubuntu` (or whatever distro name) in your Windows environment before launching Bram. Single-distro setups need no env var.
+- **Already running?** If you happen to have `whisper-server` listening on port `18080` (e.g., started manually in another terminal), Bram detects it via a preflight probe and uses it instead of spawning a new one — no conflict.
+- **Sanity check after install.** From inside Ubuntu, `which whisper-server` should print `/usr/local/bin/whisper-server`, and `ls ~/.local/share/whisper-models/` should show `ggml-small.en.bin`. If both look right, you're done.
 
 ### Linux
 

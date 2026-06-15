@@ -317,7 +317,7 @@
   <VStack
     paddingTop="0"
     paddingHorizontal="$space-6"
-    paddingBottom="$space-6"
+    paddingBottom="$space-10"
     gap="$space-6"
     onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', (correlationId, atHostMs) => { iframeTrace('listener-fired', {context: 'talk-session-changed', correlation_id: correlationId || '', at_host_ms: atHostMs || 0, delta_to_emit_ms: atHostMs ? (Date.now() - atHostMs) : -1}); debounce(400, (id, hostMs) => { iframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: id || '', at_host_ms: hostMs || 0, delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; }, correlationId, atHostMs); });
     subscribeTauriEvent('__bramWorklistUnsub', 'worklist-changed', (e) => {
@@ -379,6 +379,15 @@
         iframeTrace('refetch-called', {context: 'agent-status-changed', state: p.state || ''});
         lastAssistantTickAt = Date.now();
         lastAssistantTick = lastAssistantTick + 1;
+        const sinceSet = awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : 0;
+        if (p.state === 'finished' &amp;&amp; !submitting &amp;&amp; sinceSet &gt; 750) {
+          iframeTrace('clear-awaiting', { via: 'agent-status-finished', submittedKind: submittedKind || '', sinceSetMs: sinceSet });
+          awaitingResponse = false;
+          submittedKind = null;
+          liveSubmittedAssistantText = '';
+          liveSubmittedAssistantKey = '';
+          clearWorklistAwaiting(false);
+        }
       }
     });
 ">

@@ -48,8 +48,7 @@
   var.worklistConversationLayout="{restoreWorklistConversationLayout()}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}"
-  var.submittedKind="{restoreWorklistSubmittedKind()}"
-  var.worklistMessageDraft="{restoreWorklistDraft()}">
+  var.submittedKind="{restoreWorklistSubmittedKind()}">
   <ChangeListener
     listenTo="{worklistConversationLayout || 'split'}"
     onDidChange="(c) => iframeTrace('worklist-conversation-layout-change', {prev: c.prevValue || '', next: c.newValue || ''})" />
@@ -830,16 +829,20 @@
       <Form
         id="worklistMessageForm"
         width="*"
-        onWillSubmit="() => { const message = ((worklistInputBox && worklistInputBox.value) || worklistMessageDraft || '').trim(); return !!message; }"
-        onSubmit="() => { window.__bramFlushWorklistDraft && window.__bramFlushWorklistDraft(); const sent = submitWorklistMessageFast(((worklistInputBox && worklistInputBox.value) || worklistMessageDraft || '').trim()); if (sent) { worklistMessageDraft = ''; worklistInputBox.setValue(''); clearWorklistDraft(); pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = setWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
+        data="{{ message: restoreWorklistDraft() }}"
+        persist="true"
+        storageKey="bram.worklistMessageDraftForm"
+        dataAfterSubmit="clear"
+        onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
+        onSubmit="(data) => { window.__bramFlushWorklistDraft && window.__bramFlushWorklistDraft(); const sent = submitWorklistMessageFast(data.message); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = setWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } }">
         <property name="buttonRowTemplate"><Fragment/></property>
         <HStack gap="$space-2" verticalAlignment="center">
           <TextArea
             id="worklistInputBox"
-            initialValue="{worklistMessageDraft}"
+            bindTo="message"
             enterSubmits="true"
             onInit="setWorklistVoiceTarget('message-agent')"
-            onDidChange="(val) => { worklistMessageDraft = val || ''; persistWorklistDraft(worklistMessageDraft); }"
+            onDidChange="() => setWorklistVoiceTarget('message-agent')"
             onGotFocus="setWorklistVoiceTarget('message-agent')"
             enabled="{!feedbackExpanded}"
             readOnly="{false}"
@@ -867,8 +870,8 @@
             variant="ghost"
             size="xs"
             tooltip="Send and bypass propose-first for this turn — edit files directly. Use when you want a direct edit."
-            enabled="{!feedbackExpanded &amp;&amp; (((worklistInputBox &amp;&amp; worklistInputBox.value) || worklistMessageDraft || '').trim().length > 0)}"
-            onClick="(() => { window.__bramFlushWorklistDraft && window.__bramFlushWorklistDraft(); const raw = ((worklistInputBox &amp;&amp; worklistInputBox.value) || worklistMessageDraft || '').trim(); if (!raw) return; const sent = submitWorklistMessageFast('skip-worklist: ' + raw); if (sent) { worklistMessageDraft = ''; worklistInputBox.setValue(''); clearWorklistDraft(); pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message-skip-worklist', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = setWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } })()" />
+            enabled="{!feedbackExpanded &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
+            onClick="(() => { window.__bramFlushWorklistDraft && window.__bramFlushWorklistDraft(); const raw = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (!raw) return; const sent = submitWorklistMessageFast('skip-worklist: ' + raw); if (sent) { worklistInputBox.setValue(''); pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); iframeTrace('submitted-images', {kind: 'message-skip-worklist', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = setWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = markAwaitingStarted(); } })()" />
         </HStack>
       </Form>
       </VStack>

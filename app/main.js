@@ -915,6 +915,8 @@ const { listen } = window.__TAURI__.event;
   const MODEL_PATH = "~/.local/share/whisper-models/ggml-small.en.bin";
   const READY_TIMEOUT_MS = 15000;
   const READY_POLL_MS = 300;
+  const IFRAME_ORPHAN_GRACE_MS = 10000;
+  const IFRAME_RECORDING_WATCHDOG_MS = 5 * 60 * 1000;
 
   const toolbarBtn = document.getElementById("voice-toggle");
   if (!toolbarBtn) return;
@@ -951,6 +953,10 @@ const { listen } = window.__TAURI__.event;
   let active = null;
   let activeStopAtMs = null;
   let activeStopReceivedAtMs = null;
+  let activeStartedAtMs = null;
+  let activeRecorderStarted = false;
+  let activeStopRequested = false;
+  let activeWatchdogTimer = null;
   // Synthetic requestId for toolbar sessions — keeps log entries correlated
   // even though the toolbar path never receives an iframe-supplied id.
   let toolbarRequestId = null;
@@ -960,6 +966,84 @@ const { listen } = window.__TAURI__.event;
       : active && typeof active === "object"
         ? active.requestId
         : null;
+  const activeKind = () =>
+    active === null ? null : active === "toolbar" ? "toolbar" : "iframe";
+  const activeAgeMs = () =>
+    typeof activeStartedAtMs === "number" ? Date.now() - activeStartedAtMs : null;
+
+  const clearActiveWatchdog = () => {
+    if (activeWatchdogTimer) {
+      clearTimeout(activeWatchdogTimer);
+      activeWatchdogTimer = null;
+    }
+  };
+
+  const resetActiveState = () => {
+    clearActiveWatchdog();
+    active = null;
+    activeStopAtMs = null;
+    activeStopReceivedAtMs = null;
+    activeStartedAtMs = null;
+    activeRecorderStarted = false;
+    activeStopRequested = false;
+    toolbarRequestId = null;
+  };
+
+  const recoverStaleActiveRecording = (reason) => {
+    const staleRequestId = currentRequestId();
+    const staleKind = activeKind();
+    const recorderState = mediaRecorder ? mediaRecorder.state : "null";
+    const ageMs = activeAgeMs();
+    voiceLog("stale-recording-recovered", {
+      requestId: staleRequestId,
+      reason,
+      activeWas: staleKind,
+      ageMs,
+      recorderState,
+      recorderStarted: activeRecorderStarted,
+      stopRequested: activeStopRequested,
+    });
+    clearActiveWatchdog();
+    if (mediaRecorder) {
+      try {
+        mediaRecorder.ondataavailable = null;
+        mediaRecorder.onstop = null;
+        if (mediaRecorder.state === "recording") {
+          mediaRecorder.stop();
+        }
+      } catch (e) {
+        voiceLog("stale-recording-stop-error", {
+          requestId: staleRequestId,
+          reason,
+          error: String(e),
+        });
+      }
+      mediaRecorder = null;
+    }
+    stopStream();
+    audioChunks = [];
+    resetActiveState();
+    if (toolbarBtn.dataset.state !== "idle") setToolbarState("idle");
+  };
+
+  const armIframeRecordingWatchdog = () => {
+    clearActiveWatchdog();
+    activeWatchdogTimer = setTimeout(() => {
+      if (active && active !== "toolbar" && !activeStopRequested) {
+        recoverStaleActiveRecording("iframe-watchdog-timeout");
+      }
+    }, IFRAME_RECORDING_WATCHDOG_MS);
+  };
+
+  const canRecoverStaleIframeForNewStart = (target) =>
+    active &&
+    active !== "toolbar" &&
+    target &&
+    typeof target === "object" &&
+    target.source &&
+    active.source !== target.source &&
+    typeof activeStartedAtMs === "number" &&
+    Date.now() - activeStartedAtMs >= IFRAME_ORPHAN_GRACE_MS;
 
   const setToolbarState = (state) => {
     toolbarBtn.dataset.state = state;
@@ -1142,9 +1226,8 @@ const { listen } = window.__TAURI__.event;
       });
     }
     active = null;
-    activeStopAtMs = null;
-    activeStopReceivedAtMs = null;
-    toolbarRequestId = null;
+    mediaRecorder = null;
+    resetActiveState();
     if (toolbarBtn.dataset.state !== "idle") setToolbarState("idle");
     if (focusTerminalAfterDelivery) {
       requestAnimationFrame(() => {
@@ -1172,26 +1255,35 @@ const { listen } = window.__TAURI__.event;
       activeWas: active === null ? null : active === "toolbar" ? "toolbar" : "iframe",
     });
     if (active) {
-      voiceLog("startRecording-rejected-busy", {
-        requestId: incomingId,
-        activeRequestId: currentRequestId(),
-      });
-      // Already busy: tell the new requester nothing came of it.
-      if (target && typeof target === "object" && target.source) {
-        try {
-          target.source.postMessage(
-            {
-              type: "voice-into-result",
-              requestId: target.requestId,
-              transcript: "",
-            },
-            "*",
-          );
-        } catch (_) {}
+      if (canRecoverStaleIframeForNewStart(target)) {
+        recoverStaleActiveRecording("new-iframe-start-different-source");
+      } else {
+        voiceLog("startRecording-rejected-busy", {
+          requestId: incomingId,
+          activeRequestId: currentRequestId(),
+          activeAgeMs: activeAgeMs(),
+          activeWas: activeKind(),
+        });
+        // Already busy: tell the new requester nothing came of it.
+        if (target && typeof target === "object" && target.source) {
+          try {
+            target.source.postMessage(
+              {
+                type: "voice-into-result",
+                requestId: target.requestId,
+                transcript: "",
+              },
+              "*",
+            );
+          } catch (_) {}
+        }
+        return;
       }
-      return;
     }
     active = target;
+    activeStartedAtMs = Date.now();
+    activeRecorderStarted = false;
+    activeStopRequested = false;
     activeStopAtMs = null;
     activeStopReceivedAtMs = null;
     const isToolbar = target === "toolbar";
@@ -1202,7 +1294,7 @@ const { listen } = window.__TAURI__.event;
       console.error("whisper-server did not become ready");
       voiceLog("startRecording-not-ready", { requestId: incomingId });
       const t = active;
-      active = null;
+      resetActiveState();
       if (isToolbar) setToolbarState("idle");
       if (t && typeof t === "object" && t.source) {
         try {
@@ -1228,7 +1320,7 @@ const { listen } = window.__TAURI__.event;
         message: e && e.message ? e.message : "",
       });
       const t = active;
-      active = null;
+      resetActiveState();
       if (isToolbar) setToolbarState("idle");
       if (t && typeof t === "object" && t.source) {
         try {
@@ -1258,7 +1350,7 @@ const { listen } = window.__TAURI__.event;
       });
       stopStream();
       const t = active;
-      active = null;
+      resetActiveState();
       if (isToolbar) setToolbarState("idle");
       if (t && typeof t === "object" && t.source) {
         try {
@@ -1370,10 +1462,12 @@ const { listen } = window.__TAURI__.event;
       deliverTranscript(transcript);
     };
     mediaRecorder.start();
+    activeRecorderStarted = true;
     voiceLog("mediaRecorder-start", { requestId: incomingId });
     if (isToolbar) {
       setToolbarState("recording");
     } else if (active && typeof active === "object" && active.source) {
+      armIframeRecordingWatchdog();
       try {
         active.source.postMessage(
           { type: "voice-recording-started", requestId: active.requestId },
@@ -1391,6 +1485,8 @@ const { listen } = window.__TAURI__.event;
   const stopRecording = (stopAtMs, source) => {
     activeStopAtMs = typeof stopAtMs === "number" ? stopAtMs : Date.now();
     activeStopReceivedAtMs = Date.now();
+    activeStopRequested = true;
+    clearActiveWatchdog();
     voiceLog("stopRecording", {
       requestId: currentRequestId(),
       source: source || "unknown",

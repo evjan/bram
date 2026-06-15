@@ -655,59 +655,76 @@ window.__bramSetWorklistConversationLayout = function (layout) {
   return next;
 };
 
-window.__bramRestoreWorklistUiState = function (field) {
+// Worklist UI state model is now multi-expand: any number of items can be
+// "open" simultaneously, each with its own feedback-draft text. State shape:
+//   { expandedItemIds: string[], feedbackDraftsById: Record<string, string> }
+// Legacy fields (selected, expandedItemId, feedbackExpanded, selectedFeedback)
+// are honored on read for migration from pre-sticky-expansion sessions; they
+// are never written back. After the first save in the new shape, the legacy
+// keys disappear.
+window.__bramReadWorklistUiStateObject = function () {
   var raw = __bramReadLS("bram.worklistUiState", "");
-  if (!raw) {
-    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, raw: "", result: field === "feedbackExpanded" ? false : "" });
-    if (field === "feedbackExpanded") return false;
-    return field === "selectedFeedback" ? "" : null;
-  }
+  if (!raw) return {};
   var saved;
   if (typeof raw === "object") {
     saved = raw;
   } else {
     try { saved = JSON.parse(raw); } catch (e) { saved = null; }
   }
-  if (!saved || typeof saved !== "object") {
-    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, raw: "invalid", result: field === "feedbackExpanded" ? false : "" });
-    if (field === "feedbackExpanded") return false;
-    return field === "selectedFeedback" ? "" : null;
+  return (saved && typeof saved === "object") ? saved : {};
+};
+
+window.__bramRestoreWorklistUiState = function (field) {
+  var saved = window.__bramReadWorklistUiStateObject();
+  if (field === "expandedItemIds") {
+    // New canonical field. Fall back to legacy single-id on first migration.
+    var arr = Array.isArray(saved.expandedItemIds) ? saved.expandedItemIds.slice() : null;
+    if (!arr) {
+      var legacy = saved.expandedItemId || saved.selected || null;
+      arr = legacy ? [legacy] : [];
+    }
+    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, count: arr.length });
+    return arr;
   }
-  if (field === "feedbackExpanded") {
-    var feResult = !!saved.feedbackExpanded;
-    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, result: feResult, selected: saved.selected || "", expandedItemId: saved.expandedItemId || "" });
-    return feResult;
+  if (field === "feedbackDraftsById") {
+    // New canonical field. Migrate legacy { selected, selectedFeedback }.
+    var map = (saved.feedbackDraftsById && typeof saved.feedbackDraftsById === "object")
+      ? Object.assign({}, saved.feedbackDraftsById)
+      : null;
+    if (!map) {
+      map = {};
+      if (saved.selected && saved.selectedFeedback) {
+        map[saved.selected] = String(saved.selectedFeedback);
+      }
+    }
+    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, count: Object.keys(map).length });
+    return map;
   }
-  if (field === "selectedFeedback") {
-    var sfResult = String(saved.selectedFeedback || "");
-    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, resultLength: sfResult.length, selected: saved.selected || "", expandedItemId: saved.expandedItemId || "" });
-    return sfResult;
-  }
-  if (field === "selected") {
-    var selResult = saved.selected || null;
-    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, result: selResult || "", expandedItemId: saved.expandedItemId || "", feedbackExpanded: !!saved.feedbackExpanded });
-    return selResult;
-  }
-  if (field === "expandedItemId") {
-    var exResult = saved.expandedItemId || null;
-    window.__bramIframeTrace("worklist-ui-state-restore", { field: field, result: exResult || "", selected: saved.selected || "", feedbackExpanded: !!saved.feedbackExpanded });
-    return exResult;
-  }
+  // Legacy single-value fields retained for any stragglers; new code shouldn't read these.
+  if (field === "feedbackExpanded") return !!saved.feedbackExpanded;
+  if (field === "selectedFeedback") return String(saved.selectedFeedback || "");
+  if (field === "selected") return saved.selected || null;
+  if (field === "expandedItemId") return saved.expandedItemId || null;
   return null;
 };
 
-window.__bramPersistWorklistUiState = function (selected, expandedItemId, feedbackExpanded, selectedFeedback) {
+window.__bramPersistWorklistUiState = function (state) {
+  // state: { expandedItemIds: string[], feedbackDraftsById: Record<string, string> }
+  var ids = (state && Array.isArray(state.expandedItemIds)) ? state.expandedItemIds.slice() : [];
+  var drafts = (state && state.feedbackDraftsById && typeof state.feedbackDraftsById === "object") ? state.feedbackDraftsById : {};
+  // Garbage-collect drafts whose item is no longer expanded — keeps storage bounded.
+  var prunedDrafts = {};
+  for (var i = 0; i < ids.length; i++) {
+    var id = ids[i];
+    if (drafts[id]) prunedDrafts[id] = String(drafts[id]);
+  }
   window.__bramIframeTrace("worklist-ui-state-save", {
-    selected: selected || "",
-    expandedItemId: expandedItemId || "",
-    feedbackExpanded: !!feedbackExpanded,
-    selectedFeedbackLength: (selectedFeedback || "").length,
+    expandedCount: ids.length,
+    draftCount: Object.keys(prunedDrafts).length,
   });
   __bramWriteLS("bram.worklistUiState", JSON.stringify({
-    selected: selected || null,
-    expandedItemId: expandedItemId || null,
-    feedbackExpanded: !!feedbackExpanded,
-    selectedFeedback: selectedFeedback || "",
+    expandedItemIds: ids,
+    feedbackDraftsById: prunedDrafts,
   }));
 };
 

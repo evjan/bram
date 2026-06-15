@@ -585,8 +585,8 @@ function setWorklistConversationLayout(layout) {
 function restoreWorklistUiState(field) {
   return window.__bramRestoreWorklistUiState(field);
 }
-function persistWorklistUiState(selected, expandedItemId, feedbackExpanded, selectedFeedback) {
-  window.__bramPersistWorklistUiState(selected, expandedItemId, feedbackExpanded, selectedFeedback);
+function persistWorklistUiState(state) {
+  window.__bramPersistWorklistUiState(state);
 }
 function clearWorklistUiState() {
   window.__bramClearWorklistUiState();

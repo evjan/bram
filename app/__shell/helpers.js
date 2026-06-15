@@ -634,6 +634,27 @@ window.__bramToggleConversationOpen = function (current) {
   return next;
 };
 
+window.__bramRestoreWorklistConversationLayout = function () {
+  var raw = __bramReadLS("bram.worklistConversationLayout", "");
+  if (raw === "split" || raw === "worklist" || raw === "conversation") {
+    window.__bramIframeTrace("worklist-conversation-layout-restore", { raw: raw, layout: raw });
+    return raw;
+  }
+  var openRaw = __bramReadLS("bram.conversationOpen", "1");
+  var migrated = "split";
+  window.__bramIframeTrace("worklist-conversation-layout-restore", { raw: raw, conversationOpen: openRaw, layout: migrated });
+  return migrated;
+};
+
+window.__bramSetWorklistConversationLayout = function (layout) {
+  var next = (layout === "worklist" || layout === "conversation") ? layout : "split";
+  __bramWriteLS("bram.worklistConversationLayout", next);
+  // Keep the older boolean key coherent for existing traces/helpers.
+  __bramWriteLS("bram.conversationOpen", next === "worklist" ? "0" : "1");
+  window.__bramIframeTrace("worklist-conversation-layout-save", { layout: next });
+  return next;
+};
+
 window.__bramRestoreWorklistUiState = function (field) {
   var raw = __bramReadLS("bram.worklistUiState", "");
   if (!raw) {

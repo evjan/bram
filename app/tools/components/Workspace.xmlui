@@ -45,14 +45,14 @@
   var.pendingPastedImageCount="{window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0}"
   var.pendingPastedImagePaths="{window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []}"
   var.stagingPastedImageCount="{window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0}"
-  var.conversationOpen="{restoreConversationOpen()}"
+  var.worklistConversationLayout="{restoreWorklistConversationLayout()}"
   var.submittedWorklistMessage="{restoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{restoreWorklistSubmittedBaseline()}"
   var.submittedKind="{restoreWorklistSubmittedKind()}"
   var.worklistMessageDraft="{restoreWorklistDraft()}">
   <ChangeListener
-    listenTo="{conversationOpen ? 'open' : 'closed'}"
-    onDidChange="(c) => iframeTrace('worklist-conversation-open-change', {prev: c.prevValue || '', next: c.newValue || ''})" />
+    listenTo="{worklistConversationLayout || 'split'}"
+    onDidChange="(c) => iframeTrace('worklist-conversation-layout-change', {prev: c.prevValue || '', next: c.newValue || ''})" />
   <DataSource
     id="worklist"
     url="/__worklist"
@@ -481,11 +481,15 @@
     <HSplitter
       height="100%"
       width="100%"
-      initialPrimarySize="{conversationOpen ? restoreSplitterSize('worklist', '50%') : '100%'}"
-      minPrimarySize="320px"
-      maxPrimarySize="{conversationOpen ? '-320px' : '100%'}"
-      onResize="(px) => { if (conversationOpen) saveSplitterSize('worklist', px); }">
-      <VStack gap="$space-3" paddingRight="$space-3" overflowY="auto">
+      initialPrimarySize="{(worklistConversationLayout || 'split') === 'worklist' ? '100%' : restoreSplitterSize('worklist', '50%')}"
+      minPrimarySize="{(worklistConversationLayout || 'split') === 'worklist' ? '100%' : '320px'}"
+      maxPrimarySize="{(worklistConversationLayout || 'split') === 'split' ? '-320px' : '100%'}"
+      onResize="(px) => { if ((worklistConversationLayout || 'split') === 'split') saveSplitterSize('worklist', px); }">
+      <VStack
+        when="{(worklistConversationLayout || 'split') !== 'conversation'}"
+        gap="$space-3"
+        paddingRight="$space-3"
+        overflowY="auto">
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">
         <HStack gap="$space-3" verticalAlignment="center">
@@ -500,10 +504,19 @@
           </Theme>
           <SpaceFiller />
           <Button
-            label="{conversationOpen ? 'Hide conversation' : 'Show conversation'}"
+            when="{(worklistConversationLayout || 'split') === 'split'}"
+            label="Full width"
             variant="ghost"
             size="xs"
-            onClick="iframeTrace('worklist-conversation-toggle-click', {source: 'worklist-header', open: !!conversationOpen}); conversationOpen = toggleConversationOpen(conversationOpen)" />
+            tooltip="Give the worklist full width"
+            onClick="iframeTrace('worklist-conversation-layout-click', {source: 'worklist-header', layout: 'worklist'}); worklistConversationLayout = setWorklistConversationLayout('worklist')" />
+          <Button
+            when="{(worklistConversationLayout || 'split') === 'worklist'}"
+            label="Split view"
+            variant="ghost"
+            size="xs"
+            tooltip="Show worklist and chat side by side"
+            onClick="iframeTrace('worklist-conversation-layout-click', {source: 'worklist-header', layout: 'split'}); worklistConversationLayout = setWorklistConversationLayout('split')" />
         </HStack>
         <VStack
           when="{worklist.value.exists && worklist.value.schemaError}"
@@ -855,19 +868,28 @@
       </VStack>
 
       <VStack
-        when="{conversationOpen}"
+        when="{(worklistConversationLayout || 'split') !== 'worklist'}"
         paddingLeft="$space-3"
         gap="$space-2"
         overflowY="auto"
-        onInit="iframeTrace('worklist-conversation-pane-mounted', {open: !!conversationOpen, splitter: restoreSplitterSize('worklist', '50%')})">
+        onInit="iframeTrace('worklist-conversation-pane-mounted', {layout: worklistConversationLayout || 'split', splitter: restoreSplitterSize('worklist', '50%')})">
         <HStack gap="$space-2" verticalAlignment="center">
+          <Heading level="h2">Chat</Heading>
           <SpaceFiller />
           <Button
-            label="×"
+            when="{(worklistConversationLayout || 'split') === 'split'}"
+            label="Full width"
             variant="ghost"
             size="xs"
-            tooltip="Hide conversation"
-            onClick="iframeTrace('worklist-conversation-toggle-click', {source: 'pane-close', open: !!conversationOpen}); conversationOpen = toggleConversationOpen(conversationOpen)" />
+            tooltip="Give chat full width"
+            onClick="iframeTrace('worklist-conversation-layout-click', {source: 'conversation-header', layout: 'conversation'}); worklistConversationLayout = setWorklistConversationLayout('conversation')" />
+          <Button
+            when="{(worklistConversationLayout || 'split') === 'conversation'}"
+            label="Split view"
+            variant="ghost"
+            size="xs"
+            tooltip="Show worklist and chat side by side"
+            onClick="iframeTrace('worklist-conversation-layout-click', {source: 'conversation-header', layout: 'split'}); worklistConversationLayout = setWorklistConversationLayout('split')" />
         </HStack>
         <ConversationPane />
       </VStack>

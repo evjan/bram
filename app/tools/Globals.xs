@@ -576,6 +576,12 @@ function restoreConversationOpen() {
 function toggleConversationOpen(current) {
   return window.__bramToggleConversationOpen(current);
 }
+function restoreWorklistConversationLayout() {
+  return window.__bramRestoreWorklistConversationLayout();
+}
+function setWorklistConversationLayout(layout) {
+  return window.__bramSetWorklistConversationLayout(layout);
+}
 function restoreWorklistUiState(field) {
   return window.__bramRestoreWorklistUiState(field);
 }
@@ -869,5 +875,4 @@ function toggleVoiceForCurrentTarget(recording) {
 // window helper — the xs-script parser choked on regex-literal versions
 // here. Bare-name calls resolve via the window scope (same as toTurn,
 // logToHost, queueFeedbackDraft).
-
 

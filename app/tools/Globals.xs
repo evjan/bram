@@ -645,6 +645,9 @@ function worklistSubmittedMatches(exchangeUserText, submitted) {
 function markTurnEnded(via, state) {
   return window.__bramMarkTurnEnded(via, state);
 }
+function computeConversationSync(state) {
+  return window.__bramComputeConversationSync(state);
+}
 
 // Per-tab splitter persistence. XMLUI's documented `resize` event
 // delivers the primary panel size in pixels, while older traces showed

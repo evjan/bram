@@ -228,77 +228,55 @@
     listenTo="{awaitingResponse}"
     onDidChange="(c) => { if (c.newValue &amp;&amp; !c.prevValue) { agentTurnEndedSinceSubmit = false; } if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedKind === 'message' &amp;&amp; worklistInputBox) { worklistInputBox.setValue(''); clearWorklistDraft(); } }" />
   <ChangeListener
-    listenTo="{((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '') + ':' + ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantText) || '') + ':' + (((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userImages) || []).join('|')) + ':' + (((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantImages) || []).join('|')) + ':' + (((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools) || []).map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (submittedItemId || '') + ':' + (submittedKind || '') + ':' + (awaitingResponse ? '1' : '0')}"
+    listenTo="{((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools) || []).map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|')}"
     onDidChange="() => {
-      const submitted = (submittedWorklistMessage || '').trim();
-      const exchangeUser = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '').trim();
-      const exchangeAssistant = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantText) || '').trim();
-      const exchangeUserImages = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userImages) || []);
-      const exchangeAssistantImages = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantImages) || []);
-      const exchangeTools = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools) || []).slice(-3);
-      const exchangeMatchesSubmitted = worklistSubmittedMatches(exchangeUser, submitted);
-      const conversationKey = exchangeUser || submitted || (submittedItemId || '');
-      if (exchangeTools.length > 0) {
-        stickyConversationTools = exchangeTools;
-        stickyConversationToolsKey = conversationKey;
+      const tools = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools) || []).slice(-3);
+      if (tools.length > 0) {
+        stickyConversationTools = tools;
+        stickyConversationToolsKey = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '') || (submittedWorklistMessage || '') || (submittedItemId || '');
       }
-      if (exchangeUserImages.length > 0) {
-        stickyConversationUserImages = exchangeUserImages;
-        stickyConversationUserImagesKey = conversationKey;
+    }" />
+  <ChangeListener
+    listenTo="{((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userImages) || []).join('|')}"
+    onDidChange="() => {
+      const userImages = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userImages) || []);
+      if (userImages.length > 0) {
+        stickyConversationUserImages = userImages;
+        stickyConversationUserImagesKey = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '') || (submittedWorklistMessage || '') || (submittedItemId || '');
       }
-      const displayTools = exchangeTools.length > 0 ? exchangeTools : (stickyConversationTools || []);
-      const user = awaitingResponse &amp;&amp; submitted ? submitted : (exchangeUser || submitted);
-      if (awaitingResponse &amp;&amp; submittedKind === 'message' &amp;&amp; submitted &amp;&amp; exchangeMatchesSubmitted &amp;&amp; exchangeAssistant) {
-        liveSubmittedAssistantText = exchangeAssistant;
-        liveSubmittedAssistantKey = submitted;
+    }" />
+  <ChangeListener
+    listenTo="{((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '') + ':' + ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantText) || '') + ':' + (((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantImages) || []).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (submittedItemId || '') + ':' + (submittedKind || '') + ':' + (awaitingResponse ? '1' : '0') + ':' + ((stickyConversationTools || []).map(t => (t.id || '') + ':' + (t.name || '')).join('|')) + ':' + ((stickyConversationUserImages || []).join('|'))}"
+    onDidChange="() => {
+      const decision = computeConversationSync({
+        lastExchange: (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange) || null,
+        lastAssistantStableText: lastAssistantStableText || '',
+        submittedWorklistMessage: submittedWorklistMessage || '',
+        submittedItemId: submittedItemId || '',
+        submittedKind: submittedKind || '',
+        awaitingResponse: !!awaitingResponse,
+        agentTurnEndedSinceSubmit: !!agentTurnEndedSinceSubmit,
+        stickyConversationTools: stickyConversationTools || [],
+        stickyConversationUserImages: stickyConversationUserImages || [],
+        liveSubmittedAssistantText: liveSubmittedAssistantText || '',
+        liveSubmittedAssistantKey: liveSubmittedAssistantKey || '',
+        lastConversationSig: lastConversationSig || '',
+        awaitingResponseSetAt: awaitingResponseSetAt || 0,
+        submitting: !!submitting
+      });
+      if (decision.sigChanged) {
+        lastConversationSig = decision.signature;
       }
-      const liveSubmittedAssistant = liveSubmittedAssistantKey === submitted ? (liveSubmittedAssistantText || '') : '';
-      const assistant = awaitingResponse
-        ? (exchangeMatchesSubmitted ? (exchangeAssistant || liveSubmittedAssistant) : '')
-        : (exchangeAssistant || lastAssistantStableText || '').trim();
-      const source = awaitingResponse
-        ? (exchangeMatchesSubmitted ? (exchangeAssistant ? 'last-exchange' : 'awaiting') : 'awaiting')
-        : (exchangeAssistant ? 'last-exchange' : (assistant ? 'last-assistant-text' : 'none'));
-      const toolsSig = awaitingResponse &amp;&amp; !exchangeMatchesSubmitted ? '' : displayTools.map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|');
-      const imageSig = exchangeUserImages.join('|') + '\n---\n' + exchangeAssistantImages.join('|');
-      const sig = user + '\n---\n' + toolsSig + '\n---\n' + assistant + '\n---\n' + imageSig;
-      if (sig !== lastConversationSig) {
-        lastConversationSig = sig;
-        iframeTrace('conversation-sync', {
-          source,
-          entries: (assistant ? 1 : 0) + (toolsSig ? displayTools.length : 0),
-          userImages: exchangeUserImages.length,
-          assistantImages: exchangeAssistantImages.length,
-          matchesSubmitted: !!exchangeMatchesSubmitted,
-          submittedKind: submittedKind || '',
-          awaiting: !!awaitingResponse,
-          rawToolsLen: exchangeTools.length,
-          displayToolsLen: displayTools.length,
-          gateFires: !!(awaitingResponse && submittedKind !== 'action' && !exchangeMatchesSubmitted)
-        });
+      if (decision.liveAssistantCapture) {
+        liveSubmittedAssistantText = decision.liveAssistantCapture.text;
+        liveSubmittedAssistantKey = decision.liveAssistantCapture.key;
       }
-      if (awaitingResponse &amp;&amp; exchangeMatchesSubmitted &amp;&amp; assistant &amp;&amp; agentTurnEndedSinceSubmit) {
-        iframeTrace('clear-awaiting', {
-          via: 'exchange-match',
-          sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1,
-          stableLen: (lastAssistantStableText || '').length,
-          exchangeUserLen: exchangeUser.length,
-          exchangeAssistantLen: exchangeAssistant.length,
-          submittedLen: submitted.length
-        });
+      if (decision.shouldClearAwaiting) {
         awaitingResponse = false;
         submittedKind = null;
         liveSubmittedAssistantText = '';
         liveSubmittedAssistantKey = '';
         clearWorklistAwaiting(false);
-        if (submittedKind === 'message' &amp;&amp; submitting) {
-          iframeTrace('inflight-clear', { reason: 'message-exchange-match', item: submittedItemId || '' });
-          submitting = false;
-          submittedItemId = null;
-          submittedKind = null;
-          actionProgressKind = '';
-          actionProgressTick = 0;
-        }
       }
     }" />
   <DataSource

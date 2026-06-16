@@ -931,6 +931,100 @@ window.__bramMarkTurnEnded = function (via, state) {
   return true;
 };
 
+// Conversation-sync computation extracted from Workspace.xmlui's mega
+// ChangeListener. Takes a snapshot of the relevant state and returns a
+// decision object describing what the xs caller should mutate. Emits the
+// conversation-sync and (exchange-match) clear-awaiting trace lines
+// internally so the xs caller stays bookkeeping-only.
+//
+// Returns:
+//   {
+//     sigChanged: bool,
+//     signature: string | undefined,    // only when sigChanged
+//     liveAssistantCapture: {text, key} | null,
+//     shouldClearAwaiting: bool
+//   }
+//
+// Note: the original markup at Workspace.xmlui:294 had an inner
+// `submittedKind === 'message' && submitting` branch INSIDE the
+// clear-awaiting block, but the preceding line set submittedKind to null
+// so the inner branch could never fire. That dead code is not carried
+// forward here; behavior is identical (the branch never fired before,
+// it doesn't fire now).
+window.__bramComputeConversationSync = function (state) {
+  state = state || {};
+  var lastExchange = state.lastExchange || {};
+  var submitted = (state.submittedWorklistMessage || "").trim();
+  var exchangeUser = (lastExchange.userText || "").trim();
+  var exchangeAssistant = (lastExchange.assistantText || "").trim();
+  var exchangeUserImages = lastExchange.userImages || [];
+  var exchangeAssistantImages = lastExchange.assistantImages || [];
+  var exchangeTools = (lastExchange.tools || []).slice(-3);
+  var exchangeMatchesSubmitted = window.__bramWorklistSubmittedMatches(exchangeUser, submitted);
+  var awaitingResponse = !!state.awaitingResponse;
+  var submittedKind = state.submittedKind || "";
+  var liveSubmittedAssistantText = state.liveSubmittedAssistantText || "";
+  var liveSubmittedAssistantKey = state.liveSubmittedAssistantKey || "";
+  var stickyConversationTools = state.stickyConversationTools || [];
+  var displayTools = exchangeTools.length > 0 ? exchangeTools : stickyConversationTools;
+  var user = (awaitingResponse && submitted) ? submitted : (exchangeUser || submitted);
+
+  var liveAssistantCapture = null;
+  if (awaitingResponse && submittedKind === "message" && submitted && exchangeMatchesSubmitted && exchangeAssistant) {
+    liveAssistantCapture = { text: exchangeAssistant, key: submitted };
+    liveSubmittedAssistantText = exchangeAssistant;
+    liveSubmittedAssistantKey = submitted;
+  }
+
+  var liveSubmittedAssistant = liveSubmittedAssistantKey === submitted ? liveSubmittedAssistantText : "";
+  var assistant = awaitingResponse
+    ? (exchangeMatchesSubmitted ? (exchangeAssistant || liveSubmittedAssistant) : "")
+    : (exchangeAssistant || state.lastAssistantStableText || "").trim();
+  var source = awaitingResponse
+    ? (exchangeMatchesSubmitted ? (exchangeAssistant ? "last-exchange" : "awaiting") : "awaiting")
+    : (exchangeAssistant ? "last-exchange" : (assistant ? "last-assistant-text" : "none"));
+  var toolsSig = (awaitingResponse && !exchangeMatchesSubmitted)
+    ? ""
+    : displayTools.map(function (t) { return (t.id || "") + ":" + (t.name || "") + ":" + (t.summary || "") + ":" + (t.errored ? "1" : "0"); }).join("|");
+  var imageSig = exchangeUserImages.join("|") + "\n---\n" + exchangeAssistantImages.join("|");
+  var sig = user + "\n---\n" + toolsSig + "\n---\n" + assistant + "\n---\n" + imageSig;
+
+  var sigChanged = sig !== (state.lastConversationSig || "");
+  if (sigChanged) {
+    window.__bramIframeTrace("conversation-sync", {
+      source: source,
+      entries: (assistant ? 1 : 0) + (toolsSig ? displayTools.length : 0),
+      userImages: exchangeUserImages.length,
+      assistantImages: exchangeAssistantImages.length,
+      matchesSubmitted: !!exchangeMatchesSubmitted,
+      submittedKind: submittedKind,
+      awaiting: awaitingResponse,
+      rawToolsLen: exchangeTools.length,
+      displayToolsLen: displayTools.length,
+      gateFires: !!(awaitingResponse && submittedKind !== "action" && !exchangeMatchesSubmitted)
+    });
+  }
+
+  var shouldClearAwaiting = !!(awaitingResponse && exchangeMatchesSubmitted && assistant && state.agentTurnEndedSinceSubmit);
+  if (shouldClearAwaiting) {
+    window.__bramIframeTrace("clear-awaiting", {
+      via: "exchange-match",
+      sinceSetMs: state.awaitingResponseSetAt ? (Date.now() - state.awaitingResponseSetAt) : -1,
+      stableLen: (state.lastAssistantStableText || "").length,
+      exchangeUserLen: exchangeUser.length,
+      exchangeAssistantLen: exchangeAssistant.length,
+      submittedLen: submitted.length
+    });
+  }
+
+  return {
+    sigChanged: sigChanged,
+    signature: sigChanged ? sig : undefined,
+    liveAssistantCapture: liveAssistantCapture,
+    shouldClearAwaiting: shouldClearAwaiting
+  };
+};
+
 // Plain-JS equivalent of xs `App.mark(label)`. App.mark pushes a
 // `kind: "app:mark"` record to the Inspector buffer at window._xsLogs
 // (xmlui/src/components-core/appContext/app-utils.ts:49-53). The

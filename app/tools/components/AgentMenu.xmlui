@@ -1,12 +1,15 @@
-<Component name="AgentMenu" var.menuTick="{0}" var.agentMenuTurnState="{null}">
+<Component name="AgentMenu">
+  <External
+    id="agentMenu"
+    initial="{null}"
+    subscribe="{window.bramSubscribeAgentMenu()}" />
   <VStack
     width="100%"
-    gap="$space-2"
-    onInit="subscribeTauriEvent('__bramAgentMenuTurnStateUnsub', 'turn-state-changed', (e) => { agentMenuTurnState = (e &amp;&amp; e.payload) || null; menuTick = menuTick + 1; }); subscribeTauriEvent('__bramAgentMenuPtyUnsub', 'pty-menu-changed', (e) => menuTick = menuTick + 1); menuTick = menuTick + 1">
+    gap="$space-2">
     <VStack
       gap="$space-2"
-      when="{menuTick >= 0 &amp;&amp; getAgentMenu(agentMenuTurnState)}"
-      var.effectivePendingMenu="{menuTick >= 0 ? getAgentMenu(agentMenuTurnState) : null}"
+      when="{agentMenu.value}"
+      var.effectivePendingMenu="{agentMenu.value}"
       var.menuPreviewOpen="{false}"
       width="100%"
       padding="$space-3"

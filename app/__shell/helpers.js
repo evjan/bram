@@ -3043,6 +3043,49 @@ window.subscribeTauriEvent("__bramNativeTurnStateUnsub", "turn-state-changed", f
   window.__bramSetAgentMenuFromTurnState((e && e.payload) || {}, "agent-menu");
 });
 
+// External-driven AgentMenu bridge — emits the current pending menu
+// when either Tauri event fires. Subscribes lazily on first call so
+// the native subscribers above (registered at module load) are
+// guaranteed to fire FIRST and update window.bramAgentMenu before
+// compute() reads it.
+window.bramSubscribeAgentMenu = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var lastTurnState = null;
+    var subscribers = new Set();
+    var compute = function () {
+      var current = window.bramAgentMenu || null;
+      var suppress = window.bramAgentMenuSuppressFallback !== false;
+      return current ||
+        (!suppress && lastTurnState && lastTurnState.pendingMenu) ||
+        null;
+    };
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bramSubscribeAgentMenu] subscriber threw:", e); }
+      });
+    };
+    window.subscribeTauriEvent(
+      "__bramAgentMenuExternalTurnUnsub",
+      "turn-state-changed",
+      function (e) { lastTurnState = (e && e.payload) || null; notify(); }
+    );
+    window.subscribeTauriEvent(
+      "__bramAgentMenuExternalPtyUnsub",
+      "pty-menu-changed",
+      notify
+    );
+    factory = function (emit) {
+      var fire = function () { emit(compute()); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
 // Shared cache for the latest session-tail JSONL. A helper-side poller
 // fetches /__sessions/latest-tail and calls setLatestJsonl() on each
 // new value; both the Worklist tab (Workspace.xmlui) and the Transcript

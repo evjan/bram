@@ -3,9 +3,9 @@
   <event name="skipWorklist" />
   <event name="micClick" />
   <event name="gotFocus" />
-  <method name="getValue" value="() => (worklistInputBox &amp;&amp; worklistInputBox.value) || ''" />
-  <method name="setValue" value="(v) => { if (worklistInputBox) worklistInputBox.setValue(v); }" />
-  <method name="appendVoice" value="(t) => { if (worklistInputBox) appendVoiceTranscript(worklistInputBox, t); }" />
+  <method name="getValue">return (worklistInputBox &amp;&amp; worklistInputBox.value) || '';</method>
+  <method name="setValue">if (worklistInputBox) worklistInputBox.setValue($param);</method>
+  <method name="appendVoice">if (worklistInputBox) appendVoiceTranscript(worklistInputBox, $param);</method>
   <Form
     width="90%"
     data="{{ message: window.__bramRestoreWorklistDraft() }}"

@@ -1,5 +1,5 @@
 <Component name="ConversationPane" var.fullscreenImage="{null}">
-  <DataSource id="lastExchange" url="/__last-exchange" pollIntervalInSeconds="2" />
+  <DataSource id="lastExchange" url="/__last-exchange" />
   <ModalDialog
     when="{!!fullscreenImage}"
     fullScreen="true"
@@ -10,7 +10,8 @@
       width="100%"
       height="100%" />
   </ModalDialog>
-  <VStack gap="$space-3" padding="$space-3">
+  <VStack gap="$space-3" padding="$space-3"
+    onInit="subscribeTalkSessionChange('__bramConversationPaneTalkSessionUnsub', () => debounce(400, () => lastExchange.refetch()))">
     <VStack
       gap="$space-1"
       when="{lastExchange.value &amp;&amp; (lastExchange.value.userText || ((lastExchange.value.userImages || []).length > 0))}"

@@ -1,9 +1,13 @@
 <Component name="AgentToolUses" var.openToolId="{null}" var.openTool="{null}">
-  <DataSource id="agentToolUsesExchange" url="/__last-exchange" pollIntervalInSeconds="2" />
+  <DataSource id="agentToolUsesExchange" url="/__last-exchange" />
   <DataSource
     id="agentToolDetailDS"
     url="/__tool-detail?id={openToolId || ''}"
     when="{!!openToolId}" />
+  <VStack
+    width="0"
+    height="0"
+    onInit="subscribeTalkSessionChange('__bramAgentToolUsesTalkSessionUnsub', () => debounce(400, () => agentToolUsesExchange.refetch()))" />
   <Theme
     maxWidth-ModalDialog="50vw"
     backgroundColor-ModalDialog="$color-surface-50"

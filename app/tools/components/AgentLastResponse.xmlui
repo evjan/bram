@@ -1,5 +1,9 @@
 <Component name="AgentLastResponse" var.fullscreenImage="{null}" var.replyArriving="{false}" var.lastResponseCueKey="{null}">
-  <DataSource id="agentLastResponseExchange" url="/__last-exchange" pollIntervalInSeconds="2" />
+  <DataSource id="agentLastResponseExchange" url="/__last-exchange" />
+  <VStack
+    width="0"
+    height="0"
+    onInit="subscribeTalkSessionChange('__bramAgentLastResponseTalkSessionUnsub', () => debounce(400, () => agentLastResponseExchange.refetch()))" />
   <ChangeListener
     listenTo="{((agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantText) || '') + '|' + (((agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantImages) || []).join('|'))}"
     onDidChange="(change) => {

@@ -703,7 +703,7 @@
                     initialValue="{(feedbackDraftsById || {})[$item.id] || ''}"
                     placeholder="Message to agent"
                     onGotFocus="setWorklistVoiceTarget('feedback'); setFocusedFeedbackItemId($item.id); window.__bramIframeTrace('paste-image-target', {stage: 'feedback-focus', target: 'feedback:' + $item.id, item: $item.id})"
-                    onDidChange="() => { const next = Object.assign({}, feedbackDraftsById || {}); next[$item.id] = feedbackBox.value || ''; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); setWorklistVoiceTarget('feedback'); setFocusedFeedbackItemId($item.id); }"
+                    onLostFocus="() => { const next = Object.assign({}, feedbackDraftsById || {}); next[$item.id] = feedbackBox.value || ''; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); }"
                     resize="vertical"
                     minRows="2"
                     maxRows="16"
@@ -715,7 +715,7 @@
                     onDidChange="() => { if (worklistVoiceText &amp;&amp; worklistVoiceTarget === 'feedback' &amp;&amp; bramFocusedFeedbackItemId === $item.id) feedbackDraftsById = handleFeedbackVoiceArrival(feedbackBox, $item.id, feedbackDraftsById, expandedItemIds); feedbackVoiceRecording = false; worklistVoiceRecordingActive = false; feedbackVoiceRecordingItemId = ''; }" />
                   <ChangeListener
                     listenTo="{awaitingResponse}"
-                    onDidChange="(c) => { if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedItemId === $item.id &amp;&amp; feedbackBox &amp;&amp; feedbackBox.value) feedbackBox.setValue(''); }" />
+                    onDidChange="(c) => { if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedItemId === $item.id &amp;&amp; feedbackBox &amp;&amp; feedbackBox.value) { feedbackBox.setValue(''); const next = Object.assign({}, feedbackDraftsById || {}); delete next[$item.id]; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } }" />
                   <Theme size-Spinner="0.85em">
                     <Spinner when="{isWorklistVoiceProcessingTarget('feedback') &amp;&amp; feedbackVoiceRecordingItemId === $item.id}" />
                   </Theme>

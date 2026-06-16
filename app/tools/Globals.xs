@@ -79,58 +79,6 @@ function statusSignalDescription(signal) {
   return 'Reports one coordination signal from Bram Status. Use its level, state, detail, and timestamp to decide whether setup, mode routing, or agent communication needs attention.';
 }
 
-function historyPhaseKind(phase) {
-  return window.__bramHistoryPhaseKind(phase);
-}
-function historyDecodeJsonStringValue(raw) {
-  return window.__bramHistoryDecodeJsonStringValue(raw);
-}
-function historyExtractProseFromDiff(diff) {
-  return window.__bramHistoryExtractProseFromDiff(diff);
-}
-function historyCurrentProsePhase(group) {
-  return window.__bramHistoryCurrentProsePhase(group);
-}
-function historyLatestPhase(group) {
-  return window.__bramHistoryLatestPhase(group);
-}
-function historyCurrentItem(group) {
-  return window.__bramHistoryCurrentItem(group);
-}
-function historyItemProse(item) {
-  return window.__bramHistoryItemProse(item);
-}
-function historyCardProsePreview(group) {
-  return window.__bramHistoryCardProsePreview(group);
-}
-function historyDateParts(iso) {
-  return window.__bramHistoryDateParts(iso);
-}
-function historyDateRangeLine(group) {
-  return window.__bramHistoryDateRangeLine(group);
-}
-function historyPhaseLabel(phase) {
-  return window.__bramHistoryPhaseLabel(phase);
-}
-function historyPhasePath(group) {
-  return window.__bramHistoryPhasePath(group);
-}
-function historyItemFieldMarkdown(group, field) {
-  return window.__bramHistoryItemFieldMarkdown(group, field);
-}
-function historyItemFilesLine(group) {
-  return window.__bramHistoryItemFilesLine(group);
-}
-function historyLatestProseChanged(group) {
-  return window.__bramHistoryLatestProseChanged(group);
-}
-function historyDraftWasMissing(group) {
-  return window.__bramHistoryDraftWasMissing(group);
-}
-function historyItemFate(group) {
-  return window.__bramHistoryItemFate(group);
-}
-
 // Past transcripts often contain broken docs.xmlui.org/... URLs (the form the
 // xmlui-mcp server reports as Source). The live docs are hosted at
 // www.xmlui.org/docs/... with a `reference/` segment for component pages.

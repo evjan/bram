@@ -1,35 +1,24 @@
-<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}"
-  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); subscribeTauriEvent('__bramMainAgentStatusUnsub', 'agent-status-changed', () => { mainAgentStatus.refetch(); }); subscribeTauriEvent('__bramTurnStateUnsub', 'turn-state-changed', (e) => { setToolbarPendingMenuFromTurnState(e &amp;&amp; e.payload); }); subscribeTauriEvent('__bramToolbarPtyMenuUnsub', 'pty-menu-changed', (e) => { setToolbarPendingMenuFromEvent(e); }); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
+<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}" var.mainAgentStatus="{null}"
+  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); subscribeTauriEvent('__bramMainAgentStatusUnsub', 'agent-status-changed', (e) => { mainAgentStatus = (e &amp;&amp; e.payload) || null; if (!window.bramAgentMenu) iframeTrace('agent-header-status-loaded', { state: (mainAgentStatus &amp;&amp; mainAgentStatus.state) || '', verb: (mainAgentStatus &amp;&amp; mainAgentStatus.verb) || '', provider: (mainAgentStatus &amp;&amp; mainAgentStatus.provider) || '', source: (mainAgentStatus &amp;&amp; mainAgentStatus.source) || '', elapsed: (mainAgentStatus &amp;&amp; mainAgentStatus.elapsedText) || '' }); }); subscribeTauriEvent('__bramTurnStateUnsub', 'turn-state-changed', (e) => { setToolbarPendingMenuFromTurnState(e &amp;&amp; e.payload); }); subscribeTauriEvent('__bramToolbarPtyMenuUnsub', 'pty-menu-changed', (e) => { setToolbarPendingMenuFromEvent(e); }); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
   <DataSource id="appInfo" url="/__app-info" />
-  <DataSource
-    id="mainAgentStatus"
-    url="/__agent-status"
-    pollIntervalInSeconds="3"
-    onLoaded="(data) => { if (!window.bramAgentMenu) iframeTrace('agent-header-status-loaded', {
-      state: (data &amp;&amp; data.state) || '',
-      verb: (data &amp;&amp; data.verb) || '',
-      provider: (data &amp;&amp; data.provider) || '',
-      source: (data &amp;&amp; data.source) || '',
-      elapsed: (data &amp;&amp; data.elapsedText) || ''
-    }); }" />
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
     onDidChange="(c) => { if (c.newValue) { if ($pathname !== '/') navigate('/'); window.scrollAllToTop(); } }" />
   <ChangeListener
-    listenTo="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.verb}"
+    listenTo="{mainAgentStatus &amp;&amp; mainAgentStatus.verb}"
     onDidChange="(c) => { if (c.newValue) { lastSeenAgentVerb = c.newValue; } }" />
   <ChangeListener
-    listenTo="{((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state) || '') + ':' + ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.verb) || '') + ':' + ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.provider) || '') + ':' + ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.source) || '') + ':' + ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.elapsedText) || '') + ':' + ((enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')}"
+    listenTo="{((mainAgentStatus &amp;&amp; mainAgentStatus.state) || '') + ':' + ((mainAgentStatus &amp;&amp; mainAgentStatus.verb) || '') + ':' + ((mainAgentStatus &amp;&amp; mainAgentStatus.provider) || '') + ':' + ((mainAgentStatus &amp;&amp; mainAgentStatus.source) || '') + ':' + ((mainAgentStatus &amp;&amp; mainAgentStatus.elapsedText) || '') + ':' + ((enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')}"
     onDidChange="() => {
-      const s = mainAgentStatus.value || {};
+      const s = mainAgentStatus || {};
       const provider = s.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '';
       const branch = s.state === 'working'
         ? 'working'
         : (s.state === 'finished'
           ? 'finished'
-          : ((mainAgentStatus.value || enhanceStatus.value) &amp;&amp; provider ? 'idle-provider' : 'none'));
+          : ((mainAgentStatus || enhanceStatus.value) &amp;&amp; provider ? 'idle-provider' : 'none'));
       if (!window.bramAgentMenu) iframeTrace('agent-header-branch', {
         branch,
         state: s.state || '',
@@ -167,14 +156,14 @@
       <HStack gap="$space-0_5" verticalAlignment="center" width="100%">
         <HStack width="16rem" minWidth="16rem" verticalAlignment="center" paddingHorizontal="$space-2">
           <Text
-            when="{(mainAgentStatus.value || enhanceStatus.value) &amp;&amp; !(mainAgentStatus.value &amp;&amp; (mainAgentStatus.value.state === 'working' || mainAgentStatus.value.state === 'finished')) &amp;&amp; ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider))}"
+            when="{(mainAgentStatus || enhanceStatus.value) &amp;&amp; !(mainAgentStatus &amp;&amp; (mainAgentStatus.state === 'working' || mainAgentStatus.state === 'finished')) &amp;&amp; ((mainAgentStatus &amp;&amp; mainAgentStatus.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider))}"
             fontSize="$fontSize-md"
             fontStyle="italic"
             color="$textColor-secondary"
             overflowMode="none"
-            value="{(((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider)) === 'claude' ? 'claude code' : ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''))}" />
+            value="{(((mainAgentStatus &amp;&amp; mainAgentStatus.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider)) === 'claude' ? 'claude code' : ((mainAgentStatus &amp;&amp; mainAgentStatus.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''))}" />
           <HStack
-            when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'working'}"
+            when="{mainAgentStatus &amp;&amp; mainAgentStatus.state === 'working'}"
             gap="$space-1"
             verticalAlignment="center">
             <Theme size-Spinner="0.85em">
@@ -184,15 +173,15 @@
               fontSize="$fontSize-md"
               fontStyle="italic"
               overflowMode="none"
-              value="{(mainAgentStatus.value.provider === 'claude' ? 'claude code' : (mainAgentStatus.value.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.value.verb || 'working') + '…'}" />
+              value="{(mainAgentStatus.provider === 'claude' ? 'claude code' : (mainAgentStatus.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.verb || 'working') + '…'}" />
             <Text
               fontSize="$fontSize-md"
               color="$textColor-secondary"
               overflowMode="none"
-              value="{mainAgentStatus.value.elapsedText || ''}" />
+              value="{mainAgentStatus.elapsedText || ''}" />
           </HStack>
           <HStack
-            when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'finished'}"
+            when="{mainAgentStatus &amp;&amp; mainAgentStatus.state === 'finished'}"
             gap="$space-1"
             verticalAlignment="center">
             <Text
@@ -200,7 +189,7 @@
               fontStyle="italic"
               color="$textColor-secondary"
               overflowMode="none"
-              value="{(mainAgentStatus.value.provider === 'claude' ? 'claude code' : (mainAgentStatus.value.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.value.state === 'finished' ? (mainAgentStatus.value.verb || 'Finished') : ((mainAgentStatus.value.verb &amp;&amp; mainAgentStatus.value.verb !== 'working') ? mainAgentStatus.value.verb : ((lastSeenAgentVerb &amp;&amp; lastSeenAgentVerb !== 'working') ? lastSeenAgentVerb : 'Finished'))) + (mainAgentStatus.value.elapsedText ? ' · ' + mainAgentStatus.value.elapsedText : '')}" />
+              value="{(mainAgentStatus.provider === 'claude' ? 'claude code' : (mainAgentStatus.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.state === 'finished' ? (mainAgentStatus.verb || 'Finished') : ((mainAgentStatus.verb &amp;&amp; mainAgentStatus.verb !== 'working') ? mainAgentStatus.verb : ((lastSeenAgentVerb &amp;&amp; lastSeenAgentVerb !== 'working') ? lastSeenAgentVerb : 'Finished'))) + (mainAgentStatus.elapsedText ? ' · ' + mainAgentStatus.elapsedText : '')}" />
           </HStack>
         </HStack>
         <SpaceFiller />

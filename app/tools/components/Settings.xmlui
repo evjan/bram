@@ -37,7 +37,7 @@
             size="xs"
             variant="ghost"
             tooltip="About Agent command"
-            onClick="infoTitle = 'Agent command'; infoBody = 'Typed into the PTY shell at spawn — bash parses it, so flags work (claude --continue, codex resume, etc.). Restart Bram for changes to take effect.'; settingInfoDialog.open()" />
+            onClick="infoTitle = 'Agent command'; infoBody = window.settingsInfoBodies.agentCommand; settingInfoDialog.open()" />
         </HStack>
         <HStack gap="$space-2" verticalAlignment="center">
           <TextBox
@@ -60,7 +60,7 @@
             size="xs"
             variant="ghost"
             tooltip="About Batch commit actions"
-            onClick="infoTitle = 'Batch commit actions'; infoBody = 'Adds Approve all / Drop all controls to the Worklist tab when 2 or more TO COMMIT items are present. Approve all authorizes the agent to commit every TO COMMIT item in one turn. Drop all removes them from the worklist (on-disk edits stay).'; settingInfoDialog.open()" />
+            onClick="infoTitle = 'Batch commit actions'; infoBody = window.settingsInfoBodies.batchCommitActions; settingInfoDialog.open()" />
         </HStack>
         <Switch
           label="Batch commit actions"
@@ -76,7 +76,7 @@
             size="xs"
             variant="ghost"
             tooltip="About UI"
-            onClick="infoTitle = 'UI'; infoBody = 'Minimize target app — drives the agent pane splitter to give the agent tools maximum room. The target app stays mounted at the splitter’s minimum height — distinct from hiding it entirely.&#10;&#10;Agent-pane hot-reload — when on, the agent pane reloads automatically whenever files under app/tools/ change on disk. When off, source-code edits to Bram itself (Workspace.xmlui, Globals.xs, etc.) do not appear until you reload manually (Cmd+R in the agent pane). Default off — Bram-on-Bram development is the only context this affects (target-app developers route edits through right-pane-reload, which is unconditional). Suppresses the blank-pane cascade documented in #182 incident 7. Persists in .bram.json under ui.toolsPaneHotReload.'; settingInfoDialog.open()" />
+            onClick="infoTitle = 'UI'; infoBody = window.settingsInfoBodies.ui; settingInfoDialog.open()" />
         </HStack>
         <Switch
           label="Minimize target app"
@@ -96,7 +96,7 @@
             size="xs"
             variant="ghost"
             tooltip="About Traces"
-            onClick="infoTitle = 'Traces'; infoBody = 'Tracing enabled — master switch for writes to resources/bram-traces/bram-trace.log. When off, every [emit] / [iframe] / [route] line is a no-op regardless of the Inspector trace tap below. If BRAM_TRACE is set in the environment at launch (e.g. BRAM_TRACE=1 cargo run), it wins and this switch is ignored — so CI / shell wrappers keep behaving the same.&#10;&#10;Inspector trace tap — forwards XMLUI Inspector events (window._xsLogs) from the agent pane into bram-trace.log as [iframe] subkind=inspector-event, so they interleave with host traces live (no Inspector export needed). Capped at 50 entries per 200ms tick; overflow emits subkind=inspector-overflow. Inspector traces are intentionally complete and noisy (one per keystroke, etc.); future work will add per-category filters. Requires Tracing enabled above.&#10;&#10;Both persist in .bram.json under traces.*.'; settingInfoDialog.open()" />
+            onClick="infoTitle = 'Traces'; infoBody = window.settingsInfoBodies.traces; settingInfoDialog.open()" />
         </HStack>
         <Switch
           label="Tracing enabled"

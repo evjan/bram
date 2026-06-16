@@ -1,9 +1,7 @@
 <Component
   name="History"
   var.selectedHistoryGroup="{null}"
-  var.query="{''}"
-  var.searchHitTitle="{''}"
-  var.searchHitBody="{''}">
+  var.query="{''}">
 
   <DataSource
     id="history"
@@ -69,8 +67,6 @@
 
   <SearchHitModal
     id="searchHitModalRef"
-    title="{searchHitTitle}"
-    body="{searchHitBody}"
     query="{query}" />
 
   <VStack padding="$space-6" gap="$space-3">
@@ -156,7 +152,7 @@
           </Link>
           <Link
             when="{query &amp;&amp; query.trim().length >= 2}"
-            onClick="searchHitBody = $item.hitBody || ''; searchHitTitle = $item.title; searchHitModalRef.open()">
+            onClick="searchHitModalRef.open($item.hitBody, $item.title)">
             <Text value="view hit context" fontSize="$fontSize-sm" />
           </Link>
         </VStack>

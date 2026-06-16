@@ -4,8 +4,6 @@
   var.selectedLine="{null}"
   var.commitsExpanded="{false}"
   var.query=""
-  var.searchHitTitle="{''}"
-  var.searchHitBody="{''}"
   var.pullError="{null}"
   var.pushError="{null}">
 
@@ -42,8 +40,6 @@
 
   <SearchHitModal
     id="searchHitModalRef"
-    title="{searchHitTitle}"
-    body="{searchHitBody}"
     query="{query}" />
 
   <HSplitter height="100%"
@@ -135,7 +131,7 @@
             </Link>
             <Items data="{$item.hits}" var.parentBody="{$item.body}" var.parentRow="{$item}">
               <Link
-                onClick="searchHitBody = searchHitBestBody(query, [parentBody, $item.snippet, parentRow.commit.message]); searchHitTitle = parentRow.commit.message; searchHitModalRef.open()">
+                onClick="searchHitModalRef.open(searchHitBestBody(query, [parentBody, $item.snippet, parentRow.commit.message]), parentRow.commit.message)">
                 <HStack gap="$space-2" paddingLeft="$space-3">
                   <Text
                     value="{$item.field}"

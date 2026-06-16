@@ -13,9 +13,7 @@
   var.pendingRenames="{loadPendingSessionRenames()}"
   var.lastDeleteId="{null}"
   var.lastDeleteProvider="{null}"
-  var.lastRenameId="{null}"
-  var.searchHitTitle="{''}"
-  var.searchHitBody="{''}">
+  var.lastRenameId="{null}">
 
   <DataSource
     id="sessionsMeta"
@@ -53,8 +51,6 @@
 
   <SearchHitModal
     id="searchHitModalRef"
-    title="{searchHitTitle}"
-    body="{searchHitBody}"
     query="{query}" />
 
   <ModalDialog
@@ -201,7 +197,7 @@
             </HStack>
             <Link
               when="{$item.snippets &amp;&amp; $item.snippets.length > 0}"
-              onClick="searchHitBody = ($item.snippets || []).join(' … '); searchHitTitle = $item.title || '(untitled)'; searchHitModalRef.open()">
+              onClick="searchHitModalRef.open(($item.snippets || []).join(' … '), $item.title || '(untitled)')">
               <Text
                 paddingHorizontal="$space-3"
                 paddingBottom="$space-2"

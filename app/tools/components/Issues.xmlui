@@ -11,8 +11,6 @@
   var.lastIssuesSig="{''}"
   var.query=""
   var.selectedHitLine="{null}"
-  var.searchHitTitle="{''}"
-  var.searchHitBody="{''}"
   var.sortField="updatedAt"
   var.sortDir="desc"
   var.sortedIssues="{(issues.value || []).slice().sort(function(a, b) {
@@ -144,8 +142,6 @@
 
   <SearchHitModal
     id="searchHitModalRef"
-    title="{searchHitTitle}"
-    body="{searchHitBody}"
     query="{query}" />
 
   <HSplitter
@@ -279,7 +275,7 @@
               paddingBottom="$space-2">
               <Items data="{$item.hits}" var.parentIssue="{$item}">
                 <Link
-                  onClick="searchHitBody = searchHitBestBody(query, [parentIssue.body, $item.snippet, parentIssue.title]); searchHitTitle = '#' + parentIssue.number + ' ' + parentIssue.title; searchHitModalRef.open()">
+                  onClick="searchHitModalRef.open(searchHitBestBody(query, [parentIssue.body, $item.snippet, parentIssue.title]), '#' + parentIssue.number + ' ' + parentIssue.title)">
                   <HStack gap="$space-2">
                     <Text
                       value="{$item.field}"

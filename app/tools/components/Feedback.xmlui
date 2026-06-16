@@ -1,9 +1,7 @@
 <Component
   name="Feedback"
   var.selectedFeedback="{null}"
-  var.query="{''}"
-  var.searchHitTitle="{''}"
-  var.searchHitBody="{''}">
+  var.query="{''}">
 
   <DataSource
     id="feedbackList"
@@ -40,8 +38,6 @@
 
   <SearchHitModal
     id="searchHitModalRef"
-    title="{searchHitTitle}"
-    body="{searchHitBody}"
     query="{query}" />
 
   <VStack
@@ -108,7 +104,7 @@
           </Link>
           <Link
             when="{query &amp;&amp; query.trim().length >= 2}"
-            onClick="searchHitBody = $item.body || ''; searchHitTitle = feedbackHistoryItemTitle($item); searchHitModalRef.open()">
+            onClick="searchHitModalRef.open($item.body, feedbackHistoryItemTitle($item))">
             <Text value="view hit context" fontSize="$fontSize-sm" />
           </Link>
         </VStack>

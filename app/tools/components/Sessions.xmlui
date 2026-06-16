@@ -107,9 +107,9 @@
   </ModalDialog>
 
   <HSplitter height="100%"
-    initialPrimarySize="{restoreSplitterSize('sessions', '50%')}"
+    initialPrimarySize="{window.__bramRestoreSplitterSize('sessions', '50%')}"
     onInit="subscribeTauriEvent('__bramSessionsUnlisten', 'sessions-list-changed', () => { sessionsMeta.refetch(); sessionsList.refetch(); if (expandedId &amp;&amp; expandedProvider) sessionContent.refetch(); })"
-    onResize="(px) => saveSplitterSize('sessions', px)">
+    onResize="(px) => window.__bramSaveSplitterSize('sessions', px)">
 
     <VStack padding="$space-4" gap="$space-3" overflowY="auto">
       <HStack gap="$space-3" verticalAlignment="center">
@@ -238,7 +238,7 @@
       <Text when="{sessionContent.inProgress &amp;&amp; !sessionContent.loaded}">Loading…</Text>
       <Items
         when="{sessionContent.value}"
-        data="{(selectedSnippet &amp;&amp; query &amp;&amp; query.trim().length >= 2) ? sessionTurns(sessionContent.value).filter(t => (t.text || '').toLowerCase().includes(query.trim().toLowerCase())) : sessionTurns(sessionContent.value)}">
+        data="{(selectedSnippet &amp;&amp; query &amp;&amp; query.trim().length >= 2) ? window.__bramSessionTurns(sessionContent.value).filter(t => (t.text || '').toLowerCase().includes(query.trim().toLowerCase())) : window.__bramSessionTurns(sessionContent.value)}">
         <VStack
           gap="$space-1"
           paddingVertical="$space-2"

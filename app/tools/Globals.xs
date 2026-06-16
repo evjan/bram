@@ -83,21 +83,6 @@ function statusSignalDescription(signal) {
 // xmlui-mcp server reports as Source). The live docs are hosted at
 // www.xmlui.org/docs/... with a `reference/` segment for component pages.
 // Rewrite on the way to Markdown so links resolve when clicked.
-function rewriteXmluiDocUrls(text) {
-  return window.__bramRewriteXmluiDocUrls(text);
-}
-function extractImagePaths(text) {
-  return window.__bramExtractImagePaths(text);
-}
-function stripImagePaths(text) {
-  return window.__bramStripImagePaths(text);
-}
-function extractMarkdownImages(text) {
-  return window.__bramExtractMarkdownImages(text);
-}
-function stripMarkdownImages(text) {
-  return window.__bramStripMarkdownImages(text);
-}
 
 // Iframe-side trace helper for the [iframe] category of the comms-path
 // iframeTrace and _traceHelperTiming bodies live in
@@ -110,87 +95,29 @@ function stripMarkdownImages(text) {
 // The prefixed name keeps the two namespaces independent. Same
 // pattern as `applyAgentMenu` / `window.__bramApplyAgentMenu` (commit
 // ea9480e).
-function iframeTrace(subkind, fields) {
-  if (typeof window !== 'undefined' && typeof window.__bramIframeTrace === 'function') {
-    window.__bramIframeTrace(subkind, fields);
-  }
-}
 
-function _traceHelperTiming(name, t0, extra) {
-  if (typeof window !== 'undefined' && typeof window.__bramTraceHelperTiming === 'function') {
-    window.__bramTraceHelperTiming(name, t0, extra);
-  }
-}
 
 // Clean a user turn for transcript display: strip protocol prefixes
 // (`voice: `, `talk: `) so spoken / typed content reads as plain text;
 // summarize structured Worklist lifecycle payloads to a one-line
 // action + item label instead of dumping JSON. Anything else passes through.
-function formatUserTurnForTranscript(text) {
-  return window.__bramFormatUserTurnForTranscript(text);
-}
-function worklistActionStatusLabel(item) {
-  return window.__bramWorklistActionStatusLabel(item);
-}
-function conversationPaneUserText(text) {
-  return window.__bramConversationPaneUserText(text);
-}
-function worklistActionDisplay(kind, items) {
-  return window.__bramWorklistActionDisplay(kind, items);
-}
-function worklistActionStatusSuffix(item) {
-  return window.__bramWorklistActionStatusSuffix(item);
-}
-function worklistActionConversationDisplay(kind, items, selectedId, feedback) {
-  return window.__bramWorklistActionConversationDisplay(kind, items, selectedId, feedback);
-}
 
-function toolSummary(name, input) {
-  return window.__bramToolSummary(name, input);
-}
-function parseJsonString(value) {
-  return window.__bramParseJsonString(value);
-}
-function codexToolName(payload) {
-  return window.__bramCodexToolName(payload);
-}
-function codexToolInput(payload) {
-  return window.__bramCodexToolInput(payload);
-}
 
-function codexToolSummary(payload) {
-  return window.__bramCodexToolSummary(payload);
-}
 
 // Pretty-print arbitrary tool input as JSON, truncated to N lines.
-function toolInputJsonLines(input, maxLines) {
-  return window.__bramToolInputJsonLines(input, maxLines);
-}
 
 // Concatenate the text content of a tool_result block (handles both
 // string and array-of-blocks shapes).
-function toolResultText(content) {
-  return window.__bramToolResultText(content);
-}
 
 // True if a tool_result block carries an error (either flagged via
 // is_error or detected by an Error:/<tool_use_error> prefix). Used to
 // tint the inline result banner red.
-function isErrorResult(block) {
-  return window.__bramIsErrorResult(block);
-}
 
-function codexToolOutput(payload) {
-  return window.__bramCodexToolOutput(payload);
-}
 
 // Shallow turn equality: enough to tell "unchanged turn" from
 // "changed/new" without doing a full JSON.stringify. Used by sessionTurns
 // to preserve object refs for stable turns so XMLUI's Items doesn't
 // re-mount the whole list on every poll.
-function turnsLooselyEqual(a, b) {
-  return window.__bramTurnsLooselyEqual(a, b);
-}
 
 // Parse a slice of JSONL lines into the turn-list shape sessionTurns
 // returns. `toolIndex` (optional) lets the caller pre-populate the
@@ -199,13 +126,7 @@ function turnsLooselyEqual(a, b) {
 // only the turns generated from `lines` (no structural-share — that's
 // the caller's responsibility). Extracted from sessionTurns so the
 // full-parse and incremental paths share it (issue #100).
-function _parseLinesToTurns(lines, toolIndex) {
-  return window.__bramParseLinesToTurns(lines, toolIndex);
-}
 
-function sessionTurns(jsonlText) {
-  return window.__bramSessionTurns(jsonlText);
-}
 
 // Worklist close-issue dialog state helpers. The dialog opens when a TO COMMIT
 // item carries closesIssues: [N, ...]. State shape is { <issueNumber>: { close,
@@ -481,73 +402,6 @@ function searchHitBestBody(query, candidates) {
 // `function foo` would hoist onto `window.foo` and overwrite the
 // helpers.js implementation
 // (see memory: xs-to-window-migration-name-collision).
-function restoreWorklistDraft() {
-  return window.__bramRestoreWorklistDraft();
-}
-function persistWorklistDraft(text) {
-  window.__bramPersistWorklistDraft(text);
-}
-function clearWorklistDraft() {
-  window.__bramClearWorklistDraft();
-}
-function restoreConversationOpen() {
-  return window.__bramRestoreConversationOpen();
-}
-function toggleConversationOpen(current) {
-  return window.__bramToggleConversationOpen(current);
-}
-function restoreWorklistConversationLayout() {
-  return window.__bramRestoreWorklistConversationLayout();
-}
-function setWorklistConversationLayout(layout) {
-  return window.__bramSetWorklistConversationLayout(layout);
-}
-function restoreWorklistUiState(field) {
-  return window.__bramRestoreWorklistUiState(field);
-}
-function persistWorklistUiState(state) {
-  window.__bramPersistWorklistUiState(state);
-}
-function clearWorklistUiState() {
-  window.__bramClearWorklistUiState();
-}
-function restoreWorklistAwaiting() {
-  return window.__bramRestoreWorklistAwaiting();
-}
-function restoreWorklistAwaitingSetAt() {
-  return window.__bramRestoreWorklistAwaitingSetAt();
-}
-function markAwaitingStarted() {
-  return window.__bramMarkAwaitingStarted();
-}
-function restoreWorklistSubmittedMessage() {
-  return window.__bramRestoreWorklistSubmittedMessage();
-}
-function restoreWorklistSubmittedKind() {
-  return window.__bramRestoreWorklistSubmittedKind();
-}
-function setWorklistSubmittedKind(kind) {
-  return window.__bramSetWorklistSubmittedKind(kind);
-}
-function restoreWorklistSubmittedBaseline() {
-  return window.__bramRestoreWorklistSubmittedBaseline();
-}
-function submitWorklistMessageFast(text) {
-  return window.__bramSubmitWorklistMessageFast(text, worklistVoiceTarget);
-}
-function withStagedImageMarkers(text, target) {
-  let resolvedTarget = target;
-  if (resolvedTarget === "feedback" && window.bramActiveFocusedFeedbackItemIdMirror) {
-    resolvedTarget = "feedback:" + window.bramActiveFocusedFeedbackItemIdMirror;
-  }
-  return window.__bramWithStagedImageMarkers(text, resolvedTarget, worklistVoiceTarget);
-}
-function recordWorklistFeedbackConversation(text) {
-  return window.__bramRecordWorklistFeedbackConversation(text);
-}
-function clearWorklistAwaiting(clearDraft) {
-  window.__bramClearWorklistAwaiting(clearDraft);
-}
 
 // Mirrors toTurn's `s.replace(/\s+/g, ' ').trim()` collapse in
 // app/__shell/helpers.js so the JSONL-recorded user text (post-collapse)
@@ -557,21 +411,6 @@ function clearWorklistAwaiting(clearDraft) {
 // Map the inflight sentinel's `kind` field to the gerund verb shown below
 // the in-flight item ("Approving", "Iterating", "Dropping"). Returns '' for
 // unknown / missing kind so the calling markup hides cleanly.
-function inflightActionLabel(kind) {
-  return window.__bramInflightActionLabel(kind);
-}
-function stripImageMarkerPrefix(text) {
-  return window.__bramStripImageMarkerPrefix(text);
-}
-function worklistSubmittedMatches(exchangeUserText, submitted) {
-  return window.__bramWorklistSubmittedMatches(exchangeUserText, submitted);
-}
-function markTurnEnded(via, state) {
-  return window.__bramMarkTurnEnded(via, state);
-}
-function computeConversationSync(state) {
-  return window.__bramComputeConversationSync(state);
-}
 
 // Per-tab splitter persistence. XMLUI's documented `resize` event
 // delivers the primary panel size in pixels, while older traces showed
@@ -586,12 +425,6 @@ function computeConversationSync(state) {
 // Keys: `bram.splitter.<key>` (worklist, sessions, commits, context,
 // issues). The outer-shell `bram.splitter.shell` key is owned by
 // app/main.js and uses native localStorage flat keys.
-function restoreSplitterSize(key, fallback) {
-  return window.__bramRestoreSplitterSize(key, fallback);
-}
-function saveSplitterSize(key, sizes) {
-  window.__bramSaveSplitterSize(key, sizes);
-}
 
 var worklistVoiceTarget = '';
 var worklistVoiceText = '';
@@ -608,9 +441,6 @@ var worklistVoiceProcessingTarget = '';
 // not-yet-recording stream, losing the first phoneme(s).
 var worklistVoiceRecordingActive = false;
 
-function isWorklistTextVoiceTarget(target) {
-  return window.__bramIsWorklistTextVoiceTarget(target);
-}
 
 function setWorklistVoiceTarget(target) {
   const next = target || '';
@@ -669,9 +499,6 @@ function bumpLastExchangeRefreshTick() {
 //     ChangeListener is always mounted, and it gates on the target
 //     matching). The reactive listener below covers every other
 //     path that unmounts the feedback panel.
-function inflightSentinelDecide(data, prevSubmitting, prevSubmittedItemId) {
-  return window.__bramInflightSentinelDecide(data, prevSubmitting, prevSubmittedItemId);
-}
 
 // Reset worklistVoiceTarget to 'message-agent' whenever the feedback
 // panel is no longer mounted. Mounted condition:
@@ -783,24 +610,8 @@ function appendVoiceTranscript(component, transcript) {
 // (this file) and from xmlui markup (Main.xmlui suppression gates,
 // AgentMenu.xmlui via getAgentMenu).
 
-function applyAgentMenu(menu, suppressFallback, source) {
-  if (typeof window !== 'undefined' && typeof window.__bramApplyAgentMenu === 'function') {
-    return window.__bramApplyAgentMenu(menu, suppressFallback, source);
-  }
-  return false;
-}
 
-function setAgentMenuFromTurnState(turnState, surface) {
-  if (typeof window !== 'undefined' && typeof window.__bramSetAgentMenuFromTurnState === 'function') {
-    window.__bramSetAgentMenuFromTurnState(turnState, surface);
-  }
-}
 
-function setAgentMenuFromEvent(e, surface) {
-  if (typeof window !== 'undefined' && typeof window.__bramSetAgentMenuFromEvent === 'function') {
-    window.__bramSetAgentMenuFromEvent(e, surface);
-  }
-}
 
 function getAgentMenu(turnState) {
   const current = (typeof window !== 'undefined') ? window.bramAgentMenu : null;
@@ -816,21 +627,6 @@ function getAgentMenu(turnState) {
 // cascades into AgentMenu's mount. With these declarations present
 // xs callers — Main.xmlui's subscriber arrows and the toolbar button
 // onClick handlers — resolve as expected.
-function setToolbarPendingMenuFromEvent(e) {
-  if (typeof window !== 'undefined' && typeof window.__bramSetToolbarPendingMenuFromEvent === 'function') {
-    window.__bramSetToolbarPendingMenuFromEvent(e);
-  }
-}
-function setToolbarPendingMenuFromTurnState(turnState) {
-  if (typeof window !== 'undefined' && typeof window.__bramSetToolbarPendingMenuFromTurnState === 'function') {
-    window.__bramSetToolbarPendingMenuFromTurnState(turnState);
-  }
-}
-function traceToolbarKey(key) {
-  if (typeof window !== 'undefined' && typeof window.__bramTraceToolbarKey === 'function') {
-    window.__bramTraceToolbarKey(key);
-  }
-}
 
 function toggleVoiceForCurrentTarget(recording) {
   if (recording) {
@@ -846,7 +642,7 @@ function toggleVoiceForCurrentTarget(recording) {
         iframeTrace('voice-input', { target: stoppingTarget || 'terminal', stage: 'processing-empty' });
         return;
       }
-      if (isWorklistTextVoiceTarget(worklistVoiceTarget)) {
+      if (window.__bramIsWorklistTextVoiceTarget(worklistVoiceTarget)) {
         worklistVoiceText = t;
         worklistVoiceMeta = meta || null;
         worklistVoiceSeq = worklistVoiceSeq + 1;

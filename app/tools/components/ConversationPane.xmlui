@@ -14,12 +14,12 @@
     <VStack
       gap="$space-1"
       when="{lastExchange.value &amp;&amp; (lastExchange.value.userText || ((lastExchange.value.userImages || []).length > 0))}"
-      var.userImagePreviews="{((lastExchange.value &amp;&amp; lastExchange.value.userImages) || []).length > 0 ? lastExchange.value.userImages : extractImagePaths((lastExchange.value &amp;&amp; lastExchange.value.userText) || '').concat(extractImagePaths((lastExchange.value &amp;&amp; lastExchange.value.iterateFeedback) || ''))}">
+      var.userImagePreviews="{((lastExchange.value &amp;&amp; lastExchange.value.userImages) || []).length > 0 ? lastExchange.value.userImages : window.__bramExtractImagePaths((lastExchange.value &amp;&amp; lastExchange.value.userText) || '').concat(window.__bramExtractImagePaths((lastExchange.value &amp;&amp; lastExchange.value.iterateFeedback) || ''))}">
         <Text
           fontWeight="$fontWeight-bold"
           color="$color-info-700"
           value="You" />
-      <Markdown content="{stripImagePaths(conversationPaneUserText(lastExchange.value.userText)) + ((lastExchange.value &amp;&amp; lastExchange.value.iterateFeedback) ? '\n\n' + stripImagePaths(lastExchange.value.iterateFeedback) : '')}" />
+      <Markdown content="{window.__bramStripImagePaths(window.__bramConversationPaneUserText(lastExchange.value.userText)) + ((lastExchange.value &amp;&amp; lastExchange.value.iterateFeedback) ? '\n\n' + window.__bramStripImagePaths(lastExchange.value.iterateFeedback) : '')}" />
       <VStack
         gap="$space-2"
         when="{userImagePreviews &amp;&amp; userImagePreviews.length > 0}">

@@ -1,5 +1,5 @@
 <App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}" var.mainAgentStatus="{null}"
-  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); subscribeTauriEvent('__bramMainAgentStatusUnsub', 'agent-status-changed', (e) => { mainAgentStatus = (e &amp;&amp; e.payload) || null; if (!window.bramAgentMenu) iframeTrace('agent-header-status-loaded', { state: (mainAgentStatus &amp;&amp; mainAgentStatus.state) || '', verb: (mainAgentStatus &amp;&amp; mainAgentStatus.verb) || '', provider: (mainAgentStatus &amp;&amp; mainAgentStatus.provider) || '', source: (mainAgentStatus &amp;&amp; mainAgentStatus.source) || '', elapsed: (mainAgentStatus &amp;&amp; mainAgentStatus.elapsedText) || '' }); }); subscribeTauriEvent('__bramTurnStateUnsub', 'turn-state-changed', (e) => { setToolbarPendingMenuFromTurnState(e &amp;&amp; e.payload); }); subscribeTauriEvent('__bramToolbarPtyMenuUnsub', 'pty-menu-changed', (e) => { setToolbarPendingMenuFromEvent(e); }); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
+  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); subscribeTauriEvent('__bramMainAgentStatusUnsub', 'agent-status-changed', (e) => { mainAgentStatus = (e &amp;&amp; e.payload) || null; if (!window.bramAgentMenu) window.__bramIframeTrace('agent-header-status-loaded', { state: (mainAgentStatus &amp;&amp; mainAgentStatus.state) || '', verb: (mainAgentStatus &amp;&amp; mainAgentStatus.verb) || '', provider: (mainAgentStatus &amp;&amp; mainAgentStatus.provider) || '', source: (mainAgentStatus &amp;&amp; mainAgentStatus.source) || '', elapsed: (mainAgentStatus &amp;&amp; mainAgentStatus.elapsedText) || '' }); }); subscribeTauriEvent('__bramTurnStateUnsub', 'turn-state-changed', (e) => { window.__bramSetToolbarPendingMenuFromTurnState(e &amp;&amp; e.payload); }); subscribeTauriEvent('__bramToolbarPtyMenuUnsub', 'pty-menu-changed', (e) => { window.__bramSetToolbarPendingMenuFromEvent(e); }); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
   <DataSource id="appInfo" url="/__app-info" />
@@ -30,7 +30,7 @@
         : (s.state === 'finished'
           ? 'finished'
           : ((mainAgentStatus || enhanceStatus.value) &amp;&amp; provider ? 'idle-provider' : 'none'));
-      if (!window.bramAgentMenu) iframeTrace('agent-header-branch', {
+      if (!window.bramAgentMenu) window.__bramIframeTrace('agent-header-branch', {
         branch,
         state: s.state || '',
         verb: s.verb || '',
@@ -225,22 +225,22 @@
           label="1"
           variant="ghost"
           tooltip="Permission menu: send keystroke 1"
-          onClick="traceToolbarKey('1'); sendKeys('1\r')" />
+          onClick="window.__bramTraceToolbarKey('1'); sendKeys('1\r')" />
         <Button
           label="2"
           variant="ghost"
           tooltip="Permission menu: send keystroke 2"
-          onClick="traceToolbarKey('2'); sendKeys('2\r')" />
+          onClick="window.__bramTraceToolbarKey('2'); sendKeys('2\r')" />
         <Button
           label="3"
           variant="ghost"
           tooltip="Permission menu: send keystroke 3"
-          onClick="traceToolbarKey('3'); sendKeys('3\r')" />
+          onClick="window.__bramTraceToolbarKey('3'); sendKeys('3\r')" />
         <Button
           label="Esc"
           variant="ghost"
           tooltip="Send Esc to interrupt"
-          onClick="traceToolbarKey('esc'); sendKeys('\x1b')" />
+          onClick="window.__bramTraceToolbarKey('esc'); sendKeys('\x1b')" />
         <Inspector src="{'/__vendor/xs-diff.html?v=' + window.APP_VERSION}" />
       </HStack>
     </Theme>

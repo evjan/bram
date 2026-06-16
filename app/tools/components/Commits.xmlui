@@ -43,9 +43,9 @@
     query="{query}" />
 
   <HSplitter height="100%"
-    initialPrimarySize="{restoreSplitterSize('commits', '50%')}"
+    initialPrimarySize="{window.__bramRestoreSplitterSize('commits', '50%')}"
     onInit="subscribeTauriEvent('__bramCommitsUnlisten', 'git-status-changed', () => commits.refetch())"
-    onResize="(px) => saveSplitterSize('commits', px)">
+    onResize="(px) => window.__bramSaveSplitterSize('commits', px)">
 
     <VStack padding="$space-4" gap="$space-4" overflowY="auto">
       <HStack gap="$space-3" verticalAlignment="center">

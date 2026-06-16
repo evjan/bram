@@ -26,8 +26,8 @@
     onDidChange="selectedPath = null; selectedDisplay = null; selectedLine = null" />
 
   <HSplitter height="100%"
-    initialPrimarySize="{restoreSplitterSize('context', '40%')}"
-    onResize="(px) => saveSplitterSize('context', px)">
+    initialPrimarySize="{window.__bramRestoreSplitterSize('context', '40%')}"
+    onResize="(px) => window.__bramSaveSplitterSize('context', px)">
     <VStack
       padding="$space-4"
       gap="$space-4"

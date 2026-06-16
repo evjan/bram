@@ -146,9 +146,9 @@
 
   <HSplitter
     height="100%"
-    initialPrimarySize="{restoreSplitterSize('issues', '40%')}"
+    initialPrimarySize="{window.__bramRestoreSplitterSize('issues', '40%')}"
     onInit="subscribeTauriEvent('__bramIssuesAgentTurnEndUnsub', 'agent-turn-end', () => { if (newIssueSubmitting) { newIssueTurnEnded = true; issues.refetch(); } });"
-    onResize="(px) => saveSplitterSize('issues', px)">
+    onResize="(px) => window.__bramSaveSplitterSize('issues', px)">
 
     <VStack padding="$space-4" gap="$space-4" overflowY="auto">
       <HStack gap="$space-3" verticalAlignment="center">
@@ -370,8 +370,8 @@
         content="{issueDetail.value.body}" />
       <VStack
         gap="$space-2"
-        when="{issueDetail.value &amp;&amp; issueDetail.value.body &amp;&amp; extractMarkdownImages(issueDetail.value.body).length > 0}">
-        <Items data="{extractMarkdownImages(issueDetail.value.body)}">
+        when="{issueDetail.value &amp;&amp; issueDetail.value.body &amp;&amp; window.__bramExtractMarkdownImages(issueDetail.value.body).length > 0}">
+        <Items data="{window.__bramExtractMarkdownImages(issueDetail.value.body)}">
           <Link onClick="fullscreenImage = $item" noIndicator>
             <Image
               src="{$item}"
@@ -397,8 +397,8 @@
               content="{$item.body}" />
             <VStack
               gap="$space-2"
-              when="{$item.body &amp;&amp; extractMarkdownImages($item.body).length > 0}">
-              <Items data="{extractMarkdownImages($item.body)}">
+              when="{$item.body &amp;&amp; window.__bramExtractMarkdownImages($item.body).length > 0}">
+              <Items data="{window.__bramExtractMarkdownImages($item.body)}">
                 <Link onClick="fullscreenImage = $item" noIndicator>
                   <Image
                     src="{$item}"

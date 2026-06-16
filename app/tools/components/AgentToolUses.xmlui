@@ -50,7 +50,7 @@
           border="1px solid $color-surface-200"
           borderRadius="$borderRadius"
           backgroundColor="$backgroundColor-primary"
-          var.inputBody="{toolInputJsonLines(modalInput, 200)}">
+          var.inputBody="{window.__bramToolInputJsonLines(modalInput, 200)}">
           <Text
             fontSize="$fontSize-xs"
             fontWeight="$fontWeight-bold"

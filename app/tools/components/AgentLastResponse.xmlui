@@ -40,7 +40,7 @@
       fontWeight="$fontWeight-bold"
       color="$color-success-700"
       value="Agent: Last response" />
-    <Markdown content="{stripImagePaths(agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantText)}" />
+    <Markdown content="{window.__bramStripImagePaths(agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantText)}" />
     <VStack
       gap="$space-2"
       when="{agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantImages &amp;&amp; agentLastResponseExchange.value.assistantImages.length > 0}">

@@ -1,5 +1,16 @@
-<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}" var.mainAgentStatus="{null}"
-  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); subscribeTauriEvent('__bramEnhanceStatusUnlisten', 'enhance-status-changed', () => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }); subscribeTauriEvent('__bramMainAgentStatusUnsub', 'agent-status-changed', (e) => { mainAgentStatus = (e &amp;&amp; e.payload) || null; if (!window.bramAgentMenu) window.__bramIframeTrace('agent-header-status-loaded', { state: (mainAgentStatus &amp;&amp; mainAgentStatus.state) || '', verb: (mainAgentStatus &amp;&amp; mainAgentStatus.verb) || '', provider: (mainAgentStatus &amp;&amp; mainAgentStatus.provider) || '', source: (mainAgentStatus &amp;&amp; mainAgentStatus.source) || '', elapsed: (mainAgentStatus &amp;&amp; mainAgentStatus.elapsedText) || '' }); }); subscribeTauriEvent('__bramTurnStateUnsub', 'turn-state-changed', (e) => { window.__bramSetToolbarPendingMenuFromTurnState(e &amp;&amp; e.payload); }); subscribeTauriEvent('__bramToolbarPtyMenuUnsub', 'pty-menu-changed', (e) => { window.__bramSetToolbarPendingMenuFromEvent(e); }); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
+<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}"
+  onInit="subscribeRightPaneSize((s) => rightPaneSize = s.width + ' × ' + s.height); updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
+  <External
+    id="mainAgentStatus"
+    initial="{null}"
+    subscribe="{window.bramSubscribeAgentStatus()}" />
+  <External
+    id="enhanceStatusEvt"
+    initial="{0}"
+    subscribe="{window.bramSubscribeEnhanceStatusTick()}" />
+  <ChangeListener
+    listenTo="{enhanceStatusEvt.value}"
+    onDidChange="() => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }" />
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
   <DataSource id="appInfo" url="/__app-info" />
@@ -18,18 +29,18 @@
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
     onDidChange="(c) => { if (c.newValue) { if ($pathname !== '/') navigate('/'); window.scrollAllToTop(); } }" />
   <ChangeListener
-    listenTo="{mainAgentStatus &amp;&amp; mainAgentStatus.verb}"
+    listenTo="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.verb}"
     onDidChange="(c) => { if (c.newValue) { lastSeenAgentVerb = c.newValue; } }" />
   <ChangeListener
-    listenTo="{window.agentStatusSignature(mainAgentStatus, enhanceStatus.value)}"
+    listenTo="{window.agentStatusSignature(mainAgentStatus.value, enhanceStatus.value)}"
     onDidChange="() => {
-      const s = mainAgentStatus || {};
+      const s = mainAgentStatus.value || {};
       const provider = s.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '';
       const branch = s.state === 'working'
         ? 'working'
         : (s.state === 'finished'
           ? 'finished'
-          : ((mainAgentStatus || enhanceStatus.value) &amp;&amp; provider ? 'idle-provider' : 'none'));
+          : ((mainAgentStatus.value || enhanceStatus.value) &amp;&amp; provider ? 'idle-provider' : 'none'));
       if (!window.bramAgentMenu) window.__bramIframeTrace('agent-header-branch', {
         branch,
         state: s.state || '',
@@ -167,14 +178,14 @@
       <HStack gap="$space-0_5" verticalAlignment="center" width="100%">
         <HStack width="16rem" minWidth="16rem" verticalAlignment="center" paddingHorizontal="$space-2">
           <Text
-            when="{window.shouldShowIdleProvider(mainAgentStatus, enhanceStatus.value)}"
+            when="{window.shouldShowIdleProvider(mainAgentStatus.value, enhanceStatus.value)}"
             fontSize="$fontSize-md"
             fontStyle="italic"
             color="$textColor-secondary"
             overflowMode="none"
-            value="{window.providerDisplayName(mainAgentStatus, enhanceStatus.value)}" />
+            value="{window.providerDisplayName(mainAgentStatus.value, enhanceStatus.value)}" />
           <HStack
-            when="{mainAgentStatus &amp;&amp; mainAgentStatus.state === 'working'}"
+            when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'working'}"
             gap="$space-1"
             verticalAlignment="center">
             <Theme size-Spinner="0.85em">
@@ -184,15 +195,15 @@
               fontSize="$fontSize-md"
               fontStyle="italic"
               overflowMode="none"
-              value="{window.headerWorkingLabel(mainAgentStatus, enhanceStatus.value)}" />
+              value="{window.headerWorkingLabel(mainAgentStatus.value, enhanceStatus.value)}" />
             <Text
               fontSize="$fontSize-md"
               color="$textColor-secondary"
               overflowMode="none"
-              value="{mainAgentStatus.elapsedText || ''}" />
+              value="{(mainAgentStatus.value &amp;&amp; mainAgentStatus.value.elapsedText) || ''}" />
           </HStack>
           <HStack
-            when="{mainAgentStatus &amp;&amp; mainAgentStatus.state === 'finished'}"
+            when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'finished'}"
             gap="$space-1"
             verticalAlignment="center">
             <Text
@@ -200,7 +211,7 @@
               fontStyle="italic"
               color="$textColor-secondary"
               overflowMode="none"
-              value="{window.headerFinishedLabel(mainAgentStatus, enhanceStatus.value, lastSeenAgentVerb)}" />
+              value="{window.headerFinishedLabel(mainAgentStatus.value, enhanceStatus.value, lastSeenAgentVerb)}" />
           </HStack>
         </HStack>
         <SpaceFiller />

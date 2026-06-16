@@ -3043,6 +3043,85 @@ window.subscribeTauriEvent("__bramNativeTurnStateUnsub", "turn-state-changed", f
   window.__bramSetAgentMenuFromTurnState((e && e.payload) || {}, "agent-menu");
 });
 
+// Native subscribers for toolbar pending-menu state. Moved out of
+// Main.xmlui's onInit blob (item: main-xmlui-tauri-subscribers-external).
+// The arrow bodies that used to live in markup only called
+// window.__bramSetToolbarPendingMenuFrom* — pure side-effects on
+// window state, no App-level var dependencies. Same pattern as the
+// AgentMenu native subscribers above.
+window.subscribeTauriEvent("__bramNativeToolbarTurnStateUnsub",
+  "turn-state-changed", function (e) {
+    window.__bramSetToolbarPendingMenuFromTurnState((e && e.payload) || null);
+  });
+window.subscribeTauriEvent("__bramNativeToolbarPtyMenuUnsub",
+  "pty-menu-changed", function (e) {
+    window.__bramSetToolbarPendingMenuFromEvent(e);
+  });
+
+// External-driven agent-status bridge. Emits the agent-status-changed
+// event payload; also performs the agent-header-status-loaded trace
+// emit that used to live in Main.xmlui's onInit arrow body.
+window.bramSubscribeAgentStatus = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var lastValue = null;
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bramSubscribeAgentStatus] subscriber threw:", e); }
+      });
+    };
+    window.subscribeTauriEvent("__bramAgentStatusExternalUnsub",
+      "agent-status-changed", function (e) {
+        lastValue = (e && e.payload) || null;
+        if (!window.bramAgentMenu) {
+          window.__bramIframeTrace("agent-header-status-loaded", {
+            state: (lastValue && lastValue.state) || "",
+            verb: (lastValue && lastValue.verb) || "",
+            provider: (lastValue && lastValue.provider) || "",
+            source: (lastValue && lastValue.source) || "",
+            elapsed: (lastValue && lastValue.elapsedText) || ""
+          });
+        }
+        notify();
+      });
+    factory = function (emit) {
+      var fire = function () { emit(lastValue); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
+// External-driven enhance-status tick. Emits an incrementing tick on
+// each enhance-status-changed event so a downstream ChangeListener can
+// trigger DataSource.refetch() (a markup-only operation).
+window.bramSubscribeEnhanceStatusTick = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var tick = 0;
+    window.subscribeTauriEvent("__bramEnhanceStatusExternalUnsub",
+      "enhance-status-changed", function () {
+        tick += 1;
+        subscribers.forEach(function (fn) {
+          try { fn(); } catch (e) { console.error("[bramSubscribeEnhanceStatusTick] subscriber threw:", e); }
+        });
+      });
+    factory = function (emit) {
+      var fire = function () { emit(tick); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
 // External-driven AgentMenu bridge — emits the current pending menu
 // when either Tauri event fires. Subscribes lazily on first call so
 // the native subscribers above (registered at module load) are

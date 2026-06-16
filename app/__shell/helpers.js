@@ -902,16 +902,33 @@ window.__bramWorklistSubmittedMatches = function (exchangeUserText, submitted) {
   return a === b;
 };
 
-window.__bramShouldClearOnAgentTurnKilled = function (awaitingResponseSetAt, exchangeUserText, submittedText) {
-  var submitted = (submittedText || "").trim();
-  if (submitted && !window.__bramWorklistSubmittedMatches(exchangeUserText, submitted)) {
-    window.__bramIframeTrace("awaiting-kill-suppressed", { reason: "exchange-stale" });
+// Canonical turn-end observer. Returns true iff the caller should run
+// the five-line clear sequence (awaitingResponse + submittedKind +
+// liveSubmittedAssistantText + liveSubmittedAssistantKey +
+// clearWorklistAwaiting). Emits the trace line itself so callers stay
+// uniform — `clear-awaiting` on a true result, `mark-turn-ended-skipped`
+// with an explicit reason on a false result. Replaces the four
+// duplicated guards previously embedded in Workspace.xmlui's
+// agent-turn-end, agent-turn-killed, inflight-clear, and
+// agent-status state=finished subscribers.
+window.__bramMarkTurnEnded = function (via, state) {
+  state = state || {};
+  var awaitingResponse = !!state.awaitingResponse;
+  if (!awaitingResponse) return false;
+  var submitting = !!state.submitting;
+  var setAt = state.awaitingResponseSetAt || 0;
+  var submittedKind = state.submittedKind || "";
+  var sinceSet = setAt ? (Date.now() - setAt) : -1;
+  if (submitting) {
+    window.__bramIframeTrace("mark-turn-ended-skipped", { via: via, reason: "action-in-flight", sinceSetMs: sinceSet, submittedKind: submittedKind });
     return false;
   }
-  var sinceSet = Date.now() - (awaitingResponseSetAt || 0);
-  if (sinceSet > 750) return true;
-  window.__bramIframeTrace("awaiting-kill-suppressed", { reason: "within-window", sinceSet: sinceSet });
-  return false;
+  if (sinceSet >= 0 && sinceSet < 750) {
+    window.__bramIframeTrace("mark-turn-ended-skipped", { via: via, reason: "within-window", sinceSetMs: sinceSet, submittedKind: submittedKind });
+    return false;
+  }
+  window.__bramIframeTrace("clear-awaiting", { via: via, sinceSetMs: sinceSet, submittedKind: submittedKind });
+  return true;
 };
 
 // Plain-JS equivalent of xs `App.mark(label)`. App.mark pushes a

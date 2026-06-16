@@ -159,14 +159,14 @@
           feedbackDraftsById = nextDrafts;
           persistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById});
         }
-        if (awaitingResponse) {
-          iframeTrace('clear-awaiting', { via: 'inflight-clear', submittedKind: submittedKind || '', sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1 });
+        submitting = false;
+        if (markTurnEnded('inflight-clear', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
           awaitingResponse = false;
+          submittedKind = null;
           liveSubmittedAssistantText = '';
           liveSubmittedAssistantKey = '';
           clearWorklistAwaiting(false);
         }
-        submitting = false;
         submittedItemId = null;
         submittedKind = null;
         setWorklistSubmittedKind(null);
@@ -335,8 +335,7 @@
         lastAssistantTickAt = Date.now();
         lastAssistantTick = lastAssistantTick + 1;
         agentTurnEndedSinceSubmit = true;
-        if (!submitting) {
-          iframeTrace('clear-awaiting', { via: 'agent-turn-end', submittedKind: submittedKind || '', sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1 });
+        if (markTurnEnded('agent-turn-end', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
           awaitingResponse = false;
           submittedKind = null;
           liveSubmittedAssistantText = '';
@@ -352,15 +351,7 @@
       }
     });
     subscribeTauriEvent('__bramWorkspaceAgentTurnKilledUnsub', 'agent-turn-killed', () => {
-      if (awaitingResponse &amp;&amp; shouldClearOnAgentTurnKilled(awaitingResponseSetAt, (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '', submittedWorklistMessage)) {
-        iframeTrace('clear-awaiting', {
-          via: 'agent-turn-killed',
-          sinceSetMs: awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : -1,
-          stableLen: (lastAssistantStableText || '').length,
-          exchangeUserLen: ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '').length,
-          exchangeAssistantLen: ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantText) || '').length,
-          submittedLen: (submittedWorklistMessage || '').length
-        });
+      if (markTurnEnded('agent-turn-killed', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
         awaitingResponse = false;
         submittedKind = null;
         liveSubmittedAssistantText = '';
@@ -379,9 +370,7 @@
         iframeTrace('refetch-called', {context: 'agent-status-changed', state: p.state || ''});
         lastAssistantTickAt = Date.now();
         lastAssistantTick = lastAssistantTick + 1;
-        const sinceSet = awaitingResponseSetAt ? (Date.now() - awaitingResponseSetAt) : 0;
-        if (p.state === 'finished' &amp;&amp; !submitting &amp;&amp; sinceSet &gt; 750) {
-          iframeTrace('clear-awaiting', { via: 'agent-status-finished', submittedKind: submittedKind || '', sinceSetMs: sinceSet });
+        if (p.state === 'finished' &amp;&amp; markTurnEnded('agent-status-finished', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
           awaitingResponse = false;
           submittedKind = null;
           liveSubmittedAssistantText = '';

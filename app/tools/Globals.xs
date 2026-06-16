@@ -642,8 +642,8 @@ function stripImageMarkerPrefix(text) {
 function worklistSubmittedMatches(exchangeUserText, submitted) {
   return window.__bramWorklistSubmittedMatches(exchangeUserText, submitted);
 }
-function shouldClearOnAgentTurnKilled(awaitingResponseSetAt, exchangeUserText, submittedText) {
-  return window.__bramShouldClearOnAgentTurnKilled(awaitingResponseSetAt, exchangeUserText, submittedText);
+function markTurnEnded(via, state) {
+  return window.__bramMarkTurnEnded(via, state);
 }
 
 // Per-tab splitter persistence. XMLUI's documented `resize` event

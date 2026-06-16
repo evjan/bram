@@ -301,34 +301,6 @@ function closeIssueExistingPendingCount(commits) {
 // window-global script needed. App.mark pushes a `kind: "app:mark"`
 // record with `ts` (Unix ms) and `perfTs` to the inspector buffer,
 // directly mergeable with bram-trace.log on the same Unix-ms clock.
-function traceIterateEnabled(submitting, selected, selectedFeedback) {
-  return window.__bramTraceIterateEnabled(submitting, selected, selectedFeedback);
-}
-function traceApproveDropEnabled(submitting, selected) {
-  return window.__bramTraceApproveDropEnabled(submitting, selected);
-}
-function buildApprovePayload(items, selectedId, feedback) {
-  return window.__bramBuildApprovePayload(items, selectedId, feedback);
-}
-function buildIteratePayload(items, selectedId, feedback) {
-  return window.__bramBuildIteratePayload(items, selectedId, feedback);
-}
-function buildDropPayload(items, selectedId, feedback) {
-  return window.__bramBuildDropPayload(items, selectedId, feedback);
-}
-function buildSingleItemApprovePayload(itemRef, feedback) {
-  return window.__bramBuildSingleItemApprovePayload(itemRef, feedback);
-}
-function countByStatus(items, status) {
-  return window.__bramCountByStatus(items, status);
-}
-function buildBatchApprovePayload(items, feedback) {
-  return window.__bramBuildBatchApprovePayload(items, feedback);
-}
-function buildBatchDropPayload(items, feedback) {
-  return window.__bramBuildBatchDropPayload(items, feedback);
-}
-
 function settingsAgent(s) {
   return (s && s.shell && s.shell.agent) || '';
 }

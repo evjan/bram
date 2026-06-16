@@ -30,12 +30,12 @@
       logToHost({ kind: "tools-boot", stage: "before-xmlui-load", at: new Date().toISOString() });
     </script>
     <script>
-      // helpers.js (line 23) defines window globals like toShell,
-      // markInflight, iframeTrace. The engine snapshots `window` at
-      // boot to build its expression-scope identifier table — bare-name
-      // calls in markup (onClick="toTurn(...)", enabled="{markInflight(...)}",
-      // etc.) resolve through that table. Anything added to `window`
-      // AFTER xmlui-standalone runs is invisible to markup. Hence:
+      // helpers.js defines window globals like toShell, toTurn,
+      // logToHost, iframeTrace, sendKeys. The engine snapshots `window`
+      // at boot to build its expression-scope identifier table —
+      // bare-name calls in markup (onClick="toTurn(...)", etc.) resolve
+      // through that table. Anything added to `window` AFTER
+      // xmlui-standalone runs is invisible to markup. Hence:
       // helpers.js MUST load before xmlui-standalone.
       document.write('<script src="/__vendor/xmlui-standalone.umd.js?v=' + Date.now() + '"><\/script>');
       document.write('<script src="/__vendor/xmlui-echart.js?v=' + Date.now() + '"><\/script>');

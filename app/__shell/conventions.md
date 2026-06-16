@@ -49,6 +49,115 @@ When a non-obvious markup choice depends on documentation, cite the
 relevant how-to or component URL in the response.
 
 
+## Code organization (helpers.js / Globals.xs / window)
+
+Iframe-side code spans four surfaces. The rules below describe where
+each kind of code should live, and how XMLUI markup calls into it.
+
+### The surfaces
+
+- **`app/__shell/helpers.js`** — real JavaScript. Async, `fetch`,
+  `setTimeout`, `postMessage`, tauri event listeners — anything the
+  XMLUI expression engine can't host directly. Functions live on
+  `window` (see naming below) and are reached from XMLUI markup as
+  `window.foo(...)`. Hot-reloaded when changed.
+- **`app/tools/Globals.xs`** — XMLUI's expression engine context.
+  Holds xs-scope module state (vars whose readers/writers all live in
+  xs) and the few helpers whose proximity to that state earns them a
+  place here. Engine restrictions: no async/await, no setTimeout, no
+  fetch, no Promise chaining outside DataSource. Top-level
+  `function foo(...)` declarations auto-hoist onto `window.foo`.
+- **`window.*`** — the shared namespace. helpers.js writes here
+  explicitly; `Globals.xs` writes here implicitly via hoisting. The
+  `__bram*` prefix exists to give helpers.js a collision-safe space
+  when an xs-side counterpart of the same name would otherwise hoist
+  over it.
+- **`.xmlui` files** — markup. Attribute handlers (`onClick`,
+  `onDidChange`, `onLoaded`, etc.) and binding expressions
+  (`value="{...}"`, `when="{...}"`) are tiny expressions, not
+  hosting environments for code.
+
+### Where each kind of code goes
+
+- **Pure functions** (sync, no XMLUI component state, no
+  engine-hostile primitives) → `window.foo` in `helpers.js`. XMLUI
+  markup calls them as `window.foo(...)`.
+- **Shims for outside-sandbox operations** (async, fetch, setTimeout,
+  postMessage, tauri events) → also `window.foo` in `helpers.js`,
+  because the engine can't host them. Markup calls them as
+  `window.foo(...)`.
+- **xs-only code** → `Globals.xs`, but only when the function
+  genuinely needs xs (touches xs-scope module state directly, or is a
+  very hot binding-string callee where the `window.` prefix is
+  measurably annoying enough to justify the cost).
+- **XMLUI attribute handlers** → a single function call:
+  `onClick="window.foo(...)"` (or `onClick="foo(...)"` if `foo` is an
+  xs function). Never multi-statement bodies, never multi-line arrow
+  bodies, never object-literal blobs. The full rationale and past
+  failure modes are catalogued in
+  `docs/code-organization-audit.md`.
+
+### When and why do we need delegators?
+
+A *delegator* is `function foo(...) { return window.__bramFoo(...); }`
+in `Globals.xs`. Its only purpose is to let XMLUI markup write the
+bare name `foo(...)` instead of `window.__bramFoo(...)`.
+
+**Default: don't add one.** Call helpers as `window.foo(...)` from
+XMLUI markup. This includes inside arrow-function bodies passed to
+`subscribeTauriEvent` / `onDidChange` / `onLoaded` etc. — the engine
+analyzes the *qualified* `window.foo` member access without trouble.
+The historical bite (a bare `foo` inside an arrow body silently
+aborts identifier analysis when no xs declaration exists) is avoided
+by writing `window.foo` rather than by adding a delegator.
+
+**Add a delegator only when** (a) the function is called many times
+in attribute expressions where the seven-character `window.` prefix
+is genuinely annoying, and (b) the name doesn't already exist on the
+bare `window` surface. Each delegator we add hoists `function foo`
+onto `window.foo`, expanding the collision-prone surface — the
+exchange rate has to be worth it.
+
+The `Globals.xs` of today has 86 delegators, mostly fossil from a
+prior model. The audit at `docs/code-organization-audit.md` lists
+them in groups and a filed worklist item that pares them down.
+
+### The `__bram*` namespace prefix
+
+`__bramFoo` on `window` defends a helpers.js export against being
+clobbered by a `function foo` declaration in `Globals.xs` (which
+would auto-hoist onto `window.foo`). It is **not** a blanket rule
+for every helpers.js name — bare-name window helpers
+(`toShell`, `toTurn`, `logToHost`, `openExternal`, `sendKeys`,
+`captureScreenshot`, etc.) are fine as long as no `Globals.xs`
+declaration shadows them.
+
+The discipline:
+
+- If a name has a matching `Globals.xs` delegator → name the helper
+  `window.__bramFoo`. The delegator body is
+  `return window.__bramFoo(...)`; no collision.
+- If a name lives only in `helpers.js` → bare `window.foo` is fine.
+  No prefix required.
+
+### Failure modes that informed these rules
+
+Captured in user memory (cross-project, not in this file):
+
+- `feedback_xmlui_no_complex_expressions_in_attributes` — keep
+  attribute expressions to a single function call.
+- `feedback_xmlui_arrow_body_needs_xs_decl` — arrow-body identifier
+  analysis. Refined fix: use `window.foo()` rather than bare `foo()`
+  inside arrow bodies. Adding an xs declaration also works, but
+  costs.
+- `feedback_xs_to_window_migration_name_collision` — the `__bramFoo`
+  prefix is for names that have an xs counterpart, not a blanket
+  rule. Same evidence, sharper edge.
+- `feedback_helpers_js_load_order` — new top-level *calls* in
+  helpers.js must come after the function they invoke; load-time
+  throws abort the whole file.
+
+
 ## Coordinate via worklist.json
 
 `resources/worklist.json` is the canonical surface for multi-step

@@ -55,7 +55,9 @@ post messages to the parent shell:
 |---|---|---|
 | inject text the user can edit | `toShell(text)` | text + `\n` appears in your stdin; user must press Enter |
 | submit a complete user turn | `toTurn(text)` | bracketed-paste + carriage return; auto-submits as a fresh turn |
+| send raw key bytes to PTY (no newline) | `sendKeys(text)` | bytes go straight to PTY stdin — for Esc, arrows, single-key menus |
 | open an external URL | `openExternal(url)` | host opens the URL in the system browser |
+| capture screenshot of right pane | `captureScreenshot()` | host captures + injects the file path as a `toTurn` |
 | log without bothering you | `logToHost(payload)` | recorded in cargo run stderr only — invisible to you |
 | open devtools | (wrench icon does it) | n/a |
 

@@ -687,7 +687,6 @@ var worklistVoiceProcessingTarget = '';
 // iframe button flips to ⏹ synchronously and users start speaking into a
 // not-yet-recording stream, losing the first phoneme(s).
 var worklistVoiceRecordingActive = false;
-var bramWorklistVoiceTarget = '';
 
 function isWorklistTextVoiceTarget(target) {
   return window.__bramIsWorklistTextVoiceTarget(target);
@@ -695,7 +694,6 @@ function isWorklistTextVoiceTarget(target) {
 
 function setWorklistVoiceTarget(target) {
   const next = target || '';
-  bramWorklistVoiceTarget = next;
   window.bramSetActiveVoiceTargetMirror(next);
   if (worklistVoiceTarget === next) return;
   worklistVoiceTarget = next;
@@ -958,7 +956,3 @@ function toggleVoiceForCurrentTarget(recording) {
   return true;
 }
 
-// isWorklistActionPayloadText lives in app/__shell/helpers.js as a
-// window helper — the xs-script parser choked on regex-literal versions
-// here. Bare-name calls resolve via the window scope (same as toTurn,
-// logToHost, queueFeedbackDraft).

@@ -13,23 +13,6 @@
 
 window._xsLogs = window._xsLogs || [];
 
-// Diagnostic: log every fetch URL to the host. Strip auth/etc — just URL.
-// Temporary instrumentation for the queryParams investigation.
-(function logFetches() {
-  if (window._fetchLogged) return;
-  window._fetchLogged = true;
-  var orig = window.fetch;
-  window.fetch = function (input, init) {
-    try {
-      var url = typeof input === "string" ? input : (input && input.url);
-      if (url && url.indexOf("/__sessions/latest-tail") !== -1) {
-        window.logToHost({ kind: "fetch-url", url: url });
-      }
-    } catch (e) {}
-    return orig.apply(this, arguments);
-  };
-})();
-
 // Persist the tools-pane route across iframe reloads. main.js reassigns
 // tools.src on every tools-pane-reload event (drawer code changed under
 // app/tools/), which drops the hash and lands the user on the default
@@ -426,20 +409,6 @@ window.__bramTraceToolbarKey = function (key) {
     menuPresent: state.present ? 1 : 0,
     menuAgeMs: state.atMs ? (Date.now() - state.atMs) : -1,
   });
-};
-// Pure helper hoisted from Globals.xs because the xs-script sandbox parser
-// rejects the regex-literal forms (`return /.../.test(...)` and
-// `String(...).match(/...\s/)`) — both produce "Error parsing code behind"
-// at load time. Native JS in window scope handles the same patterns fine,
-// and bare-name calls in xs (matching the toTurn / logToHost convention)
-// resolve to this implementation.
-window.isWorklistActionPayloadText = function (text) {
-  var t = String(text == null ? "" : text).trim();
-  return (
-    t.indexOf("approved: ") === 0 ||
-    t.indexOf("iterate: ") === 0 ||
-    t.indexOf("drop: ") === 0
-  );
 };
 window.logToHost = function (payload) {
   // Master-flag short-circuit. Paired with `window.iframeTrace`
@@ -3058,55 +3027,6 @@ window.gitPush = function (commitsDs, onError) {
       if (typeof onError === "function") onError(String(e));
     });
 };
-// In-flight marker that persists across iframe reloads. At click
-// time we snapshot the current worklist's item IDs; the XMLUI side
-// clears the flag whenever worklist.json's items differ from that
-// snapshot — works on the initial fetch too (so refresh recovers
-// from a stale flag), not just on refetches.
-window.markInflight = function (items, targetedId) {
-  try {
-    var sig = (items || [])
-      .filter(function (i) { return i && i.id; })
-      .map(function (i) { return i.id + ":" + (i.status || "proposed"); })
-      .sort()
-      .join(",");
-    var record = { ids: sig, ts: Date.now() };
-    if (typeof targetedId === "string" && targetedId) {
-      record.targeted = targetedId;
-    }
-    localStorage.setItem("inflight", JSON.stringify(record));
-  } catch (e) {}
-};
-window.getInflight = function () {
-  try {
-    var raw = localStorage.getItem("inflight");
-    if (!raw) return null;
-    var v = JSON.parse(raw);
-    return v && typeof v === "object" ? v : null;
-  } catch (e) {
-    return null;
-  }
-};
-window.clearInflight = function () {
-  try {
-    localStorage.removeItem("inflight");
-  } catch (e) {}
-};
-// Workspace pending-items selection persists across iframe reloads.
-// Stored as a single JSON array of currently-checked item ids.
-window.loadChecked = function () {
-  try {
-    var raw = localStorage.getItem("workspace-checked");
-    if (!raw) return [];
-    var v = JSON.parse(raw);
-    return Array.isArray(v) ? v : [];
-  } catch (e) { return []; }
-};
-window.saveChecked = function (ids) {
-  try {
-    localStorage.setItem("workspace-checked", JSON.stringify(ids || []));
-  } catch (e) {}
-};
 // Sessions tab: pending-delete and pending-rename ids persist across
 // iframe reloads, so the dim+disable state survives until the user
 // explicitly clears it (or the JSONL stops resolving to the same id).
@@ -3144,20 +3064,6 @@ window.savePendingSessionRenames = function (ids) {
   try {
     localStorage.setItem("session-pending-renames", JSON.stringify(ids || []));
   } catch (e) {}
-};
-// Drop ids from saved selection that no longer appear in the live
-// worklist (executed/dropped). Returns the pruned array.
-window.pruneChecked = function (validIds) {
-  try {
-    var current = window.loadChecked();
-    var valid = {};
-    (validIds || []).forEach(function (id) { valid[id] = true; });
-    var pruned = current.filter(function (id) { return valid[id]; });
-    if (pruned.length !== current.length) {
-      window.saveChecked(pruned);
-    }
-    return pruned;
-  } catch (e) { return []; }
 };
 // Route external (http/https/file) anchor clicks through openExternal so
 // Markdown links and any other <a> tags open in the system browser
@@ -3203,23 +3109,7 @@ document.addEventListener("click", function (e) {
     }
   }
 }, true);
-function _refreshScrollables() {
-  var nodes = document.querySelectorAll("*");
-  var found = [];
-  for (var i = 0; i < nodes.length; i += 1) {
-    var el = nodes[i];
-    if (el && el.scrollHeight > el.clientHeight + 8) {
-      found.push(el);
-    }
-  }
-  window._scrollables = found;
-  return found;
-}
-
-// Click-driven; scan the DOM per call. _scrollables cache is for the
-// RAF loop in scrollAfterDomUpdate, not here — it would poison
-// after the first call if the DOM happened to have no scrollables
-// at that moment ([] is truthy, so the || fallback would never fire).
+// Click-driven; scan the DOM per call.
 window.scrollAllToTop = function () {
   var root = document.scrollingElement || document.documentElement || document.body;
   if (root) {
@@ -3473,72 +3363,6 @@ try {
   };
 
   applyFontSize(window.getAppFontSize());
-})();
-
-// Pin-to-bottom tracking for transcript-style views (Talk, etc).
-// _talkPinned reflects whether the user is currently within ~100px of
-// the bottom of the page. Auto-scroll-on-new-turn handlers consult
-// wasPinnedToBottom() before scrolling, so the user is never yanked
-// down while re-reading earlier content.
-(function () {
-  var PIN_THRESHOLD = 100;
-  window._talkPinned = true;
-  function recompute() {
-    var root = document.scrollingElement || document.documentElement || document.body;
-    if (!root) return;
-    var dist = root.scrollHeight - root.scrollTop - root.clientHeight;
-    window._talkPinned = dist < PIN_THRESHOLD;
-  }
-  window.addEventListener("scroll", recompute, { passive: true });
-  window.wasPinnedToBottom = function () {
-    return window._talkPinned !== false;
-  };
-  // Used by Talk's auto-expand-latest-edit hook. The expansion grows
-  // the DOM after the scroll-to-bottom listener has already run, so we
-  // capture the pre-expand pin state and re-scroll multiple times as
-  // the layout settles (two RAFs aren't enough — XMLUI renders the
-  // expanded diff over several frames). Instant scrolls — smooth ones
-  // overlap and fight each other.
-  window.scrollAfterDomUpdate = function () {
-    var wasPinned = window.wasPinnedToBottom();
-    if (!wasPinned) return;
-    // Pin to bottom every animation frame for ~1.5s — long enough for
-    // XMLUI to finish rendering the expanded diff content, which can
-    // span many frames. Each pin is instant (no smooth animation that
-    // would fight a still-growing layout). The scrollable element list
-    // is cached; doing querySelectorAll('*') per RAF stalled the main
-    // thread on transcripts with many Markdown turns.
-    var deadline = Date.now() + 1500;
-    var t0 = (typeof performance !== 'undefined') ? performance.now() : 0;
-    var frames = 0;
-    var list = window._scrollables || (typeof _refreshScrollables === 'function' ? _refreshScrollables() : []);
-    function pin() {
-      frames += 1;
-      var root = document.scrollingElement || document.documentElement || document.body;
-      if (root) root.scrollTop = root.scrollHeight;
-      for (var i = 0; i < list.length; i += 1) {
-        var el = list[i];
-        if (el && el.scrollHeight > el.clientHeight + 8) {
-          try { el.scrollTop = el.scrollHeight; } catch (e) {}
-        }
-      }
-    }
-    function loop() {
-      pin();
-      if (Date.now() < deadline) {
-        requestAnimationFrame(loop);
-      } else if (t0) {
-        try {
-          window.logToHost({
-            kind: 'scrollAfterDomUpdate',
-            frames: frames,
-            ms: Math.round(performance.now() - t0),
-          });
-        } catch (e) {}
-      }
-    }
-    loop();
-  };
 })();
 
 // Surface JS errors and lifecycle events to the host log channel.

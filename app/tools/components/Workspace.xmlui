@@ -40,6 +40,7 @@
   var.fullscreenImage="{null}"
   var.messageVoiceRecording="{false}"
   var.feedbackVoiceRecording="{false}"
+  var.feedbackVoiceRecordingItemId="{''}"
   var.pendingPastedImageCount="{window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0}"
   var.pendingPastedImagePaths="{window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []}"
   var.stagingPastedImageCount="{window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0}"
@@ -712,17 +713,20 @@
                     enabled="{!(submitting &amp;&amp; submittedItemId === $item.id)}" />
                   <ChangeListener
                     listenTo="{worklistVoiceSeq}"
-                    onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'feedback') appendVoiceTranscript(feedbackBox, worklistVoiceText); feedbackVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
+                    onDidChange="() => { if (worklistVoiceText &amp;&amp; worklistVoiceTarget === 'feedback' &amp;&amp; bramFocusedFeedbackItemId === $item.id) appendVoiceTranscript(feedbackBox, worklistVoiceText); feedbackVoiceRecording = false; worklistVoiceRecordingActive = false; feedbackVoiceRecordingItemId = ''; }" />
+                  <ChangeListener
+                    listenTo="{awaitingResponse}"
+                    onDidChange="(c) => { if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedItemId === $item.id &amp;&amp; feedbackBox &amp;&amp; feedbackBox.value) feedbackBox.setValue(''); }" />
                   <Theme size-Spinner="0.85em">
-                    <Spinner when="{isWorklistVoiceProcessingTarget('feedback')}" />
+                    <Spinner when="{isWorklistVoiceProcessingTarget('feedback') &amp;&amp; feedbackVoiceRecordingItemId === $item.id}" />
                   </Theme>
                   <Button
-                    label="{feedbackVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
+                    label="{feedbackVoiceRecording &amp;&amp; feedbackVoiceRecordingItemId === $item.id ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
                     variant="ghost"
                     size="xs"
                     tooltip="Voice feedback"
                     enabled="{!submitting &amp;&amp; !isWorklistVoiceProcessingTarget('feedback')}"
-                    onClick="setWorklistVoiceTarget('feedback'); feedbackVoiceRecording = toggleVoiceForCurrentTarget(feedbackVoiceRecording)" />
+                    onClick="setWorklistVoiceTarget('feedback'); if (!feedbackVoiceRecording) feedbackVoiceRecordingItemId = $item.id; feedbackVoiceRecording = toggleVoiceForCurrentTarget(feedbackVoiceRecording)" />
                   <Button
                     label="ⓘ"
                     variant="ghost"

@@ -770,6 +770,27 @@ function resetVoiceTargetIfFeedbackPanelGone(selected, feedbackExpanded) {
   }
 }
 
+// Voice-transcript arrival helper: appends to the TextArea AND mirrors
+// the resulting value into feedbackDraftsById so the iterate-clear path
+// (which gates on map presence) and the per-row clear ChangeListener
+// (which targets the DOM) see consistent state. Returns the new drafts
+// map so the caller can assign it back into Workspace's reactive var
+// without nested arrow bodies in the attribute. Extracted to xs scope
+// because inline multi-statement attributes with object literals were
+// silently dropping their tail statements in this codebase (verified
+// 2026-06-16 trace: voice append fired, subsequent persist did not).
+function handleFeedbackVoiceArrival(feedbackBox, itemId, currentDrafts, currentExpandedIds) {
+  iframeTrace('voice-helper', { stage: 'enter', itemId: itemId || '' });
+  appendVoiceTranscript(feedbackBox, worklistVoiceText);
+  iframeTrace('voice-helper', { stage: 'after-append', valueLen: (feedbackBox && feedbackBox.value ? String(feedbackBox.value).length : 0) });
+  const next = Object.assign({}, currentDrafts || {});
+  next[itemId] = feedbackBox.value || '';
+  iframeTrace('voice-helper', { stage: 'before-persist', nextLen: (next[itemId] || '').length });
+  persistWorklistUiState({ expandedItemIds: currentExpandedIds || [], feedbackDraftsById: next });
+  iframeTrace('voice-helper', { stage: 'after-persist' });
+  return next;
+}
+
 function appendVoiceTranscript(component, transcript) {
   if (!component || !transcript) return false;
   const meta = worklistVoiceMeta || {};

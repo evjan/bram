@@ -1,14 +1,11 @@
 <Component name="PastedImageStrip">
   <VStack
     gap="0"
-    var.pendingPastedImageCount="{$props.target &amp;&amp; window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget($props.target) : (window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0)}"
-    var.pendingPastedImagePaths="{$props.target &amp;&amp; window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget($props.target) : (window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : [])}"
-    var.stagingPastedImageCount="{window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0}"
     var.fullscreenImage="{null}">
-    <Timer
-      initialDelay="0"
-      interval="250"
-      onTick="pendingPastedImageCount = $props.target &amp;&amp; window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget($props.target) : (window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0); pendingPastedImagePaths = $props.target &amp;&amp; window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget($props.target) : (window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []); stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; if (window.bramTracePastedImageStrip) window.bramTracePastedImageStrip('PastedImageStrip', $props.target || '', pendingPastedImageCount, pendingPastedImagePaths, stagingPastedImageCount)" />
+    <External
+      id="pasteState"
+      initial="{{count: 0, paths: [], staging: 0}}"
+      subscribe="{window.bramSubscribePasteState($props.target)}" />
     <ModalDialog
       when="{!!fullscreenImage}"
       fullScreen="true"
@@ -22,8 +19,8 @@
     <HStack
       gap="$space-2"
       verticalAlignment="center"
-      when="{pendingPastedImageCount > 0 || stagingPastedImageCount > 0}">
-      <Items data="{pendingPastedImagePaths}">
+      when="{pasteState.value.count > 0 || pasteState.value.staging > 0}">
+      <Items data="{pasteState.value.paths}">
         <HStack gap="$space-1" verticalAlignment="center">
           <Link onClick="fullscreenImage = $item" noIndicator="true">
             <Badge variant="pill" value="image {$itemIndex + 1}" />
@@ -37,13 +34,13 @@
         </HStack>
       </Items>
       <Badge
-        when="{pendingPastedImageCount === 0 &amp;&amp; stagingPastedImageCount > 0}"
+        when="{pasteState.value.count === 0 &amp;&amp; pasteState.value.staging > 0}"
         variant="pill"
         value="staging image" />
       <Text
         fontSize="$fontSize-xs"
         color="$textColor-secondary"
-        value="{pendingPastedImageCount > 0 ? 'click image to preview; × to remove' : 'will be sent with your message'}" />
+        value="{pasteState.value.count > 0 ? 'click image to preview; × to remove' : 'will be sent with your message'}" />
     </HStack>
   </VStack>
 </Component>

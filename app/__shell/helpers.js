@@ -2220,6 +2220,51 @@ window.captureScreenshot = function () {
 // silently no-ops. Window-level listening sidesteps the focus problem.
 window.bramPendingPastedImages = window.bramPendingPastedImages || [];
 window.bramStagingPastedImages = window.bramStagingPastedImages || 0;
+
+// Paste-state pub/sub registry — bridge from helpers.js (canonical store) to
+// XMLUI via the <External> component's `(emit) => unsubscribe` contract.
+// helpers.js owns window.bramPendingPastedImages and
+// window.bramStagingPastedImages above; every mutation site below calls
+// bramNotifyPasteState() so the subscribers below re-snapshot and push the
+// new value to their XMLUI-side observers. Replaces the 4 Hz <Timer> polling
+// loop the strip used to do.
+var bramPasteStateSubscribers = new Set();
+function bramComputePasteState(target) {
+  return {
+    count: target
+      ? window.bramPendingPastedImageCountForTarget(target)
+      : window.bramPendingPastedImageCount(),
+    paths: target
+      ? window.bramPendingPastedImagePathsForTarget(target)
+      : window.bramPendingPastedImagePaths(),
+    staging: window.bramStagingPastedImageCount(),
+  };
+}
+function bramNotifyPasteState() {
+  bramPasteStateSubscribers.forEach(function (cb) {
+    try { cb(); } catch (e) { console.error("[bram-paste] subscriber threw:", e); }
+  });
+}
+// Memoize the per-target subscribe closure. XMLUI re-evaluates
+// `subscribe="{window.bramSubscribePasteState(target)}"` on every render;
+// returning a fresh closure each call makes the <External> useEffect's
+// [subscribeFn] dep see a new identity each time, which kicks off a
+// subscribe → emit → re-render → re-subscribe loop. Caching keyed on
+// target gives every call with the same target the same function
+// identity, so useEffect runs exactly once per real target change.
+var bramSubscribePasteStateCache = Object.create(null);
+window.bramSubscribePasteState = function (target) {
+  var key = target == null ? "" : String(target);
+  if (bramSubscribePasteStateCache[key]) return bramSubscribePasteStateCache[key];
+  var cached = function (emit) {
+    var fire = function () { emit(bramComputePasteState(target)); };
+    bramPasteStateSubscribers.add(fire);
+    fire();  // seed initial value synchronously
+    return function () { bramPasteStateSubscribers.delete(fire); };
+  };
+  bramSubscribePasteStateCache[key] = cached;
+  return cached;
+};
 window.bramActiveVoiceTargetMirror = window.bramActiveVoiceTargetMirror || "";
 window.bramActiveFocusedFeedbackItemIdMirror = window.bramActiveFocusedFeedbackItemIdMirror || "";
 window.bramSetActiveVoiceTargetMirror = function (v) {
@@ -2390,12 +2435,14 @@ window.bramStagePastedImage = function (file, target) {
   return new Promise(function (resolve, reject) {
     var reader = new FileReader();
     window.bramStagingPastedImages++;
+    bramNotifyPasteState();
     bramTracePasteImage("stage-start", { target: stageTarget, type: type, staging: window.bramStagingPastedImages });
     reader.onload = function () {
       if (!reader.result || reader.result.byteLength === 0) {
         var empty = new Error("paste-image: empty clipboard image");
         bramTracePasteImage("empty", { target: stageTarget });
         window.bramStagingPastedImages = Math.max(0, (window.bramStagingPastedImages || 0) - 1);
+        bramNotifyPasteState();
         reject(empty);
         return;
       }
@@ -2412,6 +2459,7 @@ window.bramStagePastedImage = function (file, target) {
           if (!json || !json.path) throw new Error("paste-image: no path in response");
           var entry = { path: json.path, target: stageTarget };
           window.bramPendingPastedImages.push(entry);
+          bramNotifyPasteState();
           bramTracePasteImage("staged", {
             path: json.path,
             target: stageTarget,
@@ -2427,11 +2475,13 @@ window.bramStagePastedImage = function (file, target) {
         })
         .finally(function () {
           window.bramStagingPastedImages = Math.max(0, (window.bramStagingPastedImages || 0) - 1);
+          bramNotifyPasteState();
         });
     };
     reader.onerror = function () {
       bramTracePasteImage("read-error", { target: stageTarget, message: String(reader.error || "") });
       window.bramStagingPastedImages = Math.max(0, (window.bramStagingPastedImages || 0) - 1);
+      bramNotifyPasteState();
       reject(reader.error);
     };
     reader.readAsArrayBuffer(file);
@@ -2444,6 +2494,7 @@ window.bramConsumePastedImagePaths = function (target) {
     window.bramPastedImageTarget = "";
     window.bramLastConsumedPastedImages = [];
     bramTracePasteImage("consume", { target: target || "", reason: "no-current-turn", consumed: [], retained: [] });
+    bramNotifyPasteState();
     return [];
   }
   var arr = window.bramPendingPastedImages || [];
@@ -2454,6 +2505,7 @@ window.bramConsumePastedImagePaths = function (target) {
     window.bramPastedImageTarget = "";
     window.bramLastConsumedPastedImages = allPaths.slice();
     bramTracePasteImage("consume", { target: "", mode: "drain-all", consumed: allPaths, retained: [] });
+    bramNotifyPasteState();
     return allPaths;
   }
   var kept = [];
@@ -2478,6 +2530,7 @@ window.bramConsumePastedImagePaths = function (target) {
     consumed: taken,
     retained: bramPendingPastedImageSummary()
   });
+  bramNotifyPasteState();
   return taken;
 };
 window.bramLastConsumedPastedImagePaths = function () {
@@ -2491,6 +2544,7 @@ window.bramRemovePastedImagePath = function (path) {
     if (e && e.path === path) {
       arr.splice(i, 1);
       bramTracePasteImage("removed", { path: path, target: e.target || "", pendingAfter: bramPendingPastedImageSummary() });
+      bramNotifyPasteState();
       return;
     }
   }

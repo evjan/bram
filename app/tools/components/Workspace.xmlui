@@ -207,10 +207,6 @@
       }
     }" />
 
-  <Timer
-    initialDelay="250"
-    interval="1000"
-    onTick="pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : (window.bramPendingPastedImageCount ? window.bramPendingPastedImageCount() : 0); pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : (window.bramPendingPastedImagePaths ? window.bramPendingPastedImagePaths() : []); stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0" />
   <!-- Drives the in-flight "Approving./.../..." dot cycle below the
        targeted item. 2 s tick is intentionally slow - action cycles can
        take minutes, and a fast cycle is distracting at that scale. -->
@@ -227,7 +223,7 @@
     }" />
   <ChangeListener
     listenTo="{awaitingResponse}"
-    onDidChange="(c) => { if (c.newValue &amp;&amp; !c.prevValue) { agentTurnEndedSinceSubmit = false; } if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedKind === 'message' &amp;&amp; worklistInputBox) { worklistInputBox.setValue(''); window.__bramClearWorklistDraft(); } }" />
+    onDidChange="(c) => { if (c.newValue &amp;&amp; !c.prevValue) { agentTurnEndedSinceSubmit = false; } if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedKind === 'message' &amp;&amp; messageComposer) { messageComposer.setValue(''); window.__bramClearWorklistDraft(); } }" />
   <ChangeListener
     listenTo="{window.toolsSignature(conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools)}"
     onDidChange="() => {
@@ -474,52 +470,19 @@
       <!-- Form.persist restores unsent text across iframe reloads; TextArea.enterSubmits lets Enter submit the parent Form. -->
       <ChangeListener
         listenTo="{worklistVoiceSeq}"
-        onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'message-agent') appendVoiceTranscript(worklistInputBox, worklistVoiceText); messageVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
+        onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'message-agent' && messageComposer) messageComposer.appendVoice(worklistVoiceText); messageVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
     <VStack gap="0" width="100%" height="*">
       <HStack horizontalAlignment="center" width="100%" marginBottom="$space-6">
-        <Form
-          id="worklistMessageForm"
-          width="90%"
-          data="{{ message: window.__bramRestoreWorklistDraft() }}"
-          persist="true"
-          storageKey="bram.worklistMessageDraftForm"
-          dataAfterSubmit="keep"
-          onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
-          onSubmit="(data) => { window.__bramFlushWorklistDraft && window.__bramFlushWorklistDraft(); const sent = window.__bramSubmitWorklistMessageFast(data.message); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); window.__bramIframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = window.__bramSetWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = window.__bramMarkAwaitingStarted(); } }">
-          <property name="buttonRowTemplate"><Fragment/></property>
-          <HStack gap="$space-2" verticalAlignment="center">
-            <TextArea
-              id="worklistInputBox"
-              bindTo="message"
-              enterSubmits="true"
-              onInit="setWorklistVoiceTarget('message-agent'); window.__bramIframeTrace('paste-image-target', {stage: 'message-init', target: 'message-agent'})"
-              onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId(''); window.__bramIframeTrace('paste-image-target', {stage: 'message-focus', target: 'message-agent'})"
-              enabled="{!submitting &amp;&amp; !awaitingResponse}"
-              readOnly="{false}"
-              placeholder="Message agent: Enter sends, Shift+Enter newline, Ctrl-V/Cmd-V paste screenshot."
-              autoSize="true"
-              minRows="1"
-              maxRows="6"
-              width="*" />
-            <Button
-              label="{messageVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
-              variant="ghost"
-              tooltip="Voice message"
-              enabled="{!submitting &amp;&amp; !awaitingResponse &amp;&amp; !isWorklistVoiceProcessingTarget('message-agent')}"
-              onClick="setWorklistVoiceTarget('message-agent'); messageVoiceRecording = toggleVoiceForCurrentTarget(messageVoiceRecording)" />
-            <Button
-              label="skip worklist"
-              variant="ghost"
-              size="xs"
-              tooltip="Send and bypass propose-first for this turn — edit files directly. Use when you want a direct edit."
-              enabled="{!submitting &amp;&amp; !awaitingResponse &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
-              onClick="(() => { window.__bramFlushWorklistDraft && window.__bramFlushWorklistDraft(); const raw = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (!raw) return; const sent = window.__bramSubmitWorklistMessageFast('skip-worklist: ' + raw); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); window.__bramIframeTrace('submitted-images', {kind: 'message-skip-worklist', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = window.__bramSetWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = window.__bramMarkAwaitingStarted(); } })()" />
-            <Theme size-Spinner="0.85em">
-              <Spinner when="{isWorklistVoiceProcessingTarget('message-agent')}" />
-            </Theme>
-          </HStack>
-          <PastedImageStrip target="message-agent" />
-        </Form>
+        <MessageComposer
+          id="messageComposer"
+          disabled="{submitting || awaitingResponse}"
+          voiceProcessing="{isWorklistVoiceProcessingTarget('message-agent')}"
+          micLabel="{messageVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
+          placeholder="Message agent: Enter sends, Shift+Enter newline, Ctrl-V/Cmd-V paste screenshot."
+          onSend="(msg) => { window.__bramFlushWorklistDraft &amp;&amp; window.__bramFlushWorklistDraft(); const sent = window.__bramSubmitWorklistMessageFast(msg); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); window.__bramIframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = window.__bramSetWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = window.__bramMarkAwaitingStarted(); } }"
+          onSkipWorklist="(raw) => { if (!raw) return; window.__bramFlushWorklistDraft &amp;&amp; window.__bramFlushWorklistDraft(); const sent = window.__bramSubmitWorklistMessageFast('skip-worklist: ' + raw); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); window.__bramIframeTrace('submitted-images', {kind: 'message-skip-worklist', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = window.__bramSetWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = window.__bramMarkAwaitingStarted(); } }"
+          onMicClick="setWorklistVoiceTarget('message-agent'); messageVoiceRecording = toggleVoiceForCurrentTarget(messageVoiceRecording)"
+          onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId(''); window.__bramIframeTrace('paste-image-target', {stage: 'message-focus', target: 'message-agent'})" />
       </HStack>
 
     <HSplitter

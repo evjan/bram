@@ -1,0 +1,51 @@
+<Component name="MessageComposer">
+  <event name="send" />
+  <event name="skipWorklist" />
+  <event name="micClick" />
+  <event name="gotFocus" />
+  <method name="getValue" value="() => (worklistInputBox &amp;&amp; worklistInputBox.value) || ''" />
+  <method name="setValue" value="(v) => { if (worklistInputBox) worklistInputBox.setValue(v); }" />
+  <method name="appendVoice" value="(t) => { if (worklistInputBox) appendVoiceTranscript(worklistInputBox, t); }" />
+  <Form
+    width="90%"
+    data="{{ message: window.__bramRestoreWorklistDraft() }}"
+    persist="true"
+    storageKey="bram.worklistMessageDraftForm"
+    dataAfterSubmit="keep"
+    onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
+    onSubmit="(data) => emitEvent('send', data.message)">
+    <property name="buttonRowTemplate"><Fragment/></property>
+    <HStack gap="$space-2" verticalAlignment="center">
+      <TextArea
+        id="worklistInputBox"
+        bindTo="message"
+        enterSubmits="true"
+        onInit="emitEvent('gotFocus')"
+        onGotFocus="emitEvent('gotFocus')"
+        enabled="{!$props.disabled}"
+        readOnly="{false}"
+        placeholder="{$props.placeholder}"
+        autoSize="true"
+        minRows="1"
+        maxRows="6"
+        width="*" />
+      <Button
+        label="{$props.micLabel}"
+        variant="ghost"
+        tooltip="Voice message"
+        enabled="{!$props.disabled &amp;&amp; !$props.voiceProcessing}"
+        onClick="emitEvent('micClick')" />
+      <Button
+        label="skip worklist"
+        variant="ghost"
+        size="xs"
+        tooltip="Send and bypass propose-first for this turn — edit files directly. Use when you want a direct edit."
+        enabled="{!$props.disabled &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
+        onClick="emitEvent('skipWorklist', (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim())" />
+      <Theme size-Spinner="0.85em">
+        <Spinner when="{$props.voiceProcessing}" />
+      </Theme>
+    </HStack>
+    <PastedImageStrip target="message-agent" />
+  </Form>
+</Component>

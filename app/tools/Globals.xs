@@ -692,6 +692,7 @@ function isWorklistTextVoiceTarget(target) {
 function setWorklistVoiceTarget(target) {
   const next = target || '';
   bramWorklistVoiceTarget = next;
+  window.bramSetActiveVoiceTargetMirror(next);
   if (worklistVoiceTarget === next) return;
   worklistVoiceTarget = next;
   iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'target' });
@@ -701,9 +702,15 @@ function isWorklistVoiceProcessingTarget(target) {
   return !!worklistVoiceProcessing && worklistVoiceProcessingTarget === (target || '');
 }
 
-window.bramCurrentPasteTarget = function () {
-  return bramWorklistVoiceTarget || worklistVoiceTarget || '';
-};
+var bramFocusedFeedbackItemId = '';
+function setFocusedFeedbackItemId(id) {
+  bramFocusedFeedbackItemId = id || '';
+  window.bramSetActiveFocusedFeedbackItemIdMirror(id || '');
+}
+var lastExchangeRefreshTick = 0;
+function bumpLastExchangeRefreshTick() {
+  lastExchangeRefreshTick = lastExchangeRefreshTick + 1;
+}
 
 // Decide the iframe-side state update for the `inflightClaim` DataSource
 // (the wrapper around resources/.inflight-claim.json). Sentinel is the

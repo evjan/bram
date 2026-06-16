@@ -860,8 +860,19 @@ window.__bramSubmitWorklistMessageFast = function (text, voiceTarget) {
 };
 
 window.__bramWithStagedImageMarkers = function (text, target, voiceTarget) {
+  var requestedTarget = target || voiceTarget || "";
+  var consumeTarget = requestedTarget;
+  if (requestedTarget === "feedback" && window.bramCurrentPasteTarget) {
+    consumeTarget = window.bramCurrentPasteTarget() || requestedTarget;
+  }
+  bramTracePasteImage("with-markers", {
+    requestedTarget: requestedTarget,
+    voiceTarget: voiceTarget || "",
+    consumeTarget: consumeTarget,
+    pendingBefore: bramPendingPastedImageSummary()
+  });
   var paths = window.bramConsumePastedImagePaths
-    ? window.bramConsumePastedImagePaths(target || voiceTarget || "")
+    ? window.bramConsumePastedImagePaths(consumeTarget)
     : [];
   if (!paths || paths.length === 0) return text;
   var lines = paths.map(function (p) { return "Read this screenshot: @" + p + "\n[Image: source: " + p + "]"; });
@@ -2029,9 +2040,78 @@ window.captureScreenshot = function () {
 // silently no-ops. Window-level listening sidesteps the focus problem.
 window.bramPendingPastedImages = window.bramPendingPastedImages || [];
 window.bramStagingPastedImages = window.bramStagingPastedImages || 0;
+window.bramActiveVoiceTargetMirror = window.bramActiveVoiceTargetMirror || "";
+window.bramActiveFocusedFeedbackItemIdMirror = window.bramActiveFocusedFeedbackItemIdMirror || "";
+window.bramSetActiveVoiceTargetMirror = function (v) {
+  var prev = window.bramActiveVoiceTargetMirror || "";
+  var next = v || "";
+  window.bramActiveVoiceTargetMirror = next;
+  if (window.__bramIframeTrace) window.__bramIframeTrace("paste-target-mirror", { kind: "voice", value: next, prev: prev });
+};
+window.bramSetActiveFocusedFeedbackItemIdMirror = function (v) {
+  var prev = window.bramActiveFocusedFeedbackItemIdMirror || "";
+  var next = v || "";
+  window.bramActiveFocusedFeedbackItemIdMirror = next;
+  if (window.__bramIframeTrace) window.__bramIframeTrace("paste-target-mirror", { kind: "focused-feedback-item", value: next, prev: prev });
+};
+window.bramCurrentPasteTarget = function () {
+  var voice = window.bramActiveVoiceTargetMirror || "";
+  var focusedFeedback = window.bramActiveFocusedFeedbackItemIdMirror || "";
+  var active = document.activeElement;
+  var placeholder = active && active.getAttribute && (active.getAttribute("placeholder") || "");
+  var activeLooksLikeFeedback = placeholder === "Message to agent";
+  var activeLooksLikeMessage = placeholder.indexOf("Message agent") === 0;
+  var result;
+  if (activeLooksLikeFeedback && focusedFeedback) {
+    result = "feedback:" + focusedFeedback;
+  } else if (activeLooksLikeMessage) {
+    result = "message-agent";
+  } else {
+    result = voice;
+  }
+  if (window.__bramIframeTrace) window.__bramIframeTrace("paste-current-target", {
+    voice: voice,
+    focusedFeedback: focusedFeedback,
+    placeholder: placeholder,
+    activeLooksLikeFeedback: activeLooksLikeFeedback,
+    activeLooksLikeMessage: activeLooksLikeMessage,
+    result: result
+  });
+  return result;
+};
 window.bramPastedImageForCurrentTurn = window.bramPastedImageForCurrentTurn || false;
 window.bramPastedImageTarget = window.bramPastedImageTarget || "";
 window.bramLastConsumedPastedImages = window.bramLastConsumedPastedImages || [];
+window.bramPasteImageTraceSigs = window.bramPasteImageTraceSigs || {};
+function bramPendingPastedImageSummary() {
+  return (window.bramPendingPastedImages || []).map(function (e) {
+    if (typeof e === "string") return { path: e, target: "" };
+    return { path: (e && e.path) || "", target: (e && e.target) || "" };
+  }).filter(function (e) { return !!e.path; });
+}
+function bramActiveElementSummary() {
+  var el = document.activeElement;
+  if (!el) return "";
+  var bits = [];
+  if (el.tagName) bits.push(String(el.tagName).toLowerCase());
+  if (el.id) bits.push("#" + el.id);
+  var aria = el.getAttribute && (el.getAttribute("aria-label") || el.getAttribute("placeholder"));
+  if (aria) bits.push("[" + String(aria).slice(0, 40) + "]");
+  return bits.join("");
+}
+function bramTracePasteImage(stage, payload, sampleKey) {
+  try {
+    var p = Object.assign({ stage: stage }, payload || {});
+    if (sampleKey) {
+      var sig = JSON.stringify(p);
+      if (window.bramPasteImageTraceSigs[sampleKey] === sig) return;
+      window.bramPasteImageTraceSigs[sampleKey] = sig;
+    }
+    if (typeof window.__bramIframeTrace === "function") {
+      window.__bramIframeTrace("paste-image", p);
+    }
+  } catch (e) {}
+}
 document.addEventListener("paste", function (event) {
   if (!event.clipboardData) return;
   var items = event.clipboardData.items || [];
@@ -2054,15 +2134,23 @@ document.addEventListener("paste", function (event) {
   // `bramConsumePastedImagePaths` on turn submission and by the
   // `bramPastedImageForCurrentTurn` flag below.
   window.bramPastedImageForCurrentTurn = true;
-  window.bramPastedImageTarget = window.bramCurrentPasteTarget
-    ? window.bramCurrentPasteTarget()
-    : "";
+  var currentTarget = (window.bramCurrentPasteTarget && window.bramCurrentPasteTarget()) || "";
+  var pasteTarget = currentTarget || "message-agent";
+  window.bramPastedImageTarget = pasteTarget;
+  bramTracePasteImage("intake", {
+    source: "paste",
+    currentTarget: currentTarget,
+    target: pasteTarget,
+    activeElement: bramActiveElementSummary(),
+    fileCount: imageFiles.length,
+    pendingBefore: bramPendingPastedImageSummary()
+  });
   // Suppress the default paste so the TextArea doesn't pick up any file-path
   // or filename text the OS may have placed on the clipboard alongside the
   // image (Finder copy-image, macOS screenshot tool, etc.).
   event.preventDefault();
   for (var j = 0; j < imageFiles.length; j++) {
-    window.bramStagePastedImage(imageFiles[j]);
+    window.bramStagePastedImage(imageFiles[j], pasteTarget);
   }
 });
 // Drag-and-drop image intake — parallels the paste handler above.
@@ -2094,18 +2182,27 @@ document.addEventListener("drop", function (event) {
   var imageFiles = bramImageFilesFromDataTransfer(event.dataTransfer);
   if (imageFiles.length === 0) return;
   window.bramPastedImageForCurrentTurn = true;
-  window.bramPastedImageTarget = window.bramCurrentPasteTarget
-    ? window.bramCurrentPasteTarget()
-    : "";
+  var currentTarget = (window.bramCurrentPasteTarget && window.bramCurrentPasteTarget()) || "";
+  var dropTarget = currentTarget || "message-agent";
+  window.bramPastedImageTarget = dropTarget;
+  bramTracePasteImage("intake", {
+    source: "drop",
+    currentTarget: currentTarget,
+    target: dropTarget,
+    activeElement: bramActiveElementSummary(),
+    fileCount: imageFiles.length,
+    pendingBefore: bramPendingPastedImageSummary()
+  });
   event.preventDefault();
   for (var i = 0; i < imageFiles.length; i++) {
-    window.bramStagePastedImage(imageFiles[i]);
+    window.bramStagePastedImage(imageFiles[i], dropTarget);
   }
 });
-window.bramStagePastedImage = function (file) {
+window.bramStagePastedImage = function (file, target) {
   if (!file) return Promise.reject(new Error("no file"));
   var type = file.type || "image/png";
   var url = "/__paste-image?type=" + encodeURIComponent(type);
+  var stageTarget = target || window.bramPastedImageTarget || "message-agent";
   // Read as ArrayBuffer first. `fetch(url, { body: file })` with a File body
   // in this Tauri webview wrote 0-byte files server-side (the host saw an
   // empty request body). Sending an ArrayBuffer via fetch reliably carries
@@ -2113,10 +2210,11 @@ window.bramStagePastedImage = function (file) {
   return new Promise(function (resolve, reject) {
     var reader = new FileReader();
     window.bramStagingPastedImages++;
+    bramTracePasteImage("stage-start", { target: stageTarget, type: type, staging: window.bramStagingPastedImages });
     reader.onload = function () {
       if (!reader.result || reader.result.byteLength === 0) {
         var empty = new Error("paste-image: empty clipboard image");
-        try { logToHost({ kind: "paste-image", stage: "empty" }); } catch (e) {}
+        bramTracePasteImage("empty", { target: stageTarget });
         window.bramStagingPastedImages = Math.max(0, (window.bramStagingPastedImages || 0) - 1);
         reject(empty);
         return;
@@ -2132,12 +2230,19 @@ window.bramStagePastedImage = function (file) {
         })
         .then(function (json) {
           if (!json || !json.path) throw new Error("paste-image: no path in response");
-          window.bramPendingPastedImages.push(json.path);
-          try { logToHost({ kind: "paste-image", stage: "staged", path: json.path, target: window.bramPastedImageTarget || "", bytes: reader.result.byteLength }); } catch (e) {}
+          var entry = { path: json.path, target: stageTarget };
+          window.bramPendingPastedImages.push(entry);
+          bramTracePasteImage("staged", {
+            path: json.path,
+            target: stageTarget,
+            currentGlobalTarget: window.bramPastedImageTarget || "",
+            bytes: reader.result.byteLength,
+            pendingAfter: bramPendingPastedImageSummary()
+          });
           resolve(json.path);
         })
         .catch(function (e) {
-          try { logToHost({ kind: "paste-image", stage: "error", message: String((e && e.message) || e) }); } catch (er) {}
+          bramTracePasteImage("error", { target: stageTarget, message: String((e && e.message) || e) });
           reject(e);
         })
         .finally(function () {
@@ -2145,7 +2250,7 @@ window.bramStagePastedImage = function (file) {
         });
     };
     reader.onerror = function () {
-      try { logToHost({ kind: "paste-image", stage: "read-error", message: String(reader.error || "") }); } catch (e) {}
+      bramTracePasteImage("read-error", { target: stageTarget, message: String(reader.error || "") });
       window.bramStagingPastedImages = Math.max(0, (window.bramStagingPastedImages || 0) - 1);
       reject(reader.error);
     };
@@ -2158,14 +2263,42 @@ window.bramConsumePastedImagePaths = function (target) {
     window.bramPastedImageForCurrentTurn = false;
     window.bramPastedImageTarget = "";
     window.bramLastConsumedPastedImages = [];
+    bramTracePasteImage("consume", { target: target || "", reason: "no-current-turn", consumed: [], retained: [] });
     return [];
   }
-  var paths = (window.bramPendingPastedImages || []).slice();
-  window.bramPendingPastedImages = [];
-  window.bramPastedImageForCurrentTurn = false;
-  window.bramPastedImageTarget = "";
-  window.bramLastConsumedPastedImages = paths.slice();
-  return paths;
+  var arr = window.bramPendingPastedImages || [];
+  if (!target) {
+    var allPaths = arr.map(function (e) { return e && e.path; }).filter(Boolean);
+    window.bramPendingPastedImages = [];
+    window.bramPastedImageForCurrentTurn = false;
+    window.bramPastedImageTarget = "";
+    window.bramLastConsumedPastedImages = allPaths.slice();
+    bramTracePasteImage("consume", { target: "", mode: "drain-all", consumed: allPaths, retained: [] });
+    return allPaths;
+  }
+  var kept = [];
+  var taken = [];
+  for (var i = 0; i < arr.length; i++) {
+    var e = arr[i];
+    if (e && (e.target || "") === target) {
+      if (e.path) taken.push(e.path);
+    } else if (e) {
+      kept.push(e);
+    }
+  }
+  window.bramPendingPastedImages = kept;
+  if (kept.length === 0) {
+    window.bramPastedImageForCurrentTurn = false;
+    window.bramPastedImageTarget = "";
+  }
+  window.bramLastConsumedPastedImages = taken.slice();
+  bramTracePasteImage("consume", {
+    target: target,
+    mode: "target",
+    consumed: taken,
+    retained: bramPendingPastedImageSummary()
+  });
+  return taken;
 };
 window.bramLastConsumedPastedImagePaths = function () {
   return (window.bramLastConsumedPastedImages || []).slice();
@@ -2173,10 +2306,13 @@ window.bramLastConsumedPastedImagePaths = function () {
 window.bramRemovePastedImagePath = function (path) {
   if (!path) return;
   var arr = window.bramPendingPastedImages || [];
-  var idx = arr.indexOf(path);
-  if (idx >= 0) {
-    arr.splice(idx, 1);
-    try { logToHost({ kind: "paste-image", stage: "removed", path: path }); } catch (e) {}
+  for (var i = 0; i < arr.length; i++) {
+    var e = arr[i];
+    if (e && e.path === path) {
+      arr.splice(i, 1);
+      bramTracePasteImage("removed", { path: path, target: e.target || "", pendingAfter: bramPendingPastedImageSummary() });
+      return;
+    }
   }
 };
 window.bramHasPendingPastedImages = function () {
@@ -2186,13 +2322,33 @@ window.bramPendingPastedImageCount = function () {
   return (window.bramPendingPastedImages || []).length;
 };
 window.bramPendingPastedImageCountForTarget = function (target) {
-  return (window.bramPendingPastedImages || []).length;
+  var t = target || "";
+  var count = (window.bramPendingPastedImages || []).filter(function (e) {
+    return e && (e.target || "") === t;
+  }).length;
+  bramTracePasteImage("query-count", { target: t, count: count }, "count:" + t);
+  return count;
 };
 window.bramPendingPastedImagePaths = function () {
-  return (window.bramPendingPastedImages || []).slice();
+  return (window.bramPendingPastedImages || []).map(function (e) { return e && e.path; }).filter(Boolean);
 };
 window.bramPendingPastedImagePathsForTarget = function (target) {
-  return (window.bramPendingPastedImages || []).slice();
+  var t = target || "";
+  var paths = (window.bramPendingPastedImages || [])
+    .filter(function (e) { return e && (e.target || "") === t; })
+    .map(function (e) { return e.path; })
+    .filter(Boolean);
+  bramTracePasteImage("query-paths", { target: t, count: paths.length, paths: paths }, "paths:" + t);
+  return paths;
+};
+window.bramTracePastedImageStrip = function (source, target, count, paths, staging) {
+  bramTracePasteImage("strip", {
+    source: source || "",
+    target: target || "",
+    count: count || 0,
+    paths: paths || [],
+    staging: staging || 0
+  }, "strip:" + (source || "") + ":" + (target || ""));
 };
 window.bramStagingPastedImageCount = function () {
   return window.bramStagingPastedImages || 0;

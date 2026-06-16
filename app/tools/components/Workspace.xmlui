@@ -493,7 +493,6 @@
               bindTo="message"
               enterSubmits="true"
               onInit="setWorklistVoiceTarget('message-agent'); window.__bramIframeTrace('paste-image-target', {stage: 'message-init', target: 'message-agent'})"
-              onDidChange="() => { setWorklistVoiceTarget('message-agent'); }"
               onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId(''); window.__bramIframeTrace('paste-image-target', {stage: 'message-focus', target: 'message-agent'})"
               enabled="{!submitting &amp;&amp; !awaitingResponse}"
               readOnly="{false}"

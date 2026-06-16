@@ -14,7 +14,6 @@
       source: (data &amp;&amp; data.source) || '',
       elapsed: (data &amp;&amp; data.elapsedText) || ''
     }); }" />
-  <DataSource id="turnState" url="/__turn-state" pollIntervalInSeconds="3" />
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
     onDidChange="(c) => { if (c.newValue) { if ($pathname !== '/') navigate('/'); window.scrollAllToTop(); } }" />

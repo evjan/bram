@@ -1,13 +1,12 @@
-<Component name="AgentMenu" var.menuTick="{0}">
-  <DataSource id="agentMenuTurnState" url="/__turn-state" pollIntervalInSeconds="3" />
+<Component name="AgentMenu" var.menuTick="{0}" var.agentMenuTurnState="{null}">
   <VStack
     width="100%"
     gap="$space-2"
-    onInit="subscribeTauriEvent('__bramAgentMenuTurnStateUnsub', 'turn-state-changed', (e) => menuTick = menuTick + 1); subscribeTauriEvent('__bramAgentMenuPtyUnsub', 'pty-menu-changed', (e) => menuTick = menuTick + 1); menuTick = menuTick + 1">
+    onInit="subscribeTauriEvent('__bramAgentMenuTurnStateUnsub', 'turn-state-changed', (e) => { agentMenuTurnState = (e &amp;&amp; e.payload) || null; menuTick = menuTick + 1; }); subscribeTauriEvent('__bramAgentMenuPtyUnsub', 'pty-menu-changed', (e) => menuTick = menuTick + 1); menuTick = menuTick + 1">
     <VStack
       gap="$space-2"
-      when="{menuTick >= 0 &amp;&amp; getAgentMenu(agentMenuTurnState.value)}"
-      var.effectivePendingMenu="{menuTick >= 0 ? getAgentMenu(agentMenuTurnState.value) : null}"
+      when="{menuTick >= 0 &amp;&amp; getAgentMenu(agentMenuTurnState)}"
+      var.effectivePendingMenu="{menuTick >= 0 ? getAgentMenu(agentMenuTurnState) : null}"
       var.menuPreviewOpen="{false}"
       width="100%"
       padding="$space-3"

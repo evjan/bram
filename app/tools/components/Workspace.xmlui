@@ -206,7 +206,6 @@
       }
     }" />
 
-  <DataSource id="turnStateDS" url="/__turn-state" pollIntervalInSeconds="3" />
   <Timer
     initialDelay="250"
     interval="1000"

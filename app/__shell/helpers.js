@@ -791,6 +791,23 @@ window.__bramSaveSplitterSize = function (key, sizes) {
   }
 };
 
+// Compute the next sort state for a clickable table-header. If the
+// column is already active, flip the direction; otherwise switch to
+// the new column with its default direction. Returns {field, dir}.
+window.toggleSort = function (currentField, currentDir, newField, defaultDir) {
+  if (currentField === newField) {
+    return { field: newField, dir: currentDir === "asc" ? "desc" : "asc" };
+  }
+  return { field: newField, dir: defaultDir };
+};
+
+// Render a table-header label with an active-column arrow.
+// "STATE ↑" / "STATE ↓" if currentField matches; "STATE" otherwise.
+window.sortLabel = function (label, currentField, currentDir, fieldName) {
+  if (currentField !== fieldName) return label;
+  return label + (currentDir === "asc" ? " ↑" : " ↓");
+};
+
 // Select the list to display in a searchable tab. If query is 2+
 // chars, return the search results (accepting either the raw-array
 // shape Sessions uses or the {results} wrapper used elsewhere).

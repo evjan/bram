@@ -204,24 +204,24 @@
             when="{!expandedNumber}"
             width="64px"
             noIndicator
-            onClick="if (sortField === 'state') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'state'; sortDir = 'desc'; }">
+            onClick="const r = window.toggleSort(sortField, sortDir, 'state', 'desc'); sortField = r.field; sortDir = r.dir">
             <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
-              value="{'STATE' + (sortField === 'state' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
+              value="{window.sortLabel('STATE', sortField, sortDir, 'state')}" />
           </Link>
           <Link
             width="*"
             noIndicator
-            onClick="if (sortField === 'title') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'title'; sortDir = 'asc'; }">
+            onClick="const r = window.toggleSort(sortField, sortDir, 'title', 'asc'); sortField = r.field; sortDir = r.dir">
             <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
-              value="{'TITLE' + (sortField === 'title' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
+              value="{window.sortLabel('TITLE', sortField, sortDir, 'title')}" />
           </Link>
           <Link
             when="{!expandedNumber}"
             width="90px"
             noIndicator
-            onClick="if (sortField === 'updatedAt') { sortDir = sortDir === 'asc' ? 'desc' : 'asc'; } else { sortField = 'updatedAt'; sortDir = 'desc'; }">
+            onClick="const r = window.toggleSort(sortField, sortDir, 'updatedAt', 'desc'); sortField = r.field; sortDir = r.dir">
             <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" color="$textColor-secondary"
-              value="{'AGE' + (sortField === 'updatedAt' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '')}" />
+              value="{window.sortLabel('AGE', sortField, sortDir, 'updatedAt')}" />
           </Link>
         </HStack>
         <Items data="{displayedIssues}">

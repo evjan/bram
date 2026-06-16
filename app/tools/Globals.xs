@@ -781,10 +781,16 @@ function resetVoiceTargetIfFeedbackPanelGone(selected, feedbackExpanded) {
 // 2026-06-16 trace: voice append fired, subsequent persist did not).
 function handleFeedbackVoiceArrival(feedbackBox, itemId, currentDrafts, currentExpandedIds) {
   iframeTrace('voice-helper', { stage: 'enter', itemId: itemId || '' });
-  appendVoiceTranscript(feedbackBox, worklistVoiceText);
-  iframeTrace('voice-helper', { stage: 'after-append', valueLen: (feedbackBox && feedbackBox.value ? String(feedbackBox.value).length : 0) });
+  const appendedValue = appendVoiceTranscript(feedbackBox, worklistVoiceText);
+  const existingValue = String(((currentDrafts || {})[itemId]) || '');
+  const nextValue = appendedValue === false ? existingValue : appendedValue;
+  iframeTrace('voice-helper', {
+    stage: 'after-append',
+    returnedLen: nextValue.length,
+    valueLen: (feedbackBox && feedbackBox.value ? String(feedbackBox.value).length : 0)
+  });
   const next = Object.assign({}, currentDrafts || {});
-  next[itemId] = feedbackBox.value || '';
+  next[itemId] = nextValue;
   iframeTrace('voice-helper', { stage: 'before-persist', nextLen: (next[itemId] || '').length });
   persistWorklistUiState({ expandedItemIds: currentExpandedIds || [], feedbackDraftsById: next });
   iframeTrace('voice-helper', { stage: 'after-persist' });
@@ -829,7 +835,7 @@ function appendVoiceTranscript(component, transcript) {
   };
   delay(0);
   restore();
-  return true;
+  return next;
 }
 
 // Toolbar PTY keystroke instrumentation for #182 incident 6: tracks

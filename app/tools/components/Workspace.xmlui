@@ -713,7 +713,7 @@
                     enabled="{!(submitting &amp;&amp; submittedItemId === $item.id)}" />
                   <ChangeListener
                     listenTo="{worklistVoiceSeq}"
-                    onDidChange="() => { if (worklistVoiceText &amp;&amp; worklistVoiceTarget === 'feedback' &amp;&amp; bramFocusedFeedbackItemId === $item.id) appendVoiceTranscript(feedbackBox, worklistVoiceText); feedbackVoiceRecording = false; worklistVoiceRecordingActive = false; feedbackVoiceRecordingItemId = ''; }" />
+                    onDidChange="() => { if (worklistVoiceText &amp;&amp; worklistVoiceTarget === 'feedback' &amp;&amp; bramFocusedFeedbackItemId === $item.id) feedbackDraftsById = handleFeedbackVoiceArrival(feedbackBox, $item.id, feedbackDraftsById, expandedItemIds); feedbackVoiceRecording = false; worklistVoiceRecordingActive = false; feedbackVoiceRecordingItemId = ''; }" />
                   <ChangeListener
                     listenTo="{awaitingResponse}"
                     onDidChange="(c) => { if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedItemId === $item.id &amp;&amp; feedbackBox &amp;&amp; feedbackBox.value) feedbackBox.setValue(''); }" />

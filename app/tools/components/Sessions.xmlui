@@ -45,7 +45,7 @@
 
   <variable
     name="displayedSessions"
-    value="{(query &amp;&amp; query.trim().length >= 2) ? (searchResults.value || []) : (sessionsList.value || [])}" />
+    value="{window.selectDisplayed(query, searchResults.value, sessionsList.value)}" />
 
   <variable
     name="selectedSession"

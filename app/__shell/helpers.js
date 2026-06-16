@@ -791,6 +791,19 @@ window.__bramSaveSplitterSize = function (key, sizes) {
   }
 };
 
+// Select the list to display in a searchable tab. If query is 2+
+// chars, return the search results (accepting either the raw-array
+// shape Sessions uses or the {results} wrapper used elsewhere).
+// Otherwise return the full list. Used by Feedback, History, Issues,
+// Sessions.
+window.selectDisplayed = function (query, searchValue, fullList) {
+  if (query && query.trim().length >= 2) {
+    if (Array.isArray(searchValue)) return searchValue;
+    return (searchValue && searchValue.results) || [];
+  }
+  return fullList || [];
+};
+
 // Normalize a path/URL for an XMLUI Image's src binding. Pass through
 // data: and http(s) URLs verbatim; otherwise route through the
 // /__file?path= shim with optional file://(localhost)? prefix stripped.

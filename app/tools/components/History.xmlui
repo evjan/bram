@@ -17,7 +17,7 @@
 
   <variable
     name="displayedHistory"
-    value="{(query &amp;&amp; query.trim().length >= 2) ? ((historySearch.value &amp;&amp; historySearch.value.results) || []) : (history.value || [])}" />
+    value="{window.selectDisplayed(query, historySearch.value, history.value)}" />
 
   <ModalDialog
     when="{!!selectedHistoryGroup}"

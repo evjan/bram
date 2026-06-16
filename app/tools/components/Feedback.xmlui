@@ -17,7 +17,7 @@
 
   <variable
     name="displayedFeedback"
-    value="{(query &amp;&amp; query.trim().length >= 2) ? ((feedbackSearch.value &amp;&amp; feedbackSearch.value.results) || []) : (feedbackList.value || [])}" />
+    value="{window.selectDisplayed(query, feedbackSearch.value, feedbackList.value)}" />
 
   <DataSource
     id="feedbackContent"

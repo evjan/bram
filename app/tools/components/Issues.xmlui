@@ -76,9 +76,7 @@
 
   <variable
     name="displayedIssues"
-    value="{(query &amp;&amp; query.trim().length >= 2)
-      ? ((searchResults.value &amp;&amp; searchResults.value.results) || [])
-      : sortedIssues.slice(0, issuesExpanded ? 999 : 10)}" />
+    value="{window.selectDisplayed(query, searchResults.value, sortedIssues.slice(0, issuesExpanded ? 999 : 10))}" />
 
   <variable
     name="selectedIssue"

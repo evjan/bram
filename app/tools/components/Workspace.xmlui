@@ -464,7 +464,7 @@
       fullScreen="true"
       onClose="fullscreenImage = null">
       <Image
-        src="{(fullscreenImage || '').startsWith('data:') || (fullscreenImage || '').startsWith('http') ? fullscreenImage : '/__file?path=' + encodeURIComponent((fullscreenImage || '').startsWith('file://') ? (fullscreenImage || '').replace(/^file:\/\/(localhost)?/, '') : (fullscreenImage || ''))}"
+        src="{window.imageSrcForPath(fullscreenImage)}"
         fit="contain"
         width="100%"
         height="100%" />

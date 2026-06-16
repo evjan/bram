@@ -791,6 +791,19 @@ window.__bramSaveSplitterSize = function (key, sizes) {
   }
 };
 
+// Normalize a path/URL for an XMLUI Image's src binding. Pass through
+// data: and http(s) URLs verbatim; otherwise route through the
+// /__file?path= shim with optional file://(localhost)? prefix stripped.
+// Used by every Image preview in the agent pane.
+window.imageSrcForPath = function (path) {
+  var p = path || "";
+  if (p.startsWith("data:") || p.startsWith("http")) return p;
+  var cleaned = p.startsWith("file://")
+    ? p.replace(/^file:\/\/(localhost)?/, "")
+    : p;
+  return "/__file?path=" + encodeURIComponent(cleaned);
+};
+
 // extractImagePaths — promoted from local to window in step 9 so other
 // window.__bram* helpers (sessionTurns / _parseLinesToTurns chain) can
 // share the same regex compile.

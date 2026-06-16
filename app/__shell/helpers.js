@@ -862,8 +862,13 @@ window.__bramSubmitWorklistMessageFast = function (text, voiceTarget) {
 window.__bramWithStagedImageMarkers = function (text, target, voiceTarget) {
   var requestedTarget = target || voiceTarget || "";
   var consumeTarget = requestedTarget;
-  if (requestedTarget === "feedback" && window.bramCurrentPasteTarget) {
-    consumeTarget = window.bramCurrentPasteTarget() || requestedTarget;
+  if (requestedTarget === "feedback") {
+    var focusedFeedback = window.bramActiveFocusedFeedbackItemIdMirror || "";
+    if (focusedFeedback) {
+      consumeTarget = "feedback:" + focusedFeedback;
+    } else if (window.bramCurrentPasteTarget) {
+      consumeTarget = window.bramCurrentPasteTarget() || requestedTarget;
+    }
   }
   bramTracePasteImage("with-markers", {
     requestedTarget: requestedTarget,

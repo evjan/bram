@@ -616,7 +616,11 @@ function submitWorklistMessageFast(text) {
   return window.__bramSubmitWorklistMessageFast(text, worklistVoiceTarget);
 }
 function withStagedImageMarkers(text, target) {
-  return window.__bramWithStagedImageMarkers(text, target, worklistVoiceTarget);
+  let resolvedTarget = target;
+  if (resolvedTarget === "feedback" && window.bramActiveFocusedFeedbackItemIdMirror) {
+    resolvedTarget = "feedback:" + window.bramActiveFocusedFeedbackItemIdMirror;
+  }
+  return window.__bramWithStagedImageMarkers(text, resolvedTarget, worklistVoiceTarget);
 }
 function recordWorklistFeedbackConversation(text) {
   return window.__bramRecordWorklistFeedbackConversation(text);

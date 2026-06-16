@@ -3,6 +3,17 @@
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
   <DataSource id="appInfo" url="/__app-info" />
+  <APICall
+    id="restartServer"
+    url="/__restart-server"
+    method="get"
+    onSuccess="rpInfo.refetch()" />
+  <APICall
+    id="runEnhanceSetup"
+    url="/__enhance/run"
+    method="get"
+    onSuccess="enhanceStatus.refetch()"
+    onError="setupCompleteProvider = ''; enhanceStatus.refetch()" />
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"
     onDidChange="(c) => { if (c.newValue) { if ($pathname !== '/') navigate('/'); window.scrollAllToTop(); } }" />
@@ -114,7 +125,7 @@
           <Button
             label="Restart project server"
             size="sm"
-            onClick="window.fetch('/__restart-server').then((r) => { if (r.ok) rpInfo.refetch(); })" />
+            onClick="restartServer.execute()" />
         </HStack>
       </VStack>
 
@@ -281,7 +292,7 @@
 <HStack>
   <Button
     label="{enhanceStatus.value && enhanceStatus.value.providerSetupKind === 'codex-hook-refresh' ? 'Refresh Coordination' : 'Run Setup'}"
-    onClick="setupCompleteProvider = enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider; window.fetch('/__enhance/run').then(() => enhanceStatus.refetch()).catch(() => { setupCompleteProvider = ''; enhanceStatus.refetch(); })" />
+    onClick="setupCompleteProvider = (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''; runEnhanceSetup.execute()" />
 </HStack>
   </VStack>
 

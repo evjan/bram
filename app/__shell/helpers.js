@@ -838,6 +838,59 @@ window.settingsInfoBodies = {
     "Both persist in .bram.json under traces.*.",
 };
 
+// "claude code" for the claude provider, raw provider name otherwise.
+// Falls back through mainAgentStatus.provider →
+// enhanceStatus.activeProvider → '' so the idle state still gets a
+// label. Guards mainAgentStatus against null (idle case).
+window.providerDisplayName = function (mainAgentStatus, enhanceStatusValue) {
+  var p =
+    (mainAgentStatus && mainAgentStatus.provider) ||
+    (enhanceStatusValue && enhanceStatusValue.activeProvider) ||
+    "";
+  return p === "claude" ? "claude code" : p;
+};
+
+// Should the idle-state provider label be visible? True when we have
+// some agent state, we're NOT currently working or finished, and
+// there's a provider name available to display.
+window.shouldShowIdleProvider = function (mainAgentStatus, enhanceStatusValue) {
+  if (!mainAgentStatus && !enhanceStatusValue) return false;
+  if (mainAgentStatus &&
+      (mainAgentStatus.state === "working" || mainAgentStatus.state === "finished")) {
+    return false;
+  }
+  return Boolean(
+    (mainAgentStatus && mainAgentStatus.provider) ||
+    (enhanceStatusValue && enhanceStatusValue.activeProvider)
+  );
+};
+
+// "<provider> <verb>…" for the working state.
+window.headerWorkingLabel = function (mainAgentStatus, enhanceStatusValue) {
+  var s = mainAgentStatus || {};
+  var verb = s.verb || "working";
+  return window.providerDisplayName(mainAgentStatus, enhanceStatusValue) + " " + verb + "…";
+};
+
+// "<provider> <verb> · <elapsed>" for the finished state. Verb
+// fall-through: status.verb (when finished) → status.verb (when
+// non-working) → lastSeenAgentVerb (when non-working) → "Finished".
+window.headerFinishedLabel = function (mainAgentStatus, enhanceStatusValue, lastSeenAgentVerb) {
+  var s = mainAgentStatus || {};
+  var verb;
+  if (s.state === "finished") {
+    verb = s.verb || "Finished";
+  } else if (s.verb && s.verb !== "working") {
+    verb = s.verb;
+  } else if (lastSeenAgentVerb && lastSeenAgentVerb !== "working") {
+    verb = lastSeenAgentVerb;
+  } else {
+    verb = "Finished";
+  }
+  var base = window.providerDisplayName(mainAgentStatus, enhanceStatusValue) + " " + verb;
+  return base + (s.elapsedText ? " · " + s.elapsedText : "");
+};
+
 // Compute the next sort state for a clickable table-header. If the
 // column is already active, flip the direction; otherwise switch to
 // the new column with its default direction. Returns {field, dir}.

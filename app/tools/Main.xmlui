@@ -167,12 +167,12 @@
       <HStack gap="$space-0_5" verticalAlignment="center" width="100%">
         <HStack width="16rem" minWidth="16rem" verticalAlignment="center" paddingHorizontal="$space-2">
           <Text
-            when="{(mainAgentStatus || enhanceStatus.value) &amp;&amp; !(mainAgentStatus &amp;&amp; (mainAgentStatus.state === 'working' || mainAgentStatus.state === 'finished')) &amp;&amp; ((mainAgentStatus &amp;&amp; mainAgentStatus.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider))}"
+            when="{window.shouldShowIdleProvider(mainAgentStatus, enhanceStatus.value)}"
             fontSize="$fontSize-md"
             fontStyle="italic"
             color="$textColor-secondary"
             overflowMode="none"
-            value="{(((mainAgentStatus &amp;&amp; mainAgentStatus.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider)) === 'claude' ? 'claude code' : ((mainAgentStatus &amp;&amp; mainAgentStatus.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''))}" />
+            value="{window.providerDisplayName(mainAgentStatus, enhanceStatus.value)}" />
           <HStack
             when="{mainAgentStatus &amp;&amp; mainAgentStatus.state === 'working'}"
             gap="$space-1"
@@ -184,7 +184,7 @@
               fontSize="$fontSize-md"
               fontStyle="italic"
               overflowMode="none"
-              value="{(mainAgentStatus.provider === 'claude' ? 'claude code' : (mainAgentStatus.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.verb || 'working') + '…'}" />
+              value="{window.headerWorkingLabel(mainAgentStatus, enhanceStatus.value)}" />
             <Text
               fontSize="$fontSize-md"
               color="$textColor-secondary"
@@ -200,7 +200,7 @@
               fontStyle="italic"
               color="$textColor-secondary"
               overflowMode="none"
-              value="{(mainAgentStatus.provider === 'claude' ? 'claude code' : (mainAgentStatus.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')) + ' ' + (mainAgentStatus.state === 'finished' ? (mainAgentStatus.verb || 'Finished') : ((mainAgentStatus.verb &amp;&amp; mainAgentStatus.verb !== 'working') ? mainAgentStatus.verb : ((lastSeenAgentVerb &amp;&amp; lastSeenAgentVerb !== 'working') ? lastSeenAgentVerb : 'Finished'))) + (mainAgentStatus.elapsedText ? ' · ' + mainAgentStatus.elapsedText : '')}" />
+              value="{window.headerFinishedLabel(mainAgentStatus, enhanceStatus.value, lastSeenAgentVerb)}" />
           </HStack>
         </HStack>
         <SpaceFiller />

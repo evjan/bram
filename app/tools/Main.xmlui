@@ -21,7 +21,7 @@
     listenTo="{mainAgentStatus &amp;&amp; mainAgentStatus.verb}"
     onDidChange="(c) => { if (c.newValue) { lastSeenAgentVerb = c.newValue; } }" />
   <ChangeListener
-    listenTo="{((mainAgentStatus &amp;&amp; mainAgentStatus.state) || '') + ':' + ((mainAgentStatus &amp;&amp; mainAgentStatus.verb) || '') + ':' + ((mainAgentStatus &amp;&amp; mainAgentStatus.provider) || '') + ':' + ((mainAgentStatus &amp;&amp; mainAgentStatus.source) || '') + ':' + ((mainAgentStatus &amp;&amp; mainAgentStatus.elapsedText) || '') + ':' + ((enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')}"
+    listenTo="{window.agentStatusSignature(mainAgentStatus, enhanceStatus.value)}"
     onDidChange="() => {
       const s = mainAgentStatus || {};
       const provider = s.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '';

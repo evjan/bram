@@ -838,6 +838,69 @@ window.settingsInfoBodies = {
     "Both persist in .bram.json under traces.*.",
 };
 
+// Signature for the agent-header-branch ChangeListener. Six fields:
+// state, verb, provider, source, elapsedText, enhance-active-provider.
+window.agentStatusSignature = function (mainAgentStatus, enhanceStatusValue) {
+  var s = mainAgentStatus || {};
+  return [
+    s.state || "",
+    s.verb || "",
+    s.provider || "",
+    s.source || "",
+    s.elapsedText || "",
+    (enhanceStatusValue && enhanceStatusValue.activeProvider) || "",
+  ].join(":");
+};
+
+// Signature for assistant-output cue: text plus image-URL list.
+window.assistantOutputSignature = function (exchangeValue) {
+  var e = exchangeValue || {};
+  return (e.assistantText || "") + "|" + ((e.assistantImages || []).join("|"));
+};
+
+// Signature for worklist-value transitions: presence flags + item
+// count + lifecycle flags.
+window.worklistValueSignature = function (worklist) {
+  var v = worklist && worklist.value;
+  return (
+    (v ? "V" : "-") + ":" +
+    ((v && v.exists) ? "E" : "-") + ":" +
+    ((v && v.items) ? v.items.length : 0) + ":" +
+    ((worklist && worklist.loaded) ? "L" : "-") + ":" +
+    ((worklist && worklist.isRefetching) ? "R" : "-")
+  );
+};
+
+// Per-tool flat signature for sticky-tools change detection. Four
+// fields per tool: id, name, summary, errored.
+window.toolsSignature = function (tools) {
+  return (tools || []).map(function (t) {
+    return (t.id || "") + ":" + (t.name || "") + ":" + (t.summary || "") + ":" + (t.errored ? "1" : "0");
+  }).join("|");
+};
+
+// Signature for the conversation-sync ChangeListener. Aggregates
+// last-exchange text + image hashes, the local submit-state vars,
+// the sticky-tools subkey, and the sticky-user-images subkey.
+window.conversationSyncSignature = function (lastExchange, lastAssistantStableText, submittedWorklistMessage, submittedItemId, submittedKind, awaitingResponse, stickyConversationTools, stickyConversationUserImages) {
+  var le = lastExchange || {};
+  var stickyToolsKey = (stickyConversationTools || []).map(function (t) {
+    return (t.id || "") + ":" + (t.name || "");
+  }).join("|");
+  return [
+    le.userText || "",
+    le.assistantText || "",
+    (le.assistantImages || []).join("|"),
+    lastAssistantStableText || "",
+    submittedWorklistMessage || "",
+    submittedItemId || "",
+    submittedKind || "",
+    awaitingResponse ? "1" : "0",
+    stickyToolsKey,
+    (stickyConversationUserImages || []).join("|"),
+  ].join(":");
+};
+
 // "claude code" for the claude provider, raw provider name otherwise.
 // Falls back through mainAgentStatus.provider →
 // enhanceStatus.activeProvider → '' so the idle state still gets a

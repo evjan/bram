@@ -107,7 +107,7 @@
        shows the host returning a transient empty payload, the fix is
        host-side (atomic read in /__worklist). -->
   <ChangeListener
-    listenTo="{(worklist.value ? 'V' : '-') + ':' + ((worklist.value &amp;&amp; worklist.value.exists) ? 'E' : '-') + ':' + ((worklist.value &amp;&amp; worklist.value.items || []).length) + ':' + (worklist.loaded ? 'L' : '-') + ':' + (worklist.isRefetching ? 'R' : '-')}"
+    listenTo="{window.worklistValueSignature(worklist)}"
     onDidChange="(c) => iframeTrace('worklist-value-transition', {
       prev: c.prevValue,
       next: c.newValue,
@@ -229,7 +229,7 @@
     listenTo="{awaitingResponse}"
     onDidChange="(c) => { if (c.newValue &amp;&amp; !c.prevValue) { agentTurnEndedSinceSubmit = false; } if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedKind === 'message' &amp;&amp; worklistInputBox) { worklistInputBox.setValue(''); clearWorklistDraft(); } }" />
   <ChangeListener
-    listenTo="{((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools) || []).map(t => (t.id || '') + ':' + (t.name || '') + ':' + (t.summary || '') + ':' + (t.errored ? '1' : '0')).join('|')}"
+    listenTo="{window.toolsSignature(conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools)}"
     onDidChange="() => {
       const tools = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools) || []).slice(-3);
       if (tools.length > 0) {
@@ -247,7 +247,7 @@
       }
     }" />
   <ChangeListener
-    listenTo="{((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '') + ':' + ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantText) || '') + ':' + (((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantImages) || []).join('|')) + ':' + (lastAssistantStableText || '') + ':' + (submittedWorklistMessage || '') + ':' + (submittedItemId || '') + ':' + (submittedKind || '') + ':' + (awaitingResponse ? '1' : '0') + ':' + ((stickyConversationTools || []).map(t => (t.id || '') + ':' + (t.name || '')).join('|')) + ':' + ((stickyConversationUserImages || []).join('|'))}"
+    listenTo="{window.conversationSyncSignature(conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange, lastAssistantStableText, submittedWorklistMessage, submittedItemId, submittedKind, awaitingResponse, stickyConversationTools, stickyConversationUserImages)}"
     onDidChange="() => {
       const decision = computeConversationSync({
         lastExchange: (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange) || null,

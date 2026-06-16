@@ -1,7 +1,7 @@
 <Component name="AgentLastResponse" var.fullscreenImage="{null}" var.replyArriving="{false}" var.lastResponseCueKey="{null}">
   <DataSource id="agentLastResponseExchange" url="/__last-exchange?t={lastExchangeRefreshTick}" />
   <ChangeListener
-    listenTo="{((agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantText) || '') + '|' + (((agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantImages) || []).join('|'))}"
+    listenTo="{window.assistantOutputSignature(agentLastResponseExchange.value)}"
     onDidChange="(change) => {
       const nextKey = change.newValue || '';
       if (lastResponseCueKey === null) {

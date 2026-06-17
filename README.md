@@ -82,8 +82,7 @@ rules.
 4. **XMLUI CLI - optional.** If you are developing an XMLUI app, or if you are developing `Bram` itself (the agent pane UI is an embedded XMLUI app) you will want the XMLUI MCP server. Follow the steps [here](https://xmlui.org/get-started) to get it.
 
 5. **`whisper-server` — optional.** Powers the 🎤 voice button in the
-   parent-shell toolbar and the agent pane. Tested on macOS for
-   now; see [Voice input](#voice-input) below for install and per-platform
+   parent-shell toolbar and the agent pane. Tested on macOS and Windows/WSL, see [Voice input](#voice-input) below for install and per-platform
    status.
 
 ## [Download the latest release →](https://github.com/judell/bram/releases/latest)
@@ -258,7 +257,7 @@ Bram supports two ways to dictate instead of type:
 
 Bram spawns the local `whisper-server` on the first record click and kills it on app exit — you don't manage the process; you just need the binary, `ffmpeg`, and a model file installed.
 
-### macOS — verified
+### macOS
 
 ```bash
 brew install whisper-cpp ffmpeg
@@ -301,7 +300,7 @@ That's the whole install. Bram handles starting/stopping `whisper-server` on its
 
 ### Linux
 
-The same `whisper-server` + `ffmpeg` + model setup is expected to work on non-WSL Linux, using the host process path and port `18080`.
+The same setup is expected to work on non-WSL Linux, using the host process path and port `18080`.
 
 ## Screen capture
 

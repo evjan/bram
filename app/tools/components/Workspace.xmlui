@@ -293,7 +293,7 @@
     paddingHorizontal="$space-6"
     paddingBottom="$space-10"
     gap="$space-6"
-    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', (correlationId, atHostMs) => { window.__bramIframeTrace('listener-fired', {context: 'talk-session-changed', correlation_id: correlationId || '', at_host_ms: atHostMs || 0, delta_to_emit_ms: atHostMs ? (Date.now() - atHostMs) : -1}); debounce(400, (id, hostMs) => { window.__bramIframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: id || '', at_host_ms: hostMs || 0, delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; bumpLastExchangeRefreshTick(); }, correlationId, atHostMs); });">
+    onInit="">
     <Theme
       maxWidth-ModalDialog="50vw"
       backgroundColor-ModalDialog="$color-surface-50"
@@ -408,6 +408,24 @@
 
     <VStack height="100%" gap="0" paddingTop="0">
       <!-- Form.persist restores unsent text across iframe reloads; TextArea.enterSubmits lets Enter submit the parent Form. -->
+      <External
+        id="talkSessionEvt"
+        initial="{null}"
+        subscribe="{window.bramSubscribeTalkSessionChange()}" />
+      <ChangeListener
+        listenTo="{talkSessionEvt.value &amp;&amp; talkSessionEvt.value.at}"
+        onDidChange="() => {
+          const ev = talkSessionEvt.value || null;
+          const correlationId = (ev &amp;&amp; ev.correlationId) || '';
+          const atHostMs = (ev &amp;&amp; ev.atHostMs) || 0;
+          window.__bramIframeTrace('listener-fired', {context: 'talk-session-changed', correlation_id: correlationId, at_host_ms: atHostMs, delta_to_emit_ms: atHostMs ? (Date.now() - atHostMs) : -1});
+          debounce(400, (id, hostMs) => {
+            window.__bramIframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: id || '', at_host_ms: hostMs || 0, delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1});
+            lastAssistantTickAt = Date.now();
+            lastAssistantTick = lastAssistantTick + 1;
+            bumpLastExchangeRefreshTick();
+          }, correlationId, atHostMs);
+        }" />
       <External
         id="voiceArrival"
         initial="{null}"

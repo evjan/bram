@@ -42,8 +42,14 @@
 
   <VStack
     padding="$space-6"
-    gap="$space-3"
-    onInit="subscribeTauriEvent('__bramFeedbackHistoryUnsub', 'feedback-history-changed', () => feedbackList.refetch())">
+    gap="$space-3">
+    <External
+      id="feedbackHistoryEvt"
+      initial="{null}"
+      subscribe="{window.bramSubscribeTauriEvent('feedback-history-changed')}" />
+    <ChangeListener
+      listenTo="{feedbackHistoryEvt.value &amp;&amp; feedbackHistoryEvt.value.tick}"
+      onDidChange="() => feedbackList.refetch()" />
     <HStack gap="$space-3" verticalAlignment="center">
       <Heading level="h2">Feedback</Heading>
       <SpaceFiller />

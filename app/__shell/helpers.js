@@ -3212,6 +3212,69 @@ window.bramSubscribeVoiceArrival = (function () {
   };
 })();
 
+// External-driven right-pane-size bridge. Same shape as the Tauri /
+// agent-status / agent-menu factories, but the underlying source is
+// the custom subscribeRightPaneSize API (window resize observer).
+window.bramSubscribeRightPaneSize = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var lastSize = null;
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bramSubscribeRightPaneSize] subscriber threw:", e); }
+      });
+    };
+    window.subscribeRightPaneSize(function (s) {
+      lastSize = s || null;
+      notify();
+    });
+    factory = function (emit) {
+      var fire = function () { emit(lastSize); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
+// External-driven talk-session-change bridge. Emits an event with
+// the correlation id and host timestamp on each talk-session
+// rotation.
+window.bramSubscribeTalkSessionChange = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var lastEvent = null;
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bramSubscribeTalkSessionChange] subscriber threw:", e); }
+      });
+    };
+    window.subscribeTalkSessionChange(
+      "__bramTalkSessionExternalUnsub",
+      function (correlationId, atHostMs) {
+        lastEvent = {
+          correlationId: correlationId || "",
+          atHostMs: atHostMs || 0,
+          at: Date.now(),
+        };
+        notify();
+      }
+    );
+    factory = function (emit) {
+      var fire = function () { emit(lastEvent); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
 // Generic External-driven Tauri event factory. Memoizes per event
 // name. Emits { tick, payload } on each fire — tick strictly
 // increments to guarantee identity-change for listenTo expressions;

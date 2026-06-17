@@ -144,10 +144,16 @@
     id="searchHitModalRef"
     query="{query}" />
 
+  <External
+    id="issuesAgentTurnEndEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('agent-turn-end')}" />
+  <ChangeListener
+    listenTo="{issuesAgentTurnEndEvt.value &amp;&amp; issuesAgentTurnEndEvt.value.tick}"
+    onDidChange="() => { if (newIssueSubmitting) { newIssueTurnEnded = true; issues.refetch(); } }" />
   <HSplitter
     height="100%"
     initialPrimarySize="{window.__bramRestoreSplitterSize('issues', '40%')}"
-    onInit="subscribeTauriEvent('__bramIssuesAgentTurnEndUnsub', 'agent-turn-end', () => { if (newIssueSubmitting) { newIssueTurnEnded = true; issues.refetch(); } });"
     onResize="(px) => window.__bramSaveSplitterSize('issues', px)">
 
     <VStack padding="$space-4" gap="$space-4" overflowY="auto">

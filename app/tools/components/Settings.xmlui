@@ -18,8 +18,14 @@
 
   <VStack
     padding="$space-6"
-    gap="$space-5"
-    onInit="subscribeTauriEvent('__bramSettingsUnlisten', 'settings-changed', () => settingsConfig.refetch())">
+    gap="$space-5">
+    <External
+      id="settingsChangedEvt"
+      initial="{null}"
+      subscribe="{window.bramSubscribeTauriEvent('settings-changed')}" />
+    <ChangeListener
+      listenTo="{settingsChangedEvt.value &amp;&amp; settingsChangedEvt.value.tick}"
+      onDidChange="() => settingsConfig.refetch()" />
 
     <Heading level="h2">Settings</Heading>
     <Text

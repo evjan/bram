@@ -42,9 +42,15 @@
     id="searchHitModalRef"
     query="{query}" />
 
+  <External
+    id="gitStatusEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('git-status-changed')}" />
+  <ChangeListener
+    listenTo="{gitStatusEvt.value &amp;&amp; gitStatusEvt.value.tick}"
+    onDidChange="() => commits.refetch()" />
   <HSplitter height="100%"
     initialPrimarySize="{window.__bramRestoreSplitterSize('commits', '50%')}"
-    onInit="subscribeTauriEvent('__bramCommitsUnlisten', 'git-status-changed', () => commits.refetch())"
     onResize="(px) => window.__bramSaveSplitterSize('commits', px)">
 
     <VStack padding="$space-4" gap="$space-4" overflowY="auto">

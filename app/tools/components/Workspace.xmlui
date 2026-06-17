@@ -293,67 +293,7 @@
     paddingHorizontal="$space-6"
     paddingBottom="$space-10"
     gap="$space-6"
-    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', (correlationId, atHostMs) => { window.__bramIframeTrace('listener-fired', {context: 'talk-session-changed', correlation_id: correlationId || '', at_host_ms: atHostMs || 0, delta_to_emit_ms: atHostMs ? (Date.now() - atHostMs) : -1}); debounce(400, (id, hostMs) => { window.__bramIframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: id || '', at_host_ms: hostMs || 0, delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; bumpLastExchangeRefreshTick(); }, correlationId, atHostMs); });
-    subscribeTauriEvent('__bramWorklistUnsub', 'worklist-changed', (e) => {
-      const payload = (e &amp;&amp; e.payload) || {};
-      window.__bramIframeTrace('listener-fired', {paths: payload.paths || [], correlation_id: payload.id || ''});
-      window.__bramIframeTrace('refetch-called', {context: 'worklist-changed'});
-      worklist.refetch();
-    });
-    subscribeTauriEvent('__bramWorkspaceAgentTurnEndUnsub', 'agent-turn-end', () => {
-      if (newItemSubmitting) {
-        newItemTurnEnded = true;
-        worklist.refetch();
-      }
-      if (awaitingResponse) {
-        lastAssistantTickAt = Date.now();
-        lastAssistantTick = lastAssistantTick + 1;
-        agentTurnEndedSinceSubmit = true;
-        if (window.__bramMarkTurnEnded('agent-turn-end', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
-          awaitingResponse = false;
-          submittedKind = null;
-          liveSubmittedAssistantText = '';
-          liveSubmittedAssistantKey = '';
-          window.__bramClearWorklistAwaiting(false);
-        }
-      }
-      if (window.bramConsumePastedImagePaths) {
-        window.bramConsumePastedImagePaths();
-        pendingPastedImageCount = 0;
-        pendingPastedImagePaths = [];
-        stagingPastedImageCount = 0;
-      }
-    });
-    subscribeTauriEvent('__bramWorkspaceAgentTurnKilledUnsub', 'agent-turn-killed', () => {
-      if (window.__bramMarkTurnEnded('agent-turn-killed', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
-        awaitingResponse = false;
-        submittedKind = null;
-        liveSubmittedAssistantText = '';
-        liveSubmittedAssistantKey = '';
-        window.__bramClearWorklistAwaiting(false);
-      }
-    });
-    subscribeTauriEvent('__bramInflightClaimUnsub', 'inflight-claim-changed', () => {
-      window.__bramIframeTrace('listener-fired', {context: 'inflight-claim-changed'});
-      inflightTick = inflightTick + 1;
-    });
-    subscribeTauriEvent('__bramConvPaneAgentStatusUnsub', 'agent-status-changed', (e) => {
-      const p = e &amp;&amp; e.payload;
-      agentIsWorking = !!(p &amp;&amp; p.state === 'working');
-      if (awaitingResponse &amp;&amp; p &amp;&amp; p.state !== 'working') {
-        window.__bramIframeTrace('refetch-called', {context: 'agent-status-changed', state: p.state || ''});
-        lastAssistantTickAt = Date.now();
-        lastAssistantTick = lastAssistantTick + 1;
-        if (p.state === 'finished' &amp;&amp; window.__bramMarkTurnEnded('agent-status-finished', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
-          awaitingResponse = false;
-          submittedKind = null;
-          liveSubmittedAssistantText = '';
-          liveSubmittedAssistantKey = '';
-          window.__bramClearWorklistAwaiting(false);
-        }
-      }
-    });
-">
+    onInit="subscribeTalkSessionChange('__bramWorkspaceTalkSessionUnsub', (correlationId, atHostMs) => { window.__bramIframeTrace('listener-fired', {context: 'talk-session-changed', correlation_id: correlationId || '', at_host_ms: atHostMs || 0, delta_to_emit_ms: atHostMs ? (Date.now() - atHostMs) : -1}); debounce(400, (id, hostMs) => { window.__bramIframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: id || '', at_host_ms: hostMs || 0, delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1}); lastAssistantTickAt = Date.now(); lastAssistantTick = lastAssistantTick + 1; bumpLastExchangeRefreshTick(); }, correlationId, atHostMs); });">
     <Theme
       maxWidth-ModalDialog="50vw"
       backgroundColor-ModalDialog="$color-surface-50"
@@ -468,21 +408,30 @@
 
     <VStack height="100%" gap="0" paddingTop="0">
       <!-- Form.persist restores unsent text across iframe reloads; TextArea.enterSubmits lets Enter submit the parent Form. -->
+      <External
+        id="voiceArrival"
+        initial="{null}"
+        subscribe="{window.bramSubscribeVoiceArrival()}" />
       <ChangeListener
-        listenTo="{worklistVoiceSeq}"
-        onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'message-agent' && messageComposer) messageComposer.appendVoice(worklistVoiceText); messageVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
+        listenTo="{voiceArrival.value &amp;&amp; voiceArrival.value.at}"
+        onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; if (t &amp;&amp; worklistVoiceTarget === 'message-agent' &amp;&amp; messageComposer) messageComposer.appendVoice(t); messageVoiceRecording = false; }" />
     <VStack gap="0" width="100%" height="*">
       <HStack horizontalAlignment="center" width="100%" marginBottom="$space-6">
         <MessageComposer
           id="messageComposer"
           disabled="{submitting || awaitingResponse}"
           voiceProcessing="{isWorklistVoiceProcessingTarget('message-agent')}"
-          micLabel="{messageVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
+          micLabel="{messageVoiceRecording ? '⏹' : '🎤'}"
           placeholder="Message agent: Enter sends, Shift+Enter newline, Ctrl-V/Cmd-V paste screenshot."
           onSend="(msg) => { window.__bramFlushWorklistDraft &amp;&amp; window.__bramFlushWorklistDraft(); const sent = window.__bramSubmitWorklistMessageFast(msg); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); window.__bramIframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = window.__bramSetWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = window.__bramMarkAwaitingStarted(); } }"
           onSkipWorklist="(raw) => { if (!raw) return; window.__bramFlushWorklistDraft &amp;&amp; window.__bramFlushWorklistDraft(); const sent = window.__bramSubmitWorklistMessageFast('skip-worklist: ' + raw); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); window.__bramIframeTrace('submitted-images', {kind: 'message-skip-worklist', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = window.__bramSetWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = window.__bramMarkAwaitingStarted(); } }"
-          onMicClick="setWorklistVoiceTarget('message-agent'); messageVoiceRecording = toggleVoiceForCurrentTarget(messageVoiceRecording)"
           onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId(''); window.__bramIframeTrace('paste-image-target', {stage: 'message-focus', target: 'message-agent'})" />
+        <Button
+          label="{messageVoiceRecording ? '⏹' : '🎤'}"
+          variant="ghost"
+          tooltip="Voice message"
+          enabled="{!submitting &amp;&amp; !awaitingResponse &amp;&amp; !isWorklistVoiceProcessingTarget('message-agent')}"
+          onClick="setWorklistVoiceTarget('message-agent'); messageVoiceRecording = toggleVoiceForCurrentTarget(messageVoiceRecording)" />
       </HStack>
 
     <HSplitter
@@ -674,8 +623,8 @@
                     fontSize="$fontSize-sm"
                     enabled="{!(submitting &amp;&amp; submittedItemId === $item.id)}" />
                   <ChangeListener
-                    listenTo="{worklistVoiceSeq}"
-                    onDidChange="() => { if (worklistVoiceText &amp;&amp; worklistVoiceTarget === 'feedback' &amp;&amp; bramFocusedFeedbackItemId === $item.id) feedbackDraftsById = handleFeedbackVoiceArrival(feedbackBox, $item.id, feedbackDraftsById, expandedItemIds); feedbackVoiceRecording = false; worklistVoiceRecordingActive = false; feedbackVoiceRecordingItemId = ''; }" />
+                    listenTo="{voiceArrival.value &amp;&amp; voiceArrival.value.at}"
+                    onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; const recordingId = feedbackVoiceRecordingItemId || ''; if (t &amp;&amp; worklistVoiceTarget === 'feedback' &amp;&amp; recordingId === $item.id) { const newValue = window.__bramAppendVoiceToBox(feedbackBox, t); if (newValue !== false) { const draftsNext = Object.assign({}, feedbackDraftsById || {}); draftsNext[$item.id] = newValue; feedbackDraftsById = draftsNext; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } } feedbackVoiceRecording = false; feedbackVoiceRecordingItemId = ''; }" />
                   <ChangeListener
                     listenTo="{awaitingResponse}"
                     onDidChange="(c) => { if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedItemId === $item.id &amp;&amp; feedbackBox &amp;&amp; feedbackBox.value) { feedbackBox.setValue(''); const next = Object.assign({}, feedbackDraftsById || {}); delete next[$item.id]; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } }" />
@@ -1091,7 +1040,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
           <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="Ask the agent to propose an item" />
           <ChangeListener
             listenTo="{worklistVoiceSeq}"
-            onDidChange="() => { if (worklistVoiceText && worklistVoiceTarget === 'new-item') appendVoiceTranscript(newItemBox, worklistVoiceText); newItemVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
+            onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; if (t && worklistVoiceTarget === 'new-item') window.appendVoiceTranscript(newItemBox, t); newItemVoiceRecording = false; }" />
           <HStack
             when="{newItemHelp &amp;&amp; !openIssues.value}"
             gap="$space-2"
@@ -1197,6 +1146,96 @@ TO APPLY items are unaffected — approve, iterate, or drop those individually. 
         </HStack>
       </VStack>
     </ModalDialog>
+
+    <External
+      id="worklistChangedEvt"
+      initial="{null}"
+      subscribe="{window.bramSubscribeTauriEvent('worklist-changed')}" />
+    <ChangeListener
+      listenTo="{worklistChangedEvt.value &amp;&amp; worklistChangedEvt.value.tick}"
+      onDidChange="() => {
+        const payload = (worklistChangedEvt.value &amp;&amp; worklistChangedEvt.value.payload) || {};
+        window.__bramIframeTrace('listener-fired', {paths: payload.paths || [], correlation_id: payload.id || ''});
+        window.__bramIframeTrace('refetch-called', {context: 'worklist-changed'});
+        worklist.refetch();
+      }" />
+    <External
+      id="agentTurnEndEvt"
+      initial="{null}"
+      subscribe="{window.bramSubscribeTauriEvent('agent-turn-end')}" />
+    <ChangeListener
+      listenTo="{agentTurnEndEvt.value &amp;&amp; agentTurnEndEvt.value.tick}"
+      onDidChange="() => {
+        if (newItemSubmitting) {
+          newItemTurnEnded = true;
+          worklist.refetch();
+        }
+        if (awaitingResponse) {
+          lastAssistantTickAt = Date.now();
+          lastAssistantTick = lastAssistantTick + 1;
+          agentTurnEndedSinceSubmit = true;
+          if (window.__bramMarkTurnEnded('agent-turn-end', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
+            awaitingResponse = false;
+            submittedKind = null;
+            liveSubmittedAssistantText = '';
+            liveSubmittedAssistantKey = '';
+            window.__bramClearWorklistAwaiting(false);
+          }
+        }
+        if (window.bramConsumePastedImagePaths) {
+          window.bramConsumePastedImagePaths();
+          pendingPastedImageCount = 0;
+          pendingPastedImagePaths = [];
+          stagingPastedImageCount = 0;
+        }
+      }" />
+    <External
+      id="agentTurnKilledEvt"
+      initial="{null}"
+      subscribe="{window.bramSubscribeTauriEvent('agent-turn-killed')}" />
+    <ChangeListener
+      listenTo="{agentTurnKilledEvt.value &amp;&amp; agentTurnKilledEvt.value.tick}"
+      onDidChange="() => {
+        if (window.__bramMarkTurnEnded('agent-turn-killed', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
+          awaitingResponse = false;
+          submittedKind = null;
+          liveSubmittedAssistantText = '';
+          liveSubmittedAssistantKey = '';
+          window.__bramClearWorklistAwaiting(false);
+        }
+      }" />
+    <External
+      id="inflightClaimChangedEvt"
+      initial="{null}"
+      subscribe="{window.bramSubscribeTauriEvent('inflight-claim-changed')}" />
+    <ChangeListener
+      listenTo="{inflightClaimChangedEvt.value &amp;&amp; inflightClaimChangedEvt.value.tick}"
+      onDidChange="() => {
+        window.__bramIframeTrace('listener-fired', {context: 'inflight-claim-changed'});
+        inflightTick = inflightTick + 1;
+      }" />
+    <External
+      id="convPaneAgentStatusEvt"
+      initial="{null}"
+      subscribe="{window.bramSubscribeTauriEvent('agent-status-changed')}" />
+    <ChangeListener
+      listenTo="{convPaneAgentStatusEvt.value &amp;&amp; convPaneAgentStatusEvt.value.tick}"
+      onDidChange="() => {
+        const p = (convPaneAgentStatusEvt.value &amp;&amp; convPaneAgentStatusEvt.value.payload) || null;
+        agentIsWorking = !!(p &amp;&amp; p.state === 'working');
+        if (awaitingResponse &amp;&amp; p &amp;&amp; p.state !== 'working') {
+          window.__bramIframeTrace('refetch-called', {context: 'agent-status-changed', state: p.state || ''});
+          lastAssistantTickAt = Date.now();
+          lastAssistantTick = lastAssistantTick + 1;
+          if (p.state === 'finished' &amp;&amp; window.__bramMarkTurnEnded('agent-status-finished', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
+            awaitingResponse = false;
+            submittedKind = null;
+            liveSubmittedAssistantText = '';
+            liveSubmittedAssistantKey = '';
+            window.__bramClearWorklistAwaiting(false);
+          }
+        }
+      }" />
 
   </VStack>
 </Component>

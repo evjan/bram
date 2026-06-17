@@ -3122,6 +3122,134 @@ window.bramSubscribeEnhanceStatusTick = (function () {
   };
 })();
 
+// Voice transcript scratch setter — invoked from xs arrow bodies that
+// can't write `window.foo = x` as an LValue (XMLUI's expression engine
+// rejects member-expression LValues with "Left value variable not
+// found in scope" — see bram-trace 2026-06-17 00:43:03). Plain JS, no
+// xs evaluator involvement.
+// Plain-JS append helper. xs `function foo()` declarations do NOT
+// reliably hoist onto window from the iframe's runtime context — see
+// 2026-06-17 voice debugging where window.appendVoiceTranscript and
+// window.bumpWorklistVoiceSeq calls returned without entering the
+// function body. Defining the append helper directly on window
+// guarantees the call lands.
+window.__bramAppendVoiceToBox = function (component, transcript) {
+  try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "windowAppend-enter", tLen: (transcript || "").length, hasComponent: !!component }); } catch (e) {}
+  if (!component || !transcript) {
+    try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "windowAppend-early-return", reason: !component ? "no-component" : "no-transcript" }); } catch (e) {}
+    return false;
+  }
+  var current = String(component.value || "");
+  var cleaned = transcript.replace(/\r?\n/g, " ").replace(/[ \t]+/g, " ").trim();
+  if (!cleaned) {
+    try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "windowAppend-cleaned-empty" }); } catch (e) {}
+    return false;
+  }
+  var spacer = current && !/\s$/.test(current) ? " " : "";
+  var next = current + spacer + cleaned;
+  try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "windowAppend-calling-setValue", currentLen: current.length, nextLen: next.length }); } catch (e) {}
+  try {
+    component.setValue(next);
+    try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "windowAppend-after-setValue" }); } catch (e) {}
+  } catch (e) {
+    try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "windowAppend-setValue-threw", error: String(e && e.message) }); } catch (e2) {}
+    return false;
+  }
+  try {
+    if (typeof component.focus === "function") component.focus();
+    if (typeof component.setSelectionRange === "function") component.setSelectionRange(next.length, next.length);
+  } catch (e) {}
+  return next;
+};
+
+window.__bramSetLatestVoiceState = function (t, meta) {
+  try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "setLatest-enter", tLen: (t || "").length }); } catch (e) {}
+  window.__bramLatestVoiceTranscript = t || "";
+  window.__bramLatestVoiceMeta = meta || null;
+  try {
+    window.dispatchEvent(new CustomEvent("bram:voice-arrival", {
+      detail: { transcript: t || "", meta: meta || null, at: Date.now() },
+    }));
+    try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "setLatest-dispatched" }); } catch (e) {}
+  } catch (e) {
+    console.error("[bram] voice-arrival dispatch failed:", e);
+  }
+};
+
+// External-driven voice-arrival bridge. xs-side writes to module vars
+// (worklistVoiceSeq, worklistVoiceText) don't propagate through XMLUI's
+// reactive system when triggered from arrow-body callbacks (see
+// 2026-06-17 voice debugging). This External listens to a window-side
+// CustomEvent that __bramSetLatestVoiceState dispatches, giving the
+// XMLUI reactivity layer a path it can observe.
+window.bramSubscribeVoiceArrival = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var lastEvent = null;
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bram] voice-arrival subscriber threw:", e); }
+      });
+    };
+    window.addEventListener("bram:voice-arrival", function (evt) {
+      lastEvent = (evt && evt.detail) || null;
+      try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "external-event-received", tLen: ((lastEvent && lastEvent.transcript) || "").length, subscribers: subscribers.size }); } catch (e) {}
+      notify();
+    });
+    factory = function (emit) {
+      var fire = function () {
+        try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "external-fire", hasEvent: !!lastEvent }); } catch (e) {}
+        emit(lastEvent);
+      };
+      subscribers.add(fire);
+      try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "external-subscribed", totalSubscribers: subscribers.size }); } catch (e) {}
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
+// Generic External-driven Tauri event factory. Memoizes per event
+// name. Emits { tick, payload } on each fire — tick strictly
+// increments to guarantee identity-change for listenTo expressions;
+// payload carries the event data for consumers that need it.
+window.bramSubscribeTauriEvent = (function () {
+  var byEvent = Object.create(null);
+  return function (eventName) {
+    if (byEvent[eventName]) return byEvent[eventName];
+    var subscribers = new Set();
+    var tick = 0;
+    var lastPayload = null;
+    window.subscribeTauriEvent(
+      "__bramTauriExternal_" + eventName,
+      eventName,
+      function (e) {
+        tick += 1;
+        lastPayload = (e && e.payload) || null;
+        var snapshot = { tick: tick, payload: lastPayload };
+        subscribers.forEach(function (fn) {
+          try { fn(snapshot); } catch (err) {
+            console.error("[bramSubscribeTauriEvent] subscriber threw:", err);
+          }
+        });
+      }
+    );
+    var factory = function (emit) {
+      var fire = function (snapshot) {
+        emit(snapshot || { tick: tick, payload: lastPayload });
+      };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    byEvent[eventName] = factory;
+    return factory;
+  };
+})();
+
 // External-driven AgentMenu bridge — emits the current pending menu
 // when either Tauri event fires. Subscribes lazily on first call so
 // the native subscribers above (registered at module load) are

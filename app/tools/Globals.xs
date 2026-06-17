@@ -443,15 +443,30 @@ var worklistVoiceRecordingActive = false;
 
 
 function setWorklistVoiceTarget(target) {
+  window.__bramIframeTrace('voice-trace', { stage: 'setTarget-enter', target: target || '', current: worklistVoiceTarget || '' });
   const next = target || '';
   window.bramSetActiveVoiceTargetMirror(next);
-  if (worklistVoiceTarget === next) return;
+  if (worklistVoiceTarget === next) {
+    window.__bramIframeTrace('voice-trace', { stage: 'setTarget-noop', target: next });
+    return;
+  }
   worklistVoiceTarget = next;
-  iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'target' });
+  window.__bramIframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'target' });
+  window.__bramIframeTrace('voice-trace', { stage: 'setTarget-exit', target: worklistVoiceTarget || '' });
 }
 
 function isWorklistVoiceProcessingTarget(target) {
   return !!worklistVoiceProcessing && worklistVoiceProcessingTarget === (target || '');
+}
+
+// Top-level xs function — writes to module-scope worklistVoiceSeq
+// correctly. The arrow body inside toggleVoiceForCurrentTarget's
+// voiceStop callback can't do this assignment (closure-local bug);
+// see fix-voice-iframetrace-bare-name draft for full background.
+function bumpWorklistVoiceSeq() {
+  const before = worklistVoiceSeq;
+  worklistVoiceSeq = worklistVoiceSeq + 1;
+  window.__bramIframeTrace('voice-trace', { stage: 'bumpSeq', before: before, after: worklistVoiceSeq });
 }
 
 var bramFocusedFeedbackItemId = '';
@@ -529,33 +544,43 @@ function resetVoiceTargetIfFeedbackPanelGone(selected, feedbackExpanded) {
 // silently dropping their tail statements in this codebase (verified
 // 2026-06-16 trace: voice append fired, subsequent persist did not).
 function handleFeedbackVoiceArrival(feedbackBox, itemId, currentDrafts, currentExpandedIds) {
-  iframeTrace('voice-helper', { stage: 'enter', itemId: itemId || '' });
-  const appendedValue = appendVoiceTranscript(feedbackBox, worklistVoiceText);
+  window.__bramIframeTrace('voice-helper', { stage: 'enter', itemId: itemId || '' });
+  const transcript = (typeof window !== 'undefined' && window.__bramLatestVoiceTranscript) || worklistVoiceText || '';
+  const appendedValue = appendVoiceTranscript(feedbackBox, transcript);
   const existingValue = String(((currentDrafts || {})[itemId]) || '');
   const nextValue = appendedValue === false ? existingValue : appendedValue;
-  iframeTrace('voice-helper', {
+  window.__bramIframeTrace('voice-helper', {
     stage: 'after-append',
     returnedLen: nextValue.length,
     valueLen: (feedbackBox && feedbackBox.value ? String(feedbackBox.value).length : 0)
   });
   const next = Object.assign({}, currentDrafts || {});
   next[itemId] = nextValue;
-  iframeTrace('voice-helper', { stage: 'before-persist', nextLen: (next[itemId] || '').length });
+  window.__bramIframeTrace('voice-helper', { stage: 'before-persist', nextLen: (next[itemId] || '').length });
   persistWorklistUiState({ expandedItemIds: currentExpandedIds || [], feedbackDraftsById: next });
-  iframeTrace('voice-helper', { stage: 'after-persist' });
+  window.__bramIframeTrace('voice-helper', { stage: 'after-persist' });
   return next;
 }
 
 function appendVoiceTranscript(component, transcript) {
-  if (!component || !transcript) return false;
+  window.__bramIframeTrace('voice-trace', { stage: 'appendVoice-enter', tLen: (transcript || '').length, hasComponent: !!component });
+  if (!component || !transcript) {
+    window.__bramIframeTrace('voice-trace', { stage: 'appendVoice-early-return', reason: !component ? 'no-component' : 'no-transcript' });
+    return false;
+  }
   const meta = worklistVoiceMeta || {};
   const current = String(component.value || '');
   const cleaned = transcript.replace(/\r?\n/g, ' ').replace(/[ \t]+/g, ' ').trim();
-  if (!cleaned) return false;
+  if (!cleaned) {
+    window.__bramIframeTrace('voice-trace', { stage: 'appendVoice-cleaned-empty' });
+    return false;
+  }
   const spacer = current && !/\s$/.test(current) ? ' ' : '';
   const appended = spacer + cleaned;
   const next = current + appended;
+  window.__bramIframeTrace('voice-trace', { stage: 'appendVoice-calling-setValue', currentLen: current.length, nextLen: next.length });
   component.setValue(next);
+  window.__bramIframeTrace('voice-trace', { stage: 'appendVoice-after-setValue' });
   const restore = () => {
     let focused = false;
     let cursorAtEnd = false;
@@ -567,7 +592,7 @@ function appendVoiceTranscript(component, transcript) {
       component.setSelectionRange(next.length, next.length);
       cursorAtEnd = true;
     }
-    iframeTrace('voice-input', {
+    window.__bramIframeTrace('voice-input', {
       target: worklistVoiceTarget || 'message-agent',
       stage: 'append',
       requestId: meta.requestId || null,
@@ -629,24 +654,32 @@ function getAgentMenu(turnState) {
 // onClick handlers — resolve as expected.
 
 function toggleVoiceForCurrentTarget(recording) {
+  window.__bramIframeTrace('voice-trace', { stage: 'toggle-enter', recording: !!recording, target: worklistVoiceTarget || '' });
   if (recording) {
     const stoppingTarget = worklistVoiceTarget || '';
     worklistVoiceRecordingActive = false;
     worklistVoiceProcessing = true;
     worklistVoiceProcessingTarget = stoppingTarget;
-    iframeTrace('voice-input', { target: stoppingTarget || 'terminal', stage: 'processing-start' });
+    window.__bramIframeTrace('voice-input', { target: stoppingTarget || 'terminal', stage: 'processing-start' });
+    window.__bramIframeTrace('voice-trace', { stage: 'toggle-calling-voiceStop', target: stoppingTarget });
     voiceStop((t, meta) => {
+      window.__bramIframeTrace('voice-trace', { stage: 'voiceStop-cb-enter', tLen: (t || '').length, target: worklistVoiceTarget || '' });
       worklistVoiceProcessing = false;
       worklistVoiceProcessingTarget = '';
       if (!t) {
-        iframeTrace('voice-input', { target: stoppingTarget || 'terminal', stage: 'processing-empty' });
+        window.__bramIframeTrace('voice-input', { target: stoppingTarget || 'terminal', stage: 'processing-empty' });
         return;
       }
       if (window.__bramIsWorklistTextVoiceTarget(worklistVoiceTarget)) {
+        window.__bramIframeTrace('voice-trace', { stage: 'voiceStop-cb-text-target-branch', target: worklistVoiceTarget });
         worklistVoiceText = t;
+        window.__bramIframeTrace('voice-trace', { stage: 'voiceStop-cb-after-text-assign' });
+        window.__bramSetLatestVoiceState(t, meta);
+        window.__bramIframeTrace('voice-trace', { stage: 'voiceStop-cb-after-setLatest' });
         worklistVoiceMeta = meta || null;
-        worklistVoiceSeq = worklistVoiceSeq + 1;
-        iframeTrace('voice-input', {
+        window.bumpWorklistVoiceSeq();
+        window.__bramIframeTrace('voice-trace', { stage: 'voiceStop-cb-after-bumpSeq' });
+        window.__bramIframeTrace('voice-input', {
           target: worklistVoiceTarget || 'message-agent',
           stage: 'stop',
           requestId: meta && meta.requestId ? meta.requestId : null,
@@ -654,21 +687,28 @@ function toggleVoiceForCurrentTarget(recording) {
           stopToResultMs: meta && typeof meta.stopToResultMs === 'number' ? meta.stopToResultMs : null
         });
       } else {
-        iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'fallback-terminal' });
+        window.__bramIframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'fallback-terminal' });
         toTurn('voice: ' + t);
       }
-      iframeTrace('voice-input', { target: stoppingTarget || 'terminal', stage: 'processing-end' });
+      window.__bramIframeTrace('voice-input', { target: stoppingTarget || 'terminal', stage: 'processing-end' });
+      window.__bramIframeTrace('voice-trace', { stage: 'voiceStop-cb-exit' });
     });
+    window.__bramIframeTrace('voice-trace', { stage: 'toggle-exit-stop', returning: false });
     return false;
   }
-  iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'start' });
+  window.__bramIframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'start' });
+  window.__bramIframeTrace('voice-trace', { stage: 'toggle-start-branch', target: worklistVoiceTarget || '' });
   worklistVoiceRecordingActive = false;
   worklistVoiceProcessing = false;
   worklistVoiceProcessingTarget = '';
+  window.__bramIframeTrace('voice-trace', { stage: 'toggle-calling-voiceStart', target: worklistVoiceTarget || '' });
   voiceStart(() => {
+    window.__bramIframeTrace('voice-trace', { stage: 'voiceStart-cb-enter' });
     worklistVoiceRecordingActive = true;
-    iframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'recording-started' });
+    window.__bramIframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'recording-started' });
+    window.__bramIframeTrace('voice-trace', { stage: 'voiceStart-cb-exit' });
   });
+  window.__bramIframeTrace('voice-trace', { stage: 'toggle-exit-start', returning: true });
   return true;
 }
 

@@ -1,11 +1,11 @@
-<Component name="MessageComposer">
+<Component name="MessageComposer"
+  method.getValue="() => (worklistInputBox &amp;&amp; worklistInputBox.value) || ''"
+  method.setValue="(v) => { if (worklistInputBox) worklistInputBox.setValue(v); }"
+  method.appendVoice="(t) => { window.__bramIframeTrace('voice-trace', {stage: 'composer-appendVoice', tLen: (t || '').length, hasInputBox: !!worklistInputBox}); if (worklistInputBox) window.__bramAppendVoiceToBox(worklistInputBox, t); }">
   <event name="send" />
   <event name="skipWorklist" />
   <event name="micClick" />
   <event name="gotFocus" />
-  <method name="getValue">return (worklistInputBox &amp;&amp; worklistInputBox.value) || '';</method>
-  <method name="setValue">if (worklistInputBox) worklistInputBox.setValue($param);</method>
-  <method name="appendVoice">if (worklistInputBox) appendVoiceTranscript(worklistInputBox, $param);</method>
   <Form
     width="90%"
     data="{{ message: window.__bramRestoreWorklistDraft() }}"
@@ -20,7 +20,6 @@
         id="worklistInputBox"
         bindTo="message"
         enterSubmits="true"
-        onInit="emitEvent('gotFocus')"
         onGotFocus="emitEvent('gotFocus')"
         enabled="{!$props.disabled}"
         readOnly="{false}"
@@ -29,12 +28,6 @@
         minRows="1"
         maxRows="6"
         width="*" />
-      <Button
-        label="{$props.micLabel}"
-        variant="ghost"
-        tooltip="Voice message"
-        enabled="{!$props.disabled &amp;&amp; !$props.voiceProcessing}"
-        onClick="emitEvent('micClick')" />
       <Button
         label="skip worklist"
         variant="ghost"

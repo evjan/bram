@@ -732,18 +732,26 @@
                   gap="$space-2"
                   paddingTop="$space-2">
                   <ExpandableItem
-                    when="{$item.before}"
-                    summary="Before"
+                    when="{$item.before || $item.after}"
+                    summary="Details"
                     initiallyExpanded="false"
                     fullWidthSummary="true">
-                    <Markdown content="{$item.before}" />
-                  </ExpandableItem>
-                  <ExpandableItem
-                    when="{$item.after}"
-                    summary="After"
-                    initiallyExpanded="false"
-                    fullWidthSummary="true">
-                    <Markdown content="{$item.after}" />
+                    <VStack gap="$space-2">
+                      <ExpandableItem
+                        when="{$item.before}"
+                        summary="Before"
+                        initiallyExpanded="false"
+                        fullWidthSummary="true">
+                        <Markdown content="{$item.before}" />
+                      </ExpandableItem>
+                      <ExpandableItem
+                        when="{$item.after}"
+                        summary="After"
+                        initiallyExpanded="false"
+                        fullWidthSummary="true">
+                        <Markdown content="{$item.after}" />
+                      </ExpandableItem>
+                    </VStack>
                   </ExpandableItem>
                   <ExpandableItem
                     when="{$item.diff}"

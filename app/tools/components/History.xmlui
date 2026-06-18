@@ -17,6 +17,7 @@
     name="displayedHistory"
     value="{window.selectDisplayed(query, historySearch.value, history.value)}" />
 
+  <Theme maxWidth-ModalDialog="80%">
   <ModalDialog
     when="{!!selectedHistoryGroup}"
     title="{selectedHistoryGroup ? selectedHistoryGroup.title : 'History item'}"
@@ -64,6 +65,7 @@
       </VStack>
     </VStack>
   </ModalDialog>
+  </Theme>
 
   <SearchHitModal
     id="searchHitModalRef"

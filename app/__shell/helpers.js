@@ -800,10 +800,15 @@ window.settingsInfoBodies = {
     "(claude --continue, codex resume, etc.). Restart Bram for changes " +
     "to take effect.",
   batchCommitActions:
-    "Adds Approve all / Drop all controls to the Worklist tab when 2 or " +
-    "more TO COMMIT items are present. Approve all authorizes the agent " +
-    "to commit every TO COMMIT item in one turn. Drop all removes them " +
-    "from the worklist (on-disk edits stay).",
+    "Adds Approve all / Drop all controls to the Worklist tab, shown only " +
+    "when 2 or more TO COMMIT (applied) items are present. Approve all " +
+    "authorizes the agent to commit every TO COMMIT item in one turn; the " +
+    "agent picks commit granularity (typically one bundled commit for a " +
+    "coordinated change). Drop all removes every TO COMMIT item from the " +
+    "worklist, but the on-disk file edits stay (same as a single Drop) — " +
+    "ask the agent to discard them if you want them gone. TO APPLY items " +
+    "are unaffected. Issues flagged via closesIssues are not auto-closed " +
+    "in a batch; close them via a single-item Approve or ask the agent.",
   ui:
     "Minimize target app — drives the agent pane splitter to give the " +
     "agent tools maximum room. The target app stays mounted at the " +

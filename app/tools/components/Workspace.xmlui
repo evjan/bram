@@ -593,12 +593,6 @@
             variant="outlined"
             enabled="{!submitting}"
             onClick="(() => { const ids = (worklist.value.items || []).filter(i => (i.status || 'proposed') === 'applied'); window.__bramIframeTrace('click', {target: 'drop-all', count: ids.length}); expandedItemIds = []; feedbackDraftsById = {}; window.__bramClearWorklistUiState(); submitting = true; actionProgressKind = 'drop'; actionProgressTick = 0; submittedItemId = ids.length > 0 ? ids[0].id : null; submittedKind = window.__bramSetWorklistSubmittedKind('action'); window.__bramIframeTrace('inflight-set', {item: submittedItemId, via: 'click', target: 'drop-all'}); toTurn('drop: ' + window.__bramBuildBatchDropPayload(worklist.value.items, '')); })()" />
-          <Button
-            label="ⓘ"
-            variant="ghost"
-            size="xs"
-            tooltip="What do these batch actions do?"
-            onClick="batchHelpDialog.open()" />
         </HStack>
         <Items data="{worklist.value.items}">
           <VStack gap="$space-1">
@@ -777,7 +771,7 @@
                   gap="$space-2"
                   paddingTop="$space-2">
                   <ExpandableItem
-                    when="{$item.before || $item.after}"
+                    when="{$item.before || $item.after || $item.diff}"
                     summary="Details"
                     initiallyExpanded="false"
                     fullWidthSummary="true">
@@ -796,20 +790,20 @@
                         fullWidthSummary="true">
                         <Markdown content="{$item.after}" />
                       </ExpandableItem>
-                    </VStack>
-                  </ExpandableItem>
-                  <ExpandableItem
-                    when="{$item.diff}"
-                    summary="Diff"
-                    initiallyExpanded="false"
-                    fullWidthSummary="true">
-                    <VStack gap="$space-1">
-                      <DiffView text="{($item.diff || '').slice(0, 20000)}" />
-                      <Text
-                        when="{($item.diff || '').length > 20000}"
-                        fontSize="$fontSize-xs"
-                        color="$textColor-secondary"
-                        value="{'Diff preview truncated at 20 KB for responsiveness.'}" />
+                      <ExpandableItem
+                        when="{$item.diff}"
+                        summary="Diff"
+                        initiallyExpanded="false"
+                        fullWidthSummary="true">
+                        <VStack gap="$space-1">
+                          <DiffView text="{($item.diff || '').slice(0, 20000)}" />
+                          <Text
+                            when="{($item.diff || '').length > 20000}"
+                            fontSize="$fontSize-xs"
+                            color="$textColor-secondary"
+                            value="{'Diff preview truncated at 20 KB for responsiveness.'}" />
+                        </VStack>
+                      </ExpandableItem>
                     </VStack>
                   </ExpandableItem>
                 </VStack>
@@ -1110,8 +1104,8 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
           backgroundColor="$backgroundColor-primary">
           <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="Ask the agent to propose an item" />
           <ChangeListener
-            listenTo="{worklistVoiceSeq}"
-            onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; if (t && worklistVoiceTarget === 'new-item') window.appendVoiceTranscript(newItemBox, t); newItemVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
+            listenTo="{voiceArrival.value &amp;&amp; voiceArrival.value.at}"
+            onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; if (t &amp;&amp; worklistVoiceTarget === 'new-item' &amp;&amp; newItemBox) window.__bramAppendVoiceToBox(newItemBox, t); newItemVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
           <HStack
             when="{newItemHelp &amp;&amp; !openIssues.value}"
             gap="$space-2"
@@ -1193,27 +1187,6 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
 Drop is the clean rejection path; Iterate is what you want if the item just needs to change shape." />
         <HStack>
           <Button label="Got it" onClick="dropHelpDialog.close()" />
-        </HStack>
-      </VStack>
-    </ModalDialog>
-
-    <ModalDialog
-      id="batchHelpDialog"
-      title="Approve all / Drop all"
-      when="{worklistConfig.value && worklistConfig.value.batchCommitActions}">
-      <VStack gap="$space-3" padding="$space-2">
-        <Text>
-          Batch actions for TO COMMIT items — they act on every TO COMMIT
-          (applied) item at once, so a coordinated bundle doesn't cost N
-          separate clicks. The bar appears only when there are 2 or more
-          TO COMMIT items.
-        </Text>
-        <Markdown content="- **Approve all** — authorizes the agent to commit every TO COMMIT item in one turn. The agent decides commit granularity (typically one bundled commit for a coordinated change).
-- **Drop all** — removes every TO COMMIT item from the worklist. The on-disk file edits **stay** (same as a single Drop); ask the agent to discard them if you want them gone.
-
-TO APPLY items are unaffected — approve, iterate, or drop those individually. **Issues flagged via `closesIssues` are not auto-closed in a batch** — close them through a single-item Approve, or ask the agent in chat." />
-        <HStack>
-          <Button label="Got it" onClick="batchHelpDialog.close()" />
         </HStack>
       </VStack>
     </ModalDialog>

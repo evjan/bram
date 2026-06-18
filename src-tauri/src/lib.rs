@@ -3869,13 +3869,62 @@ fn pty_raw_layout_diagnostic(input: &[u8]) -> String {
     )
 }
 
+// "Looks like a cataloged menu" predicate for selective skip capture.
+// True when the stripped buffer carries one of the catalog's anchor
+// fragments (header, numbered pair, or footer) even though the scanner
+// skipped. Gating `excerpt=` on skips by this predicate records only
+// high-signal "candidate catalog addition / detection gap" skips, not
+// every spinner tick — which is what flooded the dropped `.bin` ring
+// (#197: 779 skips vs 15 fires in 2–3s). Refs docs/pty-menu-shapes.md.
+fn pty_skip_buffer_looks_menu_bearing(stripped: &[u8]) -> bool {
+    let full = String::from_utf8_lossy(stripped);
+    let lower = full.to_ascii_lowercase();
+    let has_header = lower.contains("do you want") || lower.contains("use skill");
+    let needle2: &[u8] = b"2.";
+    let has_numbered_pair = pty_menu_anchor_pos(stripped)
+        .or_else(|| pty_any_numbered_menu_anchor_pos(stripped))
+        .map(|p1| stripped[p1..].windows(needle2.len()).any(|w| w == needle2))
+        .unwrap_or(false);
+    let has_footer = full.lines().any(line_is_menu_footer);
+    has_header || has_numbered_pair || has_footer
+}
+
+// One-line, whitespace-collapsed excerpt of the menu region for the
+// `[pty-menu-scan]` trace, so a fly-by menu can be eyeball-matched to a
+// `docs/pty-menu-shapes.md` row (and a menu_bearing skip flagged as a
+// candidate catalog addition). Anchored on the header / cursor / first
+// numbered option and capped so the trace line stays bounded. Refs #197
+// deliverable 3.
+fn pty_menu_scan_excerpt(stripped: &[u8]) -> String {
+    const CAP: usize = 200;
+    let header: &[u8] = b"Do you want";
+    let pos1 =
+        pty_menu_anchor_pos(stripped).or_else(|| pty_any_numbered_menu_anchor_pos(stripped));
+    let header_pos = stripped.windows(header.len()).rposition(|w| w == header);
+    let start = match (header_pos, pos1) {
+        (Some(h), Some(p)) => h.min(p),
+        (Some(h), None) => h,
+        (None, Some(p)) => p,
+        (None, None) => stripped.len().saturating_sub(CAP * 2),
+    };
+    let end = (start + CAP * 3).min(stripped.len());
+    let region = String::from_utf8_lossy(&stripped[start..end]);
+    // split_whitespace collapses the redraw padding / newlines the TUI
+    // injects between option lines into single spaces; the quote swap
+    // keeps the value from breaking the `key='value'` trace grammar.
+    let collapsed = region.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.chars().take(CAP).collect::<String>().replace('\'', "’")
+}
+
 // Diagnostic summary of which menu-detection anchors are present in
 // the current PTY tail. Returns a compact `k=v` string suitable for
 // embedding in a `[pty-menu-scan]` trace line. Re-runs the same
 // anchor checks `pty_menu_detect` uses but doesn't do the full
 // detection — cheap to compute (a handful of byte scans) and tells
-// us *why* a detection cycle decided not to fire.
-fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
+// us *why* a detection cycle decided not to fire. `is_fire` selects
+// whether the content excerpt is always included (fire) or only when
+// the buffer is menu-bearing (skip). Refs #197 deliverable 3.
+fn pty_menu_scan_diagnostic(tail: &[u8], is_fire: bool) -> String {
     let raw_codex_action = pty_codex_action_required_pos(tail).is_some();
     let stripped = strip_ansi(tail);
     let s = stripped.as_slice();
@@ -3955,8 +4004,14 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
         .rev()
         .map(|b| format!("{:02x}", b))
         .collect::<String>();
+    let menu_bearing = pty_skip_buffer_looks_menu_bearing(s);
+    let excerpt = if is_fire || menu_bearing {
+        pty_menu_scan_excerpt(s)
+    } else {
+        String::new()
+    };
     format!(
-        "stripped_len={} stripped_lf={} stripped_cr={} cursor={} numbered={} needle2_after_anchor={} needle2_anywhere={} header={} anchor_distance_ok={} codex_action={} format={} raw_format={} anchor_range={} needle2_range={} opt_anchors={} raw_opt_anchors={} {} fp_head={} fp_tail={}",
+        "stripped_len={} stripped_lf={} stripped_cr={} cursor={} numbered={} needle2_after_anchor={} needle2_anywhere={} header={} anchor_distance_ok={} codex_action={} format={} raw_format={} anchor_range={} needle2_range={} opt_anchors={} raw_opt_anchors={} {} fp_head={} fp_tail={} menu_bearing={} excerpt='{}'",
         stripped_len,
         stripped_lf,
         stripped_cr,
@@ -3978,6 +4033,8 @@ fn pty_menu_scan_diagnostic(tail: &[u8]) -> String {
         raw_layout,
         head_hex,
         tail_hex,
+        menu_bearing,
+        excerpt,
     )
 }
 
@@ -4033,7 +4090,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             if let Ok(mut g) = pty_menu_scan_last_log_cell().lock() {
                 *g = now_ms;
             }
-            Some(pty_menu_scan_diagnostic(&tail))
+            Some(pty_menu_scan_diagnostic(&tail, detected.is_some()))
         } else {
             None
         }
@@ -4985,6 +5042,15 @@ fn pty_text_looks_like_permission_menu(text: &str) -> bool {
         || lower.contains("approval")
         || lower.contains("permission")
         || lower.contains("sandbox")
+        // Skill-permission prompts (`Use skill "<skill>"?`, banner
+        // "Claude may use instructions, code, or files from this Skill.")
+        // carry none of the keywords above and no "Do you want" header,
+        // so a chevron-anchored skill menu was reaching this guard and
+        // returning None -> op=skip. See docs/pty-menu-shapes.md (skill
+        // row) and #197. The two fragments below are the source-string
+        // anchors CodeExam confirmed are stable across the header + banner.
+        || lower.contains("use skill")
+        || lower.contains("from this skill")
         || (lower.contains("allow") && lower.contains("deny"))
 }
 

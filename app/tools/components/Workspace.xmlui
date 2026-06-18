@@ -449,8 +449,8 @@
         <Form
           width="90%"
           data="{{ message: window.__bramRestoreWorklistDraft() }}"
-          onWillSubmit="(data) => { if (!data.message || !data.message.trim()) return false; }"
-          onSubmit="(data) => { const msg = data.message; window.__bramFlushWorklistDraft &amp;&amp; window.__bramFlushWorklistDraft(); const sent = window.__bramSubmitWorklistMessageFast(msg); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); window.__bramIframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = window.__bramSetWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = window.__bramMarkAwaitingStarted(); } if (worklistInputBox) worklistInputBox.setValue(''); }">
+          onWillSubmit="(data) => { if (!worklistInputBox || !worklistInputBox.value || !worklistInputBox.value.trim()) return false; }"
+          onSubmit="(data) => { const msg = (worklistInputBox &amp;&amp; worklistInputBox.value) || ''; window.__bramFlushWorklistDraft &amp;&amp; window.__bramFlushWorklistDraft(); const sent = window.__bramSubmitWorklistMessageFast(msg); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); window.__bramIframeTrace('submitted-images', {kind: 'message', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = window.__bramSetWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = window.__bramMarkAwaitingStarted(); } if (worklistInputBox) worklistInputBox.setValue(''); }">
           <property name="buttonRowTemplate"><Fragment/></property>
           <HStack gap="$space-2" verticalAlignment="center" width="100%">
             <Button
@@ -463,7 +463,7 @@
               onClick="window.__bramIframeTrace('voice-trace', {stage: 'mic-direct'}); setWorklistVoiceTarget('message-agent'); messageVoiceRecording = toggleVoiceForCurrentTarget(messageVoiceRecording)" />
             <TextArea
               id="worklistInputBox"
-              bindTo="message"
+              initialValue="{window.__bramRestoreWorklistDraft()}"
               enterSubmits="true"
               onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId(''); window.__bramIframeTrace('paste-image-target', {stage: 'message-focus', target: 'message-agent'})"
               onDidChange="(v) => window.__bramPersistWorklistDraft(v)"

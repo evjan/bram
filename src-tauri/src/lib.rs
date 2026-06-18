@@ -12405,6 +12405,10 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
             paths_from_text
         };
 
+        if st_is_duplicate_adjacent_turn(&turns, role, &text_joined, &entries, &images) {
+            continue;
+        }
+
         turns.push(serde_json::json!({
             "role": role,
             "text": text_joined,
@@ -12413,6 +12417,40 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
         }));
     }
     turns
+}
+
+fn st_is_duplicate_adjacent_turn(
+    turns: &[serde_json::Value],
+    role: &str,
+    text: &str,
+    entries: &[serde_json::Value],
+    images: &[String],
+) -> bool {
+    let Some(prev) = turns.last() else {
+        return false;
+    };
+    if prev.get("role").and_then(|v| v.as_str()) != Some(role) {
+        return false;
+    }
+    if prev.get("text").and_then(|v| v.as_str()) != Some(text) {
+        return false;
+    }
+    if prev.get("images").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>()
+            == images.iter().map(|s| s.as_str()).collect::<Vec<_>>()
+    }) != Some(true)
+    {
+        return false;
+    }
+
+    let text_only =
+        |entry: &serde_json::Value| entry.get("kind").and_then(|v| v.as_str()) == Some("text");
+    let prev_text_only = prev
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().all(text_only))
+        .unwrap_or(false);
+    prev_text_only && entries.iter().all(text_only)
 }
 
 // Single-entry mtime cache for read_session_turns. The parse runs
@@ -18686,6 +18724,19 @@ mod session_turn_tests {
         let turns = st_parse_lines_to_turns(content);
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0]["images"][0], "/tmp/object-image.webp");
+    }
+
+    #[test]
+    fn codex_duplicate_final_answer_records_become_one_assistant_turn() {
+        let content = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"next turn as a test"}]}}
+{"type":"event_msg","payload":{"type":"user_message","message":"next turn as a test","images":[],"local_images":[],"text_elements":[]}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"Ready for the next test turn.","phase":"final_answer","memory_citation":null}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Ready for the next test turn."}],"phase":"final_answer","metadata":{"turn_id":"turn-1"}}}"#;
+        let turns = st_parse_lines_to_turns(content);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0]["role"], "user");
+        assert_eq!(turns[1]["role"], "assistant");
+        assert_eq!(turns[1]["text"], "Ready for the next test turn.");
     }
 
     #[test]

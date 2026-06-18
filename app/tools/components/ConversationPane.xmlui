@@ -1,11 +1,13 @@
 <Component name="ConversationPane" var.fullscreenImage="{null}">
-  <!-- One stable-URL DataSource, refreshed in place. A steady poll is the
-       baseline (server caches /__last-exchange by file mtime, so it is cheap);
-       structural sharing keeps .value's reference when nothing changed, so no
-       re-render. The talk-session event triggers an immediate refetch() for
-       low latency. Never put a changing tick in the URL -- that restarts the
+  <!-- One stable-URL DataSource, refreshed in place by the talk-session event
+       only (the ChangeListener below calls lastExchange.refetch(), debounced).
+       No steady poll: a 1s poll re-rendered the growing full-turn Markdown
+       every tick during streaming and starved the shared renderer thread,
+       which showed up as multi-second getUserMedia/mic-start latency. The
+       event fires on real JSONL changes, so the pane still updates live and
+       accumulates. Never put a changing tick in the URL -- that restarts the
        query and blanks .value (the flash). See docs/conversation-pane.md. -->
-  <DataSource id="lastExchange" url="/__last-exchange" pollIntervalInSeconds="{1}" />
+  <DataSource id="lastExchange" url="/__last-exchange" />
   <External
     id="convoTalkEvt"
     initial="{null}"

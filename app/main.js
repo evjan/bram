@@ -1272,6 +1272,10 @@ const { listen } = window.__TAURI__.event;
                 type: "voice-into-result",
                 requestId: target.requestId,
                 transcript: "",
+                rejected: true,
+                reason: "busy",
+                activeWas: activeKind(),
+                activeRequestId: currentRequestId(),
               },
               "*",
             );

@@ -713,12 +713,28 @@ function toggleVoiceForCurrentTarget(recording) {
   worklistVoiceProcessing = false;
   worklistVoiceProcessingTarget = '';
   window.__bramIframeTrace('voice-trace', { stage: 'toggle-calling-voiceStart', target: worklistVoiceTarget || '' });
-  voiceStart(() => {
-    window.__bramIframeTrace('voice-trace', { stage: 'voiceStart-cb-enter' });
-    worklistVoiceRecordingActive = true;
-    window.__bramIframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'recording-started' });
-    window.__bramIframeTrace('voice-trace', { stage: 'voiceStart-cb-exit' });
-  });
+  voiceStart(
+    () => {
+      window.__bramIframeTrace('voice-trace', { stage: 'voiceStart-cb-enter' });
+      worklistVoiceRecordingActive = true;
+      window.__bramIframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'recording-started' });
+      window.__bramIframeTrace('voice-trace', { stage: 'voiceStart-cb-exit' });
+    },
+    (data) => {
+      window.__bramIframeTrace('voice-trace', { stage: 'voiceStart-failed-cb-enter', target: worklistVoiceTarget || '' });
+      worklistVoiceRecordingActive = false;
+      worklistVoiceProcessing = false;
+      worklistVoiceProcessingTarget = '';
+      window.__bramSetLatestVoiceState('', {
+        requestId: data && data.requestId ? data.requestId : null,
+        stopAtMs: data && data.stopAtMs ? data.stopAtMs : Date.now(),
+        stopToResultMs: 0,
+        parentStopToDeliverMs: data && typeof data.stopToDeliverMs === 'number' ? data.stopToDeliverMs : null
+      });
+      window.__bramIframeTrace('voice-input', { target: worklistVoiceTarget || 'terminal', stage: 'start-rejected' });
+      window.__bramIframeTrace('voice-trace', { stage: 'voiceStart-failed-cb-exit' });
+    }
+  );
   window.__bramIframeTrace('voice-trace', { stage: 'toggle-exit-start', returning: true });
   return true;
 }

@@ -2614,7 +2614,7 @@ function _voiceRemoveStartedListener() {
     window._voiceStartedListener = null;
   }
 }
-window.voiceStart = function (onStarted) {
+window.voiceStart = function (onStarted, onFailed) {
   if (window._voiceSession) {
     _voiceLog("voiceStart-rejected-already-active", {
       currentSession: window._voiceSession,
@@ -2628,11 +2628,27 @@ window.voiceStart = function (onStarted) {
   _voiceLog("voiceStart", { requestId: requestId });
   function onStartedMsg(ev) {
     var data = ev && ev.data;
-    if (!data || data.type !== "voice-recording-started") return;
+    if (!data || (data.type !== "voice-recording-started" && data.type !== "voice-into-result")) return;
     if (data.requestId !== requestId) return;
     window.removeEventListener("message", onStartedMsg);
     if (window._voiceStartedListener === onStartedMsg) {
       window._voiceStartedListener = null;
+    }
+    if (data.type === "voice-into-result") {
+      if (window._voiceSession === requestId) {
+        window._voiceSession = null;
+      }
+      _voiceLog("voiceStart-rejected-by-parent", {
+        requestId: requestId,
+        reason: data.reason || "",
+        activeWas: data.activeWas || "",
+        activeRequestId: data.activeRequestId || "",
+        transcriptLength: String(data.transcript || "").length,
+      });
+      if (typeof onFailed === "function") {
+        try { onFailed(data); } catch (e) {}
+      }
+      return;
     }
     if (window._voiceSession !== requestId) {
       _voiceLog("voice-recording-started-stale", { requestId: requestId });

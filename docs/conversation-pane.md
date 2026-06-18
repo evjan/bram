@@ -58,14 +58,19 @@ The fix follows the XMLUI DataSource model
   last user message, so "Agent: Last response" holds the entire response and
   grows as blocks land. The pane's `overflowY="auto"` container
   (`Workspace.xmlui`) makes a long response scrollable.
-- **One DataSource, in the parent.** `ConversationPane.xmlui` owns
-  `<DataSource id="lastExchange" url="/__last-exchange" pollIntervalInSeconds="{1}" />`.
-  The 1s poll is the steady baseline (the server caches `/__last-exchange` by
-  file mtime, so it is cheap); a `talk-session-changed` ChangeListener calls
-  `lastExchange.refetch()` (debounced 250ms) for immediacy. Both reuse the same
-  query, so structural sharing dedupes them.
-  - Cite: https://docs.xmlui.org/howto/poll-an-api-at-regular-intervals ,
-    https://docs.xmlui.org/howto/chain-a-refetch
+- **One DataSource, in the parent, refreshed by the event only.**
+  `ConversationPane.xmlui` owns
+  `<DataSource id="lastExchange" url="/__last-exchange" />` and a
+  `talk-session-changed` ChangeListener that calls `lastExchange.refetch()`
+  (debounced 250ms). **No `pollIntervalInSeconds`**: a steady 1s poll
+  re-rendered the growing full-turn Markdown every tick during streaming and
+  starved the shared renderer thread, which surfaced as multi-second
+  `getUserMedia`/mic-start latency. The event fires on real JSONL changes, so
+  the pane still updates live and accumulates; structural sharing keeps
+  `.value`'s reference when nothing changed, so an unchanged refetch causes no
+  re-render.
+  - Cite: https://docs.xmlui.org/howto/chain-a-refetch ;
+    structural sharing — https://docs.xmlui.org/components/DataSource
 - **The value flows down as props.** Children receive
   `exchange="{lastExchange.value}"` and an `active` flag and read them as
   `$props.exchange` / `$props.active`. They do not fetch.

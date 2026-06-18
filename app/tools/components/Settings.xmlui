@@ -37,13 +37,13 @@
 
       <VStack gap="$space-2">
         <HStack gap="$space-2" verticalAlignment="center">
-          <Heading level="h3">Shell</Heading>
           <Button
             icon="info"
             size="xs"
             variant="ghost"
-            tooltip="About Agent command"
-            onClick="infoTitle = 'Agent command'; infoBody = window.settingsInfoBodies.agentCommand; settingInfoDialog.open()" />
+            tooltip="About Shell"
+            onClick="infoTitle = 'Shell'; infoBody = window.settingsInfoBodies.agentCommand; settingInfoDialog.open()" />
+          <Heading level="h3">Shell</Heading>
         </HStack>
         <HStack gap="$space-2" verticalAlignment="center">
           <TextBox
@@ -60,13 +60,13 @@
 
       <VStack gap="$space-2">
         <HStack gap="$space-2" verticalAlignment="center">
-          <Heading level="h3">Worklist</Heading>
           <Button
             icon="info"
             size="xs"
             variant="ghost"
-            tooltip="About Batch commit actions"
-            onClick="infoTitle = 'Batch commit actions'; infoBody = window.settingsInfoBodies.batchCommitActions; settingInfoDialog.open()" />
+            tooltip="About Worklist"
+            onClick="infoTitle = 'Worklist'; infoBody = window.settingsInfoBodies.batchCommitActions; settingInfoDialog.open()" />
+          <Heading level="h3">Worklist</Heading>
         </HStack>
         <Switch
           label="Batch commit actions"
@@ -76,13 +76,13 @@
 
       <VStack gap="$space-2">
         <HStack gap="$space-2" verticalAlignment="center">
-          <Heading level="h3">UI</Heading>
           <Button
             icon="info"
             size="xs"
             variant="ghost"
             tooltip="About UI"
             onClick="infoTitle = 'UI'; infoBody = window.settingsInfoBodies.ui; settingInfoDialog.open()" />
+          <Heading level="h3">UI</Heading>
         </HStack>
         <Switch
           label="Minimize target app"
@@ -96,13 +96,13 @@
 
       <VStack gap="$space-2">
         <HStack gap="$space-2" verticalAlignment="center">
-          <Heading level="h3">Traces</Heading>
           <Button
             icon="info"
             size="xs"
             variant="ghost"
             tooltip="About Traces"
             onClick="infoTitle = 'Traces'; infoBody = window.settingsInfoBodies.traces; settingInfoDialog.open()" />
+          <Heading level="h3">Traces</Heading>
         </HStack>
         <Switch
           label="Tracing enabled"
@@ -124,7 +124,7 @@
 
     <ModalDialog id="settingInfoDialog" title="{infoTitle}">
       <VStack gap="$space-3" padding="$space-2">
-        <Text value="{infoBody}" />
+        <Markdown content="{infoBody}" />
         <HStack>
           <Button label="Got it" onClick="settingInfoDialog.close()" />
         </HStack>

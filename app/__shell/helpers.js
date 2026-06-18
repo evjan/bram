@@ -796,10 +796,12 @@ window.__bramSaveSplitterSize = function (key, sizes) {
 // stays inline in Settings since it's a single consumer.
 window.settingsInfoBodies = {
   agentCommand:
+    "## Agent command\n\n" +
     "Typed into the PTY shell at spawn — bash parses it, so flags work " +
     "(claude --continue, codex resume, etc.). Restart Bram for changes " +
     "to take effect.",
   batchCommitActions:
+    "## Batch commit actions\n\n" +
     "Adds Approve all / Drop all controls to the Worklist tab, shown only " +
     "when 2 or more TO COMMIT (applied) items are present. Approve all " +
     "authorizes the agent to commit every TO COMMIT item in one turn; the " +
@@ -810,11 +812,12 @@ window.settingsInfoBodies = {
     "are unaffected. Issues flagged via closesIssues are not auto-closed " +
     "in a batch; close them via a single-item Approve or ask the agent.",
   ui:
-    "Minimize target app — drives the agent pane splitter to give the " +
+    "## Minimize target app\n\n" +
+    "Drives the agent pane splitter to give the " +
     "agent tools maximum room. The target app stays mounted at the " +
     "splitter’s minimum height — distinct from hiding it entirely." +
-    "\n\n" +
-    "Agent-pane hot-reload — when on, the agent pane reloads " +
+    "\n\n## Agent-pane hot-reload\n\n" +
+    "When on, the agent pane reloads " +
     "automatically whenever files under app/tools/ change on disk. " +
     "When off, source-code edits to Bram itself (Workspace.xmlui, " +
     "Globals.xs, etc.) do not appear until you reload manually (Cmd+R " +
@@ -824,14 +827,15 @@ window.settingsInfoBodies = {
     "the blank-pane cascade documented in #182 incident 7. Persists " +
     "in .bram.json under ui.toolsPaneHotReload.",
   traces:
-    "Tracing enabled — master switch for writes to " +
+    "## Tracing enabled\n\n" +
+    "Master switch for writes to " +
     "resources/bram-traces/bram-trace.log. When off, every [emit] / " +
     "[iframe] / [route] line is a no-op regardless of the Inspector " +
     "trace tap below. If BRAM_TRACE is set in the environment at " +
     "launch (e.g. BRAM_TRACE=1 cargo run), it wins and this switch is " +
     "ignored — so CI / shell wrappers keep behaving the same." +
-    "\n\n" +
-    "Inspector trace tap — forwards XMLUI Inspector events " +
+    "\n\n## Inspector trace tap\n\n" +
+    "Forwards XMLUI Inspector events " +
     "(window._xsLogs) from the agent pane into bram-trace.log as " +
     "[iframe] subkind=inspector-event, so they interleave with host " +
     "traces live (no Inspector export needed). Capped at 50 entries " +

@@ -279,6 +279,8 @@ struct ProjectConfig {
     ui: Option<UiConfig>,
     #[serde(default)]
     traces: Option<TracesConfig>,
+    #[serde(default)]
+    menus: Option<MenusConfig>,
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -322,6 +324,14 @@ struct TracesConfig {
     enabled: Option<bool>,
     #[serde(default, rename = "inspectorTap")]
     inspector_tap: Option<bool>,
+}
+
+// Optional menus block. `parseAndDisplay` gates PTY menu detection +
+// the inline AgentMenu; default OFF (parsing is unreliable, opt-in).
+#[derive(Default, Clone, serde::Deserialize)]
+struct MenusConfig {
+    #[serde(default, rename = "parseAndDisplay")]
+    parse_and_display: Option<bool>,
 }
 
 fn default_server_path() -> String {
@@ -452,6 +462,10 @@ fn first_nonempty_env(names: &[&str]) -> Option<String> {
 // discipline.
 static BRAM_TRACE_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+// Gates PTY menu parsing/display (menus.parseAndDisplay). Default OFF —
+// menu parsing is unreliable, so it is opt-in. See pty_menu_update.
+static BRAM_MENUS_PARSE_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 // Defer tools-pane-reload while a cycle is active (refs #93).
 // Set when the watcher would otherwise emit during sentinel-active.
@@ -506,6 +520,17 @@ fn apply_bram_trace_from_config(enabled: bool) {
         return;
     }
     BRAM_TRACE_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn bram_menus_parse_enabled() -> bool {
+    BRAM_MENUS_PARSE_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+// Apply the `menus.parseAndDisplay` setting from .bram.json. Called at
+// startup (after project config is loaded) and on every settings POST
+// that touches it, so the toggle takes effect live without a restart.
+fn apply_bram_menus_parse_from_config(enabled: bool) {
+    BRAM_MENUS_PARSE_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[allow(dead_code)]
@@ -4044,6 +4069,11 @@ fn pty_menu_scan_diagnostic(tail: &[u8], is_fire: bool) -> String {
 // Logs every state transition to stderr so failures-to-render can be
 // correlated against actual detector activity.
 fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
+    // menus.parseAndDisplay off (the default): skip scanning entirely —
+    // no parse_menu_options, no pty-menu-changed emit, nothing to render.
+    if !bram_menus_parse_enabled() {
+        return;
+    }
     let tail_cell = pty_tail_cell();
     let mut tail = match tail_cell.lock() {
         Ok(g) => g,
@@ -7884,32 +7914,43 @@ fn tools_pane_hot_reload_enabled<R: tauri::Runtime>(app: &AppHandle<R>) -> bool 
 // so the consumer never sees nulls; out-of-scope blocks like `server`
 // stay invisible — they're project infrastructure, not Settings knobs.
 fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value {
-    let (agent, batch, minimized, tools_pane_hot_reload, tracing_enabled, inspector_tap) =
-        match config {
-            Some(c) => {
-                let traces = c.traces;
-                let ui = c.ui;
-                (
-                    c.shell.and_then(|s| s.agent).unwrap_or_default(),
-                    c.worklist
-                        .and_then(|w| w.batch_commit_actions)
-                        .unwrap_or(false),
-                    ui.as_ref()
-                        .and_then(|u| u.target_app_minimized)
-                        .unwrap_or(false),
-                    // Default OFF — only explicit `true` enables.
-                    ui.and_then(|u| u.tools_pane_hot_reload).unwrap_or(false),
-                    traces.as_ref().and_then(|t| t.enabled).unwrap_or(false),
-                    traces.and_then(|t| t.inspector_tap).unwrap_or(false),
-                )
-            }
-            None => (String::new(), false, false, false, false, false),
-        };
+    let (
+        agent,
+        batch,
+        minimized,
+        tools_pane_hot_reload,
+        tracing_enabled,
+        inspector_tap,
+        menus_parse,
+    ) = match config {
+        Some(c) => {
+            let traces = c.traces;
+            let ui = c.ui;
+            let menus = c.menus;
+            (
+                c.shell.and_then(|s| s.agent).unwrap_or_default(),
+                c.worklist
+                    .and_then(|w| w.batch_commit_actions)
+                    .unwrap_or(false),
+                ui.as_ref()
+                    .and_then(|u| u.target_app_minimized)
+                    .unwrap_or(false),
+                // Default OFF — only explicit `true` enables.
+                ui.and_then(|u| u.tools_pane_hot_reload).unwrap_or(false),
+                traces.as_ref().and_then(|t| t.enabled).unwrap_or(false),
+                traces.and_then(|t| t.inspector_tap).unwrap_or(false),
+                // Default OFF — menu parsing is opt-in.
+                menus.and_then(|m| m.parse_and_display).unwrap_or(false),
+            )
+        }
+        None => (String::new(), false, false, false, false, false, false),
+    };
     serde_json::json!({
         "shell": { "agent": agent },
         "worklist": { "batchCommitActions": batch },
         "ui": { "targetAppMinimized": minimized, "toolsPaneHotReload": tools_pane_hot_reload },
         "traces": { "enabled": tracing_enabled, "inspectorTap": inspector_tap },
+        "menus": { "parseAndDisplay": menus_parse },
     })
 }
 
@@ -9084,6 +9125,13 @@ fn handle_settings_post<R: tauri::Runtime>(
     {
         apply_bram_trace_from_config(enabled);
     }
+    apply_bram_menus_parse_from_config(
+        config
+            .as_ref()
+            .and_then(|c| c.menus.as_ref())
+            .and_then(|m| m.parse_and_display)
+            .unwrap_or(false),
+    );
     let body = settings_view_from_config(config).to_string().into_bytes();
     (200, "application/json; charset=utf-8", body)
 }
@@ -22828,6 +22876,9 @@ pub fn run() {
         if let Some(enabled) = cfg.traces.and_then(|t| t.enabled) {
             apply_bram_trace_from_config(enabled);
         }
+        apply_bram_menus_parse_from_config(
+            cfg.menus.and_then(|m| m.parse_and_display).unwrap_or(false),
+        );
     }
     if !initial_proj.join("index.html").exists() {
         eprintln!(

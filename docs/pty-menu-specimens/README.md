@@ -18,9 +18,11 @@ Both terminate here, then feed curated rows in `../pty-menu-shapes.md`:
    `resources/bram-traces/bram-trace.log`. On `op=fire` it carries a
    stripped `excerpt='…'`; on `op=skip` it carries `menu_bearing=` and,
    when that is `true`, an `excerpt='…'` (the "looks cataloged but the
-   scanner skipped" high-signal case). Workflow: grep
-   `op=fire .* excerpt=` and `op=skip menu_bearing=true`, compare to the
-   catalog, confirm a row or file a new specimen.
+   scanner skipped" high-signal case). Workflow: run
+   `python3 scripts/pty-menu-scan-report.py` to classify trace excerpts
+   as covered, missed, or unknown. Use
+   `python3 scripts/pty-menu-scan-report.py --write-specimens` only when
+   you want missed/unknown excerpts written as draft specimen files.
 2. **Human paste-in** — paste a screenshot or text of a menu you see;
    the agent routes it here (see *Routing* below).
 

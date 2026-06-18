@@ -1,4 +1,4 @@
-<Component name="ConversationPane" var.fullscreenImage="{null}">
+<Component name="ConversationPane" var.fullscreenImage="{null}" var.lastRefetchReason="{''}" var.lastRefetchAt="{0}">
   <!-- One stable-URL DataSource, refreshed in place by the talk-session event
        only (the ChangeListener below calls lastExchange.refetch(), debounced).
        No steady poll: a 1s poll re-rendered the growing full-turn Markdown
@@ -14,10 +14,38 @@
     subscribe="{window.bramSubscribeTalkSessionChange()}" />
   <ChangeListener
     listenTo="{convoTalkEvt.value &amp;&amp; convoTalkEvt.value.at}"
-    onDidChange="() => debounce(250, () => { window.__bramIframeTrace('conversation-refetch', {reason: 'talk-session'}); lastExchange.refetch(); })" />
+    onDidChange="() => debounce(250, () => {
+      const text = (lastExchange.value &amp;&amp; lastExchange.value.assistantText) || '';
+      lastRefetchReason = 'talk-session';
+      lastRefetchAt = Date.now();
+      window.__bramIframeTrace('conversation-refetch', {reason: lastRefetchReason, assistantSig: window.assistantOutputSignature(lastExchange.value), assistantTextLen: text.length, toolsLen: (lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0});
+      lastExchange.refetch();
+    })" />
+  <External
+    id="convoAgentStatusEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('agent-status-changed')}" />
+  <ChangeListener
+    listenTo="{convoAgentStatusEvt.value &amp;&amp; convoAgentStatusEvt.value.tick}"
+    onDidChange="() => {
+      const payload = (convoAgentStatusEvt.value &amp;&amp; convoAgentStatusEvt.value.payload) || {};
+      window.__bramIframeTrace('conversation-finished-signal', {event: 'agent-status-changed', state: payload.state || '', phase: payload.phase || '', provider: payload.provider || '', source: payload.source || ''});
+      if (payload.state === 'finished') {
+        debounce(650, () => {
+          const text = (lastExchange.value &amp;&amp; lastExchange.value.assistantText) || '';
+          lastRefetchReason = 'agent-status-finished';
+          lastRefetchAt = Date.now();
+          window.__bramIframeTrace('conversation-refetch', {reason: lastRefetchReason, provider: payload.provider || '', source: payload.source || '', state: payload.state || '', phase: payload.phase || '', assistantSig: window.assistantOutputSignature(lastExchange.value), assistantTextLen: text.length, toolsLen: (lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0});
+          lastExchange.refetch();
+        });
+      }
+    }" />
   <ChangeListener
     listenTo="{window.assistantOutputSignature(lastExchange.value) + '|' + ((lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0)}"
-    onDidChange="() => window.__bramIframeTrace('conversation-value-changed', {toolsLen: (lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0, hasAssistant: !!(lastExchange.value &amp;&amp; lastExchange.value.assistantText), isRefetch: !!(lastExchange.isRefetching)})" />
+    onDidChange="() => {
+      const text = (lastExchange.value &amp;&amp; lastExchange.value.assistantText) || '';
+      window.__bramIframeTrace('conversation-value-changed', {reason: lastRefetchReason, sinceRefetchMs: lastRefetchAt ? (Date.now() - lastRefetchAt) : -1, assistantSig: window.assistantOutputSignature(lastExchange.value), assistantTextLen: text.length, toolsLen: (lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0, hasAssistant: !!text, isRefetch: !!(lastExchange.isRefetching)});
+    }" />
   <ModalDialog
     when="{!!fullscreenImage}"
     fullScreen="true"

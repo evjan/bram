@@ -1,5 +1,21 @@
 <Component name="ConversationPane" var.fullscreenImage="{null}">
-  <DataSource id="lastExchange" url="/__last-exchange?t={lastExchangeRefreshTick}" />
+  <!-- One stable-URL DataSource, refreshed in place. A steady poll is the
+       baseline (server caches /__last-exchange by file mtime, so it is cheap);
+       structural sharing keeps .value's reference when nothing changed, so no
+       re-render. The talk-session event triggers an immediate refetch() for
+       low latency. Never put a changing tick in the URL -- that restarts the
+       query and blanks .value (the flash). See docs/conversation-pane.md. -->
+  <DataSource id="lastExchange" url="/__last-exchange" pollIntervalInSeconds="{1}" />
+  <External
+    id="convoTalkEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTalkSessionChange()}" />
+  <ChangeListener
+    listenTo="{convoTalkEvt.value &amp;&amp; convoTalkEvt.value.at}"
+    onDidChange="() => debounce(250, () => { window.__bramIframeTrace('conversation-refetch', {reason: 'talk-session'}); lastExchange.refetch(); })" />
+  <ChangeListener
+    listenTo="{window.assistantOutputSignature(lastExchange.value) + '|' + ((lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0)}"
+    onDidChange="() => window.__bramIframeTrace('conversation-value-changed', {toolsLen: (lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0, hasAssistant: !!(lastExchange.value &amp;&amp; lastExchange.value.assistantText), isRefetch: !!(lastExchange.isRefetching)})" />
   <ModalDialog
     when="{!!fullscreenImage}"
     fullScreen="true"
@@ -33,8 +49,12 @@
         </Items>
       </VStack>
     </VStack>
-    <AgentToolUses />
-    <AgentLastResponse />
+    <AgentToolUses
+      exchange="{lastExchange.value}"
+      active="{lastExchange.loaded &amp;&amp; conversationActive(lastExchange.value)}" />
+    <AgentLastResponse
+      exchange="{lastExchange.value}"
+      active="{lastExchange.loaded &amp;&amp; conversationActive(lastExchange.value)}" />
     <Text
       when="{!lastExchange.value || (!lastExchange.value.userText &amp;&amp; !lastExchange.value.assistantText &amp;&amp; (!lastExchange.value.tools || lastExchange.value.tools.length === 0))}"
       fontSize="$fontSize-sm">

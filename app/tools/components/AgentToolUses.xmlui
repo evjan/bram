@@ -1,5 +1,11 @@
 <Component name="AgentToolUses" var.openToolId="{null}" var.openTool="{null}">
-  <DataSource id="agentToolUsesExchange" url="/__last-exchange?t={lastExchangeRefreshTick}" />
+  <!-- Tool data arrives via $props.exchange from ConversationPane's single
+       stable DataSource; this component no longer fetches /__last-exchange.
+       The section is omitted entirely when there are no tools (no empty/"no
+       data" placeholder). Gating on tools.length is flash-free now that the
+       URL is stable: structural sharing keeps .value across refetches, so the
+       count only changes when tools genuinely change -- rows spool in without
+       a remount. -->
   <DataSource
     id="agentToolDetailDS"
     url="/__tool-detail?id={openToolId || ''}"
@@ -106,18 +112,18 @@
   </Theme>
   <VStack
     gap="$space-1"
-    when="{agentToolUsesExchange.value &amp;&amp; agentToolUsesExchange.value.tools &amp;&amp; agentToolUsesExchange.value.tools.length > 0}">
+    when="{$props.exchange &amp;&amp; $props.exchange.tools &amp;&amp; $props.exchange.tools.length > 0}">
     <Text
       fontWeight="$fontWeight-bold"
       color="$color-success-700"
       value="Agent: Tool uses" />
     <ChangeListener
-      listenTo="{agentToolUsesExchange.value &amp;&amp; agentToolUsesExchange.value.tools &amp;&amp; agentToolUsesExchange.value.tools.length}"
+      listenTo="{($props.exchange &amp;&amp; $props.exchange.tools &amp;&amp; $props.exchange.tools.length) || 0}"
       onDidChange="() => { if (agentToolUsesList) agentToolUsesList.scrollToBottom(); }" />
     <List
       id="agentToolUsesList"
-      data="{(agentToolUsesExchange.value &amp;&amp; agentToolUsesExchange.value.tools) || []}"
-      height="5.7rem"
+      data="{($props.exchange &amp;&amp; $props.exchange.tools) || []}"
+      height="8.5rem"
       fixedItemSize="true">
       <VStack
         gap="$space-1"

@@ -10980,7 +10980,17 @@ fn build_conversation_cache_entry<R: tauri::Runtime>(
             }
             if !t.trim().is_empty() || !images.is_empty() {
                 if !t.trim().is_empty() {
-                    assistant_text = t.to_string();
+                    // Accumulate every assistant text block of this turn, not
+                    // just the last one. A multi-step turn (text, tool, text,
+                    // tool, text) emits several assistant messages; overwriting
+                    // here left the pane showing only the final block. The
+                    // conversation pane's "Agent: Last response" is meant to
+                    // hold the whole response (see docs/conversation-pane.md),
+                    // and the scroll container makes a long one readable.
+                    if !assistant_text.is_empty() {
+                        assistant_text.push_str("\n\n");
+                    }
+                    assistant_text.push_str(t);
                 }
                 assistant_images = images;
             }

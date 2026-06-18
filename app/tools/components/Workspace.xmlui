@@ -423,7 +423,6 @@
             window.__bramIframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: id || '', at_host_ms: hostMs || 0, delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1});
             lastAssistantTickAt = Date.now();
             lastAssistantTick = lastAssistantTick + 1;
-            bumpLastExchangeRefreshTick();
           }, correlationId, atHostMs);
         }" />
       <External

@@ -1,26 +1,31 @@
-<Component name="AgentLastResponse" var.fullscreenImage="{null}" var.replyArriving="{false}" var.lastResponseCueKey="{null}">
-  <DataSource id="agentLastResponseExchange" url="/__last-exchange?t={lastExchangeRefreshTick}" />
+<Component name="AgentLastResponse" var.fullscreenImage="{null}" var.awaitedBaselineSig="{null}" var.awaitingLocal="{false}" var.heldAssistantText="{''}">
+  <!-- Data arrives via $props.exchange from ConversationPane's single stable
+       DataSource; no own fetch.
+
+       Dim/fade per docs/conversation-pane.md, driven by the exchange itself so
+       it works for BOTH terminal-typed turns and worklist-composer turns:
+       - userText changes => the user just spoke => dim the prior response
+         (capture the assistant signature baseline, mark awaitingLocal).
+       - the assistant signature advances past that baseline => the new
+         response arrived => clear awaitingLocal => the opacity transition fades
+         it in.
+       (We do NOT key off Workspace's awaitingResponse -- that is only set by
+       the worklist composer / action buttons, so terminal turns never dimmed.)
+
+       heldAssistantText bridges the turn-start gap: /__last-exchange briefly has
+       an empty assistantText for the new turn; binding Markdown straight to it
+       would blank the old response. We hold the last non-empty text and keep
+       showing it (dimmed) until the new one streams in.
+
+       ChangeListener does not fire on initial mount
+       (https://docs.xmlui.org/howto/debounce-with-changelistener), so neither
+       trigger fires on first load -- correct, nothing just happened. -->
   <ChangeListener
-    listenTo="{window.assistantOutputSignature(agentLastResponseExchange.value)}"
-    onDidChange="(change) => {
-      const nextKey = change.newValue || '';
-      if (lastResponseCueKey === null) {
-        lastResponseCueKey = nextKey;
-        return;
-      }
-      if (nextKey && nextKey !== lastResponseCueKey) {
-        lastResponseCueKey = nextKey;
-        replyArriving = true;
-      } else {
-        lastResponseCueKey = nextKey;
-      }
-    }" />
-  <Timer
-    enabled="{replyArriving}"
-    initialDelay="360"
-    interval="360"
-    once="true"
-    onTick="replyArriving = false" />
+    listenTo="{$props.exchange &amp;&amp; $props.exchange.userText}"
+    onDidChange="() => { awaitingLocal = true; awaitedBaselineSig = window.assistantOutputSignature($props.exchange) || ''; window.__bramIframeTrace('conversation-fade', {stage: 'dim', trigger: 'user-msg'}); }" />
+  <ChangeListener
+    listenTo="{window.assistantOutputSignature($props.exchange)}"
+    onDidChange="(c) => { const sig = c.newValue || ''; const txt = ($props.exchange &amp;&amp; $props.exchange.assistantText) || ''; if (txt) { heldAssistantText = txt; } if (awaitingLocal &amp;&amp; sig &amp;&amp; sig !== awaitedBaselineSig) { awaitingLocal = false; window.__bramIframeTrace('conversation-fade', {stage: 'fade-in'}); } }" />
   <ModalDialog
     when="{!!fullscreenImage}"
     fullScreen="true"
@@ -33,18 +38,18 @@
   </ModalDialog>
   <VStack
     gap="$space-1"
-    opacity="{replyArriving ? 0.55 : 1}"
+    opacity="{awaitingLocal ? 0.55 : 1}"
     transition="opacity 560ms ease-out"
-    when="{agentLastResponseExchange.value &amp;&amp; (agentLastResponseExchange.value.assistantText || (agentLastResponseExchange.value.assistantImages &amp;&amp; agentLastResponseExchange.value.assistantImages.length > 0))}">
+    when="{$props.active}">
     <Text
       fontWeight="$fontWeight-bold"
       color="$color-success-700"
       value="Agent: Last response" />
-    <Markdown content="{window.__bramStripImagePaths(agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantText)}" />
+    <Markdown content="{window.__bramStripImagePaths(($props.exchange &amp;&amp; $props.exchange.assistantText) || heldAssistantText)}" />
     <VStack
       gap="$space-2"
-      when="{agentLastResponseExchange.value &amp;&amp; agentLastResponseExchange.value.assistantImages &amp;&amp; agentLastResponseExchange.value.assistantImages.length > 0}">
-      <Items data="{agentLastResponseExchange.value.assistantImages}">
+      when="{$props.exchange &amp;&amp; $props.exchange.assistantImages &amp;&amp; $props.exchange.assistantImages.length > 0}">
+      <Items data="{$props.exchange.assistantImages}">
         <Link onClick="fullscreenImage = $item" noIndicator="true">
           <Image
             src="{window.imageSrcForPath($item)}"

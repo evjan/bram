@@ -474,9 +474,20 @@ function setFocusedFeedbackItemId(id) {
   bramFocusedFeedbackItemId = id || '';
   window.bramSetActiveFocusedFeedbackItemIdMirror(id || '');
 }
-var lastExchangeRefreshTick = 0;
-function bumpLastExchangeRefreshTick() {
-  lastExchangeRefreshTick = lastExchangeRefreshTick + 1;
+// Conversation pane no longer refreshes by bumping a URL tick. Bumping a
+// value in the DataSource URL restarted the query and blanked .value
+// mid-flight, unmounting the sections -- the flash. ConversationPane.xmlui
+// now owns one stable-URL DataSource refreshed in place (poll + refetch),
+// which preserves .value via structural sharing. See docs/conversation-pane.md.
+//
+// conversationActive gates the three conversation sections so they stay
+// mounted across refetches; only the cold-start placeholder (no exchange at
+// all) hides them.
+function conversationActive(ex) {
+  return !!(ex && (ex.userText || ex.assistantText
+    || (ex.tools && ex.tools.length > 0)
+    || (ex.userImages && ex.userImages.length > 0)
+    || (ex.assistantImages && ex.assistantImages.length > 0)));
 }
 
 // Decide the iframe-side state update for the `inflightClaim` DataSource

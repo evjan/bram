@@ -47,6 +47,16 @@
           value="{window.__bramWorklistItemFiles(historyGroup).length + ' file' + (window.__bramWorklistItemFiles(historyGroup).length === 1 ? '' : 's')}"
           color="$textColor-secondary"
           fontSize="$fontSize-sm" />
+        <Text
+          when="{historyGroup.commitContextLabel}"
+          value="{historyGroup.commitContextLabel}"
+          color="$textColor-secondary"
+          fontSize="$fontSize-sm" />
+        <Text
+          when="{historyGroup.detailsRestoredLabel}"
+          value="{historyGroup.detailsRestoredLabel}"
+          color="$textColor-secondary"
+          fontSize="$fontSize-sm" />
         <Link
           when="{window.__bramHistoryCommitUrl(historyGroup)}"
           noIndicator
@@ -68,6 +78,13 @@
       <VStack gap="$space-2" when="{window.__bramWorklistItemFiles(historyGroup).length > 0}">
         <Text value="Files" fontWeight="$fontWeight-bold" />
         <Items data="{window.__bramWorklistItemFiles(historyGroup)}">
+          <Text value="{$item}" variant="code" fontSize="$fontSize-sm" />
+        </Items>
+      </VStack>
+
+      <VStack gap="$space-2" when="{historyGroup.commitSiblingIds &amp;&amp; historyGroup.commitSiblingIds.length > 0}">
+        <Text value="Committed with" fontWeight="$fontWeight-bold" />
+        <Items data="{historyGroup.commitSiblingIds || []}">
           <Text value="{$item}" variant="code" fontSize="$fontSize-sm" />
         </Items>
       </VStack>

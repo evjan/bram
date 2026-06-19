@@ -20075,6 +20075,7 @@ fn cap_diff(diff: &str, max_lines: usize, max_bytes: usize) -> String {
 struct WorklistHistoryPhase {
     ts: i64,
     iso: String,
+    kind: String,
     summary: String,
     summary_label: String,
     full_changelog: String,
@@ -20097,6 +20098,15 @@ struct WorklistHistoryGroup {
     kind: String,
     current_item: Option<serde_json::Value>,
     prose_phase_summary: String,
+    commit_context_label: String,
+    commit_sibling_ids: Vec<String>,
+    details_restored_label: String,
+}
+
+#[derive(Clone)]
+struct WorklistHistoryChangelogItem {
+    id: String,
+    kind: String,
 }
 
 fn history_compact_iso(iso: &str) -> String {
@@ -20200,9 +20210,20 @@ fn visible_worklist_history_commit_url<R: tauri::Runtime>(
     }
 }
 
-fn worklist_history_ids(changelog: &str, doc: &serde_json::Value) -> Vec<String> {
-    let mut ids: Vec<String> = Vec::new();
+fn worklist_history_changelog_items(
+    changelog: &str,
+    doc: &serde_json::Value,
+) -> Vec<WorklistHistoryChangelogItem> {
+    let mut items: Vec<WorklistHistoryChangelogItem> = Vec::new();
+    let mut section_kind = String::new();
     for line in changelog.lines() {
+        section_kind = match line.trim() {
+            "## Items proposed" => String::from("proposed"),
+            "## Items applied" => String::from("applied"),
+            "## Items committed" => String::from("committed"),
+            "## Items dropped" => String::from("dropped"),
+            _ => section_kind,
+        };
         if !line.starts_with("- `") {
             continue;
         }
@@ -20219,20 +20240,57 @@ fn worklist_history_ids(changelog: &str, doc: &serde_json::Value) -> Vec<String>
                 || after.starts_with(": committed")
                 || after.starts_with(": dropped");
             if looks_like_item {
-                ids.push(rest[..end].to_string());
+                let id = rest[..end].to_string();
+                let kind = if !section_kind.is_empty() {
+                    section_kind.clone()
+                } else if after.contains("committed") {
+                    String::from("committed")
+                } else if after.contains("applied") {
+                    String::from("applied")
+                } else if after.contains("dropped") {
+                    String::from("dropped")
+                } else if after.contains("proposed") {
+                    String::from("proposed")
+                } else {
+                    String::from("changed")
+                };
+                items.push(WorklistHistoryChangelogItem { id, kind });
             }
         }
     }
-    if ids.is_empty() {
-        if let Some(items) = doc.get("items").and_then(|v| v.as_array()) {
-            for item in items {
+    if items.is_empty() {
+        if let Some(doc_items) = doc.get("items").and_then(|v| v.as_array()) {
+            for item in doc_items {
                 if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
-                    ids.push(id.to_string());
+                    let kind = worklist_item_status(item).to_string();
+                    items.push(WorklistHistoryChangelogItem {
+                        id: id.to_string(),
+                        kind,
+                    });
                 }
             }
         }
     }
-    ids
+    items
+}
+
+fn worklist_history_restored_label(previous: Option<&serde_json::Value>) -> String {
+    let Some(item) = previous else {
+        return String::new();
+    };
+    match worklist_item_status(item) {
+        "applied" => String::from("Item details restored from earlier Applied phase"),
+        "proposed" => String::from("Item details restored from earlier Proposed phase"),
+        status if !status.is_empty() => format!(
+            "Item details restored from earlier {} phase",
+            status
+                .chars()
+                .enumerate()
+                .map(|(idx, c)| if idx == 0 { c.to_ascii_uppercase() } else { c })
+                .collect::<String>()
+        ),
+        _ => String::from("Item details restored from earlier phase"),
+    }
 }
 
 fn worklist_history_item_state(doc: &serde_json::Value, id: &str) -> Option<serde_json::Value> {
@@ -20337,11 +20395,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
         }
     }
     let fast_limited = limit > 0 && limit < WORKLIST_HISTORY_DEFAULT_LIMIT;
-    if fast_limited {
-        json_files.sort_by(|a, b| b.0.cmp(&a.0));
-    } else {
-        json_files.sort_by(|a, b| a.0.cmp(&b.0));
-    }
+    json_files.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut groups: Vec<WorklistHistoryGroup> = Vec::new();
     let mut by_id: HashMap<String, usize> = HashMap::new();
@@ -20364,20 +20418,22 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
         } else {
             visible_worklist_history_commit_url(app, &raw_commit_url, repo_slug.as_deref())
         };
-        let ids = worklist_history_ids(&changelog, &doc);
+        let changelog_items = worklist_history_changelog_items(&changelog, &doc);
+        let ids: Vec<String> = changelog_items.iter().map(|item| item.id.clone()).collect();
         let iso = format_iso_utc(ts);
 
-        if ids.len() == 1 {
-            let id = ids[0].clone();
-            let current = worklist_history_item_state(&doc, &id);
-            let previous = if fast_limited {
-                None
-            } else {
-                last_state.get(&id)
-            };
-            let diff = worklist_history_item_diff(previous, current.as_ref());
-            let display_item = current.clone().or_else(|| previous.cloned());
-            if !fast_limited {
+        if !changelog_items.is_empty() {
+            for changelog_item in &changelog_items {
+                let id = changelog_item.id.clone();
+                let current = worklist_history_item_state(&doc, &id);
+                let previous = last_state.get(&id);
+                let diff = worklist_history_item_diff(previous, current.as_ref());
+                let display_item = current.clone().or_else(|| previous.cloned());
+                let restored_label = if current.is_none() && display_item.is_some() {
+                    worklist_history_restored_label(previous)
+                } else {
+                    String::new()
+                };
                 match current {
                     Some(item) => {
                         last_state.insert(id.clone(), item);
@@ -20386,57 +20442,75 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                         last_state.remove(&id);
                     }
                 }
-            }
-            let phase = WorklistHistoryPhase {
-                ts,
-                iso: iso.clone(),
-                summary: summary.clone(),
-                summary_label: format!(
-                    "{} · {}",
-                    iso.chars().take(16).collect::<String>(),
-                    summary
-                ),
-                full_changelog: String::new(),
-                changelog: String::new(),
-                diff: cap_history_diff(&diff),
-                commit_url: commit_url.clone(),
-            };
-            let group_idx = match by_id.get(&id).copied() {
-                Some(idx) => idx,
-                None => {
-                    let idx = groups.len();
-                    by_id.insert(id.clone(), idx);
-                    groups.push(WorklistHistoryGroup {
-                        id: id.clone(),
-                        title: id.clone(),
-                        ids: vec![id.clone()],
-                        phases: Vec::new(),
-                        latest_ts: 0,
-                        latest_iso: String::new(),
-                        phase_count: 0,
-                        subtitle: String::new(),
-                        kind: String::from("item"),
-                        current_item: None,
-                        prose_phase_summary: String::new(),
-                    });
-                    idx
-                }
-            };
-            if let Some(group) = groups.get_mut(group_idx) {
-                group.phases.push(phase);
-                if group.latest_ts == 0 || ts > group.latest_ts {
-                    group.latest_ts = ts;
-                    group.latest_iso = iso;
-                    group.current_item = display_item;
-                    group.prose_phase_summary = summary;
-                } else if group.current_item.is_none() && display_item.is_some() {
-                    group.current_item = display_item;
+                let phase = WorklistHistoryPhase {
+                    ts,
+                    iso: iso.clone(),
+                    kind: changelog_item.kind.clone(),
+                    summary: summary.clone(),
+                    summary_label: format!(
+                        "{} · {}",
+                        iso.chars().take(16).collect::<String>(),
+                        summary
+                    ),
+                    full_changelog: String::new(),
+                    changelog: String::new(),
+                    diff: cap_history_diff(&diff),
+                    commit_url: commit_url.clone(),
+                };
+                let group_idx = match by_id.get(&id).copied() {
+                    Some(idx) => idx,
+                    None => {
+                        let idx = groups.len();
+                        by_id.insert(id.clone(), idx);
+                        groups.push(WorklistHistoryGroup {
+                            id: id.clone(),
+                            title: id.clone(),
+                            ids: vec![id.clone()],
+                            phases: Vec::new(),
+                            latest_ts: 0,
+                            latest_iso: String::new(),
+                            phase_count: 0,
+                            subtitle: String::new(),
+                            kind: String::from("item"),
+                            current_item: None,
+                            prose_phase_summary: String::new(),
+                            commit_context_label: String::new(),
+                            commit_sibling_ids: Vec::new(),
+                            details_restored_label: String::new(),
+                        });
+                        idx
+                    }
+                };
+                if let Some(group) = groups.get_mut(group_idx) {
+                    group.phases.push(phase);
+                    if group.latest_ts == 0 || ts > group.latest_ts {
+                        group.latest_ts = ts;
+                        group.latest_iso = iso.clone();
+                        group.current_item = display_item;
+                        group.prose_phase_summary = summary.clone();
+                        group.details_restored_label = restored_label;
+                        if changelog_item.kind == "committed" {
+                            group.commit_sibling_ids = ids
+                                .iter()
+                                .filter(|sibling_id| *sibling_id != &id)
+                                .cloned()
+                                .collect();
+                            group.commit_context_label = if group.commit_sibling_ids.is_empty() {
+                                String::from("Committed solo")
+                            } else {
+                                String::from("Committed in batch")
+                            };
+                        }
+                    } else if group.current_item.is_none() && display_item.is_some() {
+                        group.current_item = display_item;
+                    }
                 }
             }
         } else {
             let phase = WorklistHistoryPhase {
                 ts,
                 iso: iso.clone(),
+                kind: String::from("snapshot"),
                 summary: summary.clone(),
                 summary_label: format!(
                     "{} · {}",
@@ -20464,10 +20538,10 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                 kind: String::from("snapshot"),
                 current_item: None,
                 prose_phase_summary: String::new(),
+                commit_context_label: String::new(),
+                commit_sibling_ids: Vec::new(),
+                details_restored_label: String::new(),
             });
-        }
-        if fast_limited && groups.len() >= limit {
-            break;
         }
     }
 
@@ -20509,7 +20583,8 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
 mod worklist_history_tests {
     use super::{
         history_compact_range, parse_github_commit_url, resolve_worklist_doc_drafts,
-        worklist_history_commit_url, worklist_history_item_diff,
+        worklist_history_changelog_items, worklist_history_commit_url, worklist_history_item_diff,
+        worklist_history_restored_label,
     };
     use serde_json::json;
 
@@ -20610,6 +20685,36 @@ mod worklist_history_tests {
         assert_eq!(
             history_compact_range("2026-05-29T10:00:00Z", "2026-05-30T09:15:00Z"),
             "29 10:00 -> 30 09:15"
+        );
+    }
+
+    #[test]
+    fn parses_batch_commit_items_from_changelog() {
+        let changelog = "\
+## Items committed
+
+- `one` (was applied, `a.md`)
+  - **Commit:** https://github.com/judell/bram/commit/abc123
+- `two` (was applied, `b.md`)
+  - **Commit:** https://github.com/judell/bram/commit/abc123
+";
+
+        let items = worklist_history_changelog_items(changelog, &json!({}));
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "one");
+        assert_eq!(items[0].kind, "committed");
+        assert_eq!(items[1].id, "two");
+        assert_eq!(items[1].kind, "committed");
+    }
+
+    #[test]
+    fn restored_label_names_prior_phase() {
+        let previous = json!({"id": "x", "status": "applied"});
+
+        assert_eq!(
+            worklist_history_restored_label(Some(&previous)),
+            "Item details restored from earlier Applied phase"
         );
     }
 }

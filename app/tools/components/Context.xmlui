@@ -53,6 +53,10 @@
             placeholder="Search..."
             width="*"
             initialValue="{searchDraft}"
+            autoComplete="off"
+            autoCorrect="{false}"
+            spellCheck="{false}"
+            autoCapitalize="off"
             onDidChange="(v) => { searchDraft = v }" />
           <Button
             label="✕"

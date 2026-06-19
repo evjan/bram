@@ -91,6 +91,10 @@
         id="renameBox"
         width="*"
         initialValue="{renamingSession &amp;&amp; (renamingSession.title || '')}"
+        autoComplete="off"
+        autoCorrect="{false}"
+        spellCheck="{false}"
+        autoCapitalize="off"
         onDidChange="(v) => renameDraft = v" />
       <Text
         color="$textColor-secondary"

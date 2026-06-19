@@ -4,6 +4,10 @@
       id="searchBox"
       placeholder="{$props.placeholder || 'Search…'}"
       width="*"
+      autoComplete="off"
+      autoCorrect="{false}"
+      spellCheck="{false}"
+      autoCapitalize="off"
       onDidChange="(v) => debounce($props.debounceMs || 250, (q) => emitEvent('queryChange', q), v)" />
     <Button
       label="✕"

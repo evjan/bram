@@ -50,6 +50,10 @@
             id="agentBox"
             width="*"
             initialValue="{settingsAgent(settingsConfig.value)}"
+            autoComplete="off"
+            autoCorrect="{false}"
+            spellCheck="{false}"
+            autoCapitalize="off"
             onDidChange="(v) => agentDraft = v" />
           <Button
             label="Save"

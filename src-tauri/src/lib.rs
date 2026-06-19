@@ -2537,6 +2537,45 @@ fn schedule_pty_turn_finished<R: tauri::Runtime>(
             }
             return;
         }
+        // Defer to JSONL at FIRE time (fix-mid-turn-false-finished-banner): the
+        // grace window can straddle a brief end_turn that subsequent work
+        // supersedes, and the sticky-verb check above misses working that is
+        // carried by the fallback (no fresh scrape). Re-read the live session
+        // JSONL; if it no longer shows a fresh completion (non-final, or the
+        // Claude end record now predates the current turn), the agent is still
+        // working -- skip the finish. Mirrors the pty-activity-stop guard.
+        // Fail open (finish) when the JSONL is unreadable/missing.
+        let jsonl_done = match latest_session_path(&app_handle, None).ok().flatten() {
+            Some(path) => match std::fs::read_to_string(&path) {
+                Ok(content) => match hinted_session_provider(&app_handle) {
+                    Some(SessionProvider::Codex) => {
+                        codex_jsonl_completion_decision(&content).detected
+                    }
+                    _ => {
+                        claude_jsonl_completion_decision(&content).detected
+                            && !claude_jsonl_end_is_stale(
+                                claude_jsonl_last_assistant_ts_ms(&content),
+                                claude_turn_stats_cell()
+                                    .lock()
+                                    .ok()
+                                    .and_then(|g| g.as_ref().map(|s| s.user_ts_ms)),
+                            )
+                    }
+                },
+                Err(_) => true,
+            },
+            None => true,
+        };
+        if !jsonl_done {
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    &app_handle,
+                    "turn-end-defer",
+                    "op=skip reason=jsonl-non-final-at-fire",
+                );
+            }
+            return;
+        }
         // Same no-fallback policy at fire time as at schedule time.
         let final_verb = initial_verb;
         if bram_trace_enabled() {
@@ -15005,6 +15044,65 @@ fn claude_jsonl_completion_decision(content: &str) -> JsonlCompletionDecision {
     }
 }
 
+// Timestamp (ms) of the most recent `type=assistant` record in a Claude
+// session JSONL. Used to tell whether a detected end_turn belongs to the
+// current turn, or is a stale prior-turn record read during the new turn's
+// think/stream phase before its own assistant record is flushed.
+fn claude_jsonl_last_assistant_ts_ms(content: &str) -> Option<i64> {
+    for line in content.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        if entry.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        return entry
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .and_then(parse_iso_to_ms);
+    }
+    None
+}
+
+// A detected Claude end_turn is "stale" when the matched assistant record
+// predates the current turn's user message -- i.e. it belongs to the PRIOR
+// turn and was read during the new turn's think/stream phase before its own
+// assistant record was flushed. Fails open (not stale) when either timestamp
+// is unknown, preserving prior behavior.
+fn claude_jsonl_end_is_stale(last_assistant_ts_ms: Option<i64>, turn_user_ts_ms: Option<i64>) -> bool {
+    matches!((turn_user_ts_ms, last_assistant_ts_ms), (Some(u), Some(a)) if a < u)
+}
+
+#[cfg(test)]
+mod claude_jsonl_freshness_tests {
+    use super::{claude_jsonl_end_is_stale, claude_jsonl_last_assistant_ts_ms};
+
+    #[test]
+    fn end_is_stale_only_when_record_predates_turn() {
+        assert!(claude_jsonl_end_is_stale(Some(100), Some(200))); // prior-turn record
+        assert!(!claude_jsonl_end_is_stale(Some(300), Some(200))); // this-turn record
+        assert!(!claude_jsonl_end_is_stale(Some(200), Some(200))); // exactly the boundary
+        assert!(!claude_jsonl_end_is_stale(None, Some(200))); // unknown record ts -> fail open
+        assert!(!claude_jsonl_end_is_stale(Some(100), None)); // unknown turn ts -> fail open
+    }
+
+    #[test]
+    fn last_assistant_ts_reads_most_recent_assistant_timestamp() {
+        let content = concat!(
+            "{\"type\":\"user\",\"timestamp\":\"2026-06-19T00:00:00.000Z\"}\n",
+            "{\"type\":\"assistant\",\"timestamp\":\"2026-06-19T01:00:00.000Z\",\"message\":{\"stop_reason\":\"end_turn\"}}\n",
+            "{\"type\":\"system\"}\n"
+        );
+        let ts = claude_jsonl_last_assistant_ts_ms(content).expect("assistant ts");
+        // 2026-06-19T01:00:00Z is well past epoch.
+        assert!(ts > 1_700_000_000_000);
+    }
+}
+
 fn codex_jsonl_completion_decision(content: &str) -> JsonlCompletionDecision {
     for line in content.lines().rev() {
         let trimmed = line.trim();
@@ -15234,6 +15332,20 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
         return;
     };
     let decision = jsonl_completion_decision(provider, &content);
+    // Shared stale-end predicate (fix-mid-turn-false-finished-banner): a Claude
+    // end_turn detected during a new turn's think/stream phase walks back to the
+    // PRIOR turn's assistant record. Gate BOTH consumers below on this -- the
+    // finished-cue emit AND the inflight-sentinel clear -- so a stale end neither
+    // flips the banner to Finished nor clears the Worklist spinner mid-turn.
+    let claude_stale_end = provider == JsonlCompletionProvider::Claude
+        && decision.detected
+        && claude_jsonl_end_is_stale(
+            claude_jsonl_last_assistant_ts_ms(&content),
+            claude_turn_stats_cell()
+                .lock()
+                .ok()
+                .and_then(|g| g.as_ref().map(|s| s.user_ts_ms)),
+        );
     let latest_codex_user_ts_ms = if provider == JsonlCompletionProvider::Codex {
         codex_latest_user_message_ts_ms(&content)
     } else {
@@ -15329,7 +15441,20 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
                         ),
                     );
                 }
-                kill_current_claude_turn_with_finished(app, verb, elapsed);
+                // Freshness gate: skip the finished cue when the detected
+                // end_turn is stale (belongs to the prior turn). See
+                // claude_stale_end above.
+                if claude_stale_end {
+                    if bram_trace_enabled() {
+                        append_bram_trace_line(
+                            app,
+                            "jsonl-turn-end",
+                            "op=skip-stale-jsonl-end consumer=finished-cue reason=end-record-predates-turn",
+                        );
+                    }
+                } else {
+                    kill_current_claude_turn_with_finished(app, verb, elapsed);
+                }
             }
             JsonlCompletionProvider::Codex => {
                 if bram_trace_enabled() {
@@ -15417,6 +15542,33 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
         return;
     }
 
+    if claude_stale_end {
+        // Same stale-end gate as the finished cue: a prior-turn end_turn read
+        // mid-think must not clear the active Worklist sentinel. Treat it like
+        // a non-final decision here.
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "jsonl-turn-end",
+                &format!(
+                    "op=skip provider={} reason=stale-claude-end consumer=inflight-sentinel path={} mtime={} claimed={}",
+                    provider_label,
+                    basename,
+                    file_mtime_ms,
+                    serde_json::to_string(&claimed_ids).unwrap_or_else(|_| "[]".to_string())
+                ),
+            );
+        }
+        record_turn_completion_monitor(
+            "jsonl",
+            provider_label,
+            "stale-claude-end",
+            format!("stale end_turn from {} predates current turn", basename),
+            file_mtime_ms,
+            false,
+        );
+        return;
+    }
     if !decision.detected {
         if bram_trace_enabled() {
             append_bram_trace_line(

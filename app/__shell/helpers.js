@@ -1335,6 +1335,7 @@ window.__bramPrepareBatchWorklistActionSubmission = function (opts) {
     submitting: true,
     submittedItemId: submittedItemId,
     submittedKind: submittedKind,
+    actionProgressScope: "batch",
     actionProgressKind: kind,
     actionProgressTick: 0,
     expandedItemIds: [],
@@ -1971,6 +1972,8 @@ window.__bramPrepareWorklistMessageSubmission = function (opts) {
 
 window.__bramPrepareWorklistActionSubmission = function (opts) {
   opts = opts || {};
+  window.__bramWorklistActionSubmissionSeq = (window.__bramWorklistActionSubmissionSeq || 0) + 1;
+  var seq = window.__bramWorklistActionSubmissionSeq;
   var kind = opts.kind || "";
   var items = opts.items || [];
   var selectedId = opts.selectedId || "";
@@ -2026,6 +2029,7 @@ window.__bramPrepareWorklistActionSubmission = function (opts) {
 
   var pasteState = window.__bramPasteStateSnapshot(opts.voiceTarget || "message-agent");
   return {
+    seq: seq,
     feedback: feedback,
     turnText: turnText,
     pendingPastedImageCount: pasteState.count,
@@ -2093,6 +2097,41 @@ window.__bramPrepareWorklistActionSubmission = function (opts) {
       return String(a);
     }
   }
+  function consoleArgDetail(a) {
+    var isError = a && (a instanceof Error || a.stack || a.message);
+    if (isError) {
+      return {
+        type: (a && a.name) || "Error",
+        message: String((a && a.message) || a),
+        stack: a && a.stack ? String(a.stack) : "",
+      };
+    }
+    return {
+      type: typeof a,
+      preview: safeStringify(a),
+    };
+  }
+  function consoleArgDetails(args) {
+    return args.map(consoleArgDetail);
+  }
+  function firstConsoleStack(args) {
+    for (var i = 0; i < args.length; i += 1) {
+      if (args[i] && args[i].stack) return String(args[i].stack);
+    }
+    return "";
+  }
+  function runtimeErrorFields(message, source, lineno, colno, error, via) {
+    return {
+      message: message || (error && error.message) || "window error",
+      filename: source,
+      lineno: lineno,
+      colno: colno,
+      errorName: error && error.name,
+      errorMessage: error && error.message,
+      stack: error && error.stack,
+      source: via,
+    };
+  }
   function emit(subkind, fields) {
     if (inTrace) return;
     inTrace = true;
@@ -2116,19 +2155,31 @@ window.__bramPrepareWorklistActionSubmission = function (opts) {
       var args = Array.prototype.slice.call(arguments);
       emit("console-" + level, {
         message: args.map(safeStringify).join(" "),
+        args: consoleArgDetails(args),
+        stack: firstConsoleStack(args),
       });
       orig.apply(console, args);
     };
   });
 
+  var previousOnError = window.onerror;
+  window.onerror = function (message, source, lineno, colno, error) {
+    emit("console-error", runtimeErrorFields(message, source, lineno, colno, error, "window.onerror"));
+    if (typeof previousOnError === "function") {
+      return previousOnError.apply(this, arguments);
+    }
+    return false;
+  };
+
   window.addEventListener("error", function (e) {
-    emit("console-error", {
-      message: (e && e.message) || "window error",
-      filename: e && e.filename,
-      lineno: e && e.lineno,
-      stack: e && e.error && e.error.stack,
-      source: "window.error",
-    });
+    emit("console-error", runtimeErrorFields(
+      e && e.message,
+      e && e.filename,
+      e && e.lineno,
+      e && e.colno,
+      e && e.error,
+      "window.error"
+    ));
   });
 
   window.addEventListener("unhandledrejection", function (e) {

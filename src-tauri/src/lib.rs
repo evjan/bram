@@ -20155,6 +20155,49 @@ fn worklist_history_commit_url(changelog: &str) -> String {
         .unwrap_or_default()
 }
 
+fn parse_github_commit_url(url: &str) -> Option<(String, String)> {
+    let rest = url
+        .trim()
+        .trim_end_matches('/')
+        .strip_prefix("https://github.com/")?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    if parts.len() != 4 || parts[2] != "commit" {
+        return None;
+    }
+    let repo_slug = format!("{}/{}", parts[0], parts[1]);
+    let sha = parts[3];
+    if repo_slug == "/" || sha.is_empty() || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((repo_slug, sha.to_string()))
+}
+
+fn visible_worklist_history_commit_url<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    raw_url: &str,
+    repo_slug: Option<&str>,
+) -> String {
+    let Some((url_repo_slug, sha)) = parse_github_commit_url(raw_url) else {
+        return String::new();
+    };
+    if let Some(expected) = repo_slug {
+        if expected != url_repo_slug {
+            return String::new();
+        }
+    }
+    match gh_commit_visible(app, &url_repo_slug, &sha) {
+        Ok(true) => raw_url.trim().to_string(),
+        Ok(false) => String::new(),
+        Err(e) => {
+            eprintln!(
+                "[worklist-history] commit visibility check failed for {}: {}",
+                sha, e
+            );
+            String::new()
+        }
+    }
+}
+
 fn worklist_history_ids(changelog: &str, doc: &serde_json::Value) -> Vec<String> {
     let mut ids: Vec<String> = Vec::new();
     for line in changelog.lines() {
@@ -20296,6 +20339,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
     let mut groups: Vec<WorklistHistoryGroup> = Vec::new();
     let mut by_id: HashMap<String, usize> = HashMap::new();
     let mut last_state: HashMap<String, serde_json::Value> = HashMap::new();
+    let repo_slug = repo_owner_name(app);
 
     for (ts, json_path) in json_files {
         let raw = std::fs::read_to_string(&json_path).unwrap_or_default();
@@ -20303,7 +20347,9 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
         let md_path = json_path.with_extension("md");
         let changelog = std::fs::read_to_string(&md_path).unwrap_or_default();
         let summary = worklist_history_summary(&changelog);
-        let commit_url = worklist_history_commit_url(&changelog);
+        let raw_commit_url = worklist_history_commit_url(&changelog);
+        let commit_url =
+            visible_worklist_history_commit_url(app, &raw_commit_url, repo_slug.as_deref());
         let ids = worklist_history_ids(&changelog, &doc);
         let iso = format_iso_utc(ts);
 
@@ -20430,8 +20476,8 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
 #[cfg(test)]
 mod worklist_history_tests {
     use super::{
-        history_compact_range, resolve_worklist_doc_drafts, worklist_history_commit_url,
-        worklist_history_item_diff,
+        history_compact_range, parse_github_commit_url, resolve_worklist_doc_drafts,
+        worklist_history_commit_url, worklist_history_item_diff,
     };
     use serde_json::json;
 
@@ -20469,6 +20515,26 @@ mod worklist_history_tests {
         assert_eq!(
             worklist_history_commit_url(changelog),
             "https://github.com/judell/bram/commit/abc123"
+        );
+    }
+
+    #[test]
+    fn github_commit_url_parser_requires_commit_url_shape() {
+        assert_eq!(
+            parse_github_commit_url("https://github.com/judell/bram/commit/abc123"),
+            Some(("judell/bram".to_string(), "abc123".to_string()))
+        );
+        assert_eq!(
+            parse_github_commit_url("https://github.com/judell/bram/pull/1"),
+            None
+        );
+        assert_eq!(
+            parse_github_commit_url("https://example.com/judell/bram/commit/abc123"),
+            None
+        );
+        assert_eq!(
+            parse_github_commit_url("https://github.com/judell/bram/commit/not-a-sha"),
+            None
         );
     }
 

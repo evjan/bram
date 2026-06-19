@@ -237,26 +237,6 @@
           variant="ghost"
           tooltip="Increase app font size"
           onClick="window.setAppFontSize(window.getAppFontSize() + 1)" />
-        <Button
-          label="1"
-          variant="ghost"
-          tooltip="Permission menu: send keystroke 1"
-          onClick="window.__bramTraceToolbarKey('1'); sendKeys('1\r')" />
-        <Button
-          label="2"
-          variant="ghost"
-          tooltip="Permission menu: send keystroke 2"
-          onClick="window.__bramTraceToolbarKey('2'); sendKeys('2\r')" />
-        <Button
-          label="3"
-          variant="ghost"
-          tooltip="Permission menu: send keystroke 3"
-          onClick="window.__bramTraceToolbarKey('3'); sendKeys('3\r')" />
-        <Button
-          label="Esc"
-          variant="ghost"
-          tooltip="Send Esc to interrupt"
-          onClick="window.__bramTraceToolbarKey('esc'); sendKeys('\x1b')" />
         <Inspector src="{'/__vendor/xs-diff.html?v=' + window.APP_VERSION}" />
       </HStack>
     </Theme>
@@ -265,6 +245,36 @@
   <NavPanel>
     <property name="logoTemplate">
       <Fragment/>
+    </property>
+    <property name="footerTemplate">
+      <VStack gap="$space-1" paddingHorizontal="$space-2">
+        <Text
+          fontSize="$fontSize-xs"
+          color="$textColor-secondary"
+          value="Terminal menu" />
+        <HStack gap="$space-1">
+          <Button
+            label="1"
+            variant="ghost"
+            tooltip="Permission menu: send keystroke 1"
+            onClick="window.__bramTraceToolbarKey('1'); sendKeys('1\r')" />
+          <Button
+            label="2"
+            variant="ghost"
+            tooltip="Permission menu: send keystroke 2"
+            onClick="window.__bramTraceToolbarKey('2'); sendKeys('2\r')" />
+          <Button
+            label="3"
+            variant="ghost"
+            tooltip="Permission menu: send keystroke 3"
+            onClick="window.__bramTraceToolbarKey('3'); sendKeys('3\r')" />
+          <Button
+            label="Esc"
+            variant="ghost"
+            tooltip="Send Esc to interrupt"
+            onClick="window.__bramTraceToolbarKey('esc'); sendKeys('\x1b')" />
+        </HStack>
+      </VStack>
     </property>
     <NavLink label="Worklist" to="/worklist" />
     <NavLink label="Issues" to="/issues" />

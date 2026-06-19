@@ -7,7 +7,7 @@
     "maxWidth-landscape-phone": "360px",
     "maxWidth-tablet": "400px",
     "paddingHorizontal-Button-sm": "$space-1",
-    "width-navPanel-App": "$space-28",
+    "width-navPanel-App": "$space-32",
     "maxWidth-content-App": "100%",
     "maxWidth-App": "100%"
   }

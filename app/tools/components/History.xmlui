@@ -84,7 +84,7 @@
         onClear="selectedHistoryGroup = null" />
     </HStack>
 
-    <Theme size-Spinner="1em">
+    <Theme size-Spinner="{16}">
       <Spinner when="{!history.value}" />
     </Theme>
 

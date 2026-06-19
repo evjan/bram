@@ -203,11 +203,9 @@
               fontStyle="italic"
               overflowMode="none"
               value="{window.headerWorkingLabel(mainAgentStatus.value, enhanceStatus.value)}" />
-            <Text
-              fontSize="$fontSize-md"
-              color="$textColor-secondary"
-              overflowMode="none"
-              value="{(mainAgentStatus.value &amp;&amp; mainAgentStatus.value.elapsedText) || ''}" />
+            <!-- Live elapsed counter intentionally removed: it can't reliably
+                 match the TUI's own timer and the mismatch was distracting; the
+                 spinner + verb signal "working". See drop-banner-elapsed-time. -->
           </HStack>
           <HStack
             when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'finished'}"

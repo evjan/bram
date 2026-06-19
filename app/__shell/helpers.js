@@ -1898,6 +1898,82 @@ window.__bramRecordWorklistFeedbackConversation = function (text) {
   return { message: message, images: __bramExtractImagePaths(message), baseline: baseline, sentAtText: new Date().toLocaleTimeString() };
 };
 
+window.__bramPrepareWorklistActionSubmission = function (opts) {
+  opts = opts || {};
+  var kind = opts.kind || "";
+  var items = opts.items || [];
+  var selectedId = opts.selectedId || "";
+  var pasteTarget = opts.pasteTarget || ("feedback:" + selectedId);
+  var rawFeedback = opts.rawFeedback || "";
+  var feedback = window.__bramWithStagedImageMarkers(rawFeedback, pasteTarget);
+  var displayItems = opts.displayItems || items;
+  var displayText = window.__bramWorklistActionConversationDisplay(kind, displayItems, selectedId, feedback);
+  var sent = window.__bramRecordWorklistFeedbackConversation(feedback ? (displayText + "\n\n" + feedback) : displayText);
+  var submittedImages = [];
+  var awaitingResponse = false;
+  var awaitingResponseSetAt = 0;
+
+  if (sent) {
+    submittedImages = ((sent.images && sent.images.length > 0) ? sent.images : window.__bramExtractImagePaths(feedback));
+    window.__bramIframeTrace("submitted-images", {
+      kind: "action",
+      action: opts.imageAction || kind,
+      count: submittedImages.length,
+      first: submittedImages[0] || "",
+    });
+    awaitingResponse = true;
+    awaitingResponseSetAt = window.__bramMarkAwaitingStarted();
+  }
+
+  if (opts.inflightTarget) {
+    window.__bramIframeTrace("inflight-set", {
+      item: selectedId,
+      via: "click",
+      target: opts.inflightTarget,
+    });
+  }
+
+  var feedbackDraftsById = opts.feedbackDraftsById || {};
+  var nextFeedbackDrafts = Object.assign({}, feedbackDraftsById);
+  delete nextFeedbackDrafts[selectedId];
+  window.__bramPersistWorklistUiState({
+    expandedItemIds: opts.expandedItemIds || [],
+    feedbackDraftsById: nextFeedbackDrafts,
+  });
+
+  var payloadFeedback = Object.prototype.hasOwnProperty.call(opts, "payloadFeedback")
+    ? opts.payloadFeedback
+    : feedback;
+  var turnText = "";
+  if (opts.payloadKind === "single-approve") {
+    turnText = "approved: " + window.__bramBuildSingleItemApprovePayload(opts.itemRef, payloadFeedback);
+  } else if (kind === "approved") {
+    turnText = "approved: " + window.__bramBuildApprovePayload(items, selectedId, payloadFeedback);
+  } else if (kind === "drop") {
+    turnText = "drop: " + window.__bramBuildDropPayload(items, selectedId, payloadFeedback);
+  }
+
+  return {
+    feedback: feedback,
+    turnText: turnText,
+    pendingPastedImageCount: window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(opts.voiceTarget || "message-agent") : 0,
+    pendingPastedImagePaths: window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(opts.voiceTarget || "message-agent") : [],
+    stagingPastedImageCount: window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0,
+    submittedWorklistImages: submittedImages,
+    submittedWorklistMessage: sent ? sent.message : "",
+    submittedTurnsBaseline: sent ? sent.baseline : 0,
+    messageSentAtText: sent ? sent.sentAtText : "",
+    awaitingResponse: awaitingResponse,
+    awaitingResponseSetAt: awaitingResponseSetAt,
+    submittedItemId: selectedId,
+    submittedKind: window.__bramSetWorklistSubmittedKind("action"),
+    submitting: true,
+    actionProgressKind: kind,
+    actionProgressTick: 0,
+    feedbackDraftsById: nextFeedbackDrafts,
+  };
+};
+
 // Self-init: read `traces.enabled` from `/__settings` once at iframe
 // load and cache the result on `window.__bramTracesEnabled`. The
 // `iframeTrace` (above) and `logToHost` (above) bodies gate on

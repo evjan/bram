@@ -6283,11 +6283,12 @@ fn git_log_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Result<
 // above the repo's total issue count so no open issue is dropped (issue
 // #104). Both gh_issues_list and gh_issues_search must share this so they
 // can't drift. Bump if the repo ever approaches this many issues.
-const GH_ISSUE_LIST_LIMIT: &str = "500";
+const GH_ISSUE_LIST_LIMIT: usize = 500;
 
-fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
+fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>, limit: usize) -> Result<Vec<u8>, String> {
     let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
     let repo_slug = repo_owner_name(app);
+    let limit = limit.clamp(1, GH_ISSUE_LIST_LIMIT).to_string();
     let out = std::process::Command::new("gh")
         .current_dir(&root)
         .args(&[
@@ -6296,7 +6297,7 @@ fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
             "--json",
             "number,title,state,author,createdAt,updatedAt,labels,url,comments",
             "--limit",
-            GH_ISSUE_LIST_LIMIT,
+            &limit,
             "--state",
             "all",
         ])
@@ -6346,6 +6347,7 @@ fn gh_issues_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Resul
 
     let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
     let repo_slug = repo_owner_name(app);
+    let full_limit = GH_ISSUE_LIST_LIMIT.to_string();
     // Fetch the same issue window as gh_issues_list (shared
     // GH_ISSUE_LIST_LIMIT, no --search flag); local grep over title + body
     // + comment bodies. One gh call; latency scales with the actual issue
@@ -6358,7 +6360,7 @@ fn gh_issues_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Resul
             "--json",
             "number,title,state,author,createdAt,updatedAt,labels,url,body,comments",
             "--limit",
-            GH_ISSUE_LIST_LIMIT,
+            &full_limit,
             "--state",
             "all",
         ])
@@ -20334,12 +20336,21 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
             }
         }
     }
-    json_files.sort_by(|a, b| a.0.cmp(&b.0));
+    let fast_limited = limit > 0 && limit < WORKLIST_HISTORY_DEFAULT_LIMIT;
+    if fast_limited {
+        json_files.sort_by(|a, b| b.0.cmp(&a.0));
+    } else {
+        json_files.sort_by(|a, b| a.0.cmp(&b.0));
+    }
 
     let mut groups: Vec<WorklistHistoryGroup> = Vec::new();
     let mut by_id: HashMap<String, usize> = HashMap::new();
     let mut last_state: HashMap<String, serde_json::Value> = HashMap::new();
-    let repo_slug = repo_owner_name(app);
+    let repo_slug = if fast_limited {
+        None
+    } else {
+        repo_owner_name(app)
+    };
 
     for (ts, json_path) in json_files {
         let raw = std::fs::read_to_string(&json_path).unwrap_or_default();
@@ -20348,23 +20359,32 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
         let changelog = std::fs::read_to_string(&md_path).unwrap_or_default();
         let summary = worklist_history_summary(&changelog);
         let raw_commit_url = worklist_history_commit_url(&changelog);
-        let commit_url =
-            visible_worklist_history_commit_url(app, &raw_commit_url, repo_slug.as_deref());
+        let commit_url = if fast_limited {
+            String::new()
+        } else {
+            visible_worklist_history_commit_url(app, &raw_commit_url, repo_slug.as_deref())
+        };
         let ids = worklist_history_ids(&changelog, &doc);
         let iso = format_iso_utc(ts);
 
         if ids.len() == 1 {
             let id = ids[0].clone();
             let current = worklist_history_item_state(&doc, &id);
-            let previous = last_state.get(&id);
+            let previous = if fast_limited {
+                None
+            } else {
+                last_state.get(&id)
+            };
             let diff = worklist_history_item_diff(previous, current.as_ref());
             let display_item = current.clone().or_else(|| previous.cloned());
-            match current {
-                Some(item) => {
-                    last_state.insert(id.clone(), item);
-                }
-                None => {
-                    last_state.remove(&id);
+            if !fast_limited {
+                match current {
+                    Some(item) => {
+                        last_state.insert(id.clone(), item);
+                    }
+                    None => {
+                        last_state.remove(&id);
+                    }
                 }
             }
             let phase = WorklistHistoryPhase {
@@ -20403,11 +20423,13 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                 }
             };
             if let Some(group) = groups.get_mut(group_idx) {
-                group.latest_ts = ts;
-                group.latest_iso = iso;
                 group.phases.push(phase);
-                group.current_item = display_item;
-                group.prose_phase_summary = summary;
+                if group.latest_ts == 0 || ts > group.latest_ts {
+                    group.latest_ts = ts;
+                    group.latest_iso = iso;
+                    group.current_item = display_item;
+                    group.prose_phase_summary = summary;
+                }
             }
         } else {
             let phase = WorklistHistoryPhase {
@@ -20442,10 +20464,18 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                 prose_phase_summary: String::new(),
             });
         }
+        if fast_limited && groups.len() >= limit {
+            break;
+        }
     }
 
     for group in &mut groups {
+        group.phases.sort_by(|a, b| a.ts.cmp(&b.ts));
         group.phase_count = group.phases.len();
+        if let Some(phase) = group.phases.last() {
+            group.latest_ts = phase.ts;
+            group.latest_iso = phase.iso.clone();
+        }
         if group.phase_count > 1 {
             let first = group
                 .phases
@@ -20874,7 +20904,15 @@ fn route_request<R: tauri::Runtime>(
     }
 
     if path == "__issues" {
-        return match gh_issues_list(app) {
+        let mut limit = GH_ISSUE_LIST_LIMIT;
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("limit=") {
+                let parsed = percent_decode(v).parse::<usize>().unwrap_or(GH_ISSUE_LIST_LIMIT);
+                limit = parsed.clamp(1, GH_ISSUE_LIST_LIMIT);
+                break;
+            }
+        }
+        return match gh_issues_list(app, limit) {
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
             Err(e) => {
                 eprintln!("[http /__issues] {}", e);

@@ -13,7 +13,8 @@
   var.selectedHitLine="{null}"
   var.sortField="updatedAt"
   var.sortDir="desc"
-  var.sortedIssues="{(issues.value || []).slice().sort(function(a, b) {
+  var.issuesSource="{(issuesFull.value &amp;&amp; issuesFull.value.length > 0) ? issuesFull.value : (issuesFirstPage.value || [])}"
+  var.sortedIssues="{(issuesSource || []).slice().sort(function(a, b) {
     const av = a[sortField] || '';
     const bv = b[sortField] || '';
     if (av < bv) return sortDir === 'asc' ? -1 : 1;
@@ -22,8 +23,28 @@
   })}">
 
   <DataSource
-    id="issues"
+    id="issuesFirstPage"
     url="/__issues"
+    queryParams="{{ limit: 20 }}"
+    pollIntervalInSeconds="30"
+    onLoaded="(data) => {
+      const currentSig = ((data || []).map(i => i && i.number).filter(Boolean).sort()).join(',');
+      if (newIssueSubmitting && newIssueStartSig && currentSig !== newIssueStartSig) {
+        newIssueSubmitting = false;
+        newIssueStartSig = '';
+        newIssueTurnEnded = false;
+      } else if (newIssueSubmitting && newIssueTurnEnded) {
+        newIssueSubmitting = false;
+        newIssueStartSig = '';
+        newIssueTurnEnded = false;
+      }
+      lastIssuesSig = currentSig;
+    }" />
+
+  <DataSource
+    id="issuesFull"
+    url="/__issues"
+    when="{issuesFirstPage.loaded || issuesFirstPage.value}"
     pollIntervalInSeconds="30"
     onLoaded="(data) => {
       const currentSig = ((data || []).map(i => i && i.number).filter(Boolean).sort()).join(',');
@@ -62,7 +83,7 @@
     method="post"
     queryParams="{{ number: $param.number, comment: $param.comment }}"
     completedNotificationMessage="Issue closed."
-    onSuccess="closeCommentBox.setValue(''); issueDetail.refetch(); issues.refetch()" />
+    onSuccess="closeCommentBox.setValue(''); issueDetail.refetch(); issuesFirstPage.refetch(); issuesFull.refetch()" />
 
   <APICall
     id="commentIssueCall"
@@ -70,11 +91,11 @@
     method="post"
     queryParams="{{ number: $param.number, body: $param.body }}"
     completedNotificationMessage="Comment posted."
-    onSuccess="closeCommentBox.setValue(''); issueDetail.refetch(); issues.refetch()" />
+    onSuccess="closeCommentBox.setValue(''); issueDetail.refetch(); issuesFirstPage.refetch(); issuesFull.refetch()" />
 
   <variable
     name="displayedIssues"
-    value="{window.selectDisplayed(query, searchResults.value, sortedIssues.slice(0, issuesExpanded ? 999 : 10))}" />
+    value="{window.selectDisplayed(query, searchResults.value, sortedIssues.slice(0, issuesExpanded ? 999 : 20))}" />
 
   <variable
     name="selectedIssue"
@@ -154,7 +175,7 @@
     subscribe="{window.bramSubscribeTauriEvent('agent-turn-end')}" />
   <ChangeListener
     listenTo="{issuesAgentTurnEndEvt.value &amp;&amp; issuesAgentTurnEndEvt.value.tick}"
-    onDidChange="() => { if (newIssueSubmitting) { newIssueTurnEnded = true; issues.refetch(); } }" />
+    onDidChange="() => { if (newIssueSubmitting) { newIssueTurnEnded = true; issuesFirstPage.refetch(); issuesFull.refetch(); } }" />
   <HSplitter
     height="100%"
     initialPrimarySize="{window.__bramRestoreSplitterSize('issues', '40%')}"
@@ -170,7 +191,7 @@
           enabled="{!newIssueSubmitting}"
           onClick="showNewIssueHint = true" />
         <Theme size-Spinner="16px">
-          <Spinner when="{newIssueSubmitting || (issues.inProgress &amp;&amp; !issues.loaded)}" />
+          <Spinner when="{newIssueSubmitting || (issuesFirstPage.inProgress &amp;&amp; !issuesFirstPage.loaded)}" />
         </Theme>
         <SpaceFiller />
         <SearchBox
@@ -187,7 +208,7 @@
       </Text>
 
       <Text
-        when="{(!query || query.trim().length &lt; 2) &amp;&amp; repoOrigin.value &amp;&amp; repoOrigin.value.htmlBase &amp;&amp; issues.loaded &amp;&amp; !issues.inProgress &amp;&amp; (!issues.value || issues.value.length === 0)}"
+        when="{(!query || query.trim().length &lt; 2) &amp;&amp; repoOrigin.value &amp;&amp; repoOrigin.value.htmlBase &amp;&amp; issuesFirstPage.loaded &amp;&amp; !issuesFirstPage.inProgress &amp;&amp; (!issuesSource || issuesSource.length === 0)}"
         color="$textColor-secondary">
         No issues found. (Either the repo has none, or `gh` is not installed / authenticated.)
       </Text>
@@ -305,7 +326,7 @@
           </VStack>
         </Items>
         <HStack
-          when="{(!query || query.trim().length &lt; 2) &amp;&amp; issues.value &amp;&amp; issues.value.length > 10}"
+          when="{(!query || query.trim().length &lt; 2) &amp;&amp; issuesSource &amp;&amp; issuesSource.length > 20}"
           padding="$space-2"
           horizontalAlignment="center">
           <Link
@@ -313,7 +334,7 @@
             noIndicator>
             <Text
               fontSize="$fontSize-sm"
-              value="{issuesExpanded ? 'Show fewer' : 'More (' + (issues.value.length - 10) + ' more)'}" />
+              value="{issuesExpanded ? 'Show fewer' : 'More (' + (issuesSource.length - 20) + ' more)'}" />
           </Link>
         </HStack>
         <Text

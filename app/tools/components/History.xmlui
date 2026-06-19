@@ -1,11 +1,19 @@
 <Component
   name="History"
   var.selectedHistoryGroup="{null}"
-  var.query="{''}">
+  var.historyExpanded="{false}"
+  var.query="{''}"
+  var.historySource="{(historyExpanded &amp;&amp; historyFull.value &amp;&amp; historyFull.value.length > 0) ? historyFull.value : (historyFirstPage.value || [])}">
 
   <DataSource
-    id="history"
-    url="/__worklist-history/list" />
+    id="historyFirstPage"
+    url="/__worklist-history/list"
+    queryParams="{{ limit: 20 }}" />
+
+  <DataSource
+    id="historyFull"
+    url="/__worklist-history/list"
+    when="{historyExpanded}" />
 
   <DataSource
     id="historySearch"
@@ -15,7 +23,7 @@
 
   <variable
     name="displayedHistory"
-    value="{window.selectDisplayed(query, historySearch.value, history.value)}" />
+    value="{window.selectDisplayed(query, historySearch.value, historySource)}" />
 
   <Theme maxWidth-ModalDialog="80%">
   <ModalDialog
@@ -85,11 +93,11 @@
     </HStack>
 
     <Theme size-Spinner="16px">
-      <Spinner when="{!history.value}" />
+      <Spinner when="{!historyFirstPage.value}" />
     </Theme>
 
     <Text
-      when="{history.value &amp;&amp; history.value.length === 0}"
+      when="{historyFirstPage.value &amp;&amp; historySource.length === 0}"
       color="$textColor-secondary"
       fontSize="$fontSize-sm">
       No worklist history yet.
@@ -155,6 +163,22 @@
           </Link>
         </VStack>
       </List>
+      <HStack
+        when="{(!query || query.trim().length &lt; 2) &amp;&amp; historyFirstPage.value &amp;&amp; historyFirstPage.value.length >= 20}"
+        padding="$space-2"
+        horizontalAlignment="center"
+        gap="$space-2">
+        <Link
+          onClick="historyExpanded = !historyExpanded"
+          noIndicator>
+          <Text
+            fontSize="$fontSize-sm"
+            value="{historyExpanded ? 'Show fewer' : ((historyFull.value &amp;&amp; historyFull.value.length > 20) ? ('More (' + (historyFull.value.length - 20) + ' more)') : 'More items')}" />
+        </Link>
+        <Theme size-Spinner="14px">
+          <Spinner when="{historyExpanded &amp;&amp; historyFull.inProgress &amp;&amp; !historyFull.value}" />
+        </Theme>
+      </HStack>
     </Theme>
   </VStack>
 </Component>

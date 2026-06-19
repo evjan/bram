@@ -15,7 +15,11 @@ Bram has opinions. It thinks versioning and collaboration are well-handled by gi
 
 <img width="1638" height="1023" alt="v28" src="https://github.com/user-attachments/assets/f4a63937-8c2e-4e77-b8a4-4f4712492db5" />
 
+## Blog
 
+<a href="https://blog.jonudell.net/2026/06/02/how-to-make-best-use-of-git-and-github-for-ai-assisted-software-development/">How to make best use of git and GitHub for AI-assisted software development</a>
+
+<a href="https://blog.jonudell.net/2026/06/17/vibe-coding-as-a-team-sport/">Vibe coding as a team sport</a>
 
 ## How does it work?
 

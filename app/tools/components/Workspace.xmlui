@@ -490,7 +490,7 @@
                 enabled="{!(submitting || awaitingResponse) &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
                 onClick="const raw = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (raw) { window.__bramFlushWorklistDraft &amp;&amp; window.__bramFlushWorklistDraft(); const sent = window.__bramSubmitWorklistMessageFast('skip-worklist: ' + raw); if (sent) { pendingPastedImageCount = window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(worklistVoiceTarget || 'message-agent') : 0; pendingPastedImagePaths = window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(worklistVoiceTarget || 'message-agent') : []; stagingPastedImageCount = window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0; stickyConversationTools = []; stickyConversationToolsKey = ''; stickyConversationUserImages = []; stickyConversationUserImagesKey = ''; liveSubmittedAssistantText = ''; liveSubmittedAssistantKey = ''; submittedWorklistImages = (sent.images || []); window.__bramIframeTrace('submitted-images', {kind: 'message-skip-worklist', count: submittedWorklistImages.length, first: submittedWorklistImages[0] || ''}); submittedWorklistMessage = sent.message; submittedTurnsBaseline = sent.baseline; messageSentAtText = sent.sentAtText; submittedKind = window.__bramSetWorklistSubmittedKind('message'); awaitingResponse = true; awaitingResponseSetAt = window.__bramMarkAwaitingStarted(); } worklistInputBox.setValue(''); } " />
             </VStack>
-            <Theme size-Spinner="0.85em">
+            <Theme size-Spinner="{14}">
               <Spinner when="{isWorklistVoiceProcessingTarget('message-agent')}" />
             </Theme>
           </HStack>
@@ -519,7 +519,7 @@
             size="xs"
             enabled="{!newItemSubmitting}"
             onClick="newItemHelp = true" />
-          <Theme size-Spinner="1em">
+          <Theme size-Spinner="{16}">
             <Spinner when="{newItemSubmitting}" />
           </Theme>
           <SpaceFiller />
@@ -599,7 +599,7 @@
           <VStack gap="$space-1">
             <HStack gap="$space-3" verticalAlignment="start">
               <HStack width="1.75em" horizontalAlignment="center" verticalAlignment="center">
-                <Theme size-Spinner="0.85em">
+                <Theme size-Spinner="{14}">
                   <Spinner when="{submitting &amp;&amp; submittedItemId === $item.id}" />
                 </Theme>
                 <Button
@@ -690,7 +690,7 @@
                   <ChangeListener
                     listenTo="{awaitingResponse}"
                     onDidChange="(c) => { if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedItemId === $item.id &amp;&amp; feedbackBox &amp;&amp; feedbackBox.value) { feedbackBox.setValue(''); const next = Object.assign({}, feedbackDraftsById || {}); delete next[$item.id]; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } }" />
-                  <Theme size-Spinner="0.85em">
+                  <Theme size-Spinner="{14}">
                     <Spinner when="{isWorklistVoiceProcessingTarget('feedback') &amp;&amp; feedbackVoiceRecordingItemId === $item.id}" />
                   </Theme>
                   <Button
@@ -1149,7 +1149,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
               variant="{newItemVoiceRecording ? 'solid' : 'outlined'}"
               enabled="{!isWorklistVoiceProcessingTarget('new-item') &amp;&amp; (!newItemVoiceRecording || worklistVoiceRecordingActive)}"
               onClick="setWorklistVoiceTarget('new-item'); newItemVoiceRecording = toggleVoiceForCurrentTarget(newItemVoiceRecording)" />
-            <Theme size-Spinner="0.85em">
+            <Theme size-Spinner="{14}">
               <Spinner when="{isWorklistVoiceProcessingTarget('new-item')}" />
             </Theme>
           </HStack>

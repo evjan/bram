@@ -839,7 +839,8 @@
             tooltip="Show worklist and chat side by side"
             onClick="window.__bramIframeTrace('worklist-conversation-layout-click', {source: 'conversation-header', layout: 'split'}); worklistConversationLayout = window.__bramSetWorklistConversationLayout('split')" />
         </HStack>
-        <ConversationPane />
+        <ConversationPane
+          exchange="{conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange}" />
       </VStack>
     </HSplitter>
     </VStack>
@@ -1266,7 +1267,8 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
       listenTo="{convPaneAgentStatusEvt.value &amp;&amp; convPaneAgentStatusEvt.value.tick}"
       onDidChange="() => {
         const p = (convPaneAgentStatusEvt.value &amp;&amp; convPaneAgentStatusEvt.value.payload) || null;
-        agentIsWorking = !!(p &amp;&amp; p.state === 'working');
+        const nextWorking = !!(p &amp;&amp; p.state === 'working');
+        if (nextWorking !== agentIsWorking) { agentIsWorking = nextWorking; }
         if (awaitingResponse &amp;&amp; p &amp;&amp; p.state !== 'working') {
           window.__bramIframeTrace('refetch-called', {context: 'agent-status-changed', state: p.state || ''});
           lastAssistantTickAt = Date.now();

@@ -1,50 +1,33 @@
-<Component name="ConversationPane" var.fullscreenImage="{null}" var.lastRefetchReason="{''}" var.lastRefetchAt="{0}">
-  <!-- One stable-URL DataSource, refreshed in place by the talk-session event
-       only (the ChangeListener below calls lastExchange.refetch(), debounced).
-       No steady poll: a 1s poll re-rendered the growing full-turn Markdown
-       every tick during streaming and starved the shared renderer thread,
-       which showed up as multi-second getUserMedia/mic-start latency. The
-       event fires on real JSONL changes, so the pane still updates live and
-       accumulates. Never put a changing tick in the URL -- that restarts the
-       query and blanks .value (the flash). See docs/conversation-pane.md. -->
-  <DataSource id="lastExchange" url="/__last-exchange" />
-  <External
-    id="convoTalkEvt"
-    initial="{null}"
-    subscribe="{window.bramSubscribeTalkSessionChange()}" />
+<Component name="ConversationPane" var.fullscreenImage="{null}" var.heldExchange="{null}">
+  <!-- Sources the exchange from Workspace's conversationStateDS
+       (/__conversation-state) via $props.exchange. That route's URL carries a
+       cache-buster (?t={tick}) that increments on every refetch, so its
+       .value oscillates blank<->content continuously during a turn (confirmed:
+       textLen 0 <-> N on each refetch). Binding the pane straight to it both
+       flashes and corrupts the dim.
+
+       FIX: render the whole pane from heldExchange -- a state var that a
+       ChangeListener updates ONLY when $props.exchange is *meaningful* (has
+       userText / assistantText / tools). It therefore never holds a blank, so
+       the pane never blanks and never flashes, while real content (including
+       incremental growth) still flows through. A ChangeListener (not a var
+       binding) is used so the update is reliably reactive.
+
+       DIM: derived downstream from heldExchange.assistantText -- empty means a
+       new turn has started and you're looking at the prior response (held in
+       AgentLastResponse.heldAssistantText), so it dims; non-empty means the
+       fresh response has begun, so it brightens and stays bright.
+
+       ChangeListener does not fire on initial mount
+       (https://docs.xmlui.org/howto/debounce-with-changelistener). -->
   <ChangeListener
-    listenTo="{convoTalkEvt.value &amp;&amp; convoTalkEvt.value.at}"
-    onDidChange="() => debounce(250, () => {
-      const text = (lastExchange.value &amp;&amp; lastExchange.value.assistantText) || '';
-      lastRefetchReason = 'talk-session';
-      lastRefetchAt = Date.now();
-      window.__bramIframeTrace('conversation-refetch', {reason: lastRefetchReason, assistantSig: window.assistantOutputSignature(lastExchange.value), assistantTextLen: text.length, toolsLen: (lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0});
-      lastExchange.refetch();
-    })" />
-  <External
-    id="convoAgentStatusEvt"
-    initial="{null}"
-    subscribe="{window.bramSubscribeTauriEvent('agent-status-changed')}" />
+    listenTo="{(($props.exchange &amp;&amp; $props.exchange.userText) || '') + '|' + window.assistantOutputSignature($props.exchange) + '|' + (($props.exchange &amp;&amp; $props.exchange.tools &amp;&amp; $props.exchange.tools.length) || 0)}"
+    onDidChange="() => { if ($props.exchange &amp;&amp; ($props.exchange.userText || $props.exchange.assistantText || ($props.exchange.tools &amp;&amp; $props.exchange.tools.length))) { heldExchange = $props.exchange; } }" />
   <ChangeListener
-    listenTo="{convoAgentStatusEvt.value &amp;&amp; convoAgentStatusEvt.value.tick}"
+    listenTo="{window.assistantOutputSignature(heldExchange) + '|' + ((heldExchange &amp;&amp; heldExchange.tools &amp;&amp; heldExchange.tools.length) || 0)}"
     onDidChange="() => {
-      const payload = (convoAgentStatusEvt.value &amp;&amp; convoAgentStatusEvt.value.payload) || {};
-      window.__bramIframeTrace('conversation-finished-signal', {event: 'agent-status-changed', state: payload.state || '', phase: payload.phase || '', provider: payload.provider || '', source: payload.source || ''});
-      if (payload.state === 'finished') {
-        debounce(650, () => {
-          const text = (lastExchange.value &amp;&amp; lastExchange.value.assistantText) || '';
-          lastRefetchReason = 'agent-status-finished';
-          lastRefetchAt = Date.now();
-          window.__bramIframeTrace('conversation-refetch', {reason: lastRefetchReason, provider: payload.provider || '', source: payload.source || '', state: payload.state || '', phase: payload.phase || '', assistantSig: window.assistantOutputSignature(lastExchange.value), assistantTextLen: text.length, toolsLen: (lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0});
-          lastExchange.refetch();
-        });
-      }
-    }" />
-  <ChangeListener
-    listenTo="{window.assistantOutputSignature(lastExchange.value) + '|' + ((lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0)}"
-    onDidChange="() => {
-      const text = (lastExchange.value &amp;&amp; lastExchange.value.assistantText) || '';
-      window.__bramIframeTrace('conversation-value-changed', {reason: lastRefetchReason, sinceRefetchMs: lastRefetchAt ? (Date.now() - lastRefetchAt) : -1, assistantSig: window.assistantOutputSignature(lastExchange.value), assistantTextLen: text.length, toolsLen: (lastExchange.value &amp;&amp; lastExchange.value.tools &amp;&amp; lastExchange.value.tools.length) || 0, hasAssistant: !!text, isRefetch: !!(lastExchange.isRefetching)});
+      const text = (heldExchange &amp;&amp; heldExchange.assistantText) || '';
+      window.__bramIframeTrace('conversation-value-changed', {assistantSig: window.assistantOutputSignature(heldExchange), assistantTextLen: text.length, toolsLen: (heldExchange &amp;&amp; heldExchange.tools &amp;&amp; heldExchange.tools.length) || 0, hasAssistant: !!text});
     }" />
   <ModalDialog
     when="{!!fullscreenImage}"
@@ -59,13 +42,13 @@
   <VStack gap="$space-3" padding="$space-3">
     <VStack
       gap="$space-1"
-      when="{lastExchange.value &amp;&amp; (lastExchange.value.userText || ((lastExchange.value.userImages || []).length > 0))}"
-      var.userImagePreviews="{((lastExchange.value &amp;&amp; lastExchange.value.userImages) || []).length > 0 ? lastExchange.value.userImages : window.__bramExtractImagePaths((lastExchange.value &amp;&amp; lastExchange.value.userText) || '').concat(window.__bramExtractImagePaths((lastExchange.value &amp;&amp; lastExchange.value.iterateFeedback) || ''))}">
+      when="{heldExchange &amp;&amp; (heldExchange.userText || ((heldExchange.userImages || []).length > 0))}"
+      var.userImagePreviews="{((heldExchange &amp;&amp; heldExchange.userImages) || []).length > 0 ? heldExchange.userImages : window.__bramExtractImagePaths((heldExchange &amp;&amp; heldExchange.userText) || '').concat(window.__bramExtractImagePaths((heldExchange &amp;&amp; heldExchange.iterateFeedback) || ''))}">
         <Text
           fontWeight="$fontWeight-bold"
           color="$color-info-700"
           value="You" />
-      <Markdown content="{window.__bramStripImagePaths(window.__bramConversationPaneUserText(lastExchange.value.userText)) + ((lastExchange.value &amp;&amp; lastExchange.value.iterateFeedback) ? '\n\n' + window.__bramStripImagePaths(lastExchange.value.iterateFeedback) : '')}" />
+      <Markdown content="{window.__bramStripImagePaths(window.__bramConversationPaneUserText(heldExchange.userText)) + ((heldExchange &amp;&amp; heldExchange.iterateFeedback) ? '\n\n' + window.__bramStripImagePaths(heldExchange.iterateFeedback) : '')}" />
       <VStack
         gap="$space-2"
         when="{userImagePreviews &amp;&amp; userImagePreviews.length > 0}">
@@ -80,13 +63,13 @@
       </VStack>
     </VStack>
     <AgentToolUses
-      exchange="{lastExchange.value}"
-      active="{lastExchange.loaded &amp;&amp; conversationActive(lastExchange.value)}" />
+      exchange="{heldExchange}"
+      active="{heldExchange &amp;&amp; conversationActive(heldExchange)}" />
     <AgentLastResponse
-      exchange="{lastExchange.value}"
-      active="{lastExchange.loaded &amp;&amp; conversationActive(lastExchange.value)}" />
+      exchange="{heldExchange}"
+      active="{heldExchange &amp;&amp; conversationActive(heldExchange)}" />
     <Text
-      when="{!lastExchange.value || (!lastExchange.value.userText &amp;&amp; !lastExchange.value.assistantText &amp;&amp; (!lastExchange.value.tools || lastExchange.value.tools.length === 0))}"
+      when="{!heldExchange || (!heldExchange.userText &amp;&amp; !heldExchange.assistantText &amp;&amp; (!heldExchange.tools || heldExchange.tools.length === 0))}"
       fontSize="$fontSize-sm">
       No recent exchange to show.
     </Text>

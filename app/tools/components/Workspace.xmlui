@@ -457,7 +457,7 @@
           width="90%"
           data="{{ message: window.__bramRestoreWorklistDraft() }}"
           onWillSubmit="(data) => { if (!worklistInputBox || !worklistInputBox.value || !worklistInputBox.value.trim()) return false; }"
-          onSubmit="messageSubmitResult = window.__bramPrepareWorklistMessageSubmission({text: (worklistInputBox &amp;&amp; worklistInputBox.value) || '', voiceTarget: worklistVoiceTarget || 'message-agent'}); if (worklistInputBox) worklistInputBox.setValue('')">
+          onSubmit="const r = window.__bramPrepareWorklistMessageSubmission({text: (worklistInputBox &amp;&amp; worklistInputBox.value) || '', voiceTarget: worklistVoiceTarget || 'message-agent'}); messageSubmitResult = r; if (r.submitted &amp;&amp; worklistInputBox) { worklistInputBox.setValue(''); window.__bramClearWorklistDraft(); }">
           <property name="buttonRowTemplate"><Fragment/></property>
           <HStack gap="$space-2" verticalAlignment="center" width="100%">
             <Button
@@ -491,14 +491,14 @@
                 size="xs"
                 tooltip="Send this message to the agent (Enter also sends)."
                 enabled="{!(submitting || awaitingResponse) &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
-                onClick="const msg = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (msg) { messageSubmitResult = window.__bramPrepareWorklistMessageSubmission({text: msg, voiceTarget: worklistVoiceTarget || 'message-agent'}); worklistInputBox.setValue(''); }" />
+                onClick="const msg = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (msg) { const r = window.__bramPrepareWorklistMessageSubmission({text: msg, voiceTarget: worklistVoiceTarget || 'message-agent'}); messageSubmitResult = r; if (r.submitted) { worklistInputBox.setValue(''); window.__bramClearWorklistDraft(); } }" />
               <Button
                 label="skip worklist"
                 variant="ghost"
                 size="xs"
                 tooltip="Send and bypass propose-first for this turn — edit files directly. Use when you want a direct edit."
                 enabled="{!(submitting || awaitingResponse) &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
-                onClick="const raw = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (raw) { messageSubmitResult = window.__bramPrepareWorklistMessageSubmission({text: raw, mode: 'skip-worklist', voiceTarget: worklistVoiceTarget || 'message-agent'}); worklistInputBox.setValue(''); }" />
+                onClick="const raw = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (raw) { const r = window.__bramPrepareWorklistMessageSubmission({text: raw, mode: 'skip-worklist', voiceTarget: worklistVoiceTarget || 'message-agent'}); messageSubmitResult = r; if (r.submitted) { worklistInputBox.setValue(''); window.__bramClearWorklistDraft(); } }" />
             </VStack>
             <Theme size-Spinner="14px">
               <Spinner when="{isWorklistVoiceProcessingTarget('message-agent')}" />
@@ -742,7 +742,7 @@
                       label="Approve"
                       size="xs"
                       enabled="{!submitting && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed')}"
-                      onClick="(() => { window.__bramIframeTrace('click', {target: 'approve', item: $item.id}); if ($item.status === 'applied' &amp;&amp; $item.closesIssues &amp;&amp; $item.closesIssues.length > 0) { closeIssuesItemRef = $item; closeIssuesState = initCloseIssueState($item.closesIssues); closeIssuesDialog = $item.id; return; } const r = window.__bramPrepareWorklistActionSubmission({kind: 'approved', items: worklist.value.items, selectedId: $item.id, rawFeedback: (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || '', feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'approve'}); worklistActionResult = r; toTurn(r.turnText); if (feedbackBox) feedbackBox.setValue(''); })()" />
+                      onClick="(() => { window.__bramIframeTrace('click', {target: 'approve', item: $item.id}); if ($item.status === 'applied' &amp;&amp; $item.closesIssues &amp;&amp; $item.closesIssues.length > 0) { closeIssuesItemRef = $item; closeIssuesState = initCloseIssueState($item.closesIssues); closeIssuesDialog = $item.id; return; } const r = window.__bramPrepareWorklistActionSubmission({kind: 'approved', items: worklist.value.items, selectedId: $item.id, rawFeedback: (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || '', feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'approve'}); feedbackDraftsById = r.feedbackDraftsById; worklistActionResult = r; toTurn(r.turnText); if (feedbackBox) feedbackBox.setValue(''); })()" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -757,7 +757,7 @@
                       label="Iterate"
                       size="xs"
                       enabled="{!submitting && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed') && (((feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || '').trim().length > 0 || (window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot('feedback:' + $item.id).count : pendingPastedImageCount) > 0)}"
-                      onClick="window.__bramIframeTrace('click', {target: 'iterate', item: $item.id, pasteTarget: 'feedback:' + $item.id}); const r = window.__bramPrepareWorklistActionSubmission({kind: 'iterate', items: worklist.value.items, selectedId: $item.id, rawFeedback: (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || '', feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'iterate'}); worklistActionResult = r; sendIterateWithFeedbackDraft(worklist.value.items, $item.id, r.feedback); if (feedbackBox) feedbackBox.setValue('')" />
+                      onClick="window.__bramIframeTrace('click', {target: 'iterate', item: $item.id, pasteTarget: 'feedback:' + $item.id}); const r = window.__bramPrepareWorklistActionSubmission({kind: 'iterate', items: worklist.value.items, selectedId: $item.id, rawFeedback: (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || '', feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'iterate'}); feedbackDraftsById = r.feedbackDraftsById; worklistActionResult = r; sendIterateWithFeedbackDraft(worklist.value.items, $item.id, r.feedback); if (feedbackBox) feedbackBox.setValue('')" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -772,7 +772,7 @@
                       label="Drop"
                       size="xs"
                       enabled="{!submitting}"
-                      onClick="window.__bramIframeTrace('click', {target: 'drop', item: $item.id}); const r = window.__bramPrepareWorklistActionSubmission({kind: 'drop', items: worklist.value.items, selectedId: $item.id, rawFeedback: (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || '', feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'drop'}); worklistActionResult = r; toTurn(r.turnText); if (feedbackBox) feedbackBox.setValue('')" />
+                      onClick="window.__bramIframeTrace('click', {target: 'drop', item: $item.id}); const r = window.__bramPrepareWorklistActionSubmission({kind: 'drop', items: worklist.value.items, selectedId: $item.id, rawFeedback: (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || '', feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'drop'}); feedbackDraftsById = r.feedbackDraftsById; worklistActionResult = r; toTurn(r.turnText); if (feedbackBox) feedbackBox.setValue('')" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"

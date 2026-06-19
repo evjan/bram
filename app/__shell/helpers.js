@@ -1953,12 +1953,13 @@ window.__bramPrepareWorklistActionSubmission = function (opts) {
     turnText = "drop: " + window.__bramBuildDropPayload(items, selectedId, payloadFeedback);
   }
 
+  var pasteState = window.__bramPasteStateSnapshot(opts.voiceTarget || "message-agent");
   return {
     feedback: feedback,
     turnText: turnText,
-    pendingPastedImageCount: window.bramPendingPastedImageCountForTarget ? window.bramPendingPastedImageCountForTarget(opts.voiceTarget || "message-agent") : 0,
-    pendingPastedImagePaths: window.bramPendingPastedImagePathsForTarget ? window.bramPendingPastedImagePathsForTarget(opts.voiceTarget || "message-agent") : [],
-    stagingPastedImageCount: window.bramStagingPastedImageCount ? window.bramStagingPastedImageCount() : 0,
+    pendingPastedImageCount: pasteState.count,
+    pendingPastedImagePaths: pasteState.paths,
+    stagingPastedImageCount: pasteState.staging,
     submittedWorklistImages: submittedImages,
     submittedWorklistMessage: sent ? sent.message : "",
     submittedTurnsBaseline: sent ? sent.baseline : 0,
@@ -2273,6 +2274,9 @@ function bramComputePasteState(target) {
     staging: window.bramStagingPastedImageCount(),
   };
 }
+window.__bramPasteStateSnapshot = function (target) {
+  return bramComputePasteState(target);
+};
 function bramNotifyPasteState() {
   bramPasteStateSubscribers.forEach(function (cb) {
     try { cb(); } catch (e) { console.error("[bram-paste] subscriber threw:", e); }

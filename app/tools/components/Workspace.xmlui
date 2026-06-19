@@ -20,9 +20,7 @@
   var.inflightTick="{0}"
   var.actionProgressTick="{0}"
   var.actionProgressKind="{''}"
-  var.lastAssistantTick="{0}"
   var.worklistTurnsTick="{0}"
-  var.lastAssistantTickAt="{0}"
   var.lastAssistantStableText="{''}"
   var.staleAssistantBaseline="{''}"
   var.lastConversationSig="{''}"
@@ -199,7 +197,7 @@
        consumers in AgentToolUses / ConversationPane / AgentLastResponse. -->
   <DataSource
     id="conversationStateDS"
-    url="/__conversation-state?t={lastAssistantTick}"
+    url="/__conversation-state"
     onLoaded="(data) => {
       const text = data && data.lastAssistantText && data.lastAssistantText.text;
       if (text && text !== lastAssistantStableText) {
@@ -421,8 +419,7 @@
           window.__bramIframeTrace('listener-fired', {context: 'talk-session-changed', correlation_id: correlationId, at_host_ms: atHostMs, delta_to_emit_ms: atHostMs ? (Date.now() - atHostMs) : -1});
           debounce(400, (id, hostMs) => {
             window.__bramIframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: id || '', at_host_ms: hostMs || 0, delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1});
-            lastAssistantTickAt = Date.now();
-            lastAssistantTick = lastAssistantTick + 1;
+            conversationStateDS.refetch();
           }, correlationId, atHostMs);
         }" />
       <External
@@ -1216,8 +1213,7 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
           worklist.refetch();
         }
         if (awaitingResponse) {
-          lastAssistantTickAt = Date.now();
-          lastAssistantTick = lastAssistantTick + 1;
+          conversationStateDS.refetch();
           agentTurnEndedSinceSubmit = true;
           if (window.__bramMarkTurnEnded('agent-turn-end', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
             awaitingResponse = false;
@@ -1271,8 +1267,7 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
         if (nextWorking !== agentIsWorking) { agentIsWorking = nextWorking; }
         if (awaitingResponse &amp;&amp; p &amp;&amp; p.state !== 'working') {
           window.__bramIframeTrace('refetch-called', {context: 'agent-status-changed', state: p.state || ''});
-          lastAssistantTickAt = Date.now();
-          lastAssistantTick = lastAssistantTick + 1;
+          conversationStateDS.refetch();
           if (p.state === 'finished' &amp;&amp; window.__bramMarkTurnEnded('agent-status-finished', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
             awaitingResponse = false;
             submittedKind = null;

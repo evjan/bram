@@ -1,33 +1,24 @@
-<Component name="ConversationPane" var.fullscreenImage="{null}" var.heldExchange="{null}">
+<Component name="ConversationPane" var.fullscreenImage="{null}">
   <!-- Sources the exchange from Workspace's conversationStateDS
-       (/__conversation-state) via $props.exchange. That route's URL carries a
-       cache-buster (?t={tick}) that increments on every refetch, so its
-       .value oscillates blank<->content continuously during a turn (confirmed:
-       textLen 0 <-> N on each refetch). Binding the pane straight to it both
-       flashes and corrupts the dim.
+       (/__conversation-state, static URL refreshed in place via .refetch()).
+       The source no longer blanks per-refetch (see
+       stabilize-conversation-state-refetch-no-blank: the URL cache-buster that
+       made .value oscillate blank<->content was removed), so the pane renders
+       directly from $props.exchange -- no heldExchange bridge needed.
 
-       FIX: render the whole pane from heldExchange -- a state var that a
-       ChangeListener updates ONLY when $props.exchange is *meaningful* (has
-       userText / assistantText / tools). It therefore never holds a blank, so
-       the pane never blanks and never flashes, while real content (including
-       incremental growth) still flows through. A ChangeListener (not a var
-       binding) is used so the update is reliably reactive.
-
-       DIM: derived downstream from heldExchange.assistantText -- empty means a
-       new turn has started and you're looking at the prior response (held in
-       AgentLastResponse.heldAssistantText), so it dims; non-empty means the
-       fresh response has begun, so it brightens and stays bright.
+       Dim is derived downstream (AgentLastResponse) from whether the exchange
+       has fresh assistant text: empty => a new turn started and you are looking
+       at the prior response (held in AgentLastResponse.heldAssistantText), so it
+       dims; non-empty => the new response has begun, so it brightens and stays
+       bright as it accumulates.
 
        ChangeListener does not fire on initial mount
        (https://docs.xmlui.org/howto/debounce-with-changelistener). -->
   <ChangeListener
-    listenTo="{(($props.exchange &amp;&amp; $props.exchange.userText) || '') + '|' + window.assistantOutputSignature($props.exchange) + '|' + (($props.exchange &amp;&amp; $props.exchange.tools &amp;&amp; $props.exchange.tools.length) || 0)}"
-    onDidChange="() => { if ($props.exchange &amp;&amp; ($props.exchange.userText || $props.exchange.assistantText || ($props.exchange.tools &amp;&amp; $props.exchange.tools.length))) { heldExchange = $props.exchange; } }" />
-  <ChangeListener
-    listenTo="{window.assistantOutputSignature(heldExchange) + '|' + ((heldExchange &amp;&amp; heldExchange.tools &amp;&amp; heldExchange.tools.length) || 0)}"
+    listenTo="{window.assistantOutputSignature($props.exchange) + '|' + (($props.exchange &amp;&amp; $props.exchange.tools &amp;&amp; $props.exchange.tools.length) || 0)}"
     onDidChange="() => {
-      const text = (heldExchange &amp;&amp; heldExchange.assistantText) || '';
-      window.__bramIframeTrace('conversation-value-changed', {assistantSig: window.assistantOutputSignature(heldExchange), assistantTextLen: text.length, toolsLen: (heldExchange &amp;&amp; heldExchange.tools &amp;&amp; heldExchange.tools.length) || 0, hasAssistant: !!text});
+      const text = ($props.exchange &amp;&amp; $props.exchange.assistantText) || '';
+      window.__bramIframeTrace('conversation-value-changed', {assistantSig: window.assistantOutputSignature($props.exchange), assistantTextLen: text.length, toolsLen: ($props.exchange &amp;&amp; $props.exchange.tools &amp;&amp; $props.exchange.tools.length) || 0, hasAssistant: !!text});
     }" />
   <ModalDialog
     when="{!!fullscreenImage}"
@@ -42,13 +33,13 @@
   <VStack gap="$space-3" padding="$space-3">
     <VStack
       gap="$space-1"
-      when="{heldExchange &amp;&amp; (heldExchange.userText || ((heldExchange.userImages || []).length > 0))}"
-      var.userImagePreviews="{((heldExchange &amp;&amp; heldExchange.userImages) || []).length > 0 ? heldExchange.userImages : window.__bramExtractImagePaths((heldExchange &amp;&amp; heldExchange.userText) || '').concat(window.__bramExtractImagePaths((heldExchange &amp;&amp; heldExchange.iterateFeedback) || ''))}">
+      when="{$props.exchange &amp;&amp; ($props.exchange.userText || (($props.exchange.userImages || []).length > 0))}"
+      var.userImagePreviews="{(($props.exchange &amp;&amp; $props.exchange.userImages) || []).length > 0 ? $props.exchange.userImages : window.__bramExtractImagePaths(($props.exchange &amp;&amp; $props.exchange.userText) || '').concat(window.__bramExtractImagePaths(($props.exchange &amp;&amp; $props.exchange.iterateFeedback) || ''))}">
         <Text
           fontWeight="$fontWeight-bold"
           color="$color-info-700"
           value="You" />
-      <Markdown content="{window.__bramStripImagePaths(window.__bramConversationPaneUserText(heldExchange.userText)) + ((heldExchange &amp;&amp; heldExchange.iterateFeedback) ? '\n\n' + window.__bramStripImagePaths(heldExchange.iterateFeedback) : '')}" />
+      <Markdown content="{window.__bramStripImagePaths(window.__bramConversationPaneUserText($props.exchange.userText)) + (($props.exchange &amp;&amp; $props.exchange.iterateFeedback) ? '\n\n' + window.__bramStripImagePaths($props.exchange.iterateFeedback) : '')}" />
       <VStack
         gap="$space-2"
         when="{userImagePreviews &amp;&amp; userImagePreviews.length > 0}">
@@ -63,13 +54,13 @@
       </VStack>
     </VStack>
     <AgentToolUses
-      exchange="{heldExchange}"
-      active="{heldExchange &amp;&amp; conversationActive(heldExchange)}" />
+      exchange="{$props.exchange}"
+      active="{$props.exchange &amp;&amp; conversationActive($props.exchange)}" />
     <AgentLastResponse
-      exchange="{heldExchange}"
-      active="{heldExchange &amp;&amp; conversationActive(heldExchange)}" />
+      exchange="{$props.exchange}"
+      active="{$props.exchange &amp;&amp; conversationActive($props.exchange)}" />
     <Text
-      when="{!heldExchange || (!heldExchange.userText &amp;&amp; !heldExchange.assistantText &amp;&amp; (!heldExchange.tools || heldExchange.tools.length === 0))}"
+      when="{!$props.exchange || (!$props.exchange.userText &amp;&amp; !$props.exchange.assistantText &amp;&amp; (!$props.exchange.tools || $props.exchange.tools.length === 0))}"
       fontSize="$fontSize-sm">
       No recent exchange to show.
     </Text>

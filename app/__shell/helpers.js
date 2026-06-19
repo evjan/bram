@@ -2050,6 +2050,62 @@ window.__bramPrepareWorklistActionSubmission = function (opts) {
   };
 };
 
+function __bramBuildCloseIssueLines(state) {
+  var lines = [];
+  Object.keys(state || {}).forEach(function (key) {
+    var v = state[key];
+    if (!v || !v.close) return;
+    var comment = (v.comment || "").trim();
+    if (comment) lines.push("close-issue: " + key + " comment: " + JSON.stringify(comment));
+    else lines.push("close-issue: " + key);
+  });
+  return lines;
+}
+
+function __bramCombineFeedbackWithCloseLines(base, lines, pushBeforeClose) {
+  var baseTrim = (base || "").trim();
+  var generated = [];
+  if (pushBeforeClose) generated.push("push-before-close: true");
+  if (lines && lines.length > 0) generated.push.apply(generated, lines);
+  if (generated.length === 0) return baseTrim;
+  if (!baseTrim) return generated.join("\n");
+  return baseTrim + "\n\n" + generated.join("\n");
+}
+
+window.__bramPrepareCloseIssueWorklistActionSubmission = function (opts) {
+  opts = opts || {};
+  var item = opts.item || {};
+  var feedbackDraftsById = opts.feedbackDraftsById || {};
+  var rawFeedback = feedbackDraftsById[item.id] || "";
+  var pasteTarget = "feedback:" + item.id;
+  var payloadFeedback = rawFeedback;
+  var imageAction = "approved-no-close";
+
+  if (opts.closeIssues) {
+    payloadFeedback = __bramCombineFeedbackWithCloseLines(
+      window.__bramWithStagedImageMarkers(rawFeedback, pasteTarget),
+      __bramBuildCloseIssueLines(opts.closeIssuesState),
+      true,
+    );
+    imageAction = "approved-close";
+  }
+
+  return window.__bramPrepareWorklistActionSubmission({
+    kind: "approved",
+    items: [item],
+    displayItems: [item],
+    selectedId: item.id,
+    itemRef: item,
+    payloadKind: "single-approve",
+    rawFeedback: rawFeedback,
+    payloadFeedback: payloadFeedback,
+    feedbackDraftsById: feedbackDraftsById,
+    expandedItemIds: opts.expandedItemIds || [],
+    voiceTarget: opts.voiceTarget || "message-agent",
+    imageAction: imageAction,
+  });
+};
+
 // Self-init: read `traces.enabled` from `/__settings` once at iframe
 // load and cache the result on `window.__bramTracesEnabled`. The
 // `iframeTrace` (above) and `logToHost` (above) bodies gate on

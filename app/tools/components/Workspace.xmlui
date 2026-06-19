@@ -1010,11 +1010,11 @@
           <Button
             label="Confirm"
             tooltip="Commit, push this commit through the verified close helper, then close"
-            onClick="const rawFeedback = (feedbackDraftsById || {})[closeIssuesItemRef.id] || ''; const markedFeedback = window.__bramWithStagedImageMarkers(rawFeedback, 'feedback:' + closeIssuesItemRef.id); const r = window.__bramPrepareWorklistActionSubmission({kind: 'approved', items: [closeIssuesItemRef], displayItems: [closeIssuesItemRef], selectedId: closeIssuesItemRef.id, itemRef: closeIssuesItemRef, payloadKind: 'single-approve', rawFeedback: rawFeedback, payloadFeedback: combineFeedbackWithCloseLines(markedFeedback, buildCloseIssueLines(closeIssuesState), true), feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', imageAction: 'approved-close'}); worklistActionResult = r; toTurn(r.turnText); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="const r = window.__bramPrepareCloseIssueWorklistActionSubmission({item: closeIssuesItemRef, closeIssuesState: closeIssuesState, closeIssues: true, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent'}); worklistActionResult = r; toTurn(r.turnText); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Approve without closing"
             variant="outlined"
-            onClick="const r = window.__bramPrepareWorklistActionSubmission({kind: 'approved', items: [closeIssuesItemRef], displayItems: [closeIssuesItemRef], selectedId: closeIssuesItemRef.id, itemRef: closeIssuesItemRef, payloadKind: 'single-approve', rawFeedback: (feedbackDraftsById || {})[closeIssuesItemRef.id] || '', feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', imageAction: 'approved-no-close'}); worklistActionResult = r; toTurn(r.turnText); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="const r = window.__bramPrepareCloseIssueWorklistActionSubmission({item: closeIssuesItemRef, closeIssues: false, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent'}); worklistActionResult = r; toTurn(r.turnText); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Cancel"
             variant="ghost"

@@ -43,9 +43,9 @@
           value="{window.__bramHistoryPhasePath(historyGroup)}"
           fontWeight="$fontWeight-bold" />
         <Text
-          when="{window.__bramHistoryItemFilesLine(historyGroup)}"
-          value="{window.__bramHistoryItemFilesLine(historyGroup)}"
-          variant="code"
+          when="{window.__bramWorklistItemFiles(historyGroup).length > 0}"
+          value="{window.__bramWorklistItemFiles(historyGroup).length + ' file' + (window.__bramWorklistItemFiles(historyGroup).length === 1 ? '' : 's')}"
+          color="$textColor-secondary"
           fontSize="$fontSize-sm" />
         <Link
           when="{window.__bramHistoryCommitUrl(historyGroup)}"
@@ -63,6 +63,22 @@
       <VStack gap="$space-2" when="{window.__bramHistoryItemFieldMarkdown(historyGroup, 'after')}">
         <Text value="After" fontWeight="$fontWeight-bold" />
         <Markdown content="{window.__bramHistoryItemFieldMarkdown(historyGroup, 'after')}" />
+      </VStack>
+
+      <VStack gap="$space-2" when="{window.__bramWorklistItemFiles(historyGroup).length > 0}">
+        <Text value="Files" fontWeight="$fontWeight-bold" />
+        <Items data="{window.__bramWorklistItemFiles(historyGroup)}">
+          <Text value="{$item}" variant="code" fontSize="$fontSize-sm" />
+        </Items>
+      </VStack>
+
+      <VStack gap="$space-2" when="{window.__bramHistoryCommitUrl(historyGroup)}">
+        <Text value="Commit" fontWeight="$fontWeight-bold" />
+        <Link
+          noIndicator
+          onClick="openExternal(window.__bramHistoryCommitUrl(historyGroup))">
+          <Text value="{window.__bramHistoryCommitUrl(historyGroup)}" variant="code" fontSize="$fontSize-sm" />
+        </Link>
       </VStack>
 
       <VStack gap="$space-2">

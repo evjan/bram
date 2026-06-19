@@ -20360,7 +20360,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
         let summary = worklist_history_summary(&changelog);
         let raw_commit_url = worklist_history_commit_url(&changelog);
         let commit_url = if fast_limited {
-            String::new()
+            raw_commit_url.trim().to_string()
         } else {
             visible_worklist_history_commit_url(app, &raw_commit_url, repo_slug.as_deref())
         };
@@ -20429,6 +20429,8 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                     group.latest_iso = iso;
                     group.current_item = display_item;
                     group.prose_phase_summary = summary;
+                } else if group.current_item.is_none() && display_item.is_some() {
+                    group.current_item = display_item;
                 }
             }
         } else {

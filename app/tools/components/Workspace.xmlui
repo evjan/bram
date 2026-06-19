@@ -686,10 +686,6 @@
                     color="$textColor-secondary"
                     value="{'+ ' + (turnEdits.length - 5) + ' more'}" />
                 </VStack>
-                <Text
-                  when="{(expandedItemIds || []).includes($item.id)}"
-                  value="{$item.file}"
-                  variant="code" />
                 <HStack
                   when="{(expandedItemIds || []).includes($item.id)}"
                   gap="$space-2"
@@ -802,11 +798,22 @@
                   gap="$space-2"
                   paddingTop="$space-2">
                   <ExpandableItem
-                    when="{$item.before || $item.after || $item.diff}"
+                    when="{$item.before || $item.after || $item.diff || window.__bramWorklistItemFiles($item).length > 0}"
                     summary="Details"
                     initiallyExpanded="false"
                     fullWidthSummary="true">
                     <VStack gap="$space-2">
+                      <ExpandableItem
+                        when="{window.__bramWorklistItemFiles($item).length > 0}"
+                        summary="Files"
+                        initiallyExpanded="false"
+                        fullWidthSummary="true">
+                        <VStack gap="$space-1">
+                          <Items data="{window.__bramWorklistItemFiles($item)}">
+                            <Text value="{$item}" variant="code" fontSize="$fontSize-sm" />
+                          </Items>
+                        </VStack>
+                      </ExpandableItem>
                       <ExpandableItem
                         when="{$item.before}"
                         summary="Before"

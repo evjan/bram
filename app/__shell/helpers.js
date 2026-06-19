@@ -1875,6 +1875,25 @@ window.__bramHistoryItemFilesLine = function (group) {
   return "";
 };
 
+window.__bramWorklistItemFiles = function (itemOrGroup) {
+  var item = itemOrGroup;
+  if (itemOrGroup && itemOrGroup.currentItem) {
+    item = itemOrGroup.currentItem;
+  }
+  if (!item) return [];
+  if (Array.isArray(item.files)) {
+    return item.files
+      .filter(function (file) {
+        return typeof file === "string" && file.trim();
+      })
+      .map(function (file) { return file.trim(); });
+  }
+  if (typeof item.file === "string" && item.file.trim()) {
+    return [item.file.trim()];
+  }
+  return [];
+};
+
 window.__bramHistoryLatestProseChanged = function (group) {
   var phase = window.__bramHistoryLatestPhase(group);
   var diff = (phase && phase.diff) || "";

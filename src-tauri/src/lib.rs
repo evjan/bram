@@ -4069,11 +4069,6 @@ fn pty_menu_scan_diagnostic(tail: &[u8], is_fire: bool) -> String {
 // Logs every state transition to stderr so failures-to-render can be
 // correlated against actual detector activity.
 fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
-    // menus.parseAndDisplay off (the default): skip scanning entirely —
-    // no parse_menu_options, no pty-menu-changed emit, nothing to render.
-    if !bram_menus_parse_enabled() {
-        return;
-    }
     let tail_cell = pty_tail_cell();
     let mut tail = match tail_cell.lock() {
         Ok(g) => g,
@@ -4102,6 +4097,14 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         if let Some(nl_pos) = tail.iter().position(|&b| b == b'\n') {
             tail.drain(..=nl_pos);
         }
+    }
+    // menus.parseAndDisplay off (the default): the rolling pty_tail is kept up
+    // to date above -- pty_agent_status_update reads it to scrape the status
+    // verb, so the append must NOT be skipped -- but skip menu detection /
+    // parse_menu_options / the pty-menu-changed emit so nothing is parsed or
+    // rendered.
+    if !bram_menus_parse_enabled() {
+        return;
     }
     let codex_action_required_title = pty_codex_action_required_pos(&tail).is_some();
     let mut detected = pty_menu_detect(&tail);

@@ -195,7 +195,7 @@
             when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'working'}"
             gap="$space-1"
             verticalAlignment="center">
-            <Theme size-Spinner="0.85em">
+            <Theme size-Spinner="24px">
               <Spinner />
             </Theme>
             <Text

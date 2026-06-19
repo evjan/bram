@@ -126,7 +126,7 @@
             variant="{newIssueVoiceRecording ? 'solid' : 'outlined'}"
             enabled="{!isWorklistVoiceProcessingTarget('new-issue')}"
             onClick="setWorklistVoiceTarget('new-issue'); newIssueVoiceRecording = toggleVoiceForCurrentTarget(newIssueVoiceRecording)" />
-          <Theme size-Spinner="{14}">
+          <Theme size-Spinner="14px">
             <Spinner when="{isWorklistVoiceProcessingTarget('new-issue')}" />
           </Theme>
         </HStack>
@@ -169,7 +169,7 @@
           size="xs"
           enabled="{!newIssueSubmitting}"
           onClick="showNewIssueHint = true" />
-        <Theme size-Spinner="{16}">
+        <Theme size-Spinner="16px">
           <Spinner when="{newIssueSubmitting || (issues.inProgress &amp;&amp; !issues.loaded)}" />
         </Theme>
         <SpaceFiller />
@@ -477,7 +477,7 @@
             size="sm"
             enabled="{!commentIssueCall.inProgress &amp;&amp; !closeIssueCall.inProgress}"
             onClick="closeIssueCall.execute({ number: selectedIssue.number, comment: closeCommentBox.value || '' })" />
-          <Theme size-Spinner="{16}">
+          <Theme size-Spinner="16px">
             <Spinner when="{commentIssueCall.inProgress || closeIssueCall.inProgress}" />
           </Theme>
         </HStack>

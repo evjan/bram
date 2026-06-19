@@ -500,7 +500,7 @@
                 enabled="{!(submitting || awaitingResponse) &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
                 onClick="const raw = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (raw) { messageSubmitResult = window.__bramPrepareWorklistMessageSubmission({text: raw, mode: 'skip-worklist', voiceTarget: worklistVoiceTarget || 'message-agent'}); worklistInputBox.setValue(''); }" />
             </VStack>
-            <Theme size-Spinner="{14}">
+            <Theme size-Spinner="14px">
               <Spinner when="{isWorklistVoiceProcessingTarget('message-agent')}" />
             </Theme>
           </HStack>
@@ -529,7 +529,7 @@
             size="xs"
             enabled="{!newItemSubmitting}"
             onClick="newItemHelp = true" />
-          <Theme size-Spinner="{16}">
+          <Theme size-Spinner="16px">
             <Spinner when="{newItemSubmitting}" />
           </Theme>
           <SpaceFiller />
@@ -612,7 +612,7 @@
           paddingHorizontal="$space-2"
           paddingBottom="$space-2"
           backgroundColor="$color-surface-50">
-          <Theme size-Spinner="{14}">
+          <Theme size-Spinner="14px">
             <Spinner />
           </Theme>
           <Text
@@ -625,7 +625,7 @@
           <VStack gap="$space-1">
             <HStack gap="$space-3" verticalAlignment="start">
               <HStack width="1.75em" horizontalAlignment="center" verticalAlignment="center">
-                <Theme size-Spinner="{14}">
+                <Theme size-Spinner="14px">
                   <Spinner when="{submitting &amp;&amp; actionProgressScope !== 'batch' &amp;&amp; submittedItemId === $item.id}" />
                 </Theme>
                 <Button
@@ -716,7 +716,7 @@
                   <ChangeListener
                     listenTo="{awaitingResponse}"
                     onDidChange="(c) => { if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedItemId === $item.id &amp;&amp; feedbackBox &amp;&amp; feedbackBox.value) { feedbackBox.setValue(''); const next = Object.assign({}, feedbackDraftsById || {}); delete next[$item.id]; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } }" />
-                  <Theme size-Spinner="{14}">
+                  <Theme size-Spinner="14px">
                     <Spinner when="{isWorklistVoiceProcessingTarget('feedback') &amp;&amp; feedbackVoiceRecordingItemId === $item.id}" />
                   </Theme>
                   <Button
@@ -1175,7 +1175,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
               variant="{newItemVoiceRecording ? 'solid' : 'outlined'}"
               enabled="{!isWorklistVoiceProcessingTarget('new-item') &amp;&amp; (!newItemVoiceRecording || worklistVoiceRecordingActive)}"
               onClick="setWorklistVoiceTarget('new-item'); newItemVoiceRecording = toggleVoiceForCurrentTarget(newItemVoiceRecording)" />
-            <Theme size-Spinner="{14}">
+            <Theme size-Spinner="14px">
               <Spinner when="{isWorklistVoiceProcessingTarget('new-item')}" />
             </Theme>
           </HStack>

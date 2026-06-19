@@ -20,7 +20,7 @@
        ChangeListener does not fire on initial mount
        (https://docs.xmlui.org/howto/debounce-with-changelistener). -->
   <ChangeListener
-    listenTo="{window.assistantOutputSignature($props.exchange)}"
+    listenToSources="{{exchange: $props.exchange}}"
     onDidChange="() => { const txt = ($props.exchange &amp;&amp; $props.exchange.assistantText) || ''; if (txt) { heldAssistantText = txt; } }" />
   <ChangeListener
     listenTo="{!!($props.exchange &amp;&amp; $props.exchange.assistantText)}"

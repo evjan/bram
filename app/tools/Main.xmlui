@@ -39,7 +39,7 @@
     listenTo="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.verb}"
     onDidChange="(c) => { if (c.newValue) { lastSeenAgentVerb = c.newValue; } }" />
   <ChangeListener
-    listenTo="{window.agentStatusSignature(mainAgentStatus.value, enhanceStatus.value)}"
+    listenToSources="{{mainAgentStatus: mainAgentStatus.value, enhanceStatus: enhanceStatus.value}}"
     onDidChange="() => {
       const s = mainAgentStatus.value || {};
       const provider = s.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '';

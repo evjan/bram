@@ -105,7 +105,7 @@
        shows the host returning a transient empty payload, the fix is
        host-side (atomic read in /__worklist). -->
   <ChangeListener
-    listenTo="{window.worklistValueSignature(worklist)}"
+    listenToSources="{{value: worklist.value, loaded: worklist.loaded, isRefetching: worklist.isRefetching}}"
     onDidChange="(c) => window.__bramIframeTrace('worklist-value-transition', {
       prev: c.prevValue,
       next: c.newValue,
@@ -223,7 +223,7 @@
     listenTo="{awaitingResponse}"
     onDidChange="(c) => { if (c.newValue &amp;&amp; !c.prevValue) { agentTurnEndedSinceSubmit = false; } if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedKind === 'message' &amp;&amp; worklistInputBox) { worklistInputBox.setValue(''); window.__bramClearWorklistDraft(); } }" />
   <ChangeListener
-    listenTo="{window.toolsSignature(conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools)}"
+    listenToSources="{{tools: conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools}}"
     onDidChange="() => {
       const tools = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools) || []).slice(-3);
       if (tools.length > 0) {
@@ -241,7 +241,7 @@
       }
     }" />
   <ChangeListener
-    listenTo="{window.conversationSyncSignature(conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange, lastAssistantStableText, submittedWorklistMessage, submittedItemId, submittedKind, awaitingResponse, stickyConversationTools, stickyConversationUserImages)}"
+    listenToSources="{{lastExchange: conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange, lastAssistantStableText: lastAssistantStableText, submittedWorklistMessage: submittedWorklistMessage, submittedItemId: submittedItemId, submittedKind: submittedKind, awaitingResponse: awaitingResponse, stickyConversationTools: stickyConversationTools, stickyConversationUserImages: stickyConversationUserImages}}"
     onDidChange="() => {
       const decision = window.__bramComputeConversationSync({
         lastExchange: (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange) || null,

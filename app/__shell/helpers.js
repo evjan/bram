@@ -1315,6 +1315,33 @@ window.__bramBuildBatchDropPayload = function (items, feedback) {
   });
 };
 
+window.__bramPrepareBatchWorklistActionSubmission = function (opts) {
+  opts = opts || {};
+  var items = opts.items || [];
+  var kind = opts.kind === "drop" ? "drop" : "approved";
+  var target = kind === "drop" ? "drop-all" : "approve-all";
+  var ids = items.filter(function (i) { return (i.status || "proposed") === "applied"; });
+  window.__bramIframeTrace("click", { target: target, count: ids.length });
+  window.__bramClearWorklistUiState();
+  var submittedItemId = ids.length > 0 ? ids[0].id : null;
+  var submittedKind = window.__bramSetWorklistSubmittedKind("action");
+  window.__bramIframeTrace("inflight-set", { item: submittedItemId, via: "click", target: target });
+  return {
+    turnText: (kind === "drop" ? "drop: " : "approved: ") + (
+      kind === "drop"
+        ? window.__bramBuildBatchDropPayload(items, "")
+        : window.__bramBuildBatchApprovePayload(items, "")
+    ),
+    submitting: true,
+    submittedItemId: submittedItemId,
+    submittedKind: submittedKind,
+    actionProgressKind: kind,
+    actionProgressTick: 0,
+    expandedItemIds: [],
+    feedbackDraftsById: {},
+  };
+};
+
 // Step 9 — sessionTurns bundle. Image / markdown / tool parsers +
 // JSONL → turns parser + sessionTurns with its function-property memo.
 // All pure data transforms; internal calls dispatch to window.__bram*
@@ -1896,6 +1923,50 @@ window.__bramRecordWorklistFeedbackConversation = function (text) {
   __bramWriteLS("bram.worklistSubmittedBaseline", String(baseline));
   window.__bramSetWorklistSubmittedKind("action");
   return { message: message, images: __bramExtractImagePaths(message), baseline: baseline, sentAtText: new Date().toLocaleTimeString() };
+};
+
+window.__bramPrepareWorklistMessageSubmission = function (opts) {
+  opts = opts || {};
+  var rawText = opts.text || "";
+  var skipWorklist = opts.mode === "skip-worklist";
+  window.__bramWorklistMessageSubmissionSeq = (window.__bramWorklistMessageSubmissionSeq || 0) + 1;
+  var seq = window.__bramWorklistMessageSubmissionSeq;
+  if (skipWorklist && !rawText.trim()) return { submitted: false, seq: seq };
+  var text = skipWorklist ? ("skip-worklist: " + rawText.trim()) : rawText;
+  if (!text.trim()) return { submitted: false, seq: seq };
+
+  if (window.__bramFlushWorklistDraft) window.__bramFlushWorklistDraft();
+  var sent = window.__bramSubmitWorklistMessageFast(text);
+  if (!sent) return { submitted: false, seq: seq };
+
+  var pasteState = window.__bramPasteStateSnapshot(opts.voiceTarget || "message-agent");
+  var submittedImages = sent.images || [];
+  window.__bramIframeTrace("submitted-images", {
+    kind: skipWorklist ? "message-skip-worklist" : "message",
+    count: submittedImages.length,
+    first: submittedImages[0] || "",
+  });
+
+  return {
+    submitted: true,
+    seq: seq,
+    pendingPastedImageCount: pasteState.count,
+    pendingPastedImagePaths: pasteState.paths,
+    stagingPastedImageCount: pasteState.staging,
+    stickyConversationTools: [],
+    stickyConversationToolsKey: "",
+    stickyConversationUserImages: [],
+    stickyConversationUserImagesKey: "",
+    liveSubmittedAssistantText: "",
+    liveSubmittedAssistantKey: "",
+    submittedWorklistImages: submittedImages,
+    submittedWorklistMessage: sent.message,
+    submittedTurnsBaseline: sent.baseline,
+    messageSentAtText: sent.sentAtText,
+    submittedKind: window.__bramSetWorklistSubmittedKind("message"),
+    awaitingResponse: true,
+    awaitingResponseSetAt: window.__bramMarkAwaitingStarted(),
+  };
 };
 
 window.__bramPrepareWorklistActionSubmission = function (opts) {

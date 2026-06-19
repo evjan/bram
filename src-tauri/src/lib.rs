@@ -7167,6 +7167,20 @@ fn remote_to_html(remote: &str) -> String {
     String::new()
 }
 
+fn current_head_commit_url<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<String> {
+    let remote_url = git_run(app, &["remote", "get-url", "origin"]).ok()?;
+    let html_base = remote_to_html(remote_url.trim());
+    if html_base.is_empty() {
+        return None;
+    }
+    let sha = git_run(app, &["rev-parse", "HEAD"]).ok()?;
+    let sha = sha.trim();
+    if sha.is_empty() {
+        return None;
+    }
+    Some(format!("{}/commit/{}", html_base, sha))
+}
+
 fn git_commit_detail<R: tauri::Runtime>(app: &AppHandle<R>, sha: &str) -> Result<Vec<u8>, String> {
     if sha.is_empty() || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("invalid sha".to_string());
@@ -19842,32 +19856,47 @@ fn generate_worklist_changelog<R: tauri::Runtime>(
         out.push('\n');
     }
 
-    let emit_removed_section = |out: &mut String, header: &str, items: &[&serde_json::Value]| {
-        if items.is_empty() {
-            return;
-        }
-        out.push_str(&format!("## {}\n\n", header));
-        for item in items {
-            let id = worklist_item_id(item).unwrap_or_default();
-            out.push_str(&format!(
-                "- `{}` (was {}, `{}`)\n",
-                id,
-                worklist_item_status(item),
-                worklist_item_str_field(item, "file")
-            ));
-            let before = worklist_item_str_field(item, "before");
-            if !before.is_empty() {
-                out.push_str(&format!("  - **Before:** {}\n", before.replace('\n', " ")));
-            }
-            let after = worklist_item_str_field(item, "after");
-            if !after.is_empty() {
-                out.push_str(&format!("  - **After:** {}\n", after.replace('\n', " ")));
-            }
-        }
-        out.push('\n');
+    let commit_url = if committed.is_empty() {
+        None
+    } else {
+        current_head_commit_url(app)
     };
-    emit_removed_section(&mut out, "Items committed", &committed);
-    emit_removed_section(&mut out, "Items dropped", &dropped);
+
+    let emit_removed_section =
+        |out: &mut String, header: &str, items: &[&serde_json::Value], commit_url: Option<&str>| {
+            if items.is_empty() {
+                return;
+            }
+            out.push_str(&format!("## {}\n\n", header));
+            for item in items {
+                let id = worklist_item_id(item).unwrap_or_default();
+                out.push_str(&format!(
+                    "- `{}` (was {}, `{}`)\n",
+                    id,
+                    worklist_item_status(item),
+                    worklist_item_str_field(item, "file")
+                ));
+                let before = worklist_item_str_field(item, "before");
+                if !before.is_empty() {
+                    out.push_str(&format!("  - **Before:** {}\n", before.replace('\n', " ")));
+                }
+                let after = worklist_item_str_field(item, "after");
+                if !after.is_empty() {
+                    out.push_str(&format!("  - **After:** {}\n", after.replace('\n', " ")));
+                }
+                if let Some(url) = commit_url {
+                    out.push_str(&format!("  - **Commit:** {}\n", url));
+                }
+            }
+            out.push('\n');
+        };
+    emit_removed_section(
+        &mut out,
+        "Items committed",
+        &committed,
+        commit_url.as_deref(),
+    );
+    emit_removed_section(&mut out, "Items dropped", &dropped, None);
 
     // Trailing-newline padding kept from the legacy bottom of the function.
     {
@@ -20049,6 +20078,7 @@ struct WorklistHistoryPhase {
     full_changelog: String,
     changelog: String,
     diff: String,
+    commit_url: String,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -20112,6 +20142,17 @@ fn worklist_history_summary(changelog: &str) -> String {
                 String::from("change")
             }
         })
+}
+
+fn worklist_history_commit_url(changelog: &str) -> String {
+    changelog
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("- **Commit:**")
+                .map(|url| url.trim().to_string())
+        })
+        .unwrap_or_default()
 }
 
 fn worklist_history_ids(changelog: &str, doc: &serde_json::Value) -> Vec<String> {
@@ -20262,6 +20303,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
         let md_path = json_path.with_extension("md");
         let changelog = std::fs::read_to_string(&md_path).unwrap_or_default();
         let summary = worklist_history_summary(&changelog);
+        let commit_url = worklist_history_commit_url(&changelog);
         let ids = worklist_history_ids(&changelog, &doc);
         let iso = format_iso_utc(ts);
 
@@ -20291,6 +20333,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                 full_changelog: String::new(),
                 changelog: String::new(),
                 diff: cap_history_diff(&diff),
+                commit_url: commit_url.clone(),
             };
             let group_idx = match by_id.get(&id).copied() {
                 Some(idx) => idx,
@@ -20333,6 +20376,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                 full_changelog: String::new(),
                 changelog: String::new(),
                 diff: String::from("No single item diff is available for this snapshot."),
+                commit_url,
             };
             groups.push(WorklistHistoryGroup {
                 id: format!("snapshot-{}", ts),
@@ -20385,7 +20429,10 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
 
 #[cfg(test)]
 mod worklist_history_tests {
-    use super::{history_compact_range, resolve_worklist_doc_drafts, worklist_history_item_diff};
+    use super::{
+        history_compact_range, resolve_worklist_doc_drafts, worklist_history_commit_url,
+        worklist_history_item_diff,
+    };
     use serde_json::json;
 
     #[test]
@@ -20408,6 +20455,21 @@ mod worklist_history_tests {
 
         assert!(diff.contains("- {"));
         assert!(diff.contains("-   \"id\": \"x\""));
+    }
+
+    #[test]
+    fn commit_url_is_extracted_from_changelog() {
+        let changelog = "\
+## Items committed
+
+- `x` (was applied, `a.md`)
+  - **Commit:** https://github.com/judell/bram/commit/abc123
+";
+
+        assert_eq!(
+            worklist_history_commit_url(changelog),
+            "https://github.com/judell/bram/commit/abc123"
+        );
     }
 
     #[test]

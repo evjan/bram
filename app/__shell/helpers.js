@@ -1822,6 +1822,17 @@ window.__bramHistoryPhasePath = function (group) {
   return labels.join(" -> ");
 };
 
+window.__bramHistoryCommitUrl = function (group) {
+  var phases = (group && group.phases) || [];
+  for (var i = phases.length - 1; i >= 0; i--) {
+    var phase = phases[i] || {};
+    var summary = (phase.summary || "").toLowerCase();
+    var url = typeof phase.commitUrl === "string" ? phase.commitUrl.trim() : "";
+    if (url && summary.indexOf("committed") >= 0) return url;
+  }
+  return "";
+};
+
 window.__bramHistoryItemFieldMarkdown = function (group, field) {
   var item = window.__bramHistoryCurrentItem(group);
   var value = item && typeof item[field] === "string" ? item[field].trim() : "";

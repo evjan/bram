@@ -39,6 +39,12 @@
           value="{window.__bramHistoryItemFilesLine(historyGroup)}"
           variant="code"
           fontSize="$fontSize-sm" />
+        <Link
+          when="{window.__bramHistoryCommitUrl(historyGroup)}"
+          noIndicator
+          onClick="openExternal(window.__bramHistoryCommitUrl(historyGroup))">
+          <Text value="view commit" fontSize="$fontSize-sm" />
+        </Link>
       </VStack>
 
       <VStack gap="$space-2" when="{window.__bramHistoryItemFieldMarkdown(historyGroup, 'before')}">
@@ -67,10 +73,6 @@
   </ModalDialog>
   </Theme>
 
-  <SearchHitModal
-    id="searchHitModalRef"
-    query="{query}" />
-
   <VStack padding="$space-6" gap="$space-3">
     <HStack gap="$space-3" verticalAlignment="center">
       <Heading level="h2">History</Heading>
@@ -79,7 +81,7 @@
         placeholder="Search history…"
         inProgress="{historySearch.inProgress}"
         onQueryChange="(q) => query = q"
-        onClear="selectedHistoryGroup = null; searchHitModalRef.close()" />
+        onClear="selectedHistoryGroup = null" />
     </HStack>
 
     <Theme size-Spinner="1em">
@@ -147,15 +149,9 @@
           </VStack>
 
           <Link
-            when="{!query || query.trim().length &lt; 2}"
             noIndicator
             onClick="selectedHistoryGroup = historyGroup">
             <Text value="view item" fontSize="$fontSize-sm" />
-          </Link>
-          <Link
-            when="{query &amp;&amp; query.trim().length >= 2}"
-            onClick="searchHitModalRef.open($item.hitBody, $item.title)">
-            <Text value="view hit context" fontSize="$fontSize-sm" />
           </Link>
         </VStack>
       </List>

@@ -1,31 +1,30 @@
 # Bram
 
-You are running in the **terminal** of a Tauri desktop shell that puts
-a real terminal next to an XMLUI surface. The user can SEE the right
-pane while talking to you. Use it.
+You are running in the **terminal** of a Tauri desktop shell. The shell
+puts a real terminal (where you run) next to a right-pane iframe the user
+can SEE while talking to you. Use it.
 
-## What to do with the target app
+Keep two distinct surfaces straight — they are not the same, and the rules
+differ:
 
-When the user asks for something that benefits from structured output
-(tables, lists, charts, multi-line text) or structured input (selectors,
-forms, multi-step flows), **edit `Main.xmlui`** (or one of the
-`components/` files) so the target app renders it. A filesystem watcher reloads the iframe automatically
-when you save — you do not need to ask the user to reload.
+- **The agent pane** — Bram's own UI (the Worklist / Sessions / Context /
+  Status tabs, the conversation pane). **Always XMLUI** — that's how Bram
+  is built. Editing it means `app/tools/Main.xmlui`,
+  `app/tools/components/*.xmlui`, `app/__shell/helpers.js`,
+  `app/tools/Globals.xs`.
+- **The target app** — whatever project the user is developing with Bram's
+  help, shown in the iframe. Per `app/__shell/conventions.md`, Bram "works
+  with any project that serves a web UI (vanilla HTML/JS, a React or other
+  Node app, a Python web app, an XMLUI app, etc.)." It **may or may not be
+  XMLUI** — detect before you assume.
 
-Examples:
+The XMLUI-specific guidance below is **unconditional when working on Bram
+itself**, and applies to the target app **only when the target is XMLUI**.
 
-- *"Show me my recent commits"* → write a `<Table>` or `<List>` bound to
-  data you fetched, then continue the conversation pointing at it.
-- *"Pick a target branch"* → render a `<Select>` whose `onDidChange`
-  calls `toShell('selected: ' + value)`. The user clicks; their pick
-  arrives as user input on your next turn.
-- *"Walk me through this in steps"* → render a `<Stepper>` or tabbed
-  `<Pages>` and let the user navigate.
+## Working on Bram itself (the agent pane is XMLUI)
 
-## Working in XMLUI surfaces
-
-Both panes here are XMLUI, so most edits land in `.xmlui` files. Some
-rules the xmlui-standalone evaluator enforces hard:
+Most edits to Bram land in `.xmlui` files. Rules the xmlui-standalone
+evaluator enforces hard:
 
 - **No raw browser JS in event handlers** — `setTimeout`, `setInterval`,
   `fetch` outside DataSource, `async` / `await`, etc. are rejected at
@@ -46,12 +45,65 @@ rules the xmlui-standalone evaluator enforces hard:
 
 The `xmlui-mcp` server is loaded for this conversation. Use it.
 
-## How the target app talks back to you
+The helpers.js / Globals.xs / window code-organization discipline (where
+each kind of code lives, when delegators are warranted, the `__bram*`
+prefix) is in `@app/__shell/conventions.md`, `@`-imported below.
 
-The target app's `index.html` exposes helpers as window globals that
-post messages to the parent shell:
+### Files you'll edit most (Bram)
 
-| intent | from XMLUI | what the host does |
+- `app/tools/Main.xmlui` — the agent-pane surface
+- `app/tools/components/*.xmlui` — Workspace, Sessions, Toolbar,
+  Architecture, etc.
+- `app/tools/config.json` — XMLUI app config (resources, appGlobals)
+- `app/tools/resources/*.svg` — custom icons; register in `config.json`
+  under `resources` with the `icon.<name>` prefix
+- `app/__shell/helpers.js` — window helpers loaded by `index.html` via
+  `xmlui://localhost/__shell/helpers.js`
+
+## Working on the target app
+
+When the user asks for something in the target app, **first detect what the
+target is**, then render output its native way:
+
+- **Vanilla HTML/JS** — `index.html` + plain `.js`, no framework manifest.
+  Edit the HTML/JS directly.
+- **React / other Node** — `package.json` (look for `react`, `vue`, `next`,
+  etc.). Edit components in the project's own framework.
+- **Python web app** — `requirements.txt` / `pyproject.toml` / `*.py`
+  serving templates. Edit templates / handlers.
+- **XMLUI** — `config.json` + `.xmlui` files. See *When the target app is
+  XMLUI* below.
+
+A filesystem watcher reloads the target iframe automatically when you save —
+you do not need to ask the user to reload.
+
+## When the target app is XMLUI
+
+Only when the target is an XMLUI app: when the user asks for something that
+benefits from structured output (tables, lists, charts, multi-line text) or
+structured input (selectors, forms, multi-step flows), **edit the target's
+`Main.xmlui`** (or one of its `components/` files) so it renders. The XMLUI
+rules from "Working on Bram itself" apply here too.
+
+Examples:
+
+- *"Show me my recent commits"* → write a `<Table>` or `<List>` bound to
+  data you fetched, then continue the conversation pointing at it.
+- *"Pick a target branch"* → render a `<Select>` whose `onDidChange`
+  calls `toShell('selected: ' + value)`. The user clicks; their pick
+  arrives as user input on your next turn.
+- *"Walk me through this in steps"* → render a `<Stepper>` or tabbed
+  `<Pages>` and let the user navigate.
+
+## The host helpers (cross-target)
+
+The shell exposes helpers as window globals that post messages to the parent
+shell. They are available in the **agent pane** unconditionally. To use them
+from the **target app** (XMLUI or not), the target's `index.html` must
+include `<script src="/__shell/helpers.js"></script>`. If it doesn't, drive
+these from the agent pane instead.
+
+| intent | call | what the host does |
 |---|---|---|
 | inject text the user can edit | `toShell(text)` | text + `\n` appears in your stdin; user must press Enter |
 | submit a complete user turn | `toTurn(text)` | bracketed-paste + carriage return; auto-submits as a fresh turn |
@@ -59,7 +111,6 @@ post messages to the parent shell:
 | open an external URL | `openExternal(url)` | host opens the URL in the system browser |
 | capture screenshot of right pane | `captureScreenshot()` | host captures + injects the file path as a `toTurn` |
 | log without bothering you | `logToHost(payload)` | recorded in cargo run stderr only — invisible to you |
-| open devtools | (wrench icon does it) | n/a |
 
 Use `toTurn` for one-shot form submissions (Approve buttons, Confirm
 buttons, single-pick selectors). Use `toShell` only when you want to
@@ -83,34 +134,14 @@ chose) as a fresh user message.
 multi-step work between you and the user. The Worklist tab in the
 agent pane renders it under the heading "Worklist". Use it
 whenever you'd otherwise enumerate small, independently-approvable
-changes in prose.
+changes in prose. This is framework-agnostic — it applies whatever the
+target is.
 
 The full lifecycle (proposed → applied → committed), payload shapes,
 authorization flow (`/__worklist/resolve`, `/__worklist/mutate`), and
 edge cases live in `@app/__shell/conventions.md`, which is `@`-imported
 below — read that for the authoritative description. Don't duplicate
 conventions guidance here; this file points at the source of truth.
-
-## Charting
-
-The `xmlui-echart` extension is loaded — `<EChart>` is available
-out of the box. It wraps Apache ECharts and accepts any valid ECharts
-`option` configuration. Use it whenever the user asks for a chart
-(line, bar, pie, scatter, heatmap, etc.). XMLUI theme colors are
-applied automatically.
-
-Reference: https://docs.xmlui.org/howto/use-echarts-for-advanced-charting
-and https://echarts.apache.org/en/option.html for the full option API.
-
-## Files you'll edit most
-
-- `Main.xmlui` — the XMLUI surface (the one)
-- `components/*.xmlui` — Workspace, Sessions, Toolbar, Architecture, etc.
-- `config.json` — XMLUI app config (resources, appGlobals)
-- `resources/*.svg` — custom icons; register in
-  `config.json` under `resources` with the `icon.<name>` prefix
-- `app/__shell/helpers.js` — window helpers loaded by `index.html` via
-  `xmlui://localhost/__shell/helpers.js`
 
 ## Files to leave alone unless asked
 
@@ -121,10 +152,10 @@ and https://echarts.apache.org/en/option.html for the full option API.
 
 ## Inspector
 
-The target app mounts `<Inspector />` in the AppHeader's profile menu
-slot — it's the magnifying-glass icon top-right. It shows semantic
-traces of XMLUI events. Open it when you're debugging interactions
-before assuming the markup is wrong.
+When editing Bram or an XMLUI target: `<Inspector />` is mounted in the
+AppHeader's profile menu slot — the magnifying-glass icon top-right. It
+shows semantic traces of XMLUI events. Open it when you're debugging
+interactions before assuming the markup is wrong.
 
 ## Architectural background
 

@@ -3346,6 +3346,45 @@ window.bramSubscribeAgentStatus = (function () {
   };
 })();
 
+// External-driven conversation-state push. Replaces the conversationStateDS
+// DataSource: the host emits `conversation-state-changed` with the full
+// /__conversation-state payload, deduped, so subscribers re-render only on a
+// real content change (not on every session signal). A one-time seed fetch
+// populates the value on first subscribe so the chat pane is not blank before
+// the first push.
+window.bramSubscribeConversationState = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var lastValue = null;
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bramSubscribeConversationState] subscriber threw:", e); }
+      });
+    };
+    window.subscribeTauriEvent("__bramConversationStateExternalUnsub",
+      "conversation-state-changed", function (e) {
+        lastValue = (e && e.payload) || null;
+        notify();
+      });
+    // Seed once so the pane has content before the first push event arrives.
+    try {
+      window.fetch("/__conversation-state")
+        .then(function (r) { return r.json(); })
+        .then(function (v) { if (lastValue == null) { lastValue = v; notify(); } })
+        .catch(function () {});
+    } catch (e) {}
+    factory = function (emit) {
+      var fire = function () { emit(lastValue); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
 // External-driven enhance-status tick. Emits an incrementing tick on
 // each enhance-status-changed event so a downstream ChangeListener can
 // trigger DataSource.refetch() (a markup-only operation).

@@ -933,6 +933,65 @@ fn emit_talk_session_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
         "at_host_ms": at_host_ms,
     });
     emit_replayable_payload(app, "talk-session-changed", payload);
+    // Push the conversation-state payload too, so the Worklist Chat pane can
+    // consume it via an <External> push source instead of refetching
+    // /__conversation-state on every signal. Deduped (below) so byte-identical
+    // content never re-renders the chat List.
+    emit_conversation_state_changed(app);
+}
+
+// Last conversation-state bytes pushed via `conversation-state-changed`, used
+// to suppress emits when the payload is unchanged.
+fn last_emitted_conversation_state_cell() -> &'static Mutex<Option<Vec<u8>>> {
+    static CELL: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(None))
+}
+
+// Builds the current /__conversation-state payload (reusing the cache when
+// fresh) and emits it as `conversation-state-changed` only when the bytes
+// differ from the last emit. The push counterpart of the conversationStateDS
+// DataSource: subscribers re-render only on a real content change, not on every
+// session signal.
+fn emit_conversation_state_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let bytes = match resolve_conversation_path_meta(app, None) {
+        Ok(Some((path, mtime_ms, len))) => {
+            let cached = {
+                let cache = conversation_state_cache_cell().lock().unwrap();
+                cache.as_ref().and_then(|c| {
+                    if c.path == path && c.mtime_ms == mtime_ms && c.len == len {
+                        Some(c.conversation_state_bytes.clone())
+                    } else {
+                        None
+                    }
+                })
+            };
+            match cached {
+                Some(b) => Some(b),
+                None => match build_conversation_cache_entry(app, None, path, mtime_ms, len) {
+                    Ok(entry) => {
+                        let b = entry.conversation_state_bytes.clone();
+                        *conversation_state_cache_cell().lock().unwrap() = Some(entry);
+                        Some(b)
+                    }
+                    Err(_) => None,
+                },
+            }
+        }
+        _ => None,
+    };
+    let Some(bytes) = bytes else {
+        return;
+    };
+    {
+        let mut last = last_emitted_conversation_state_cell().lock().unwrap();
+        if last.as_deref() == Some(bytes.as_slice()) {
+            return;
+        }
+        *last = Some(bytes.clone());
+    }
+    let payload: serde_json::Value =
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    emit_replayable_payload(app, "conversation-state-changed", payload);
 }
 
 fn emit_replayable_payload<R, P>(app: &AppHandle<R>, event_name: &str, payload: P)
@@ -11050,6 +11109,12 @@ fn build_conversation_cache_entry<R: tauri::Runtime>(
     let mut user_images: Vec<String> = Vec::new();
     let mut assistant_images: Vec<String> = Vec::new();
     let mut tool_entries: Vec<serde_json::Value> = Vec::new();
+    // Each assistant text block of the latest turn, in emission order. The
+    // conversation pane's "Agent: Last response" renders these as a
+    // bottom-anchored, accumulating List (mirroring "Agent: Tool uses"), so a
+    // multi-step turn streams in one row per message rather than one growing
+    // Markdown blob. See app/tools/components/AgentLastResponse.xmlui.
+    let mut assistant_texts: Vec<String> = Vec::new();
     let mut user_idx: Option<usize> = None;
     for (i, turn) in turns.iter().enumerate().rev() {
         if turn.get("role").and_then(|v| v.as_str()) == Some("user") {
@@ -11097,6 +11162,7 @@ fn build_conversation_cache_entry<R: tauri::Runtime>(
                         assistant_text.push_str("\n\n");
                     }
                     assistant_text.push_str(t);
+                    assistant_texts.push(t.to_string());
                 }
                 assistant_images = images;
             }
@@ -11142,6 +11208,7 @@ fn build_conversation_cache_entry<R: tauri::Runtime>(
     let last_exchange_value = serde_json::json!({
         "userText": user_text,
         "assistantText": assistant_text,
+        "assistantTexts": assistant_texts,
         "userImages": user_images,
         "assistantImages": assistant_images,
         "tools": tool_entries,

@@ -39,7 +39,7 @@
     listenTo="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.verb}"
     onDidChange="(c) => { if (c.newValue) { lastSeenAgentVerb = c.newValue; } }" />
   <ChangeListener
-    listenToSources="{{mainAgentStatus: mainAgentStatus.value, enhanceStatus: enhanceStatus.value}}"
+    listenTo="{((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state) || '') + '|' + ((mainAgentStatus.value &amp;&amp; mainAgentStatus.value.provider) || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '') + '|' + ((mainAgentStatus.value || enhanceStatus.value) ? '1' : '0')}"
     onDidChange="() => {
       const s = mainAgentStatus.value || {};
       const provider = s.provider || (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '';

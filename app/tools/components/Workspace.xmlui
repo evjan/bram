@@ -206,14 +206,15 @@
        /__last-assistant-text, /__last-exchange, /__current-turn-edits
        routes still exist (and share the same cache) for the polling
        consumers in AgentToolUses / ConversationPane / AgentLastResponse. -->
-  <DataSource
+  <External
     id="conversationStateDS"
-    url="/__conversation-state"
-    onLoaded="(data) => {
-      const text = data && data.lastAssistantText && data.lastAssistantText.text;
-      if (text && text !== lastAssistantStableText) {
-        lastAssistantStableText = text;
-      }
+    initial="{null}"
+    subscribe="{window.bramSubscribeConversationState()}" />
+  <ChangeListener
+    listenToSources="{{cs: conversationStateDS.value}}"
+    onDidChange="() => {
+      const text = conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text;
+      if (text &amp;&amp; text !== lastAssistantStableText) { lastAssistantStableText = text; }
     }" />
 
   <!-- Drives the in-flight "Approving./.../..." dot cycle below the
@@ -434,10 +435,8 @@
           const correlationId = (ev &amp;&amp; ev.correlationId) || '';
           const atHostMs = (ev &amp;&amp; ev.atHostMs) || 0;
           window.__bramIframeTrace('listener-fired', {context: 'talk-session-changed', correlation_id: correlationId, at_host_ms: atHostMs, delta_to_emit_ms: atHostMs ? (Date.now() - atHostMs) : -1});
-          debounce(400, (id, hostMs) => {
-            window.__bramIframeTrace('refetch-called', {context: 'talk-session-changed', correlation_id: id || '', at_host_ms: hostMs || 0, delta_to_emit_ms: hostMs ? (Date.now() - hostMs) : -1});
-            conversationStateDS.refetch();
-          }, correlationId, atHostMs);
+          // conversation-state now arrives via the conversationStateDS External
+          // push (conversation-state-changed); no refetch needed here.
         }" />
       <External
         id="voiceArrival"
@@ -1271,7 +1270,6 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
           worklist.refetch();
         }
         if (awaitingResponse) {
-          conversationStateDS.refetch();
           agentTurnEndedSinceSubmit = true;
           if (window.__bramMarkTurnEnded('agent-turn-end', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
             awaitingResponse = false;
@@ -1324,8 +1322,6 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
         const nextWorking = !!(p &amp;&amp; p.state === 'working');
         if (nextWorking !== agentIsWorking) { agentIsWorking = nextWorking; }
         if (awaitingResponse &amp;&amp; p &amp;&amp; p.state !== 'working') {
-          window.__bramIframeTrace('refetch-called', {context: 'agent-status-changed', state: p.state || ''});
-          conversationStateDS.refetch();
           if (p.state === 'finished' &amp;&amp; window.__bramMarkTurnEnded('agent-status-finished', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
             awaitingResponse = false;
             submittedKind = null;

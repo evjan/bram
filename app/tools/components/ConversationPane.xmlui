@@ -1,4 +1,11 @@
-<Component name="ConversationPane" var.fullscreenImage="{null}">
+<Component
+  name="ConversationPane"
+  var.fullscreenImage="{null}"
+  var.heldTexts="{[]}"
+  var.heldImages="{[]}"
+  var.hasFreshTexts="{!!($props.exchange &amp;&amp; $props.exchange.assistantTexts &amp;&amp; $props.exchange.assistantTexts.length > 0)}"
+  var.displayTexts="{hasFreshTexts ? $props.exchange.assistantTexts : heldTexts}"
+  var.displayImages="{hasFreshTexts ? ($props.exchange.assistantImages || []) : heldImages}">
   <!-- Sources the exchange from Workspace's conversationStateDS
        (/__conversation-state, static URL refreshed in place via .refetch()).
        The source no longer blanks per-refetch (see
@@ -6,11 +13,29 @@
        made .value oscillate blank<->content was removed), so the pane renders
        directly from $props.exchange -- no heldExchange bridge needed.
 
-       Dim is derived downstream (AgentLastResponse) from whether the exchange
-       has fresh assistant text: empty => a new turn started and you are looking
-       at the prior response (held in AgentLastResponse.heldAssistantText), so it
-       dims; non-empty => the new response has begun, so it brightens and stays
-       bright as it accumulates.
+       Layout: a plain flex column. The "You" block and the "Agent: Tool uses"
+       widget take natural height; the "Agent: Last response" region is a
+       height="*" (star/flex-fill) child that grows to fill the remaining space
+       and scrolls within its own bottom-anchored List. The confirmed
+       fill-and-scroll pattern is height="*" on the List (NOT height="100%",
+       which is percentage-of-parent and collapses when an ancestor is
+       unbounded) -- see the scrollToBottom example at
+       https://www.xmlui.org/docs/reference/components/List#scrolltobottom and
+       the in-codebase nested star-fill at Workspace.xmlui (VStack height="*"
+       containing HSplitter height="*"). The list was inlined here rather than
+       left inside an AgentLastResponse user-defined component because neither
+       confirmed example crosses a UDC boundary; star sizing through a UDC
+       wrapper was the unverified step that left scrollToBottom a no-op.
+
+       assistantTexts is the ordered list of this turn's assistant text blocks;
+       each streams in as the backend re-reads the session JSONL mid-turn, so
+       the list grows one row per emitted message and bottom-anchors to keep the
+       newest visible -- the symmetric twin of AgentToolUses' tool List.
+
+       Dim semantics: dimmed === looking at the PREVIOUS response while awaiting
+       the next one (hasFreshTexts === false). heldTexts/heldImages keep the
+       prior response visible (dimmed) until the first fresh message of the new
+       turn arrives, at which point the held view is replaced and it brightens.
 
        ChangeListener does not fire on initial mount
        (https://docs.xmlui.org/howto/debounce-with-changelistener). -->
@@ -20,6 +45,12 @@
       const text = ($props.exchange &amp;&amp; $props.exchange.assistantText) || '';
       window.__bramIframeTrace('conversation-value-changed', {assistantSig: window.assistantOutputSignature($props.exchange), assistantTextLen: text.length, toolsLen: ($props.exchange &amp;&amp; $props.exchange.tools &amp;&amp; $props.exchange.tools.length) || 0, hasAssistant: !!text});
     }" />
+  <ChangeListener
+    listenToSources="{{exchange: $props.exchange}}"
+    onDidChange="() => { const txts = ($props.exchange &amp;&amp; $props.exchange.assistantTexts) || []; if (txts.length) { heldTexts = txts; heldImages = ($props.exchange &amp;&amp; $props.exchange.assistantImages) || []; } }" />
+  <ChangeListener
+    listenTo="{hasFreshTexts}"
+    onDidChange="(c) => window.__bramIframeTrace('conversation-fade', {stage: c.newValue ? 'fade-in' : 'dim', trigger: 'response-text', hasText: !!c.newValue})" />
   <ModalDialog
     when="{!!fullscreenImage}"
     fullScreen="true"
@@ -56,9 +87,35 @@
     <AgentToolUses
       exchange="{$props.exchange}"
       active="{$props.exchange &amp;&amp; conversationActive($props.exchange)}" />
-    <AgentLastResponse
-      exchange="{$props.exchange}"
-      active="{$props.exchange &amp;&amp; conversationActive($props.exchange)}" />
+    <VStack
+      gap="$space-1"
+      opacity="{hasFreshTexts ? 1 : 0.55}"
+      transition="opacity 560ms ease-out"
+      when="{$props.exchange &amp;&amp; conversationActive($props.exchange)}">
+      <Text
+        fontWeight="$fontWeight-bold"
+        color="$color-success-700"
+        value="Agent: Last response" />
+      <List
+        data="{displayTexts}"
+        maxHeight="60vh"
+        scrollAnchor="bottom">
+        <property name="emptyListTemplate"><Fragment/></property>
+        <Markdown content="{window.__bramStripImagePaths($item || '')}" />
+      </List>
+      <VStack
+        gap="$space-2"
+        when="{displayImages &amp;&amp; displayImages.length > 0}">
+        <Items data="{displayImages}">
+          <Link onClick="fullscreenImage = $item" noIndicator="true">
+            <Image
+              src="{window.imageSrcForPath($item)}"
+              maxHeight="200px"
+              fit="contain" />
+          </Link>
+        </Items>
+      </VStack>
+    </VStack>
     <Text
       when="{!$props.exchange || (!$props.exchange.userText &amp;&amp; !$props.exchange.assistantText &amp;&amp; (!$props.exchange.tools || $props.exchange.tools.length === 0))}"
       fontSize="$fontSize-sm">

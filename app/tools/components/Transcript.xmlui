@@ -1,0 +1,13 @@
+<Component name="Transcript">
+  <!-- Exploratory standalone Transcript tab: its own conversation-state push
+       (same source Workspace uses) feeding the existing ConversationPane. -->
+  <External
+    id="transcriptConversationDS"
+    initial="{null}"
+    subscribe="{window.bramSubscribeConversationState()}" />
+  <VStack padding="$space-6" gap="$space-3" height="100%">
+    <Heading level="h2">Transcript</Heading>
+    <ConversationPane
+      exchange="{transcriptConversationDS.value &amp;&amp; transcriptConversationDS.value.lastExchange}" />
+  </VStack>
+</Component>

@@ -47,7 +47,7 @@
   var.pendingPastedImageCount="{window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot().count : 0}"
   var.pendingPastedImagePaths="{window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot().paths : []}"
   var.stagingPastedImageCount="{window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot().staging : 0}"
-  var.worklistConversationLayout="{window.__bramRestoreWorklistConversationLayout()}"
+  var.worklistConversationLayout="{'worklist'}"
   var.submittedWorklistMessage="{window.__bramRestoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{window.__bramRestoreWorklistSubmittedBaseline()}"
   var.submittedKind="{window.__bramRestoreWorklistSubmittedKind()}">
@@ -446,7 +446,8 @@
         listenTo="{voiceArrival.value &amp;&amp; voiceArrival.value.at}"
         onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; if (t &amp;&amp; worklistVoiceTarget === 'message-agent' &amp;&amp; worklistInputBox) window.__bramAppendVoiceToBox(worklistInputBox, t); messageVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
     <VStack gap="0" width="100%" height="*">
-      <HStack horizontalAlignment="center" width="100%" marginBottom="$space-6">
+      <!-- Top composer hidden (not removed) — the App Footer composer replaces it. Flip when back to show. -->
+      <HStack when="{false}" horizontalAlignment="center" width="100%" marginBottom="$space-6">
         <!-- Message-agent composer, inlined from the former MessageComposer
              component so the mic toggle runs in Workspace scope. As a separate
              component the mic could only signal across the boundary via
@@ -548,7 +549,7 @@
             tooltip="Give the worklist full width"
             onClick="window.__bramIframeTrace('worklist-conversation-layout-click', {source: 'worklist-header', layout: 'worklist'}); worklistConversationLayout = window.__bramSetWorklistConversationLayout('worklist')" />
           <Button
-            when="{(worklistConversationLayout || 'split') === 'worklist'}"
+            when="{false}"
             label="Split view"
             variant="ghost"
             size="xs"
@@ -697,6 +698,13 @@
                   when="{(expandedItemIds || []).includes($item.id)}"
                   gap="$space-2"
                   verticalAlignment="center">
+                  <Button
+                    label="{feedbackVoiceRecording &amp;&amp; feedbackVoiceRecordingItemId === $item.id ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
+                    variant="ghost"
+                    size="xs"
+                    tooltip="Voice feedback"
+                    enabled="{!(feedbackInputSentIds || []).includes($item.id) &amp;&amp; !submitting &amp;&amp; !isWorklistVoiceProcessingTarget('feedback') &amp;&amp; (!feedbackVoiceRecording || (feedbackVoiceRecordingItemId === $item.id &amp;&amp; worklistVoiceRecordingActive))}"
+                    onClick="setWorklistVoiceTarget('feedback'); if (!feedbackVoiceRecording) feedbackVoiceRecordingItemId = $item.id; feedbackVoiceRecording = toggleVoiceForCurrentTarget(feedbackVoiceRecording)" />
                   <TextArea
                     id="feedbackBox"
                     initialValue="{(feedbackDraftsById || {})[$item.id] || ''}"
@@ -723,13 +731,6 @@
                   <Theme size-Spinner="14px">
                     <Spinner when="{isWorklistVoiceProcessingTarget('feedback') &amp;&amp; feedbackVoiceRecordingItemId === $item.id}" />
                   </Theme>
-                  <Button
-                    label="{feedbackVoiceRecording &amp;&amp; feedbackVoiceRecordingItemId === $item.id ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
-                    variant="ghost"
-                    size="xs"
-                    tooltip="Voice feedback"
-                    enabled="{!(feedbackInputSentIds || []).includes($item.id) &amp;&amp; !submitting &amp;&amp; !isWorklistVoiceProcessingTarget('feedback') &amp;&amp; (!feedbackVoiceRecording || (feedbackVoiceRecordingItemId === $item.id &amp;&amp; worklistVoiceRecordingActive))}"
-                    onClick="setWorklistVoiceTarget('feedback'); if (!feedbackVoiceRecording) feedbackVoiceRecordingItemId = $item.id; feedbackVoiceRecording = toggleVoiceForCurrentTarget(feedbackVoiceRecording)" />
                   <Button
                     label="ⓘ"
                     variant="ghost"

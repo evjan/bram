@@ -1,4 +1,4 @@
-<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}"
+<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}" var.footerVoiceRecording="{false}" var.headerInflightTick="{0}"
   onInit="updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
   <External
     id="mainAgentStatus"
@@ -12,6 +12,13 @@
     id="rightPaneSizeEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeRightPaneSize()}" />
+  <External
+    id="footerVoiceArrival"
+    initial="{null}"
+    subscribe="{window.bramSubscribeVoiceArrival()}" />
+  <ChangeListener
+    listenTo="{footerVoiceArrival.value &amp;&amp; footerVoiceArrival.value.at}"
+    onDidChange="() => { const ev = footerVoiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; if (t &amp;&amp; worklistVoiceTarget === 'message-agent' &amp;&amp; footerComposerBox) window.__bramAppendVoiceToBox(footerComposerBox, t); footerVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
   <ChangeListener
     listenTo="{enhanceStatusEvt.value}"
     onDidChange="() => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }" />
@@ -20,6 +27,23 @@
     onDidChange="() => { const s = rightPaneSizeEvt.value || null; rightPaneSize = s ? (s.width + ' × ' + s.height) : '(measuring…)'; }" />
   <DataSource id="enhanceStatus" url="/__enhance/status" />
   <DataSource id="rpInfo" url="/__right-pane-info" />
+  <!-- App-scope read of the inflight worklist claim, so the header can show
+       "Approving/Iterating/Dropping <item>" even when you've left the Worklist tab. -->
+  <DataSource id="headerInflightClaim" url="/__inflight?t={headerInflightTick}" />
+  <External
+    id="headerInflightEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('inflight-claim-changed')}" />
+  <ChangeListener
+    listenTo="{headerInflightEvt.value}"
+    onDidChange="() => { headerInflightTick = headerInflightTick + 1; }" />
+  <!-- Backup driver: the dedicated inflight-claim-changed subscription dedups
+       against Workspace's, so also refetch whenever the agent status changes
+       (App-scope push that's already proven). An in-flight action always makes
+       the agent work, so this reliably picks the claim up and drops it. -->
+  <ChangeListener
+    listenTo="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state}"
+    onDidChange="() => { headerInflightTick = headerInflightTick + 1; window.__bramIframeTrace('header-inflight-refetch', {tick: headerInflightTick, state: (mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state) || ''}); }" />
   <DataSource id="appInfo" url="/__app-info" />
   <APICall
     id="restartServer"
@@ -220,6 +244,13 @@
           </HStack>
         </HStack>
         <SpaceFiller />
+        <Text
+          when="{headerInflightClaim.value &amp;&amp; headerInflightClaim.value.ids &amp;&amp; headerInflightClaim.value.ids.length > 0}"
+          fontStyle="italic"
+          color="$color-primary-600"
+          overflowMode="none"
+          value="{window.__bramInflightActionLabel(headerInflightClaim.value.kind) + ' ' + (headerInflightClaim.value.ids || []).join(', ')}" />
+        <SpaceFiller />
         <Theme fontSize-Button="$fontSize-lg">
           <Button
             label="ⓘ"
@@ -277,6 +308,7 @@
       </VStack>
     </property>
     <NavLink label="Worklist" to="/worklist" />
+    <NavLink label="Transcript" to="/transcript" />
     <NavLink label="Issues" to="/issues" />
     <NavLink label="Commits" to="/commits" />
     <NavLink label="Sessions" to="/sessions" />
@@ -350,6 +382,7 @@
     <Pages fallbackPath="/worklist">
       <Page url="/"><Workspace activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
       <Page url="/worklist"><Workspace activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>
+      <Page url="/transcript"><Transcript /></Page>
       <Page url="/status"><Status /></Page>
       <Page url="/settings"><Settings /></Page>
       <Page url="/sessions"><Sessions /></Page>
@@ -360,4 +393,37 @@
       <Page url="/commits"><Commits /></Page>
     </Pages>
   </Theme>
+  <Footer>
+    <VStack width="100%" gap="$space-1">
+      <HStack width="100%" gap="$space-2" verticalAlignment="center">
+        <Button
+          label="{footerVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
+          variant="ghost"
+          size="xs"
+          width="2.5rem"
+          tooltip="Voice message"
+          enabled="{!isWorklistVoiceProcessingTarget('message-agent') &amp;&amp; (!footerVoiceRecording || worklistVoiceRecordingActive)}"
+          onClick="setWorklistVoiceTarget('message-agent'); footerVoiceRecording = toggleVoiceForCurrentTarget(footerVoiceRecording)" />
+        <TextArea
+          id="footerComposerBox"
+          placeholder="Message agent …"
+          autoSize="true"
+          minRows="1"
+          maxRows="3"
+          width="*"
+          onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId('')" />
+        <Button
+          label="send"
+          variant="ghost"
+          size="xs"
+          onClick="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }" />
+        <Button
+          label="skip worklist"
+          variant="ghost"
+          size="xs"
+          onClick="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, mode: 'skip-worklist', voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }" />
+      </HStack>
+      <PastedImageStrip target="message-agent" />
+    </VStack>
+  </Footer>
 </App>

@@ -812,20 +812,15 @@ window.settingsInfoBodies = {
     "are unaffected. Issues flagged via closesIssues are not auto-closed " +
     "in a batch; close them via a single-item Approve or ask the agent.",
   ui:
-    "## Minimize target app\n\n" +
-    "Drives the agent pane splitter to give the " +
-    "agent tools maximum room. The target app stays mounted at the " +
-    "splitter’s minimum height — distinct from hiding it entirely." +
+    "## Show or Hide Target App\n\n" +
+    "Usually off. Most people run their app in their own browser, so the " +
+    "target-app pane stays hidden and the agent pane fills the space. Turn " +
+    "it on to preview a simple app inside Bram; turn it off to reclaim the " +
+    "room." +
     "\n\n## Agent-pane hot-reload\n\n" +
-    "When on, the agent pane reloads " +
-    "automatically whenever files under app/tools/ change on disk. " +
-    "When off, source-code edits to Bram itself (Workspace.xmlui, " +
-    "Globals.xs, etc.) do not appear until you reload manually (Cmd+R " +
-    "in the agent pane). Default off — Bram-on-Bram development is " +
-    "the only context this affects (target-app developers route edits " +
-    "through right-pane-reload, which is unconditional). Suppresses " +
-    "the blank-pane cascade documented in #182 incident 7. Persists " +
-    "in .bram.json under ui.toolsPaneHotReload.",
+    "Only matters when developing Bram itself: when on, the agent pane " +
+    "reloads automatically as you edit Bram’s own source. Leave it off " +
+    "otherwise.",
   traces:
     "## Tracing enabled\n\n" +
     "Master switch for writes to " +

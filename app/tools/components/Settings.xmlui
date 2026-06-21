@@ -89,9 +89,9 @@
           <Heading level="h3">UI</Heading>
         </HStack>
         <Switch
-          label="Minimize target app"
-          initialValue="{settingsMinimized(settingsConfig.value)}"
-          onDidChange="(v) => saveSettings.execute({ ui: { targetAppMinimized: v } })" />
+          label="Show target app"
+          initialValue="{settingsShowTargetApp(settingsConfig.value)}"
+          onDidChange="(v) => saveSettings.execute({ ui: { showTargetApp: v } })" />
         <Switch
           label="Agent-pane hot-reload"
           initialValue="{settingsToolsPaneHotReload(settingsConfig.value)}"

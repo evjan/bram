@@ -1,12 +1,18 @@
 # Working with Bram
 
 Bram is a **workspace for AI-assisted web app development** — it
-works with any project that serves a web UI (vanilla HTML/JS, a
-React or other Node app, a Python web app, an XMLUI app, etc.).
-The shell puts a real terminal alongside the app you're building,
-plus an "agent tools" tabs that include a Worklist (pending
-items + commits), a Sessions browser, and a Context viewer
+works with any project, whatever it serves. The shell puts a real
+terminal alongside an "agent tools" pane that includes a Worklist
+(pending items + commits), a Sessions browser, and a Context viewer
 (CLAUDE.md + memory + hooks + settings, searchable).
+
+Bram can *optionally* embed a **target app** — a project iframe that
+previews a web UI inside Bram (vanilla HTML/JS, a React or other Node
+app, a Python web app, an XMLUI app, etc.). This pane is **off by
+default** and is a minority case: most users run their own app in
+their own server and view it in their own browser, so the embedded
+preview is reserved for a simple app or a quick check. Don't assume
+an iframe is present — detect before you rely on it.
 
 > Note on memory: this file is loaded into every session in this
 > project via a `@`-import in `CLAUDE.md`. **Don't save project-related
@@ -983,6 +989,12 @@ two messages when one would do. Only add a separate submit button if
 the auxiliary input is genuinely independent of the primary actions.
 
 ### Build vs. runtime-served files
+
+> The hot-reload behavior below is **internal plumbing** — it concerns
+> Bram's own `app/` tree and the *optional* embedded target-app iframe.
+> A mainstream user who runs their app in their own browser never relies
+> on it; their own dev server handles reloading. It matters only when you
+> are editing Bram itself or previewing a project in the embedded pane.
 
 The Bram binary embeds the `app/` tree at build time (Tauri
 `frontendDist: "../app"`), but prefers an on-disk `app/` next to the

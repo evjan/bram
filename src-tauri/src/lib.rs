@@ -308,12 +308,15 @@ struct WorklistConfig {
     batch_commit_actions: Option<bool>,
 }
 
-// Optional UI block. Currently only `targetAppMinimized`, which drives
-// the right-column h-splitter from the parent shell — see app/main.js.
+// Optional UI block. `showTargetApp` controls whether the embedded
+// target-app pane is shown at all — driven from the parent shell, see
+// app/main.js. Default OFF: the embedded target app is a minority case
+// (most users run their own app in their own server and view it in their
+// own browser), so the pane is hidden unless explicitly enabled.
 #[derive(Default, Clone, serde::Deserialize)]
 struct UiConfig {
-    #[serde(default, rename = "targetAppMinimized")]
-    target_app_minimized: Option<bool>,
+    #[serde(default, rename = "showTargetApp")]
+    show_target_app: Option<bool>,
     #[serde(default, rename = "toolsPaneHotReload")]
     tools_pane_hot_reload: Option<bool>,
 }
@@ -8034,7 +8037,7 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
     let (
         agent,
         batch,
-        minimized,
+        show_target_app,
         tools_pane_hot_reload,
         tracing_enabled,
         inspector_tap,
@@ -8049,8 +8052,9 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
                 c.worklist
                     .and_then(|w| w.batch_commit_actions)
                     .unwrap_or(false),
+                // Default OFF — the embedded target app is opt-in.
                 ui.as_ref()
-                    .and_then(|u| u.target_app_minimized)
+                    .and_then(|u| u.show_target_app)
                     .unwrap_or(false),
                 // Default OFF — only explicit `true` enables.
                 ui.and_then(|u| u.tools_pane_hot_reload).unwrap_or(false),
@@ -8065,7 +8069,7 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
     serde_json::json!({
         "shell": { "agent": agent },
         "worklist": { "batchCommitActions": batch },
-        "ui": { "targetAppMinimized": minimized, "toolsPaneHotReload": tools_pane_hot_reload },
+        "ui": { "showTargetApp": show_target_app, "toolsPaneHotReload": tools_pane_hot_reload },
         "traces": { "enabled": tracing_enabled, "inspectorTap": inspector_tap },
         "menus": { "parseAndDisplay": menus_parse },
     })

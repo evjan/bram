@@ -228,8 +228,8 @@ function settingsAgent(s) {
 function settingsBatch(s) {
   return !!(s && s.worklist && s.worklist.batchCommitActions);
 }
-function settingsMinimized(s) {
-  return !!(s && s.ui && s.ui.targetAppMinimized);
+function settingsShowTargetApp(s) {
+  return !!(s && s.ui && s.ui.showTargetApp);
 }
 function settingsInspectorTap(s) {
   return !!(s && s.traces && s.traces.inspectorTap);

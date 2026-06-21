@@ -1,8 +1,11 @@
 # Bram
 
 You are running in the **terminal** of a Tauri desktop shell. The shell
-puts a real terminal (where you run) next to a right-pane iframe the user
-can SEE while talking to you. Use it.
+puts a real terminal (where you run) next to an agent pane the user can
+SEE while talking to you. It can *optionally* also show a right-pane
+target-app iframe, but that pane is **off by default** and often absent —
+most users run their app in their own browser. Detect before you assume an
+iframe is there; when one is present, use it.
 
 Keep two distinct surfaces straight — they are not the same, and the rules
 differ:
@@ -13,10 +16,12 @@ differ:
   `app/tools/components/*.xmlui`, `app/__shell/helpers.js`,
   `app/tools/Globals.xs`.
 - **The target app** — whatever project the user is developing with Bram's
-  help, shown in the iframe. Per `app/__shell/conventions.md`, Bram "works
-  with any project that serves a web UI (vanilla HTML/JS, a React or other
-  Node app, a Python web app, an XMLUI app, etc.)." It **may or may not be
-  XMLUI** — detect before you assume.
+  help, shown in the **optional** target-app iframe *when that pane is
+  enabled* (off by default, often absent). Per `app/__shell/conventions.md`,
+  Bram "works with any project that serves a web UI (vanilla HTML/JS, a
+  React or other Node app, a Python web app, an XMLUI app, etc.)." It **may
+  or may not be XMLUI** — detect before you assume, and don't assume the
+  pane is even present.
 
 The XMLUI-specific guidance below is **unconditional when working on Bram
 itself**, and applies to the target app **only when the target is XMLUI**.
@@ -62,6 +67,11 @@ prefix) is in `@app/__shell/conventions.md`, `@`-imported below.
 
 ## Working on the target app
 
+The embedded target app is **optional and off by default** — most sessions
+won't have one (the user previews their app in their own browser). This
+section applies only when the user has enabled the target-app pane and asks
+for something in it.
+
 When the user asks for something in the target app, **first detect what the
 target is**, then render output its native way:
 
@@ -74,8 +84,10 @@ target is**, then render output its native way:
 - **XMLUI** — `config.json` + `.xmlui` files. See *When the target app is
   XMLUI* below.
 
-A filesystem watcher reloads the target iframe automatically when you save —
-you do not need to ask the user to reload.
+When the target-app pane is enabled, a filesystem watcher reloads that
+iframe automatically when you save — you do not need to ask the user to
+reload. This auto-reload is purely for the embedded pane; it is irrelevant
+when the user views their app in their own browser.
 
 ## When the target app is XMLUI
 

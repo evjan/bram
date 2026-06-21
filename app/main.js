@@ -854,53 +854,43 @@ const { listen } = window.__TAURI__.event;
   fetch("/__startup-ready?event=tools-pane-reload", { cache: "no-store" }).catch(() => {});
 })();
 
-// ui.targetAppMinimized driver. The Settings tab and hand-edits to
+// ui.showTargetApp driver. The Settings tab and hand-edits to
 // .bram.json both flow here via the `settings-changed` event (emitted
-// by handle_project_config_reload in src-tauri/src/lib.rs). True =
-// drive the right-column h-splitter to its MIN_PX floor on the
-// target-app side, leaving the tools drawer to fill the column. False
-// = clear the override and let the splitter fall back to default flex
-// behavior; user drags are not persisted, so prior manual sizes are
-// not restored.
+// by handle_project_config_reload in src-tauri/src/lib.rs).
+//
+// Default OFF: the embedded target app is a minority case — most users
+// run their own web app in their own server and view it in their own
+// browser — so Bram ships with the pane hidden. When showTargetApp is
+// absent or false, #right-pane and the h-splitter get display:none and
+// the agent-tools pane grows to fill the right column (overriding its
+// CSS `flex: 0 0 240px`). True restores the normal vertical split.
 (() => {
-  const TARGET_MIN_PX = 80; // matches the h-splitter MIN_PX above
-  let minimized = false;
-  function pin() {
-    const tools = document.getElementById("tools-pane");
-    const column = document.querySelector(".right-column");
+  let shown = false;
+  function apply() {
+    const right = document.getElementById("right-pane");
     const hSplitter = document.getElementById("h-splitter");
-    if (!tools || !column || !hSplitter) return;
-    const rect = column.getBoundingClientRect();
-    const h = rect.height - TARGET_MIN_PX - hSplitter.offsetHeight;
-    if (h > 0) tools.style.flexBasis = h + "px";
+    const tools = document.getElementById("tools-pane");
+    if (!right || !hSplitter || !tools) return;
+    right.style.display = shown ? "" : "none";
+    hSplitter.style.display = shown ? "" : "none";
+    // Hidden: grow the tools pane to fill the column. Shown: clear the
+    // overrides so CSS (flex: 0 0 240px) and the h-splitter drag handler
+    // take over again.
+    tools.style.flexGrow = shown ? "" : "1";
+    tools.style.flexShrink = shown ? "" : "1";
+    tools.style.flexBasis = shown ? "" : "0";
   }
   function set(next) {
-    const prev = minimized;
-    minimized = !!next;
-    if (minimized) {
-      pin();
-    } else if (prev) {
-      // Only clear the override when transitioning OFF, not on every
-      // tick of the resize listener — otherwise a non-minimized user
-      // drag (stored as percentage by the h-splitter handler) gets
-      // wiped on every window resize.
-      const tools = document.getElementById("tools-pane");
-      if (tools) tools.style.flexBasis = "";
-    }
+    shown = !!next;
+    apply();
   }
   fetch("/__settings")
     .then((r) => r.json())
-    .then((v) => set(v && v.ui && v.ui.targetAppMinimized))
+    .then((v) => set(v && v.ui && v.ui.showTargetApp))
     .catch(() => {});
   listen("settings-changed", (e) => {
     const v = e && e.payload;
-    set(v && v.ui && v.ui.targetAppMinimized);
-  });
-  // Reapply on window resize so the splitter stays at the floor when
-  // the Tauri window grows or shrinks. No-op when not minimized — the
-  // user's drag-set percentage flexBasis is responsive on its own.
-  window.addEventListener("resize", () => {
-    if (minimized) pin();
+    set(v && v.ui && v.ui.showTargetApp);
   });
 })();
 

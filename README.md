@@ -27,11 +27,11 @@ Bram has opinions. It thinks versioning and collaboration are well-handled by gi
 
 - **Terminal** — where you run an AI coding agent (e.g. `claude` or `codex`).
 
-- **Target app** — your app under development, loaded in an iframe.
-
 - **Agent pane** — where Bram guides the agent through the workflow (Worklist, Issues, Sessions, Status, etc.).
 
-As files in the project change, the target app reloads automatically.
+- **Target app** *(optional, off by default)* — a project iframe for previewing your app inside Bram. Most people run their own web app in their own server and view it in their own browser, so this pane is hidden unless you turn it on (Settings → UI → "Show target app"). It is handy for a very simple app, but it is not the common case.
+
+When the optional target-app pane is enabled, Bram's file watcher reloads it automatically as project files change. That auto-reload is purely a convenience for the embedded pane — if you view your app in your own browser, your own dev server handles reloading.
 
 ### Glossary
 
@@ -42,7 +42,7 @@ A small glossary of the terms used throughout this README, the conventions sidec
 | **main app** | the whole Bram desktop shell. |
 | **app toolbar** | the top button row in the main app (reload target app · devtools · agent tools · terminal · A− · A+ · voice). |
 | **terminal** | the xterm.js area where Claude / Codex runs. |
-| **target app** | the project iframe where the app you are building runs. |
+| **target app** | the *optional* project iframe (off by default) for previewing your app inside Bram. |
 | **agent pane** | the area where Bram guides the agent through the workflow — the tabs UI (Worklist, Issues, Commits, Sessions, History, Context, Status, Settings). |
 | **agent nav** | the vertical menu on the left of the agent pane (Worklist, Issues, Commits, Sessions, History, Context, Status, Settings). |
 | **agent toolbar** | controls associated with the agent pane (per-view action bars: Refresh, Approve, etc.). |
@@ -131,7 +131,7 @@ On some Windows 11 setups, Smart App Control may block the unsigned binary — m
 
 - **Status** — a coordination-health view of the host↔agent plumbing: port-file consistency, loopback HTTP responsiveness, the inflight spinner sentinel, and the latest worklist authorization records. Use it to diagnose a stuck spinner or a refused loopback connection.
 
-- **Settings** — bidirectional view of `.bram.json`. Surfaces the agent-command (`shell.agent`), the worklist's batch-commit-actions toggle, and the target-app-minimized switch (drives the right-column splitter to give the agent pane maximum room while keeping the target app mounted). Edits persist to disk; hand-edits to `.bram.json` flow back through a `settings-changed` Tauri event without manual reload. Agent-command changes require a Bram restart to take effect (consumed at PTY spawn); the other settings apply live.
+- **Settings** — bidirectional view of `.bram.json`. Surfaces the agent-command (`shell.agent`), the worklist's batch-commit-actions toggle, and the show-target-app switch (off by default — reveals the optional target-app pane; otherwise the agent pane fills the right column). Edits persist to disk; hand-edits to `.bram.json` flow back through a `settings-changed` Tauri event without manual reload. Agent-command changes require a Bram restart to take effect (consumed at PTY spawn); the other settings apply live.
 
 The four search-capable tabs (Issues, Commits, Sessions, History) all share a single `<SearchBox>` (250 ms debounce, ✕ to clear, inline spinner during fetch) and a single `<SearchHitModal>`. Clicking a hit opens the modal centered on the matched term within a 500-character window, with the match visibly highlighted. Diff renders across the Worklist TO COMMIT expander and the Commits per-file patch through a single `<DiffView>` that goes through a backend `/__diff/annotate` route for word-level intra-line emphasis.
 

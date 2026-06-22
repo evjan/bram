@@ -14,7 +14,6 @@
   var.newItemTurnEnded="{false}"
   var.newItemIssue="{null}"
   var.newItemVoiceRecording="{false}"
-  var.agentIsWorking="{false}"
   var.openToolId="{null}"
   var.openTool="{null}"
   var.inflightTick="{0}"
@@ -22,15 +21,6 @@
   var.actionProgressKind="{''}"
   var.actionProgressScope="{''}"
   var.worklistTurnsTick="{0}"
-  var.lastAssistantStableText="{''}"
-  var.staleAssistantBaseline="{''}"
-  var.lastConversationSig="{''}"
-  var.liveSubmittedAssistantText="{''}"
-  var.liveSubmittedAssistantKey="{''}"
-  var.stickyConversationTools="{[]}"
-  var.stickyConversationToolsKey="{''}"
-  var.stickyConversationUserImages="{[]}"
-  var.stickyConversationUserImagesKey="{''}"
   var.submittedWorklistImages="{[]}"
   var.messageSubmitResult="{null}"
   var.worklistActionResult="{null}"
@@ -47,13 +37,9 @@
   var.pendingPastedImageCount="{window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot().count : 0}"
   var.pendingPastedImagePaths="{window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot().paths : []}"
   var.stagingPastedImageCount="{window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot().staging : 0}"
-  var.worklistConversationLayout="{'worklist'}"
   var.submittedWorklistMessage="{window.__bramRestoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{window.__bramRestoreWorklistSubmittedBaseline()}"
   var.submittedKind="{window.__bramRestoreWorklistSubmittedKind()}">
-  <ChangeListener
-    listenTo="{worklistConversationLayout || 'split'}"
-    onDidChange="(c) => window.__bramIframeTrace('worklist-conversation-layout-change', {prev: c.prevValue || '', next: c.newValue || ''})" />
   <DataSource
     id="worklist"
     url="/__worklist"
@@ -172,8 +158,6 @@
         if (window.__bramMarkTurnEnded('inflight-clear', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
           awaitingResponse = false;
           submittedKind = null;
-          liveSubmittedAssistantText = '';
-          liveSubmittedAssistantKey = '';
           window.__bramClearWorklistAwaiting(false);
         }
         submittedItemId = null;
@@ -183,8 +167,6 @@
         actionProgressScope = '';
         actionProgressTick = 0;
         setWorklistVoiceTarget('message-agent');
-        stickyConversationUserImages = [];
-        stickyConversationUserImagesKey = '';
       }
     }" />
   <!-- Reactive voice-target reset: when no item is expanded, reset
@@ -193,29 +175,12 @@
   <ChangeListener
     listenTo="{(expandedItemIds || []).length === 0 ? 'none' : 'some'}"
     onDidChange="() => { if ((expandedItemIds || []).length === 0 && worklistVoiceTarget === 'feedback') setWorklistVoiceTarget('message-agent'); }" />
-  <!-- Transcript-aligned last response. Host derives this from the same
-       parsed turn stream Transcript uses. Refetch is driven by JSONL
-       fanout plus the shell's talk-session bridge so Workspace does not
-       lag behind the terminal between throttled fanout ticks. -->
-  <!-- Combined conversation-derived state. Single backend route that
-       returns the lastAssistantText, lastExchange, and currentTurnEdits
-       sub-payloads from one JSONL parse per tick instead of three. The
-       route is backed by a (path, mtime, len) cache so unchanged JSONL
-       serves from memory; under active agent generation the parse
-       happens once per JSONL growth, not once per consumer. The legacy
-       /__last-assistant-text, /__last-exchange, /__current-turn-edits
-       routes still exist (and share the same cache) for the polling
-       consumers in AgentToolUses / ConversationPane / AgentLastResponse. -->
+  <!-- Worklist still consumes conversation-derived currentTurnEdits for
+       in-flight edit hints. Transcript owns the chat surface. -->
   <External
     id="conversationStateDS"
     initial="{null}"
     subscribe="{window.bramSubscribeConversationState()}" />
-  <ChangeListener
-    listenToSources="{{cs: conversationStateDS.value}}"
-    onDidChange="() => {
-      const text = conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text;
-      if (text &amp;&amp; text !== lastAssistantStableText) { lastAssistantStableText = text; }
-    }" />
 
   <!-- Drives the in-flight "Approving./.../..." dot cycle below the
        targeted item. 2 s tick is intentionally slow - action cycles can
@@ -226,72 +191,14 @@
     enabled="{submitting &amp;&amp; actionProgressKind}"
     onTick="actionProgressTick = actionProgressTick + 1" />
   <ChangeListener
-    listenTo="{agentIsWorking}"
-    onDidChange="(c) => {
-      App.mark('dim-baseline:listener-fired|new=' + (c.newValue ? '1' : '0') + '|prevBaselineLen=' + (staleAssistantBaseline || '').length + '|stableLen=' + (lastAssistantStableText || '').length + '|stablePfx=' + (lastAssistantStableText || '').slice(0, 24).replace(/\|/g, '_'));
-      if (c.newValue) { staleAssistantBaseline = lastAssistantStableText || ''; }
-    }" />
-  <ChangeListener
     listenTo="{awaitingResponse}"
     onDidChange="(c) => { if (c.newValue &amp;&amp; !c.prevValue) { agentTurnEndedSinceSubmit = false; } }" />
   <ChangeListener
     listenTo="{messageSubmitResult &amp;&amp; messageSubmitResult.seq}"
-    onDidChange="() => { const r = messageSubmitResult || {}; if (!r.submitted) return; pendingPastedImageCount = r.pendingPastedImageCount; pendingPastedImagePaths = r.pendingPastedImagePaths; stagingPastedImageCount = r.stagingPastedImageCount; stickyConversationTools = r.stickyConversationTools; stickyConversationToolsKey = r.stickyConversationToolsKey; stickyConversationUserImages = r.stickyConversationUserImages; stickyConversationUserImagesKey = r.stickyConversationUserImagesKey; liveSubmittedAssistantText = r.liveSubmittedAssistantText; liveSubmittedAssistantKey = r.liveSubmittedAssistantKey; submittedWorklistImages = r.submittedWorklistImages; submittedWorklistMessage = r.submittedWorklistMessage; submittedTurnsBaseline = r.submittedTurnsBaseline; messageSentAtText = r.messageSentAtText; submittedKind = r.submittedKind; awaitingResponse = r.awaitingResponse; awaitingResponseSetAt = r.awaitingResponseSetAt; }" />
+    onDidChange="() => { const r = messageSubmitResult || {}; if (!r.submitted) return; pendingPastedImageCount = r.pendingPastedImageCount; pendingPastedImagePaths = r.pendingPastedImagePaths; stagingPastedImageCount = r.stagingPastedImageCount; submittedWorklistImages = r.submittedWorklistImages; submittedWorklistMessage = r.submittedWorklistMessage; submittedTurnsBaseline = r.submittedTurnsBaseline; messageSentAtText = r.messageSentAtText; submittedKind = r.submittedKind; awaitingResponse = r.awaitingResponse; awaitingResponseSetAt = r.awaitingResponseSetAt; }" />
   <ChangeListener
     listenTo="{worklistActionResult &amp;&amp; worklistActionResult.seq}"
     onDidChange="() => { const r = worklistActionResult || {}; if (!r.submittedKind) return; submittedWorklistImages = r.submittedWorklistImages; submittedWorklistMessage = r.submittedWorklistMessage; submittedTurnsBaseline = r.submittedTurnsBaseline; messageSentAtText = r.messageSentAtText; awaitingResponse = r.awaitingResponse; awaitingResponseSetAt = r.awaitingResponseSetAt; pendingPastedImageCount = r.pendingPastedImageCount; pendingPastedImagePaths = r.pendingPastedImagePaths; stagingPastedImageCount = r.stagingPastedImageCount; submittedItemId = r.submittedItemId; submittedKind = r.submittedKind; submitting = r.submitting; actionProgressScope = r.actionProgressScope || 'item'; actionProgressKind = r.actionProgressKind; actionProgressTick = r.actionProgressTick; const nextDrafts = Object.assign({}, r.feedbackDraftsById || {}); if (r.submittedItemId &amp;&amp; (feedbackInputSentIds || []).includes(r.submittedItemId) &amp;&amp; feedbackDraftsById &amp;&amp; feedbackDraftsById[r.submittedItemId]) nextDrafts[r.submittedItemId] = feedbackDraftsById[r.submittedItemId]; feedbackDraftsById = nextDrafts; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); window.localStorage.setItem('bram.worklistFeedbackSentIds', JSON.stringify(feedbackInputSentIds || [])); }" />
-  <ChangeListener
-    listenToSources="{{tools: conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools}}"
-    onDidChange="() => {
-      const tools = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.tools) || []).slice(-3);
-      if (tools.length > 0) {
-        stickyConversationTools = tools;
-        stickyConversationToolsKey = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '') || (submittedWorklistMessage || '') || (submittedItemId || '');
-      }
-    }" />
-  <ChangeListener
-    listenTo="{((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userImages) || []).join('|')}"
-    onDidChange="() => {
-      const userImages = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userImages) || []);
-      if (userImages.length > 0) {
-        stickyConversationUserImages = userImages;
-        stickyConversationUserImagesKey = ((conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || '') || (submittedWorklistMessage || '') || (submittedItemId || '');
-      }
-    }" />
-  <ChangeListener
-    listenToSources="{{lastExchange: conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange, lastAssistantStableText: lastAssistantStableText, submittedWorklistMessage: submittedWorklistMessage, submittedItemId: submittedItemId, submittedKind: submittedKind, awaitingResponse: awaitingResponse, stickyConversationTools: stickyConversationTools, stickyConversationUserImages: stickyConversationUserImages}}"
-    onDidChange="() => {
-      const decision = window.__bramComputeConversationSync({
-        lastExchange: (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange) || null,
-        lastAssistantStableText: lastAssistantStableText || '',
-        submittedWorklistMessage: submittedWorklistMessage || '',
-        submittedItemId: submittedItemId || '',
-        submittedKind: submittedKind || '',
-        awaitingResponse: !!awaitingResponse,
-        agentTurnEndedSinceSubmit: !!agentTurnEndedSinceSubmit,
-        stickyConversationTools: stickyConversationTools || [],
-        stickyConversationUserImages: stickyConversationUserImages || [],
-        liveSubmittedAssistantText: liveSubmittedAssistantText || '',
-        liveSubmittedAssistantKey: liveSubmittedAssistantKey || '',
-        lastConversationSig: lastConversationSig || '',
-        awaitingResponseSetAt: awaitingResponseSetAt || 0,
-        submitting: !!submitting
-      });
-      if (decision.sigChanged) {
-        lastConversationSig = decision.signature;
-      }
-      if (decision.liveAssistantCapture) {
-        liveSubmittedAssistantText = decision.liveAssistantCapture.text;
-        liveSubmittedAssistantKey = decision.liveAssistantCapture.key;
-      }
-      if (decision.shouldClearAwaiting) {
-        awaitingResponse = false;
-        submittedKind = null;
-        liveSubmittedAssistantText = '';
-        liveSubmittedAssistantKey = '';
-        window.__bramClearWorklistAwaiting(false);
-      }
-    }" />
   <DataSource
     id="worklistToolDetailDS"
     url="/__tool-detail?id={openToolId || ''}"
@@ -516,17 +423,8 @@
         </Form>
       </HStack>
 
-    <HSplitter
-      height="*"
-      width="100%"
-      initialPrimarySize="{(worklistConversationLayout || 'split') === 'worklist' ? '100%' : window.__bramRestoreSplitterSize('worklist', '50%')}"
-      minPrimarySize="{(worklistConversationLayout || 'split') === 'worklist' ? '100%' : '320px'}"
-      maxPrimarySize="{(worklistConversationLayout || 'split') === 'split' ? '-320px' : '100%'}"
-      onResize="(px) => { if ((worklistConversationLayout || 'split') === 'split') window.__bramSaveSplitterSize('worklist', px); }">
       <VStack
-        when="{(worklistConversationLayout || 'split') !== 'conversation'}"
         gap="$space-3"
-        paddingRight="$space-3"
         overflowY="auto">
     <VStack gap="$space-3" when="{worklist.value}">
       <VStack gap="$space-3">
@@ -541,20 +439,6 @@
             <Spinner when="{newItemSubmitting}" />
           </Theme>
           <SpaceFiller />
-          <Button
-            when="{(worklistConversationLayout || 'split') === 'split'}"
-            label="Full width"
-            variant="ghost"
-            size="xs"
-            tooltip="Give the worklist full width"
-            onClick="window.__bramIframeTrace('worklist-conversation-layout-click', {source: 'worklist-header', layout: 'worklist'}); worklistConversationLayout = window.__bramSetWorklistConversationLayout('worklist')" />
-          <Button
-            when="{false}"
-            label="Split view"
-            variant="ghost"
-            size="xs"
-            tooltip="Show worklist and chat side by side"
-            onClick="window.__bramIframeTrace('worklist-conversation-layout-click', {source: 'worklist-header', layout: 'split'}); worklistConversationLayout = window.__bramSetWorklistConversationLayout('split')" />
         </HStack>
         <VStack
           when="{worklist.value.exists && worklist.value.schemaError}"
@@ -862,34 +746,6 @@
       </VStack>
       </VStack>
 
-      <VStack
-        when="{(worklistConversationLayout || 'split') !== 'worklist'}"
-        paddingLeft="$space-3"
-        gap="$space-2"
-        overflowY="auto"
-        onInit="window.__bramIframeTrace('worklist-conversation-pane-mounted', {layout: worklistConversationLayout || 'split', splitter: window.__bramRestoreSplitterSize('worklist', '50%')})">
-        <HStack gap="$space-2" verticalAlignment="center">
-          <Heading level="h2">Chat</Heading>
-          <SpaceFiller />
-          <Button
-            when="{(worklistConversationLayout || 'split') === 'split'}"
-            label="Full width"
-            variant="ghost"
-            size="xs"
-            tooltip="Give chat full width"
-            onClick="window.__bramIframeTrace('worklist-conversation-layout-click', {source: 'conversation-header', layout: 'conversation'}); worklistConversationLayout = window.__bramSetWorklistConversationLayout('conversation')" />
-          <Button
-            when="{(worklistConversationLayout || 'split') === 'conversation'}"
-            label="Split view"
-            variant="ghost"
-            size="xs"
-            tooltip="Show worklist and chat side by side"
-            onClick="window.__bramIframeTrace('worklist-conversation-layout-click', {source: 'conversation-header', layout: 'split'}); worklistConversationLayout = window.__bramSetWorklistConversationLayout('split')" />
-        </HStack>
-        <ConversationPane
-          exchange="{conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange}" />
-      </VStack>
-    </HSplitter>
     </VStack>
     </VStack>
 
@@ -1211,8 +1067,6 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
                 newItemTurnEnded = false;
                 newItemSubmitting = true;
                 submittedWorklistMessage = msg;
-                liveSubmittedAssistantText = '';
-                liveSubmittedAssistantKey = '';
                 submittedKind = window.__bramSetWorklistSubmittedKind('message');
                 messageSentAtText = new Date().toLocaleTimeString();
                 awaitingResponse = true;
@@ -1275,8 +1129,6 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
           if (window.__bramMarkTurnEnded('agent-turn-end', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
             awaitingResponse = false;
             submittedKind = null;
-            liveSubmittedAssistantText = '';
-            liveSubmittedAssistantKey = '';
             window.__bramClearWorklistAwaiting(false);
           }
         }
@@ -1297,8 +1149,6 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
         if (window.__bramMarkTurnEnded('agent-turn-killed', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
           awaitingResponse = false;
           submittedKind = null;
-          liveSubmittedAssistantText = '';
-          liveSubmittedAssistantKey = '';
           window.__bramClearWorklistAwaiting(false);
         }
       }" />
@@ -1313,21 +1163,17 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
         inflightTick = inflightTick + 1;
       }" />
     <External
-      id="convPaneAgentStatusEvt"
+      id="workspaceAgentStatusEvt"
       initial="{null}"
       subscribe="{window.bramSubscribeTauriEvent('agent-status-changed')}" />
     <ChangeListener
-      listenTo="{convPaneAgentStatusEvt.value &amp;&amp; convPaneAgentStatusEvt.value.tick}"
+      listenTo="{workspaceAgentStatusEvt.value &amp;&amp; workspaceAgentStatusEvt.value.tick}"
       onDidChange="() => {
-        const p = (convPaneAgentStatusEvt.value &amp;&amp; convPaneAgentStatusEvt.value.payload) || null;
-        const nextWorking = !!(p &amp;&amp; p.state === 'working');
-        if (nextWorking !== agentIsWorking) { agentIsWorking = nextWorking; }
+        const p = (workspaceAgentStatusEvt.value &amp;&amp; workspaceAgentStatusEvt.value.payload) || null;
         if (awaitingResponse &amp;&amp; p &amp;&amp; p.state !== 'working') {
           if (p.state === 'finished' &amp;&amp; window.__bramMarkTurnEnded('agent-status-finished', {awaitingResponse: awaitingResponse, submitting: submitting, awaitingResponseSetAt: awaitingResponseSetAt, submittedKind: submittedKind})) {
             awaitingResponse = false;
             submittedKind = null;
-            liveSubmittedAssistantText = '';
-            liveSubmittedAssistantKey = '';
             window.__bramClearWorklistAwaiting(false);
           }
         }

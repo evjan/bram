@@ -10,8 +10,8 @@ iframe is there; when one is present, use it.
 Keep two distinct surfaces straight — they are not the same, and the rules
 differ:
 
-- **The agent pane** — Bram's own UI (the Worklist / Sessions / Context /
-  Status tabs, the conversation pane). **Always XMLUI** — that's how Bram
+- **The agent pane** — Bram's own UI (the Worklist / Transcript / Sessions /
+  Context / Status tabs). **Always XMLUI** — that's how Bram
   is built. Editing it means `app/tools/Main.xmlui`,
   `app/tools/components/*.xmlui`, `app/__shell/helpers.js`,
   `app/tools/Globals.xs`.

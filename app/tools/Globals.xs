@@ -474,22 +474,6 @@ function setFocusedFeedbackItemId(id) {
   bramFocusedFeedbackItemId = id || '';
   window.bramSetActiveFocusedFeedbackItemIdMirror(id || '');
 }
-// Conversation pane no longer refreshes by bumping a URL tick. Bumping a
-// value in the DataSource URL restarted the query and blanked .value
-// mid-flight, unmounting the sections -- the flash. ConversationPane.xmlui
-// now owns one stable-URL DataSource refreshed in place (poll + refetch),
-// which preserves .value via structural sharing. See docs/conversation-pane.md.
-//
-// conversationActive gates the three conversation sections so they stay
-// mounted across refetches; only the cold-start placeholder (no exchange at
-// all) hides them.
-function conversationActive(ex) {
-  return !!(ex && (ex.userText || ex.assistantText
-    || (ex.tools && ex.tools.length > 0)
-    || (ex.userImages && ex.userImages.length > 0)
-    || (ex.assistantImages && ex.assistantImages.length > 0)));
-}
-
 // Decide the iframe-side state update for the `inflightClaim` DataSource
 // (the wrapper around resources/.inflight-claim.json). Sentinel is the
 // single source of truth for the spinner. Returns an object the caller
@@ -503,17 +487,7 @@ function conversationActive(ex) {
 //                with the returned trace payload).
 //   - 'none'   : no transition needed.
 //
-// IMPORTANT non-resets in the 'clear' branch:
-//
-//   - stickyConversationTools / stickyConversationToolsKey
-//     INTENTIONALLY not reset here. Mirror of b54e9b1 in onSubmit:
-//     the sticky cache is the cross-turn bridge that keeps the
-//     `Agent: Tool uses` section mounted between the end of one
-//     turn and the first raw tool of the next. Resetting causes a
-//     transient unmount when lastExchangeDS hasn't refetched yet --
-//     diagnosed as the "transient flash of tool uses" symptom.
-//     The ChangeListener that updates sticky will overwrite it as
-//     soon as the next turn produces its own raw tools.
+// IMPORTANT non-reset in the 'clear' branch:
 //
 //   - setWorklistVoiceTarget('message-agent') IS called in the
 //     'clear' branch (and also via the reactive listener below).
@@ -738,4 +712,3 @@ function toggleVoiceForCurrentTarget(recording) {
   window.__bramIframeTrace('voice-trace', { stage: 'toggle-exit-start', returning: true });
   return true;
 }
-

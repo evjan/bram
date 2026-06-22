@@ -298,11 +298,11 @@ providers, switched by the `provider=` query.
 | `/__sessions/search` | HTTP GET | `provider=`, `q=`, `scope=recent\|all` | `[{ id, title, hits: [{ line, snippet }] }, …]` | agent pane iframe |
 | `/__sessions/delete` | HTTP GET | `provider=`, `id=` | `{ ok: true }` | agent pane iframe |
 | `/__sessions/rename` | HTTP GET | `provider=`, `id=`, `title=` | `{ ok: true }` | agent pane iframe |
-| `/__last-assistant-text` | HTTP GET | — | `{ text, mtime, path, source }`. Host walks the current session JSONL's trailing 32 KB in reverse, returns the most recent assistant text. Replaces the per-fanout iframe-side `lastAssistantText(lastJsonl)` walk (250-300 ms cost per call) — see commit dcef719. | agent pane iframe (Workspace `Last agent response` panel) |
+| `/__last-assistant-text` | HTTP GET | — | `{ text, mtime, path, source }`. Legacy compatibility route returning the most recent assistant text from the current session JSONL. Transcript now owns the live chat surface. | compatibility consumers / diagnostics |
 | `/__current-turn-edits` | HTTP GET | — | `{ added, removed, filePath, kind, lastToolId }` for the current turn's edit aggregates. Same derive-at-the-boundary pattern: host parses the 64 KB tail once per request, iframe binds via DataSource instead of running `currentTurnEdits(lastJsonl)` on every fanout. | agent pane iframe (Workspace turn-edits hint) |
 | `/__waiting-for-assistant` | HTTP GET | — | `{ waiting: bool }` — true when the most recent meaningful JSONL record is a user message (`tool_result`-only records skipped). Mirror of the iframe `isWaitingForAssistant` helper. | agent pane iframe |
-| `/__session-turns` | HTTP GET | — | `[{ role, text, entries, images }, …]` — host-derived turn timeline. Mirror of the iframe `sessionTurns(jsonlText)` helper that walked the full JSONL per fanout. | agent pane iframe (Workspace conversation components / compatibility consumers) |
-| `/__tool-detail` | HTTP GET | `id=<toolId>` | `{ input, result }` or `null` for a single tool by id. Companion to `/__session-turns`; mirrors `getToolDetail(jsonlText, toolId)`. | agent pane iframe (Workspace tool-use detail views / compatibility consumers) |
+| `/__session-turns` | HTTP GET | — | `[{ role, text, entries, images }, …]` — host-derived turn timeline. Mirror of the iframe `sessionTurns(jsonlText)` helper that walked the full JSONL per fanout. | compatibility consumers / diagnostics |
+| `/__tool-detail` | HTTP GET | `id=<toolId>` | `{ input, result }` or `null` for a single tool by id. Companion to `/__session-turns`; mirrors `getToolDetail(jsonlText, toolId)`. | agent pane iframe (Workspace in-flight edit detail / compatibility consumers) |
 
 - Provider directories: `~/.claude/projects/<encoded-cwd>/` for Claude
   Code (`claude_sessions_dir` at `lib.rs:1942`),

@@ -92,10 +92,9 @@ the whole history.
 The toolbar uses agent status and turn state to show whether the
 agent is working, waiting for input, or finished.
 
-The Worklist and conversation panes use the spine to decide when
-an action cycle is awaiting a response, when tool-use rows should
-stay mounted, when conversation text is safe to refresh, and when
-a permission menu should appear or disappear.
+The Worklist and Transcript panes use the spine to decide when an action cycle
+is awaiting a response, when current-turn edit hints should refresh, and when a
+permission menu should appear or disappear.
 
 The status page and trace tools use the spine as a diagnostic lens.
 They do not just ask "what is the latest PTY chunk?" or "what is the
@@ -212,4 +211,3 @@ Prefer small, evidence-backed extensions over a sweeping abstraction
 that assumes the communications path is cleaner than it is. The
 spine is the current compromise: unified enough to coordinate the UI,
 modest enough to keep learning from production traces.
-

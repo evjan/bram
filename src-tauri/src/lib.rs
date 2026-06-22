@@ -11042,16 +11042,12 @@ fn freshest_session_path<R: tauri::Runtime>(
     Ok(best.map(|(p, _)| p))
 }
 
-// Shared cache for the three conversation-derived routes plus the
-// combined /__conversation-state endpoint. Workspace's
-// lastAssistantTick++ used to fan out to /__last-assistant-text +
-// /__current-turn-edits + /__last-exchange — three full JSONL parses
-// per tick. With the cache, one parse per JSONL change powers all
-// four routes; subsequent requests at the same `(path, mtime, len)`
-// return cached bytes directly. AgentToolUses, ConversationPane, and
-// AgentLastResponse continue to poll the legacy routes; with the
-// shared cache their 2 s polls hit cached bytes between JSONL
-// updates instead of re-parsing.
+// Shared cache for the conversation-derived routes. Worklist still reads
+// /__conversation-state for currentTurnEdits while Transcript owns the chat
+// surface; legacy last-assistant / last-exchange routes remain available for
+// diagnostics and older traces. One parse per JSONL change powers the route
+// payloads; subsequent requests at the same `(path, mtime, len)` return cached
+// bytes directly.
 struct ConversationStateCache {
     path: std::path::PathBuf,
     mtime_ms: i64,
@@ -11113,11 +11109,8 @@ fn build_conversation_cache_entry<R: tauri::Runtime>(
     let mut user_images: Vec<String> = Vec::new();
     let mut assistant_images: Vec<String> = Vec::new();
     let mut tool_entries: Vec<serde_json::Value> = Vec::new();
-    // Each assistant text block of the latest turn, in emission order. The
-    // conversation pane's "Agent: Last response" renders these as a
-    // bottom-anchored, accumulating List (mirroring "Agent: Tool uses"), so a
-    // multi-step turn streams in one row per message rather than one growing
-    // Markdown blob. See app/tools/components/AgentLastResponse.xmlui.
+    // Each assistant text block of the latest turn, in emission order. Kept in
+    // the legacy lastExchange payload for diagnostics and compatibility.
     let mut assistant_texts: Vec<String> = Vec::new();
     let mut user_idx: Option<usize> = None;
     for (i, turn) in turns.iter().enumerate().rev() {
@@ -11157,11 +11150,7 @@ fn build_conversation_cache_entry<R: tauri::Runtime>(
                 if !t.trim().is_empty() {
                     // Accumulate every assistant text block of this turn, not
                     // just the last one. A multi-step turn (text, tool, text,
-                    // tool, text) emits several assistant messages; overwriting
-                    // here left the pane showing only the final block. The
-                    // conversation pane's "Agent: Last response" is meant to
-                    // hold the whole response (see docs/conversation-pane.md),
-                    // and the scroll container makes a long one readable.
+                    // tool, text) emits several assistant messages.
                     if !assistant_text.is_empty() {
                         assistant_text.push_str("\n\n");
                     }
@@ -11460,12 +11449,9 @@ fn read_current_turn_edits<R: tauri::Runtime>(
     Ok(bytes)
 }
 
-// /__conversation-state — combined endpoint. Workspace.xmlui binds one
-// DataSource (conversationStateDS) to this route on lastAssistantTick++,
-// replacing the previous fan-out to /__last-assistant-text,
-// /__last-exchange, and /__current-turn-edits. Returns nested
-// { lastAssistantText, lastExchange, currentTurnEdits } so accessor
-// paths in Workspace's existing bindings map directly across.
+// /__conversation-state — combined endpoint. Workspace.xmlui currently uses
+// currentTurnEdits for in-flight edit hints; lastAssistantText and
+// lastExchange remain in the payload for compatibility with older tools.
 fn read_conversation_state<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,

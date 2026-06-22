@@ -16,6 +16,13 @@
     id="footerVoiceArrival"
     initial="{null}"
     subscribe="{window.bramSubscribeVoiceArrival()}" />
+  <External
+    id="whisperNotice"
+    initial="{null}"
+    subscribe="{window.bramSubscribeWhisperUnavailable()}" />
+  <ChangeListener
+    listenTo="{whisperNotice.value &amp;&amp; whisperNotice.value.at}"
+    onDidChange="(c) => { if (c.newValue) { toast.error('Whisper server is not running and could not be started automatically. Start it manually — see the README Voice input section: https://github.com/judell/bram#voice-input'); } }" />
   <ChangeListener
     listenTo="{footerVoiceArrival.value &amp;&amp; footerVoiceArrival.value.at}"
     onDidChange="() => { const ev = footerVoiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; if (t &amp;&amp; worklistVoiceTarget === 'message-agent' &amp;&amp; footerComposerBox) window.__bramAppendVoiceToBox(footerComposerBox, t); footerVoiceRecording = false; worklistVoiceRecordingActive = false; }" />

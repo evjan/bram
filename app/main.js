@@ -1083,7 +1083,7 @@ const { listen } = window.__TAURI__.event;
         elapsedMs: Date.now() - startedAt,
         source: "preflight",
       });
-      return true;
+      return { ready: true, reason: "preflight" };
     }
     let status;
     try {
@@ -1091,7 +1091,7 @@ const { listen } = window.__TAURI__.event;
     } catch (e) {
       console.error("whisper_status", e);
       voiceLog("whisper-status-error", { error: String(e) });
-      return false;
+      return { ready: false, reason: "status-error" };
     }
     voiceLog("whisper-status", {
       running: !!(status && status.running),
@@ -1106,7 +1106,7 @@ const { listen } = window.__TAURI__.event;
         elapsedMs: Date.now() - startedAt,
         source: "status",
       });
-      return true;
+      return { ready: true, reason: "status" };
     }
     try {
       voiceLog("ensure-server-start-invoked", { modelPath: MODEL_PATH });
@@ -1116,7 +1116,7 @@ const { listen } = window.__TAURI__.event;
       console.error("whisper_start", e);
       voiceLog("whisper-start-error", { error: String(e) });
       voiceLog("ensure-server-start-error", { error: String(e) });
-      return false;
+      return { ready: false, reason: "start-failed" };
     }
     const deadline = Date.now() + READY_TIMEOUT_MS;
     while (Date.now() < deadline) {
@@ -1132,7 +1132,7 @@ const { listen } = window.__TAURI__.event;
         if (res.ok) {
           voiceLog("whisper-ready", { httpStatus: res.status });
           voiceLog("ensure-server-ready", { elapsedMs: Date.now() - startedAt });
-          return true;
+          return { ready: true, reason: "started" };
         }
         voiceLog("whisper-ready-poll", { httpStatus: res.status });
       } catch (e) {
@@ -1151,7 +1151,28 @@ const { listen } = window.__TAURI__.event;
       elapsedMs: Date.now() - startedAt,
       totalPolls: polls,
     });
-    return false;
+    return { ready: false, reason: "timeout" };
+  };
+
+  // When voice can't start because whisper-server is neither running nor
+  // auto-startable (binary missing, or it never became ready), notify the
+  // agent-pane iframe (same-origin tools-pane) so it can surface a toast
+  // pointing the user at the README. This covers every mic origin —
+  // toolbar, agent pane, and any target-app iframe — because the notice
+  // always lands in Bram's own pane, which always renders the toast.
+  const notifyWhisperUnavailable = (reason) => {
+    voiceLog("whisper-unavailable-notice", { reason: String(reason || "") });
+    try {
+      const tools = document.getElementById("tools-pane");
+      if (tools && tools.contentWindow) {
+        tools.contentWindow.postMessage(
+          { type: "bram-whisper-unavailable", reason: String(reason || "") },
+          "*",
+        );
+      }
+    } catch (e) {
+      voiceLog("whisper-unavailable-notice-error", { error: String(e) });
+    }
   };
 
   const stopStream = () => {
@@ -1283,17 +1304,26 @@ const { listen } = window.__TAURI__.event;
     const isToolbar = target === "toolbar";
     if (isToolbar) toolbarRequestId = incomingId;
     if (isToolbar) setToolbarState("starting");
-    const ready = await ensureServerRunning();
-    if (!ready) {
+    const serverResult = await ensureServerRunning();
+    if (!serverResult.ready) {
       console.error("whisper-server did not become ready");
-      voiceLog("startRecording-not-ready", { requestId: incomingId });
+      voiceLog("startRecording-not-ready", {
+        requestId: incomingId,
+        reason: serverResult.reason,
+      });
+      notifyWhisperUnavailable(serverResult.reason);
       const t = active;
       resetActiveState();
       if (isToolbar) setToolbarState("idle");
       if (t && typeof t === "object" && t.source) {
         try {
           t.source.postMessage(
-            { type: "voice-into-result", requestId: t.requestId, transcript: "" },
+            {
+              type: "voice-into-result",
+              requestId: t.requestId,
+              transcript: "",
+              reason: "whisper-unavailable",
+            },
             "*",
           );
         } catch (_) {}

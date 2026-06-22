@@ -3330,6 +3330,49 @@ window.bramSubscribeVoiceArrival = (function () {
   };
 })();
 
+// Parent → agent-pane bridge for "whisper-server unavailable" notices.
+// main.js posts { type: "bram-whisper-unavailable", reason } to the
+// tools-pane iframe when voice recording can't start because the whisper
+// server is neither running nor auto-startable. Re-dispatch as a window
+// CustomEvent that the External below observes, giving XMLUI markup a path
+// to toast. Same indirection as __bramSetLatestVoiceState / voice-arrival.
+window.addEventListener("message", function (event) {
+  var data = event && event.data;
+  if (!data || data.type !== "bram-whisper-unavailable") return;
+  try {
+    window.dispatchEvent(new CustomEvent("bram:whisper-unavailable", {
+      detail: { reason: String(data.reason || ""), at: Date.now() },
+    }));
+  } catch (e) {
+    console.error("[bram] whisper-unavailable dispatch failed:", e);
+  }
+});
+
+window.bramSubscribeWhisperUnavailable = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var lastEvent = null;
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bram] whisper-unavailable subscriber threw:", e); }
+      });
+    };
+    window.addEventListener("bram:whisper-unavailable", function (evt) {
+      lastEvent = (evt && evt.detail) || null;
+      notify();
+    });
+    factory = function (emit) {
+      var fire = function () { emit(lastEvent); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
 // External-driven right-pane-size bridge. Same shape as the Tauri /
 // agent-status / agent-menu factories, but the underlying source is
 // the custom subscribeRightPaneSize API (window resize observer).

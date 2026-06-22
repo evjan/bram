@@ -207,42 +207,6 @@
   <AppHeader>
     <Theme fontSize-Button="$fontSize-md">
       <HStack gap="$space-0_5" verticalAlignment="center" width="100%">
-        <HStack width="16rem" minWidth="16rem" verticalAlignment="center" paddingHorizontal="$space-2">
-          <Text
-            when="{window.shouldShowIdleProvider(mainAgentStatus.value, enhanceStatus.value)}"
-            fontSize="$fontSize-md"
-            fontStyle="italic"
-            color="$textColor-secondary"
-            overflowMode="none"
-            value="{window.providerDisplayName(mainAgentStatus.value, enhanceStatus.value)}" />
-          <HStack
-            when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'working'}"
-            gap="$space-1"
-            verticalAlignment="center">
-            <Theme size-Spinner="24px">
-              <Spinner />
-            </Theme>
-            <Text
-              fontSize="$fontSize-md"
-              fontStyle="italic"
-              overflowMode="none"
-              value="{window.headerWorkingLabel(mainAgentStatus.value, enhanceStatus.value)}" />
-            <!-- Live elapsed counter intentionally removed: it can't reliably
-                 match the TUI's own timer and the mismatch was distracting; the
-                 spinner + verb signal "working". See drop-banner-elapsed-time. -->
-          </HStack>
-          <HStack
-            when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'finished'}"
-            gap="$space-1"
-            verticalAlignment="center">
-            <Text
-              fontSize="$fontSize-md"
-              fontStyle="italic"
-              color="$textColor-secondary"
-              overflowMode="none"
-              value="{window.headerFinishedLabel(mainAgentStatus.value, enhanceStatus.value, lastSeenAgentVerb)}" />
-          </HStack>
-        </HStack>
         <SpaceFiller />
         <Text
           when="{headerInflightClaim.value &amp;&amp; headerInflightClaim.value.ids &amp;&amp; headerInflightClaim.value.ids.length > 0}"
@@ -388,36 +352,84 @@
     </Pages>
   </Theme>
   <Footer>
+    <Theme fontSize-TextArea="$fontSize-lg" fontSize-placeholder-TextArea="$fontSize-lg">
     <VStack width="100%" gap="$space-1">
-      <HStack width="100%" gap="$space-2" verticalAlignment="center">
-        <Button
-          label="{footerVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
-          variant="ghost"
-          size="xs"
-          width="2.5rem"
-          tooltip="Voice message"
-          enabled="{!isWorklistVoiceProcessingTarget('message-agent') &amp;&amp; (!footerVoiceRecording || worklistVoiceRecordingActive)}"
-          onClick="setWorklistVoiceTarget('message-agent'); footerVoiceRecording = toggleVoiceForCurrentTarget(footerVoiceRecording)" />
-        <TextArea
-          id="footerComposerBox"
-          placeholder="Message agent …"
-          autoSize="true"
-          minRows="1"
-          maxRows="3"
-          width="*"
-          onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId('')" />
-        <Button
-          label="send"
-          variant="ghost"
-          size="xs"
-          onClick="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }" />
-        <Button
-          label="skip worklist"
-          variant="ghost"
-          size="xs"
-          onClick="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, mode: 'skip-worklist', voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }" />
+      <HStack verticalAlignment="center" paddingHorizontal="$space-1" paddingBottom="$space-2" gap="$space-1">
+        <Text
+          when="{window.shouldShowIdleProvider(mainAgentStatus.value, enhanceStatus.value)}"
+          fontSize="$fontSize-lg"
+          fontStyle="italic"
+          color="$textColor-secondary"
+          overflowMode="none"
+          value="{window.providerDisplayName(mainAgentStatus.value, enhanceStatus.value)}" />
+        <HStack
+          when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'working'}"
+          gap="$space-1"
+          verticalAlignment="center">
+          <Theme size-Spinner="24px">
+            <Spinner />
+          </Theme>
+          <Text
+            fontSize="$fontSize-lg"
+            fontStyle="italic"
+            overflowMode="none"
+            value="{window.headerWorkingLabel(mainAgentStatus.value, enhanceStatus.value)}" />
+          <!-- Live elapsed counter intentionally removed: it can't reliably
+               match the TUI's own timer and the mismatch was distracting; the
+               spinner + verb signal "working". See drop-banner-elapsed-time. -->
+        </HStack>
+        <HStack
+          when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'finished'}"
+          gap="$space-1"
+          verticalAlignment="center">
+          <Text
+            fontSize="$fontSize-lg"
+            fontStyle="italic"
+            color="$textColor-secondary"
+            overflowMode="none"
+            value="{window.headerFinishedLabel(mainAgentStatus.value, enhanceStatus.value, lastSeenAgentVerb)}" />
+        </HStack>
       </HStack>
+      <!-- Form exists only for Enter-to-send: TextArea enterSubmits prompts
+           the parent Form to submit, and TextArea exposes no standalone Enter
+           event. See https://docs.xmlui.org/components/TextArea#entersubmits .
+           Enter and the Send button each run the submit block directly. -->
+      <Form
+        width="100%"
+        onSubmit="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }">
+        <property name="buttonRowTemplate"><Fragment/></property>
+        <HStack width="100%" gap="$space-2" verticalAlignment="center">
+          <Button
+            label="{footerVoiceRecording ? (worklistVoiceRecordingActive ? '⏹' : '⏳') : '🎤'}"
+            variant="ghost"
+            size="xs"
+            width="2.5rem"
+            tooltip="Voice message"
+            enabled="{!isWorklistVoiceProcessingTarget('message-agent') &amp;&amp; (!footerVoiceRecording || worklistVoiceRecordingActive)}"
+            onClick="setWorklistVoiceTarget('message-agent'); footerVoiceRecording = toggleVoiceForCurrentTarget(footerVoiceRecording)" />
+          <TextArea
+            id="footerComposerBox"
+            placeholder="Message agent: Enter sends, Shift+Enter newline, Ctrl-V/Cmd-V paste screenshot."
+            enterSubmits="true"
+            autoSize="true"
+            minRows="2"
+            maxRows="4"
+            width="*"
+            onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId('')" />
+          <Button
+            label="send"
+            variant="ghost"
+            size="xs"
+            onClick="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }" />
+          <Button
+            label="skip worklist"
+            variant="ghost"
+            size="xs"
+            onClick="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, mode: 'skip-worklist', voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }" />
+        </HStack>
+      </Form>
       <PastedImageStrip target="message-agent" />
     </VStack>
+    </Theme>
   </Footer>
 </App>

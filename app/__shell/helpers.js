@@ -2191,6 +2191,24 @@ window.__bramApplyAgentMenu = function (menu, suppressFallback, source) {
     return true;
   }
   window.bramAgentMenu = menu || null;
+  // Menu-row trace at the canonical setter — the single place the applied
+  // menu state changes, run once per change with no churning subscriber.
+  // Deduped by menu key; emits transcript-menu-row stage=source. Gated to
+  // the agent pane (/tools/): helpers.js loads in both iframes and each
+  // would emit, but the inline-menu render staleness only manifests where
+  // the Transcript lives. Pairs with host pty-menu-changed to localize it:
+  // a clean object here + a blended row on screen => render layer; a fused
+  // object here => data layer.
+  try {
+    if (window.location.pathname.indexOf("/tools/") !== -1 &&
+        window.__bramMenuRowKey && window.__bramTraceMenuRow) {
+      var __menuRowKey = window.__bramMenuRowKey(window.bramAgentMenu);
+      if (__menuRowKey !== window.__bramMenuRowTraceLastKey) {
+        window.__bramMenuRowTraceLastKey = __menuRowKey;
+        window.__bramTraceMenuRow(window.bramAgentMenu, "source");
+      }
+    }
+  } catch (e) {}
   window.bramAgentMenuSuppressFallback = suppressFallback;
   window.__bramMenuPending = !!menu;
   if (hostMs) {
@@ -3848,25 +3866,10 @@ window.__bramTraceMenuRow = function (menu, stage) {
   } catch (e) {}
 };
 
-// Always-on pending-menu trace, hooked directly to the pty-menu-changed
-// Tauri event — NOT the bramSubscribeAgentMenu factory (created lazily only
-// when the Transcript tab mounts) and NOT a tab-scoped ChangeListener. Fires
-// on every change to the menu's identity regardless of which tab is showing,
-// so a stale / blended / stuck inline menu self-diagnoses. Disambiguates the
-// layer: a clean object here + a blended row on screen => render bug; a fused
-// object here => data bug. Dedupes by key so repeated same-menu emits are
-// quiet. Top-level call is safe: subscribeTauriEvent is defined above; the
-// handler resolves __bramMenuRowKey / __bramTraceMenuRow at event time.
-window.__bramMenuRowTraceLastKey = null;
-window.subscribeTauriEvent("__bramMenuRowTraceUnsub", "pty-menu-changed", function (e) {
-  try {
-    var m = (e && e.payload) || null;
-    var key = window.__bramMenuRowKey(m);
-    if (key === window.__bramMenuRowTraceLastKey) return;
-    window.__bramMenuRowTraceLastKey = key;
-    window.__bramTraceMenuRow(m, "source");
-  } catch (x) {}
-});
+// The menu-row trace lives in window.__bramApplyAgentMenu (the canonical
+// menu-state setter), NOT as a separate pty-menu-changed subscriber — a
+// fourth subscriber just joined the churning subscribeTauriEvent registry
+// and never reliably fired. See subscribe-tauri-event-churn for that smell.
 
 // Immutable toggle of an id in an array (proven per-item expand pattern,
 // matching Workspace's expandedItemIds — avoids object-literal var inits

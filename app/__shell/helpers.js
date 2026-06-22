@@ -3817,6 +3817,36 @@ window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {
   return events;
 };
 
+// Stable identity key for the Transcript's pending-menu row: present /
+// tool / option keys. Drives the row-lifecycle trace below and is the
+// natural candidate for re-keying the synthetic menu event (vs the
+// constant "menu-pending") if the stale-row-reuse hypothesis is confirmed.
+window.__bramMenuRowKey = function (menu) {
+  if (!menu) return "(none)";
+  var opts = menu.options || [];
+  var keys = [];
+  for (var i = 0; i < opts.length; i++) keys.push((opts[i] && opts[i].key) || "");
+  return (menu.tool || "") + "|" + opts.length + "|" + keys.join(",");
+};
+
+// Trace the Transcript pending-menu row lifecycle — emit whenever the
+// menu's identity changes (enters / leaves / swaps). Makes the inline
+// menu's add/drop directly observable in bram-trace.log instead of
+// inferred from host `pty-menu-changed`: a host clear paired with a
+// lingering `transcript-menu-row present=true` (or a row `key` that
+// doesn't match the latest host menu) localizes a stale/blended inline
+// menu to the render layer. Refs the stable-`menu-pending`-id hypothesis.
+window.__bramTraceMenuRow = function (menu) {
+  try {
+    window.__bramIframeTrace("transcript-menu-row", {
+      present: !!menu,
+      tool: (menu && menu.tool) || "",
+      options: (menu && menu.options && menu.options.length) || 0,
+      key: window.__bramMenuRowKey(menu),
+    });
+  } catch (e) {}
+};
+
 // Immutable toggle of an id in an array (proven per-item expand pattern,
 // matching Workspace's expandedItemIds — avoids object-literal var inits
 // that XMLUI's expression engine mishandles).

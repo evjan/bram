@@ -22,6 +22,13 @@
     id="agentMenuEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeAgentMenu()}" />
+  <!-- Row-lifecycle trace: emit when the inline pending-menu enters /
+       leaves / swaps identity, so a stale or blended inline menu is
+       directly observable in bram-trace.log (vs inferred from host
+       pty-menu-changed). See window.__bramTraceMenuRow. -->
+  <ChangeListener
+    listenTo="{window.__bramMenuRowKey(agentMenuEvt.value)}"
+    onDidChange="() => window.__bramTraceMenuRow(agentMenuEvt.value)" />
   <ModalDialog
     when="{!!fullscreenImage}"
     onClose="fullscreenImage = null">

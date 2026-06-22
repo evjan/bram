@@ -3862,8 +3862,25 @@ window.__bramTraceMenuRow = function (menu, stage) {
       tool: (menu && menu.tool) || "",
       options: (menu && menu.options && menu.options.length) || 0,
       key: window.__bramMenuRowKey(menu),
+      // Whether the Transcript page (which hosts the inline AgentMenuView)
+      // is currently mounted. The host setter fires this trace regardless of
+      // the active tab, so a miss reads as `present:true transcriptMounted:false`
+      // — the host pushed a menu while the renderer was unmounted.
+      // Refs menu-miss-mount-instrumentation.
+      transcriptMounted: !!window.__bramTranscriptMounted,
     });
   } catch (e) {}
+};
+
+// Set by Transcript.xmlui on mount/unmount so __bramTraceMenuRow can record
+// whether a host menu push had a live renderer. On mount, also emit a
+// `stage:mount` row carrying the current menu key: a remount while a menu is
+// active shows whether the row re-read the live menu or came up `(none)`.
+// Refs menu-miss-mount-instrumentation.
+window.__bramSetTranscriptMounted = function (mounted) {
+  window.__bramTranscriptMounted = !!mounted;
+  if (mounted) window.__bramTraceMenuRow(window.bramAgentMenu, "mount");
+  else window.__bramTraceMenuRow(window.bramAgentMenu, "unmount");
 };
 
 // The menu-row trace lives in window.__bramApplyAgentMenu (the canonical

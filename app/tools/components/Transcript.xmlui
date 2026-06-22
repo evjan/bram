@@ -40,6 +40,8 @@
     height="100%"
     padding="$space-4"
     gap="$space-2"
+    onInit="window.__bramSetTranscriptMounted(true)"
+    onCleanup="window.__bramSetTranscriptMounted(false)"
     var.events="{window.__bramTranscriptEventsWithMenu(jsonlEvt.value, agentMenuEvt.value)}"
     var.expanded="{[]}">
     <HStack verticalAlignment="center" gap="$space-2">

@@ -617,8 +617,7 @@ function appendVoiceTranscript(component, transcript) {
 // processStatementQueueAsync per-statement awaits
 // (xmlui/src/components-core/script-runner/process-statement-async.ts:115-166).
 // Source of truth: window.bramAgentMenu. Read it directly from xs
-// (this file) and from xmlui markup (Main.xmlui suppression gates,
-// AgentMenu.xmlui via getAgentMenu).
+// (this file) and from XMLUI markup through bramSubscribeAgentMenu.
 
 
 

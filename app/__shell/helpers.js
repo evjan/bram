@@ -2111,9 +2111,8 @@ window.__bramSetMenuPending = function (v) {
   window.__bramMenuPending = !!v;
 };
 
-// Plain-JS wrappers for the AgentMenu pty-menu-changed and
-// turn-state-changed subscriber callbacks (registered in
-// AgentMenu.xmlui onInit). XMLUI's expression engine runs subscriber
+// Plain-JS wrappers for the agent-menu pty-menu-changed and
+// turn-state-changed subscriber callbacks. XMLUI's expression engine runs subscriber
 // arrow-function bodies through processStatementQueueAsync
 // (xmlui/src/components-core/script-runner/process-statement-async.ts:115-166),
 // which `await`s three times per statement — onStatementStarted,
@@ -3112,14 +3111,10 @@ window.subscribeTauriEvent = function (key, eventName, fn) {
 // Native plain-JS subscribers for the AgentMenu pipeline. Counterpart
 // to window.__bramApplyAgentMenu / window.__bramSetAgentMenuFrom*
 // defined earlier in this file. Registered here, AFTER
-// window.subscribeTauriEvent exists, but BEFORE AgentMenu.xmlui's
-// onInit calls subscribeTauriEvent with its trivial menuTick-bumping
-// callback. Subscribers are dispatched by __ensureTauriEventListener
-// in registration order, so the native handler updates
-// window.bramAgentMenu in plain JS before the XMLUI subscriber's
-// menuTick++ statement gets queued for evaluation. AgentMenu's
-// `when={menuTick >= 0 && getAgentMenu(...)}` re-evaluation reads the
-// already-updated window state.
+// window.subscribeTauriEvent exists, before any External subscribers
+// attach through bramSubscribeAgentMenu. Subscribers are dispatched by
+// __ensureTauriEventListener in registration order, so the native handler
+// updates window.bramAgentMenu in plain JS before XMLUI consumers read it.
 window.subscribeTauriEvent("__bramNativePtyMenuUnsub", "pty-menu-changed", function (e) {
   window.__bramSetAgentMenuFromEvent(e, "agent-menu");
 });
@@ -3704,32 +3699,6 @@ window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {
     events.push({ id: "menu-pending", kind: "menu", menu: menu });
   }
   return events;
-};
-
-// Transcript auto-follow with read-pause. force=true always jumps to the
-// bottom (initial mount); force=false only follows when the page is already
-// near the bottom (so a user who scrolled up to read is not yanked). Runs
-// after a short delay so the just-rendered event has been laid out.
-window.__bramTranscriptFollow = function (force) {
-  var jump = function () {
-    var root = document.scrollingElement || document.documentElement || document.body;
-    if (!root) return;
-    if (!force) {
-      var dist = root.scrollHeight - root.scrollTop - root.clientHeight;
-      if (dist >= 240) return; // scrolled up to read — pause
-    }
-    var bottom = root.scrollHeight;
-    try { window.scrollTo(0, bottom); } catch (e) {}
-    try { root.scrollTop = bottom; } catch (e) {}
-    if (document.body) { try { document.body.scrollTop = bottom; } catch (e) {} }
-  };
-  if (force) {
-    // big transcript + Markdown renders progressively; retry over ~1.8s so
-    // the final scrollHeight is reached, not an intermediate one.
-    [100, 300, 600, 1100, 1800].forEach(function (ms) { setTimeout(jump, ms); });
-  } else {
-    setTimeout(jump, 70);
-  }
 };
 
 // Immutable toggle of an id in an array (proven per-item expand pattern,

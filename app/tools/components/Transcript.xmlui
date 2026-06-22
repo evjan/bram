@@ -1,4 +1,5 @@
-<Component name="Transcript">
+<Component name="Transcript"
+  var.fullscreenImage="{null}">
   <!-- Bounded List as the sole scroller. The List gets height="*" inside a
        height="100%" parent, so it fills the remaining viewport and scrolls
        within its OWN virtua container (footer stays docked, page does not
@@ -21,6 +22,15 @@
     id="agentMenuEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeAgentMenu()}" />
+  <ModalDialog
+    when="{!!fullscreenImage}"
+    onClose="fullscreenImage = null">
+    <Image
+      src="{window.imageSrcForPath(fullscreenImage)}"
+      fit="contain"
+      width="min(88vw, 1200px)"
+      height="min(78vh, 900px)" />
+  </ModalDialog>
   <VStack
     height="100%"
     padding="$space-4"
@@ -56,6 +66,20 @@
         <Markdown
           when="{$item.kind === 'text'}"
           content="{window.__bramStripImagePaths($item.text)}" />
+        <!-- image strip -->
+        <VStack
+          when="{$item.kind === 'images'}"
+          gap="$space-2"
+          paddingVertical="$space-1">
+          <Items data="{$item.images || []}">
+            <Link onClick="fullscreenImage = $item" noIndicator="true">
+              <Image
+                src="{window.imageSrcForPath($item)}"
+                maxHeight="220px"
+                fit="contain" />
+            </Link>
+          </Items>
+        </VStack>
         <!-- thinking (foldable) -->
         <VStack when="{$item.kind === 'thinking'}" gap="$space-0_5">
           <Link noIndicator="true" onClick="expanded = window.__bramToggleInArray(expanded, $item.id)">

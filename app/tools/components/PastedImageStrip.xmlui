@@ -8,13 +8,12 @@
       subscribe="{window.bramSubscribePasteState($props.target)}" />
     <ModalDialog
       when="{!!fullscreenImage}"
-      fullScreen="true"
       onClose="fullscreenImage = null">
       <Image
         src="{window.imageSrcForPath(fullscreenImage)}"
         fit="contain"
-        width="100%"
-        height="100%" />
+        width="min(88vw, 1200px)"
+        height="min(78vh, 900px)" />
     </ModalDialog>
     <HStack
       gap="$space-2"

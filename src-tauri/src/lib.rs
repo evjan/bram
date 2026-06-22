@@ -10447,9 +10447,13 @@ fn cap_latest_tail_payload(content: Vec<u8>) -> (Vec<u8>, bool) {
     }
     let start = content.len().saturating_sub(LATEST_TAIL_MAX_BYTES);
     let Some(first_newline) = content[start..].iter().position(|b| *b == b'\n') else {
-        return (Vec::new(), true);
+        return (content, true);
     };
-    (content[start + first_newline + 1..].to_vec(), true)
+    let keep_from = start + first_newline + 1;
+    if keep_from >= content.len() {
+        return (content, true);
+    }
+    (content[keep_from..].to_vec(), true)
 }
 
 // Detect whether the latest session has a pending tool_use awaiting
@@ -18911,7 +18915,8 @@ mod sessions_discovery_tests {
 #[cfg(test)]
 mod session_turn_tests {
     use super::{
-        handle_paste_image, st_extract_image_paths, st_parse_lines_to_turns, st_strip_image_paths,
+        cap_latest_tail_payload, handle_paste_image, st_extract_image_paths,
+        st_parse_lines_to_turns, st_strip_image_paths, LATEST_TAIL_MAX_BYTES,
     };
 
     #[test]
@@ -19021,6 +19026,17 @@ mod session_turn_tests {
         let turns = st_parse_lines_to_turns(content);
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0]["images"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn latest_tail_cap_preserves_single_oversized_record() {
+        let record = format!(
+            "{{\"blob\":\"{}\"}}\n",
+            "x".repeat(LATEST_TAIL_MAX_BYTES + 1024)
+        );
+        let (content, truncated) = cap_latest_tail_payload(record.as_bytes().to_vec());
+        assert!(truncated);
+        assert_eq!(content, record.as_bytes());
     }
 }
 

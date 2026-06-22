@@ -3576,6 +3576,47 @@ window.__bramTranscriptResultText = function (content) {
   return "";
 };
 
+window.__bramTranscriptImageValue = function (value) {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value !== "object") return "";
+  if (typeof value.image_url === "string") return value.image_url;
+  if (value.image_url && typeof value.image_url.url === "string") return value.image_url.url;
+  if (typeof value.url === "string") return value.url;
+  if (typeof value.image === "string") return value.image;
+  if (typeof value.file_path === "string") return value.file_path;
+  if (typeof value.path === "string") return value.path;
+  if (value.source && typeof value.source === "object") {
+    var data = value.source.data || value.source.base64 || "";
+    if (data && (value.source.type === "base64" || value.source.media_type || value.source.mime_type)) {
+      var mime = value.source.media_type || value.source.mime_type || "image/png";
+      return "data:" + mime + ";base64," + data;
+    }
+  }
+  return "";
+};
+
+window.__bramTranscriptContentImage = function (block) {
+  if (!block || typeof block !== "object") return "";
+  var type = block.type || "";
+  if (type !== "input_image" && type !== "output_image" && type !== "image") return "";
+  return window.__bramTranscriptImageValue(block);
+};
+
+window.__bramTranscriptPayloadImages = function (payload) {
+  var images = [];
+  var add = function (value) {
+    var image = window.__bramTranscriptImageValue(value);
+    if (image && images.indexOf(image) < 0) images.push(image);
+  };
+  ["images", "local_images"].forEach(function (key) {
+    var arr = payload && payload[key];
+    if (!Array.isArray(arr)) return;
+    arr.forEach(add);
+  });
+  return images;
+};
+
 // Parse session JSONL into an ordered event stream:
 //   { id, kind: 'user'|'text'|'thinking'|'tool', text?, name?, summary?,
 //     input?, result?, isError? }
@@ -3587,6 +3628,17 @@ window.__bramParseTranscript = function (jsonl) {
   var lines = jsonl.split("\n");
   var events = [];
   var toolById = {};
+  var pushImages = function (id, role, images) {
+    images = (images || []).filter(Boolean);
+    if (!images.length) return;
+    var signature = role + "\n" + JSON.stringify(images);
+    for (var pi = Math.max(0, events.length - 8); pi < events.length; pi++) {
+      var prev = events[pi];
+      if (!prev || prev.kind !== "images") continue;
+      if ((prev.role || "") + "\n" + JSON.stringify(prev.images || []) === signature) return;
+    }
+    events.push({ id: id, kind: "images", role: role || "", images: images });
+  };
   var pushText = function (id, role, text) {
     if (!text || !String(text).trim()) return;
     var kind = role === "user" ? "user" : "text";
@@ -3607,7 +3659,14 @@ window.__bramParseTranscript = function (jsonl) {
     if (o.type === "event_msg" && o.payload) {
       var ep = o.payload;
       if (ep.type === "user_message" || ep.type === "agent_message") {
-        pushText("e" + i, ep.type === "user_message" ? "user" : "assistant", ep.message || "");
+        var epRole = ep.type === "user_message" ? "user" : "assistant";
+        var epMessage = ep.message || "";
+        pushText("e" + i, epRole, epMessage);
+        pushImages(
+          "e" + i + "_images",
+          epRole,
+          window.__bramExtractImagePaths(epMessage).concat(window.__bramTranscriptPayloadImages(ep))
+        );
       }
       continue;
     }
@@ -3618,14 +3677,21 @@ window.__bramParseTranscript = function (jsonl) {
         var pContent = p.content;
         if (typeof pContent === "string") {
           pushText("r" + i, pRole, pContent);
+          pushImages("r" + i + "_images", pRole, window.__bramExtractImagePaths(pContent));
         } else if (Array.isArray(pContent)) {
+          var pImages = [];
           for (var pc = 0; pc < pContent.length; pc++) {
             var cb = pContent[pc];
             if (!cb || typeof cb !== "object") continue;
             if (cb.type === "input_text" || cb.type === "output_text" || cb.type === "text") {
               pushText("r" + i + "_" + pc, pRole, cb.text || "");
+              pImages = pImages.concat(window.__bramExtractImagePaths(cb.text || ""));
+            } else {
+              var pImage = window.__bramTranscriptContentImage(cb);
+              if (pImage) pImages.push(pImage);
             }
           }
+          pushImages("r" + i + "_images", pRole, pImages);
         }
       } else if (p.type === "function_call" || p.type === "custom_tool_call") {
         var cid = p.call_id || p.id || "";
@@ -3654,15 +3720,18 @@ window.__bramParseTranscript = function (jsonl) {
       var content = msg.content;
       if (typeof content === "string") {
         pushText("s" + i, role, content);
+        pushImages("s" + i + "_images", role, window.__bramExtractImagePaths(content));
         continue;
       }
       if (!Array.isArray(content)) continue;
+      var msgImages = [];
       for (var j = 0; j < content.length; j++) {
         var b = content[j];
         if (!b || typeof b !== "object") continue;
         var bid = i + "_" + j;
         if (b.type === "text") {
           pushText(bid, role, b.text || "");
+          msgImages = msgImages.concat(window.__bramExtractImagePaths(b.text || ""));
         } else if (b.type === "thinking") {
           var th = b.thinking || b.text || "";
           if (th.trim()) events.push({ id: bid, kind: "thinking", text: th });
@@ -3680,8 +3749,12 @@ window.__bramParseTranscript = function (jsonl) {
             toolById[tu].result = window.__bramTranscriptResultText(b.content).slice(0, 4000);
             toolById[tu].isError = !!b.is_error;
           }
+        } else {
+          var msgImage = window.__bramTranscriptContentImage(b);
+          if (msgImage) msgImages.push(msgImage);
         }
       }
+      pushImages("s" + i + "_images", role, msgImages);
     }
   }
   return events;

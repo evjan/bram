@@ -1,0 +1,94 @@
+<Component name="AgentMenuView">
+  <!-- Presentational pending-menu box. Takes the parsed menu as $props.menu
+       so it can be rendered both as a standalone banner and inline in the
+       Transcript event flow (where $item shadowing would otherwise collide
+       with the per-option Items below). -->
+  <VStack
+    when="{$props.menu}"
+    gap="$space-2"
+    var.menuPreviewOpen="{false}"
+    width="100%"
+    padding="$space-3"
+    borderRadius="$borderRadius"
+    border="1px solid $color-warn-200"
+    backgroundColor="$color-warn-50">
+    <Text fontSize="$fontSize-xs" color="$color-warn-800">
+      Agent wants to use <Text fontFamily="$fontFamily-monospace">{$props.menu.tool}</Text>
+    </Text>
+    <Button
+      when="{$props.menu.toolCallSignature || $props.menu.toolCallContent || $props.menu.text}"
+      label="{menuPreviewOpen ? 'Hide preview' : 'Show preview'}"
+      variant="ghost"
+      size="xs"
+      onClick="menuPreviewOpen = !menuPreviewOpen" />
+    <VStack
+      when="{menuPreviewOpen &amp;&amp; $props.menu.toolCallSignature}"
+      maxHeight="20em"
+      overflowY="auto"
+      padding="$space-2"
+      borderRadius="$borderRadius"
+      backgroundColor="$color-surface-100">
+      <Text
+        when="{!$props.menu.toolCallDiff}"
+        value="{$props.menu.toolCallSignature}"
+        fontFamily="$fontFamily-monospace"
+        fontSize="$fontSize-sm"
+        preserveLinebreaks="true" />
+      <DiffView
+        when="{$props.menu.toolCallDiff}"
+        text="{($props.menu.toolCallDiff || '').slice(0, 20000)}" />
+    </VStack>
+    <VStack
+      when="{menuPreviewOpen &amp;&amp; $props.menu.toolCallContent}"
+      maxHeight="20em"
+      overflowY="auto"
+      padding="$space-2"
+      borderRadius="$borderRadius"
+      backgroundColor="$color-surface-100">
+      <Markdown content="{$props.menu.toolCallContent}" />
+    </VStack>
+    <VStack
+      when="{menuPreviewOpen &amp;&amp; !$props.menu.toolCallSignature &amp;&amp; $props.menu.text}"
+      maxHeight="12em"
+      overflowY="auto"
+      padding="$space-2"
+      borderRadius="$borderRadius"
+      backgroundColor="$color-surface-100">
+      <Text
+        value="{$props.menu.text}"
+        fontFamily="$fontFamily-monospace"
+        fontSize="$fontSize-xs"
+        preserveLinebreaks="true" />
+    </VStack>
+    <VStack
+      when="{$props.menu.options &amp;&amp; $props.menu.options.length > 0}"
+      gap="$space-1"
+      width="100%">
+      <Theme paddingHorizontal-Button-sm="$space-3">
+        <Items data="{$props.menu.options}">
+          <HStack gap="$space-2" verticalAlignment="center" width="100%">
+            <Button
+              label="{$item.key}"
+              variant="outlined"
+              size="sm"
+              onClick="sendKeys($item.key + '\r')" />
+            <Text
+              width="*"
+              value="{$item.label}"
+              fontSize="$fontSize-sm"
+              overflowMode="flow"
+              breakMode="word" />
+          </HStack>
+        </Items>
+      </Theme>
+    </VStack>
+    <HStack
+      when="{!$props.menu.options || $props.menu.options.length === 0}"
+      gap="$space-2"
+      wrapContent="true">
+      <Button label="1. Yes" variant="outlined" size="sm" onClick="sendKeys('1\r')" />
+      <Button label="2. Yes, allow and don't ask again" variant="outlined" size="sm" onClick="sendKeys('2\r')" />
+      <Button label="3. No, and tell agent what to do" variant="outlined" size="sm" onClick="sendKeys('3\r')" />
+    </HStack>
+  </VStack>
+</Component>

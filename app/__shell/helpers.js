@@ -3800,6 +3800,20 @@ window.__bramParseTranscript = function (jsonl) {
   return events;
 };
 
+// Append the live pending agent menu (if any) as the last transcript event,
+// so it renders inline at its natural chronological position — the end of
+// the conversation, since a pending menu is always the agent's most recent
+// action. When the menu resolves (menu becomes null) the synthetic event
+// drops out and the row disappears. Stable id so the List updates the row
+// in place rather than remounting as the menu content changes.
+window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {
+  var events = window.__bramParseTranscript(jsonl);
+  if (menu) {
+    events.push({ id: "menu-pending", kind: "menu", menu: menu });
+  }
+  return events;
+};
+
 // Transcript auto-follow with read-pause. force=true always jumps to the
 // bottom (initial mount); force=false only follows when the page is already
 // near the bottom (so a user who scrolled up to read is not yanked). Runs

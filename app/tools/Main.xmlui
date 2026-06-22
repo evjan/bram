@@ -372,12 +372,6 @@
       onClick="setupCompleteProvider = ''" />
   </HStack>
 
-  <HStack width="100%">
-    <VStack width="100%">
-      <AgentMenu />
-    </VStack>
-  </HStack>
-
   <Theme paddingVertical-Pages="0" paddingVertical-content-App="0">
     <Pages fallbackPath="/worklist">
       <Page url="/"><Workspace activeProvider="{enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider}" /></Page>

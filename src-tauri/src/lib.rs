@@ -5982,7 +5982,153 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
         const ESC_DOUBLE_TAP_WINDOW_MS: i64 = 1000;
         if now - prev < ESC_DOUBLE_TAP_WINDOW_MS && prev > 0 {
             kill_current_claude_turn(app);
+        } else {
+            // Single Esc: CC usually just interrupts the current tool call
+            // and continues the same turn, so we don't end the turn now. But
+            // if the user interrupts and then goes idle, CC writes no
+            // `end_turn` record and the JSONL-driven working signal sticks,
+            // freezing the banner on the last working verb forever. Defer a
+            // soft turn-end check to catch that case
+            // (claude-single-esc-banner-stuck).
+            schedule_single_esc_soft_turn_end(app, now);
         }
+    }
+}
+
+// True when a single-Esc-then-idle soft turn-end should fire: the live JSONL
+// shows no `end_turn` (the turn is non-final) AND the Esc landed at/after the
+// turn's last assistant record -- i.e. the interrupt, not subsequent model
+// output, was the last thing to happen. If CC continued the turn, a newer
+// assistant record (ts > escape) makes this false and the live banner is left
+// alone. Pure for testability; the scheduler adds the quiet-window and
+// still-working guards around it.
+fn single_esc_soft_end_should_fire(
+    jsonl_end_detected: bool,
+    last_assistant_ts_ms: Option<i64>,
+    escape_ts_ms: i64,
+) -> bool {
+    !jsonl_end_detected && matches!(last_assistant_ts_ms, Some(a) if a <= escape_ts_ms)
+}
+
+// After a single Esc, wait out the post-escape quiet window and then drop the
+// banner to idle iff the user interrupted and went idle (no continuation, no
+// new turn, no normal finish). No finished verb -- same no-fallback-verb policy
+// as `schedule_pty_turn_finished` -- and the kill stamp keeps the row down
+// until the next user turn, exactly the double-Esc cancel behavior. Only Claude
+// needs this; Codex writes an explicit `task_complete` marker on cancel.
+fn schedule_single_esc_soft_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, escape_ts_ms: i64) {
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        // Let the interrupt redraw settle, then poll: drop to idle the instant
+        // the turn is confirmed interrupted-and-idle rather than waiting out a
+        // fixed window (a frozen verb for many seconds reads as broken). In the
+        // common case -- Esc during tool execution -- the last assistant record
+        // already predates the Esc, so this fires on the first poll. Give up
+        // after the budget: by then CC has either continued (a newer assistant
+        // record makes the guard false) or a normal finish has landed.
+        const SETTLE_MS: u64 = 2000;
+        const POLL_MS: u64 = 1500;
+        const MAX_WAIT_MS: u64 = 16000;
+        std::thread::sleep(std::time::Duration::from_millis(SETTLE_MS));
+        let mut waited = SETTLE_MS;
+        loop {
+            if !matches!(
+                hinted_session_provider(&app_handle),
+                Some(SessionProvider::Claude)
+            ) {
+                return;
+            }
+            // A later Esc (including the double-tap that hard-kills) supersedes
+            // this deferred check.
+            let latest_escape = last_pty_escape_ms_cell().lock().map(|g| *g).unwrap_or(0);
+            if latest_escape != escape_ts_ms {
+                return;
+            }
+            // If a normal finish already landed, the banner isn't stuck.
+            let still_working = agent_status_cell()
+                .lock()
+                .map(|g| g.state == "working")
+                .unwrap_or(false);
+            if !still_working {
+                return;
+            }
+            // Fail closed (skip) on unreadable/missing JSONL: a lingering banner
+            // is better than one cleared mid-turn.
+            let should_fire = match latest_session_path(&app_handle, None).ok().flatten() {
+                Some(path) => match std::fs::read_to_string(&path) {
+                    Ok(content) => single_esc_soft_end_should_fire(
+                        claude_jsonl_completion_decision(&content).detected,
+                        claude_jsonl_last_assistant_ts_ms(&content),
+                        escape_ts_ms,
+                    ),
+                    Err(_) => false,
+                },
+                None => false,
+            };
+            if should_fire {
+                let turn_user_ts = claude_turn_stats_cell()
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.as_ref().map(|s| s.user_ts_ms));
+                if let Some(ts) = turn_user_ts {
+                    if let Ok(mut g) = last_killed_user_ts_ms_cell().lock() {
+                        *g = ts;
+                    }
+                }
+                if bram_trace_enabled() {
+                    append_bram_trace_line(
+                        &app_handle,
+                        "turn-end-defer",
+                        &format!(
+                            "op=fire reason=single-esc-idle escape_ts={} waited_ms={}",
+                            escape_ts_ms, waited
+                        ),
+                    );
+                }
+                if agent_status_emit_finished(
+                    &app_handle,
+                    "claude",
+                    None,
+                    None,
+                    "pty-single-esc-idle",
+                ) {
+                    trace_emit_signal(&app_handle, "agent-turn-killed");
+                    let _ = app_handle.emit("agent-turn-killed", ());
+                }
+                return;
+            }
+            if waited >= MAX_WAIT_MS {
+                if bram_trace_enabled() {
+                    append_bram_trace_line(
+                        &app_handle,
+                        "turn-end-defer",
+                        "op=skip reason=single-esc-not-idle",
+                    );
+                }
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
+            waited += POLL_MS;
+        }
+    });
+}
+
+#[cfg(test)]
+mod single_esc_soft_end_tests {
+    use super::single_esc_soft_end_should_fire;
+
+    #[test]
+    fn fires_only_when_interrupted_then_idle() {
+        // Non-final turn, Esc after the last assistant record -> interrupted, idle.
+        assert!(single_esc_soft_end_should_fire(false, Some(100), 200));
+        // Esc exactly at the record boundary still counts as terminal.
+        assert!(single_esc_soft_end_should_fire(false, Some(200), 200));
+        // CC continued: a newer assistant record postdates the Esc -> leave it.
+        assert!(!single_esc_soft_end_should_fire(false, Some(300), 200));
+        // Turn ended normally (end_turn detected) -> nothing to soft-end.
+        assert!(!single_esc_soft_end_should_fire(true, Some(100), 200));
+        // No assistant record at all -> fail closed.
+        assert!(!single_esc_soft_end_should_fire(false, None, 200));
     }
 }
 

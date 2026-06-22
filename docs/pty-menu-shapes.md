@@ -108,3 +108,28 @@ these. First specimen:
 ## Family C — other
 
 Empty. Add rows as specimens surface unknown shapes.
+
+## Known non-priority edge — self-reference collision
+
+When the agent's *own* on-screen output carries menu-pattern literals —
+prose quoting `Do you want to proceed?`, commands grepping `op=fire` /
+`❯ 1. Yes 2. No` / `statically analyzed`, etc. — the scanner can anchor
+`header`/`cursor` on that **decoy** text while `numbered=false` (no real
+options beside the anchor) → `op=skip`, and a genuine menu on screen at
+the same time can be missed (never reaches `op=fire`).
+
+Signature to recognize it: a skip with `cursor=true header=true
+needle2_after_anchor=true anchor_distance_ok=true` but `numbered=false`,
+whose `excerpt=` is agent prose / a command echo rather than a real
+numbered block. Evidence: `bram-trace.log` 2026-06-22 ~17:43 (the menu
+for a `grep … pty-menu-scan … proceed …` command went 16 skips → no
+fire; excerpt captured the prior answer's text + the idle `⏵⏵ accept
+edits` prompt).
+
+**Deprioritized — not a fix target.** Confined to sessions where the
+agent is itself discussing or grepping menus; ordinary use doesn't print
+these literals. Recorded so a future `numbered=false`-with-`header=true`
+skip isn't re-investigated from scratch. A real fix would require the
+real menu to be a coherent *active* block (header → cursor → numbered
+structurally adjacent), not scattered matching tokens — which is exactly
+what `numbered=false` already (correctly) refuses.

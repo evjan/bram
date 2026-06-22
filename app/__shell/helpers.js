@@ -3689,14 +3689,33 @@ window.onLatestJsonlChange = function (fn) {
 };
 
 // --- Transcript (foldable, structured, full history) ---------------------
-// External subscribe factory for the latest session JSONL. Emits the
-// current cached value on attach, then on every setLatestJsonl broadcast.
-window.bramSubscribeLatestJsonl = function () {
-  return function (emit) {
-    try { emit(window.getLatestJsonl()); } catch (e) {}
-    return window.onLatestJsonlChange(function (v) { emit(v); });
+// External subscribe factory for the latest session JSONL. Memoized
+// singleton matching bramSubscribeConversationState: the onLatestJsonlChange
+// subscription is set up ONCE, the factory reference is stable across
+// renders (so the External doesn't re-subscribe every render), and each
+// subscriber gets a clean teardown. The non-memoized version churned the
+// subscription on every render and broke navigation out of the tab.
+window.bramSubscribeLatestJsonl = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var lastValue = window.getLatestJsonl();
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bramSubscribeLatestJsonl] subscriber threw:", e); }
+      });
+    };
+    window.onLatestJsonlChange(function (v) { lastValue = v; notify(); });
+    factory = function (emit) {
+      var fire = function () { emit(lastValue); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
   };
-};
+})();
 
 // One-line summary for a tool card's collapsed state.
 window.__bramTranscriptToolSummary = function (name, input) {
@@ -3779,6 +3798,32 @@ window.__bramParseTranscript = function (jsonl) {
     }
   }
   return events;
+};
+
+// Transcript auto-follow with read-pause. force=true always jumps to the
+// bottom (initial mount); force=false only follows when the page is already
+// near the bottom (so a user who scrolled up to read is not yanked). Runs
+// after a short delay so the just-rendered event has been laid out.
+window.__bramTranscriptFollow = function (force) {
+  var jump = function () {
+    var root = document.scrollingElement || document.documentElement || document.body;
+    if (!root) return;
+    if (!force) {
+      var dist = root.scrollHeight - root.scrollTop - root.clientHeight;
+      if (dist >= 240) return; // scrolled up to read — pause
+    }
+    var bottom = root.scrollHeight;
+    try { window.scrollTo(0, bottom); } catch (e) {}
+    try { root.scrollTop = bottom; } catch (e) {}
+    if (document.body) { try { document.body.scrollTop = bottom; } catch (e) {} }
+  };
+  if (force) {
+    // big transcript + Markdown renders progressively; retry over ~1.8s so
+    // the final scrollHeight is reached, not an intermediate one.
+    [100, 300, 600, 1100, 1800].forEach(function (ms) { setTimeout(jump, ms); });
+  } else {
+    setTimeout(jump, 70);
+  }
 };
 
 // Immutable toggle of an id in an array (proven per-item expand pattern,

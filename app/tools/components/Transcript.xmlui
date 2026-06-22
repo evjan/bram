@@ -1,13 +1,102 @@
 <Component name="Transcript">
-  <!-- Exploratory standalone Transcript tab: its own conversation-state push
-       (same source Workspace uses) feeding the existing ConversationPane. -->
+  <!-- Bounded List as the sole scroller. The List gets height="*" inside a
+       height="100%" parent, so it fills the remaining viewport and scrolls
+       within its OWN virtua container (footer stays docked, page does not
+       grow) -- the star-fill-through-Page pattern proven by Workspace's
+       HSplitter height="*". A bounded List is required for the new native
+       scroll event to fire: in the prior unbounded Items/page-scroll layout
+       the PAGE scrolled, so the List reported nothing.
+
+       Follow + read-pause are driven explicitly from the List's `scroll`
+       event (no DOM access, no opaque scrollAnchor heuristic): onScroll
+       tracks atBottom; when new events arrive, follow only if the user is
+       parked at the bottom. The event fires only for user-driven scrolls
+       (the List's own scrollToBottom is guarded), so following never fights
+       reading. -->
   <External
-    id="transcriptConversationDS"
+    id="jsonlEvt"
     initial="{null}"
-    subscribe="{window.bramSubscribeConversationState()}" />
-  <VStack padding="$space-6" gap="$space-3" height="100%">
-    <Heading level="h2">Transcript</Heading>
-    <ConversationPane
-      exchange="{transcriptConversationDS.value &amp;&amp; transcriptConversationDS.value.lastExchange}" />
+    subscribe="{window.bramSubscribeLatestJsonl()}" />
+  <VStack
+    height="100%"
+    padding="$space-4"
+    gap="$space-2"
+    var.events="{window.__bramParseTranscript(jsonlEvt.value)}"
+    var.expanded="{[]}">
+    <HStack verticalAlignment="center" gap="$space-2">
+      <Heading level="h2">Transcript</Heading>
+      <Text fontSize="$fontSize-sm" color="$textColor-secondary" value="{events.length + ' events'}" />
+    </HStack>
+    <Text
+      when="{events.length === 0}"
+      color="$textColor-secondary"
+      value="No transcript yet." />
+    <List
+      id="transcriptList"
+      height="*"
+      data="{events}"
+      scrollAnchor="bottom">
+      <property name="emptyListTemplate"><Fragment/></property>
+      <VStack gap="$space-1" paddingVertical="$space-1">
+        <!-- user message -->
+        <VStack
+          when="{$item.kind === 'user'}"
+          backgroundColor="$color-surface-100"
+          padding="$space-2"
+          borderRadius="$borderRadius"
+          gap="$space-1">
+          <Text value="You" fontWeight="bold" color="$color-primary-600" fontSize="$fontSize-sm" />
+          <Markdown content="{window.__bramStripImagePaths($item.text)}" />
+        </VStack>
+        <!-- assistant text -->
+        <Markdown
+          when="{$item.kind === 'text'}"
+          content="{window.__bramStripImagePaths($item.text)}" />
+        <!-- thinking (foldable) -->
+        <VStack when="{$item.kind === 'thinking'}" gap="$space-0_5">
+          <Link noIndicator="true" onClick="expanded = window.__bramToggleInArray(expanded, $item.id)">
+            <Text
+              fontSize="$fontSize-sm"
+              fontStyle="italic"
+              color="$textColor-secondary"
+              value="{((expanded || []).includes($item.id) ? '▾' : '▸') + '  💭 thinking'}" />
+          </Link>
+          <VStack
+            when="{(expanded || []).includes($item.id)}"
+            backgroundColor="$color-surface-50"
+            padding="$space-2"
+            borderRadius="$borderRadius">
+            <Markdown content="{$item.text}" />
+          </VStack>
+        </VStack>
+        <!-- tool call (foldable) -->
+        <VStack when="{$item.kind === 'tool'}" gap="$space-0_5">
+          <Link noIndicator="true" onClick="expanded = window.__bramToggleInArray(expanded, $item.id)">
+            <HStack gap="$space-1" verticalAlignment="center">
+              <Text fontSize="$fontSize-sm" fontWeight="bold" value="{((expanded || []).includes($item.id) ? '▾' : '▸') + '  🔧 ' + $item.name}" />
+              <Text fontSize="$fontSize-sm" color="$textColor-secondary" value="{$item.summary}" />
+            </HStack>
+          </Link>
+          <VStack
+            when="{(expanded || []).includes($item.id)}"
+            gap="$space-1"
+            backgroundColor="$color-surface-50"
+            padding="$space-2"
+            borderRadius="$borderRadius">
+            <Text
+              when="{$item.summary}"
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-xs"
+              value="{$item.summary}" />
+            <Text
+              when="{$item.result}"
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-xs"
+              color="{$item.isError ? '$color-danger-600' : '$textColor-secondary'}"
+              value="{$item.result}" />
+          </VStack>
+        </VStack>
+      </VStack>
+    </List>
   </VStack>
 </Component>

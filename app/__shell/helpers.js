@@ -3687,6 +3687,108 @@ window.onLatestJsonlChange = function (fn) {
     if (idx >= 0) __latestJsonlSubscribers.splice(idx, 1);
   };
 };
+
+// --- Transcript (foldable, structured, full history) ---------------------
+// External subscribe factory for the latest session JSONL. Emits the
+// current cached value on attach, then on every setLatestJsonl broadcast.
+window.bramSubscribeLatestJsonl = function () {
+  return function (emit) {
+    try { emit(window.getLatestJsonl()); } catch (e) {}
+    return window.onLatestJsonlChange(function (v) { emit(v); });
+  };
+};
+
+// One-line summary for a tool card's collapsed state.
+window.__bramTranscriptToolSummary = function (name, input) {
+  input = input || {};
+  if (name === "Bash") return input.command || "";
+  if (name === "Read" || name === "Edit" || name === "Write" || name === "NotebookEdit") return input.file_path || "";
+  if (name === "Grep" || name === "Glob") return input.pattern || "";
+  if (input.description) return input.description;
+  var keys = Object.keys(input);
+  for (var k = 0; k < keys.length; k++) {
+    if (typeof input[keys[k]] === "string") return input[keys[k]].slice(0, 200);
+  }
+  return "";
+};
+
+// Flatten a tool_result content (string | array-of-blocks) to text.
+window.__bramTranscriptResultText = function (content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map(function (b) {
+      return (b && b.type === "text") ? (b.text || "") : "";
+    }).join("");
+  }
+  return "";
+};
+
+// Parse session JSONL into an ordered event stream:
+//   { id, kind: 'user'|'text'|'thinking'|'tool', text?, name?, summary?,
+//     input?, result?, isError? }
+// The JSONL is already chronological (one content block per line), so this
+// preserves the real play-by-play. tool_result lines are merged back into
+// their originating tool event by tool_use_id.
+window.__bramParseTranscript = function (jsonl) {
+  if (!jsonl) return [];
+  var lines = jsonl.split("\n");
+  var events = [];
+  var toolById = {};
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (!line) continue;
+    var o;
+    try { o = JSON.parse(line); } catch (e) { continue; }
+    if (o.type !== "assistant" && o.type !== "user") continue;
+    var msg = o.message || {};
+    var role = msg.role;
+    var content = msg.content;
+    if (typeof content === "string") {
+      if (content.trim()) {
+        events.push({ id: "s" + i, kind: role === "user" ? "user" : "text", text: content });
+      }
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+    for (var j = 0; j < content.length; j++) {
+      var b = content[j];
+      if (!b || typeof b !== "object") continue;
+      var bid = i + "_" + j;
+      if (b.type === "text") {
+        if ((b.text || "").trim()) {
+          events.push({ id: bid, kind: role === "user" ? "user" : "text", text: b.text });
+        }
+      } else if (b.type === "thinking") {
+        var th = b.thinking || b.text || "";
+        if (th.trim()) events.push({ id: bid, kind: "thinking", text: th });
+      } else if (b.type === "tool_use") {
+        var ev = {
+          id: bid, kind: "tool", toolId: b.id, name: b.name || "Tool",
+          summary: window.__bramTranscriptToolSummary(b.name, b.input),
+          result: "", isError: false,
+        };
+        events.push(ev);
+        if (b.id) toolById[b.id] = ev;
+      } else if (b.type === "tool_result") {
+        var tu = b.tool_use_id;
+        if (tu && toolById[tu]) {
+          toolById[tu].result = window.__bramTranscriptResultText(b.content).slice(0, 4000);
+          toolById[tu].isError = !!b.is_error;
+        }
+      }
+    }
+  }
+  return events;
+};
+
+// Immutable toggle of an id in an array (proven per-item expand pattern,
+// matching Workspace's expandedItemIds — avoids object-literal var inits
+// that XMLUI's expression engine mishandles).
+window.__bramToggleInArray = function (arr, id) {
+  arr = arr || [];
+  if (arr.indexOf(id) >= 0) return arr.filter(function (x) { return x !== id; });
+  return arr.concat([id]);
+};
 window.startLatestJsonlPolling = function (key, getProvider) {
   key = key || "__bramLatestJsonlPoller";
   if (__latestJsonlPollers[key] && typeof __latestJsonlPollers[key].stop === "function") {

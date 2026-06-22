@@ -98,8 +98,8 @@
         value="Agent: Last response" />
       <List
         data="{displayTexts}"
-        maxHeight="60vh"
-        scrollAnchor="bottom">
+        height="60vh"
+        scrollAnchor="{(displayTexts || []).join('').length > 800 ? 'bottom' : 'top'}">
         <property name="emptyListTemplate"><Fragment/></property>
         <Markdown content="{window.__bramStripImagePaths($item || '')}" />
       </List>

@@ -3962,16 +3962,19 @@ window.subscribeRightPaneSize = function (callback) {
     __rpsListenerAttached = true;
   }
 };
-// Push local commits to origin and refetch a DataSource (typically
-// the commits list) when the push completes, so the pushed flags
-// refresh without a manual reload.
-window.gitPush = function (commitsDs, onError) {
+// Push local commits from the branch the UI last rendered and refetch
+// relevant DataSources when the push completes, so branch and pushed
+// state refresh without a manual reload.
+window.gitPush = function (commitsDs, statusDs, branch, onError) {
   var invoke = getTauriInvoke();
   if (!invoke) return;
-  invoke("git_push", {})
+  invoke("git_push", { branch: branch || null })
     .then(function () {
       if (commitsDs && typeof commitsDs.refetch === "function") {
         commitsDs.refetch();
+      }
+      if (statusDs && typeof statusDs.refetch === "function") {
+        statusDs.refetch();
       }
     })
     .catch(function (e) {

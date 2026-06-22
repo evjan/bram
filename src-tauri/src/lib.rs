@@ -8766,16 +8766,132 @@ fn open_devtools(window: tauri::WebviewWindow) {
 }
 
 #[tauri::command]
-fn git_push(app: AppHandle) -> Result<(), String> {
+fn git_push(app: AppHandle, branch: Option<String>) -> Result<(), String> {
+    let current = git_current_branch(&app)?;
+    if let Some(expected) = branch.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if expected != current {
+            return Err(format!(
+                "current branch changed from {} to {}; refresh and retry",
+                expected, current
+            ));
+        }
+    }
     let stderr = match git_run(&app, &["push"]) {
-        Ok(_) => return Ok(()),
+        Ok(_) => {
+            emit_replayable_signal(&app, "git-status-changed");
+            return Ok(());
+        }
         Err(e) => e,
     };
+    let missing_upstream = stderr.contains("has no upstream branch")
+        || stderr.contains("no upstream branch")
+        || stderr.contains("set the remote as upstream");
+    if missing_upstream {
+        git_run(&app, &["push", "-u", "origin", &current])?;
+        emit_replayable_signal(&app, "git-status-changed");
+        return Ok(());
+    }
     let is_nonff = stderr.contains("non-fast-forward") || stderr.contains("fetch first");
     if !is_nonff {
         return Err(stderr);
     }
-    auto_rebase_and_push(&app).map_err(|e| format!("non-fast-forward; {}", e))
+    auto_rebase_and_push(&app)
+        .map(|_| emit_replayable_signal(&app, "git-status-changed"))
+        .map_err(|e| format!("non-fast-forward; {}", e))
+}
+
+fn git_current_branch<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<String, String> {
+    let branch =
+        git_run(app, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|s| s.trim().to_string())?;
+    if branch == "HEAD" || branch.is_empty() {
+        return Err("detached HEAD is not switchable from the commits page".to_string());
+    }
+    Ok(branch)
+}
+
+fn git_upstream_branch<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<String> {
+    git_run(
+        app,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .ok()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
+}
+
+fn git_dir_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    let root = project_root(Some(app))?;
+    let raw = git_run(app, &["rev-parse", "--git-dir"]).ok()?;
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(raw);
+    Some(if path.is_absolute() { path } else { root.join(path) })
+}
+
+fn start_git_head_watch<R: tauri::Runtime>(app_handle: AppHandle<R>) {
+    let Some(git_dir) = git_dir_path(&app_handle) else {
+        eprintln!("[git-head-watch] no git dir");
+        return;
+    };
+    let head_path = git_dir.join("HEAD");
+    if !head_path.exists() {
+        eprintln!("[git-head-watch] no HEAD at {}", head_path.display());
+        return;
+    }
+    std::thread::spawn(move || {
+        use notify::{recommended_watcher, Event, EventKind, RecursiveMode, Watcher};
+        use std::sync::mpsc::channel;
+        use std::time::{Duration, Instant};
+
+        let mut current_branch =
+            git_current_branch(&app_handle).unwrap_or_else(|_| "HEAD".to_string());
+        let (tx, rx) = channel::<notify::Result<Event>>();
+        let mut watcher = match recommended_watcher(tx) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("[git-head-watch] init failed: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = watcher.watch(&head_path, RecursiveMode::NonRecursive) {
+            eprintln!("[git-head-watch] watch {} failed: {}", head_path.display(), e);
+            return;
+        }
+        eprintln!("[git-head-watch] watching {}", head_path.display());
+        let debounce = Duration::from_millis(100);
+        let mut pending_since: Option<Instant> = None;
+        loop {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Ok(event)) => {
+                    if matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
+                        pending_since = Some(Instant::now());
+                    }
+                }
+                Ok(Err(e)) => {
+                    eprintln!("[git-head-watch] event failed: {}", e);
+                    continue;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            let Some(since) = pending_since else {
+                continue;
+            };
+            if since.elapsed() < debounce {
+                continue;
+            }
+            pending_since = None;
+            let next_branch =
+                git_current_branch(&app_handle).unwrap_or_else(|_| "HEAD".to_string());
+            if next_branch == current_branch {
+                continue;
+            }
+            current_branch = next_branch;
+            emit_replayable_signal(&app_handle, "git-status-changed");
+        }
+    });
 }
 
 fn git_status_summary<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
@@ -8794,10 +8910,14 @@ fn git_status_summary<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, 
     let dirty = git_run(app, &["status", "--porcelain"])
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
+    let branch = git_current_branch(app).unwrap_or_else(|_| "HEAD".to_string());
+    let upstream = git_upstream_branch(app);
     serde_json::to_vec(&serde_json::json!({
         "ahead": ahead,
         "behind": behind,
         "dirty": dirty,
+        "branch": branch,
+        "upstream": upstream,
     }))
     .map_err(|e| e.to_string())
 }
@@ -23702,6 +23822,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             start_codex_session_poll_fallback(app_handle.clone());
             start_claude_turn_stats_poll(app_handle.clone());
+            start_git_head_watch(app_handle.clone());
             std::thread::spawn(move || {
                 use notify::{recommended_watcher, Event, EventKind, RecursiveMode, Watcher};
                 use std::sync::mpsc::channel;
@@ -23819,6 +23940,25 @@ pub fn run() {
                     };
                     let dispatch_trace_path =
                         || event.paths.iter().find_map(|p| trace_rel_path(p));
+                    let is_git_state_path = |p: &std::path::Path| -> bool {
+                        let Ok(rel) = p.strip_prefix(&proj_root_path) else {
+                            return false;
+                        };
+                        let parts: Vec<String> = rel
+                            .components()
+                            .map(|c| c.as_os_str().to_string_lossy().to_string())
+                            .collect();
+                        if parts.first().map(|s| s.as_str()) != Some(".git") {
+                            return false;
+                        }
+                        matches!(
+                            parts.get(1).map(|s| s.as_str()),
+                            Some("HEAD") | Some("index") | Some("packed-refs")
+                        ) || (parts.get(1).map(|s| s.as_str()) == Some("refs")
+                            && parts.get(2).map(|s| s.as_str()) == Some("heads"))
+                            || (parts.get(1).map(|s| s.as_str()) == Some("logs")
+                                && parts.get(2).map(|s| s.as_str()) == Some("HEAD"))
+                    };
                     let hook_target_from_rel = |rel: &str| -> Option<String> {
                         let base = rel
                             .find(".tmp.")
@@ -24136,6 +24276,15 @@ pub fn run() {
                     {
                         trace_dispatch("intent-drain", &[]);
                         drain_worklist_intent(&app_handle);
+                    }
+
+                    // Git state changes often happen entirely under .git
+                    // (empty commits, branch switches, fetches). Emit the
+                    // data refresh event before the ignored-dir skip below.
+                    let is_git_state_event = event.paths.iter().any(|p| is_git_state_path(p));
+                    if is_git_state_event {
+                        trace_dispatch("git-status", &[("source", ".git".to_string())]);
+                        emit_replayable_signal(&app_handle, "git-status-changed");
                     }
 
                     // git-status-changed: any project file change that's

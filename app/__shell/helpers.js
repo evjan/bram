@@ -3836,9 +3836,10 @@ window.__bramMenuRowKey = function (menu) {
 // lingering `transcript-menu-row present=true` (or a row `key` that
 // doesn't match the latest host menu) localizes a stale/blended inline
 // menu to the render layer. Refs the stable-`menu-pending`-id hypothesis.
-window.__bramTraceMenuRow = function (menu) {
+window.__bramTraceMenuRow = function (menu, stage) {
   try {
     window.__bramIframeTrace("transcript-menu-row", {
+      stage: stage || "change",
       present: !!menu,
       tool: (menu && menu.tool) || "",
       options: (menu && menu.options && menu.options.length) || 0,

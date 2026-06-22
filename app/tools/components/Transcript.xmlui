@@ -28,7 +28,16 @@
        pty-menu-changed). See window.__bramTraceMenuRow. -->
   <ChangeListener
     listenTo="{window.__bramMenuRowKey(agentMenuEvt.value)}"
-    onDidChange="() => window.__bramTraceMenuRow(agentMenuEvt.value)" />
+    onDidChange="() => window.__bramTraceMenuRow(agentMenuEvt.value, 'change')" />
+  <!-- ChangeListener does not fire for the value already present at mount
+       (the restart/startup case, where a stale menu can be the initial
+       value). Capture it once via a Timer that ticks ~200ms after mount,
+       then effectively never again (1-day interval). onTick stays a single
+       call. See window.__bramTraceMenuRow. -->
+  <Timer
+    initialDelay="200"
+    interval="86400000"
+    onTick="window.__bramTraceMenuRow(agentMenuEvt.value, 'init')" />
   <ModalDialog
     when="{!!fullscreenImage}"
     onClose="fullscreenImage = null">

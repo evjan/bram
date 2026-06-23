@@ -22,11 +22,6 @@
     id="agentMenuEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeAgentMenu()}" />
-  <!-- The pending-menu row-lifecycle trace lives at the broadcast source in
-       helpers.js (bramSubscribeAgentMenu), not here: a tab-scoped trace
-       misses menu transitions that happen while the Transcript isn't the
-       mounted tab. See window.__bramTraceMenuRow. -->
-
   <ModalDialog
     when="{!!fullscreenImage}"
     onClose="fullscreenImage = null">
@@ -132,7 +127,7 @@
           </VStack>
         </VStack>
         <!-- pending agent menu, interleaved at its natural (latest) position -->
-        <AgentMenuView when="{$item.kind === 'menu'}" menu="{$item.menu}" />
+        <AgentMenuView when="{$item.kind === 'menu'}" menu="{$item.menu}" surface="transcript" />
       </VStack>
     </List>
   </VStack>

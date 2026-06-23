@@ -6,8 +6,10 @@
   <VStack
     when="{$props.menu}"
     gap="$space-2"
+    var.menuIdentity="{window.__bramMenuIdentity($props.menu)}"
     var.menuPreviewOpen="{false}"
     width="100%"
+    onInit="window.__bramTraceAgentMenuRender($props.menu, $props.surface || 'component')"
     padding="$space-3"
     borderRadius="$borderRadius"
     border="1px solid $color-warn-200"
@@ -68,13 +70,13 @@
         <Items data="{$props.menu.options}">
           <HStack gap="$space-2" verticalAlignment="center" width="100%">
             <Button
-              label="{$item.key}"
+              label="{($item.key || '')}"
               variant="outlined"
               size="sm"
               onClick="sendKeys($item.key + '\r')" />
             <Text
               width="*"
-              value="{$item.label}"
+              value="{($item.label || '')}"
               fontSize="$fontSize-sm"
               overflowMode="flow"
               breakMode="word" />

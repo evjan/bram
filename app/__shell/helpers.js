@@ -2152,10 +2152,40 @@ function __bramAgentMenuHostMs(menu) {
   return menu && typeof menu.atHostMs === "number" ? menu.atHostMs : 0;
 }
 
+window.__bramHashString = function (text) {
+  var s = String(text || "");
+  var h = 2166136261;
+  for (var i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+};
+
+window.__bramMenuIdentity = function (menu) {
+  if (!menu) return "(none)";
+  var opts = menu.options || [];
+  var parts = [
+    __bramAgentMenuHostMs(menu) || "",
+    menu.cacheSource || "",
+    menu.tool || "",
+    menu.toolCallSignature || "",
+    menu.toolCallContent || "",
+    menu.text || "",
+  ];
+  for (var i = 0; i < opts.length; i++) {
+    var opt = opts[i] || {};
+    parts.push(opt.key || "");
+    parts.push(opt.label || "");
+  }
+  return window.__bramHashString(parts.join("\n"));
+};
+
 function __bramAgentMenuTraceFields(menu) {
   var hostMs = __bramAgentMenuHostMs(menu);
   return {
     tool: (menu && menu.tool) || "",
+    menuId: window.__bramMenuIdentity(menu),
     hasSignature: !!(menu && menu.toolCallSignature),
     signatureChars: menu && menu.toolCallSignature ? menu.toolCallSignature.length : 0,
     assignedMenu: window.bramAgentMenu ? window.bramAgentMenu.tool : "",
@@ -2221,6 +2251,19 @@ window.__bramApplyAgentMenu = function (menu, suppressFallback, source) {
     window.bramAgentMenuLastSource = source || "";
   }
   return false;
+};
+
+window.__bramTraceAgentMenuRender = function (menu, surface) {
+  try {
+    window.__bramIframeTrace("agent-menu-render", {
+      surface: surface || "",
+      present: !!menu,
+      tool: (menu && menu.tool) || "",
+      options: (menu && menu.options && menu.options.length) || 0,
+      menuId: window.__bramMenuIdentity(menu),
+      transcriptMounted: !!window.__bramTranscriptMounted,
+    });
+  } catch (e) {}
 };
 
 window.__bramSetAgentMenuFromEvent = function (e, surface) {
@@ -3370,15 +3413,22 @@ window.__bramSetLatestVoiceState = function (t, meta) {
 window.addEventListener("message", function (ev) {
   var data = ev && ev.data;
   if (!data || data.type !== "voice-state") return;
+  var state = data.state || "idle";
+  var requestId = data.requestId || null;
   window.__bramVoiceRecorderState = {
-    state: data.state || "idle",
-    requestId: data.requestId || null,
+    state: state,
+    requestId: requestId,
     target: data.target || "",
     reason: data.reason || "",
     transcriptLength:
       typeof data.transcriptLength === "number" ? data.transcriptLength : null,
     at: Date.now(),
   };
+  if (state === "idle" && (!requestId || requestId === window._voiceSession)) {
+    window._voiceSession = null;
+    window._voiceSessionTarget = "";
+    _voiceRemoveStartedListener();
+  }
   try {
     window.dispatchEvent(new CustomEvent("bram:voice-recorder-state", {
       detail: window.__bramVoiceRecorderState,
@@ -3962,16 +4012,12 @@ window.__bramParseTranscript = function (jsonl) {
   return events;
 };
 
-// Append the live pending agent menu (if any) as the last transcript event,
-// so it renders inline at its natural chronological position — the end of
-// the conversation, since a pending menu is always the agent's most recent
-// action. When the menu resolves (menu becomes null) the synthetic event
-// drops out and the row disappears. Stable id so the List updates the row
-// in place rather than remounting as the menu content changes.
+// Append the live pending agent menu (if any) as the last transcript event.
+// Transcript keeps this interleaved view as the only full menu renderer.
 window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {
   var events = window.__bramParseTranscript(jsonl);
   if (menu) {
-    events.push({ id: "menu-pending", kind: "menu", menu: menu });
+    events.push({ id: "menu-pending-" + window.__bramMenuIdentity(menu), kind: "menu", menu: menu });
   }
   return events;
 };
@@ -3981,20 +4027,11 @@ window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {
 // natural candidate for re-keying the synthetic menu event (vs the
 // constant "menu-pending") if the stale-row-reuse hypothesis is confirmed.
 window.__bramMenuRowKey = function (menu) {
-  if (!menu) return "(none)";
-  var opts = menu.options || [];
-  var keys = [];
-  for (var i = 0; i < opts.length; i++) keys.push((opts[i] && opts[i].key) || "");
-  return (menu.tool || "") + "|" + opts.length + "|" + keys.join(",");
+  return window.__bramMenuIdentity(menu);
 };
 
-// Trace the Transcript pending-menu row lifecycle — emit whenever the
-// menu's identity changes (enters / leaves / swaps). Makes the inline
-// menu's add/drop directly observable in bram-trace.log instead of
-// inferred from host `pty-menu-changed`: a host clear paired with a
-// lingering `transcript-menu-row present=true` (or a row `key` that
-// doesn't match the latest host menu) localizes a stale/blended inline
-// menu to the render layer. Refs the stable-`menu-pending`-id hypothesis.
+// Trace pending-menu state against Transcript mount state. The menu remains
+// interleaved on Transcript; other tabs do not render the full menu.
 window.__bramTraceMenuRow = function (menu, stage) {
   try {
     window.__bramIframeTrace("transcript-menu-row", {
@@ -4003,20 +4040,18 @@ window.__bramTraceMenuRow = function (menu, stage) {
       tool: (menu && menu.tool) || "",
       options: (menu && menu.options && menu.options.length) || 0,
       key: window.__bramMenuRowKey(menu),
-      // Whether the Transcript page (which hosts the inline AgentMenuView)
-      // is currently mounted. The host setter fires this trace regardless of
-      // the active tab, so a miss reads as `present:true transcriptMounted:false`
-      // — the host pushed a menu while the renderer was unmounted.
-      // Refs menu-miss-mount-instrumentation.
+      // Whether the Transcript page is currently mounted. The host setter
+      // fires this trace regardless of active tab, so `present:true` with
+      // `transcriptMounted:false` means the host pushed a menu while
+      // Transcript was unmounted.
       transcriptMounted: !!window.__bramTranscriptMounted,
     });
   } catch (e) {}
 };
 
 // Set by Transcript.xmlui on mount/unmount so __bramTraceMenuRow can record
-// whether a host menu push had a live renderer. On mount, also emit a
-// `stage:mount` row carrying the current menu key: a remount while a menu is
-// active shows whether the row re-read the live menu or came up `(none)`.
+// whether a host menu push happened while Transcript was active. On mount,
+// also emit a `stage:mount` row carrying the current menu key.
 // Refs menu-miss-mount-instrumentation.
 window.__bramSetTranscriptMounted = function (mounted) {
   window.__bramTranscriptMounted = !!mounted;

@@ -3098,7 +3098,26 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
         }
     }
 
-    let next = if let Some(p) = full {
+    // xterm-grid cut-over: when a fresh grid status exists, drive the working
+    // row from it (clean verb/elapsed/substate, full-fidelity, no sticky-cache
+    // flicker). The strip_ansi parse below stays as the fallback.
+    let grid_status = latest_grid_status_cell()
+        .lock()
+        .ok()
+        .and_then(|c| c.clone())
+        .filter(|(_, _, _, ts)| (unix_now_ms() - ts) < 2000);
+    let next = if let Some((verb, elapsed, substate, _)) = grid_status {
+        AgentStatus {
+            provider: Some("claude".to_string()),
+            state: "working".to_string(),
+            verb: Some(verb),
+            elapsed_text: Some(elapsed),
+            substate,
+            output_tokens_text: None,
+            updated_at_ms: unix_now_ms(),
+            source: Some("grid-status".to_string()),
+        }
+    } else if let Some(p) = full {
         sticky_verb_remember(&p.verb);
         if let Some(ref s) = p.substate {
             sticky_substate_remember(s);
@@ -3734,6 +3753,44 @@ fn latest_grid_menu_cell() -> &'static Mutex<Option<(Vec<MenuOption>, u128)>> {
     static LATEST_GRID_MENU: OnceLock<Mutex<Option<(Vec<MenuOption>, u128)>>> =
         OnceLock::new();
     LATEST_GRID_MENU.get_or_init(|| Mutex::new(None))
+}
+
+// (tool, first-seen ms, gap-already-logged) for the coverage-gap signal that
+// drives the grid-primary migration. See the op=gap logic in pty_menu_update.
+fn gap_tracker_cell() -> &'static Mutex<Option<(String, i64, bool)>> {
+    static GAP_TRACKER: OnceLock<Mutex<Option<(String, i64, bool)>>> = OnceLock::new();
+    GAP_TRACKER.get_or_init(|| Mutex::new(None))
+}
+
+// (verb, elapsed_text, substate, ts) read clean from xterm's grid — drives the
+// working agent-status row in place of the strip_ansi parse + sticky caches.
+fn latest_grid_status_cell(
+) -> &'static Mutex<Option<(String, String, Option<String>, i64)>> {
+    static LATEST_GRID_STATUS: OnceLock<
+        Mutex<Option<(String, String, Option<String>, i64)>>,
+    > = OnceLock::new();
+    LATEST_GRID_STATUS.get_or_init(|| Mutex::new(None))
+}
+
+#[tauri::command]
+fn report_grid_status(payload: serde_json::Value) {
+    let verb = payload
+        .get("verb")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let elapsed = payload
+        .get("elapsed")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let substate = payload
+        .get("substate")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    if let (Some(verb), Some(elapsed)) = (verb, elapsed) {
+        if let Ok(mut cell) = latest_grid_status_cell().lock() {
+            *cell = Some((verb, elapsed, substate, unix_now_ms()));
+        }
+    }
 }
 
 #[tauri::command]
@@ -4420,12 +4477,14 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     // host produced it. We only ever ADD/correct on present:true; we never
     // force `detected = None` from the grid, so an uncovered-shape menu the
     // host caught is never clobbered.
+    let mut grid_was_fresh = false;
     let grid_snapshot = latest_grid_menu_cell()
         .lock()
         .ok()
         .and_then(|c| c.clone());
     if let Some((grid_opts, ts)) = grid_snapshot {
         if (unix_now_ms() as u128).saturating_sub(ts) < 1500 && grid_opts.len() >= 2 {
+            grid_was_fresh = true;
             let grid_labels = || {
                 grid_opts
                     .iter()
@@ -4503,6 +4562,46 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                             at_host_ms: None,
                             signature_source: Some("jsonl"),
                         });
+                    }
+                }
+            }
+        }
+    }
+
+    // Coverage-gap signal for the grid-primary migration: when the host
+    // detected a menu but the grid has NOT covered it for >1.5s (past the
+    // async report lag), log op=gap once. Each op=gap is a menu shape the
+    // grid detector still misses — the to-do list for full coverage, and the
+    // gate for retiring the host detector (op=gap silent over real use).
+    if bram_trace_enabled() {
+        if let Ok(mut tr) = gap_tracker_cell().lock() {
+            let now = unix_now_ms();
+            match detected.as_ref() {
+                None => *tr = None,
+                Some(menu) => {
+                    let is_new =
+                        !matches!(tr.as_ref(), Some((t, _, _)) if *t == menu.tool);
+                    if is_new {
+                        *tr = Some((menu.tool.clone(), now, false));
+                    }
+                    if let Some((_, first_ms, logged)) = tr.as_mut() {
+                        if grid_was_fresh {
+                            *first_ms = now;
+                        } else if !*logged && now - *first_ms > 1500 {
+                            append_bram_trace_line(
+                                app,
+                                "grid-menu",
+                                &format!(
+                                    "op=gap provider={} tool={} options={}",
+                                    hinted_session_provider(app)
+                                        .map(session_provider_label)
+                                        .unwrap_or("?"),
+                                    menu.tool,
+                                    menu.options.len()
+                                ),
+                            );
+                            *logged = true;
+                        }
                     }
                 }
             }
@@ -24066,6 +24165,7 @@ pub fn run() {
             pty_resize,
             log_from_right_pane,
             report_grid_menu,
+            report_grid_status,
             open_devtools,
             open_url,
             save_trace_export,

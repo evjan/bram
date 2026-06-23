@@ -787,6 +787,80 @@ setInterval(() => {
     }).catch(() => {});
   }
 }, 1000);
+// ===== xterm-grid status/banner reader (Phase C, shadow) =====
+// Read the rotating status line and the end-of-turn banner from xterm's clean
+// grid. strip_ansi loses digits here (e.g. "1m 22s" -> "1m 2s"); the grid has
+// them intact. Shadow-log for now to compare against the host's parse.
+let __gridBannerKey = null;
+let __gridStatusVerbKey = null;
+function __gridReadStatus() {
+  try {
+    const buf = term.buffer && term.buffer.active;
+    if (!buf) return;
+    const len = buf.length;
+    const rows = [];
+    for (let i = Math.max(0, len - 20); i < len; i++) {
+      const ln = buf.getLine(i);
+      if (ln) {
+        const t = ln.translateToString(true);
+        if (t.trim()) rows.push(t);
+      }
+    }
+    // End-of-turn banner: "<glyph> <Verb> for <duration>" (capitalized verb
+    // distinguishes it from the lowercase "thought for 7s" substate).
+    for (let r = rows.length - 1; r >= 0; r--) {
+      const m = rows[r].match(/\b([A-Z][a-zé]+) for ((?:\d+m ?)?\d+s)\b/);
+      if (m) {
+        const banner = m[1] + " for " + m[2];
+        if (banner !== __gridBannerKey) {
+          __gridBannerKey = banner;
+          invoke("log_from_right_pane", {
+            payload: { kind: "iframe-trace", subkind: "grid-banner", banner },
+          }).catch(() => {});
+        }
+        break;
+      }
+    }
+    // Rotating status line: "<Verb>… (<elapsed> · <tokens> · <substate>)".
+    // Parse to {verb, elapsed, substate} and report it structured so the host
+    // can drive the agent-status row from the grid (clean, full-fidelity, no
+    // sticky-cache flicker). Strip the leading rotating spinner glyph first.
+    for (let r = rows.length - 1; r >= 0; r--) {
+      // Core shape: "<Verb>… (<elapsed> [· <tokens>] [· <substate>])" — match
+      // it directly so we catch early-turn statuses without tokens/·, not just
+      // the fully-painted ones.
+      const sm = rows[r].match(/([A-Za-zé']{3,})…\s*\(([^)]*)\)/);
+      if (sm && /\d+\s*[hms]\b/.test(sm[2])) {
+        const verb = sm[1];
+        const segs = sm[2].split("·").map((x) => x.trim());
+        const elapsed =
+          segs.find((x) => /\d+\s*[hms]\b/.test(x) && !/token/i.test(x)) || null;
+        const substate =
+          segs.find(
+            (x) => /[a-z]{4}/i.test(x) && !/token/i.test(x) && x !== elapsed,
+          ) || null;
+        if (verb && elapsed) {
+          invoke("report_grid_status", {
+            payload: { verb, elapsed, substate },
+          }).catch(() => {});
+          const verbKey = verb + "|" + (substate || "");
+          if (verbKey !== __gridStatusVerbKey) {
+            __gridStatusVerbKey = verbKey;
+            invoke("log_from_right_pane", {
+              payload: {
+                kind: "iframe-trace",
+                subkind: "grid-status",
+                status: rows[r].trim(),
+              },
+            }).catch(() => {});
+          }
+        }
+        break;
+      }
+    }
+  } catch (e) {}
+}
+term.onWriteParsed(() => requestAnimationFrame(__gridReadStatus));
 // ===== end xterm-grid screen reader =====
 
 let pendingPtySize = null;

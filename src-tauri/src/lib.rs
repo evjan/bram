@@ -2062,80 +2062,7 @@ fn stamp_pty_menu_payload(
     menu
 }
 
-// Sticky-verb cache. Holds the most recently parsed verb so that when
-// the status line gets evicted from the PTY tail for a few seconds, the
-// row keeps showing "Hashing…" instead of flickering to generic
-// "working…" and back. STICKY_VERB_TTL_MS bounds how long we'll keep
-// showing a stale verb — long enough to ride through typical eviction
-// bursts (single Read of a big file), short enough that a turn that
-// genuinely moved on doesn't keep showing the old verb forever.
-const STICKY_VERB_TTL_MS: i64 = 15_000;
 const PTY_TURN_FINISHED_VERB_GRACE_MS: u64 = 500;
-
-struct StickyVerb {
-    verb: String,
-    captured_at_ms: i64,
-}
-
-static STICKY_VERB_CELL: OnceLock<Mutex<Option<StickyVerb>>> = OnceLock::new();
-fn sticky_verb_cell() -> &'static Mutex<Option<StickyVerb>> {
-    STICKY_VERB_CELL.get_or_init(|| Mutex::new(None))
-}
-
-fn sticky_verb_recall() -> Option<String> {
-    let now = unix_now_ms();
-    sticky_verb_cell().lock().ok().and_then(|guard| {
-        guard
-            .as_ref()
-            .filter(|s| now - s.captured_at_ms <= STICKY_VERB_TTL_MS)
-            .map(|s| s.verb.clone())
-    })
-}
-
-fn sticky_verb_captured_at_ms() -> Option<i64> {
-    sticky_verb_cell()
-        .lock()
-        .ok()
-        .and_then(|guard| guard.as_ref().map(|s| s.captured_at_ms))
-}
-
-fn sticky_verb_clear() {
-    if let Ok(mut guard) = sticky_verb_cell().lock() {
-        *guard = None;
-    }
-}
-
-// Sticky substate cache. Same shape as sticky_verb but shorter TTL —
-// substate ("thinking some more", "almost done thinking") shifts faster
-// than the verb, so a 5 s window covers brief PTY-tail evictions while
-// not pinning a phrase that's actually become stale.
-const STICKY_SUBSTATE_TTL_MS: i64 = 5_000;
-
-struct StickySubstate {
-    substate: String,
-    captured_at_ms: i64,
-}
-
-static STICKY_SUBSTATE_CELL: OnceLock<Mutex<Option<StickySubstate>>> = OnceLock::new();
-fn sticky_substate_cell() -> &'static Mutex<Option<StickySubstate>> {
-    STICKY_SUBSTATE_CELL.get_or_init(|| Mutex::new(None))
-}
-
-fn sticky_substate_recall() -> Option<String> {
-    let now = unix_now_ms();
-    sticky_substate_cell().lock().ok().and_then(|guard| {
-        guard
-            .as_ref()
-            .filter(|s| now - s.captured_at_ms <= STICKY_SUBSTATE_TTL_MS)
-            .map(|s| s.substate.clone())
-    })
-}
-
-fn sticky_substate_clear() {
-    if let Ok(mut guard) = sticky_substate_cell().lock() {
-        *guard = None;
-    }
-}
 
 // Format elapsed milliseconds as "1m 53s" / "23s" / "1h 5m" matching
 // the Claude Code TUI status line cosmetic.
@@ -2257,10 +2184,10 @@ fn schedule_pty_turn_finished<R: tauri::Runtime>(
 ) {
     let app_handle = app.clone();
     let started_ms = unix_now_ms();
-    // No sticky-verb fallback. If `verb` is None here it means the
+    // No verb fallback. If `verb` is None here it means the
     // JSONL detector fired but the natural-end banner gate
     // didn't find a past-tense `<Verb> for <duration>` shape in the
-    // tail. Falling back to `sticky_verb_recall` would emit the most
+    // tail. Falling back to a recalled working verb would emit the most
     // recent *working* verb (gerund — e.g. "Newspapering",
     // "Hyperspacing") as the finished state, which is the desync
     // symptom the user sees in the agent pane while the terminal
@@ -2284,7 +2211,7 @@ fn schedule_pty_turn_finished<R: tauri::Runtime>(
         std::thread::sleep(std::time::Duration::from_millis(
             PTY_TURN_FINISHED_VERB_GRACE_MS,
         ));
-        let last_verb_ms = sticky_verb_captured_at_ms().unwrap_or(0);
+        let last_verb_ms = 0;
         if last_verb_ms > started_ms {
             if bram_trace_enabled() {
                 append_bram_trace_line(
@@ -2424,8 +2351,6 @@ fn agent_status_emit_finished<R: tauri::Runtime>(
     if let Ok(mut g) = last_cleared_at_cell().lock() {
         *g = unix_now_ms();
     }
-    sticky_verb_clear();
-    sticky_substate_clear();
     if let Ok(mut cur) = agent_status_cell().lock() {
         *cur = next.clone();
     }
@@ -3087,9 +3012,9 @@ fn agent_status_set_claude_jsonl_working<R: tauri::Runtime>(
     let next = AgentStatus {
         provider: Some("claude".to_string()),
         state: "working".to_string(),
-        verb: sticky_verb_recall().or_else(|| Some("working".to_string())),
+        verb: Some("working".to_string()),
         elapsed_text: Some(format_elapsed_text(elapsed_ms)),
-        substate: sticky_substate_recall(),
+        substate: None,
         output_tokens_text: None,
         updated_at_ms: unix_now_ms(),
         source: Some("jsonl-non-final".to_string()),

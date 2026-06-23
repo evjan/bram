@@ -66,7 +66,8 @@ each kind of code should live, and how XMLUI markup calls into it.
   `setTimeout`, `postMessage`, tauri event listeners — anything the
   XMLUI expression engine can't host directly. Functions live on
   `window` (see naming below) and are reached from XMLUI markup as
-  `window.foo(...)`. Hot-reloaded when changed.
+  `window.foo(...)`. Reload behavior depends on which Bram binary is
+  running; see *Build vs. hot-reload boundary*.
 - **`app/tools/Globals.xs`** — XMLUI's expression engine context.
   Holds xs-scope module state (vars whose readers/writers all live in
   xs) and the few helpers whose proximity to that state earns them a
@@ -988,30 +989,40 @@ submission. A separate submit button creates a third decision point
 two messages when one would do. Only add a separate submit button if
 the auxiliary input is genuinely independent of the primary actions.
 
-### Build vs. runtime-served files
+### Build vs. hot-reload boundary
 
-> The hot-reload behavior below is **internal plumbing** — it concerns
-> Bram's own `app/` tree and the *optional* embedded target-app iframe.
-> A mainstream user who runs their app in their own browser never relies
-> on it; their own dev server handles reloading. It matters only when you
-> are editing Bram itself or previewing a project in the embedded pane.
+Use a hard boundary for Bram development:
 
-The Bram binary embeds the `app/` tree at build time (Tauri
-`frontendDist: "../app"`), but prefers an on-disk `app/` next to the
-binary at runtime. A filesystem watcher (`src-tauri/src/lib.rs`)
-hot-reloads iframes when watched paths change:
-
-| path | reloads |
+| path | rule |
 |---|---|
-| `app/__shell/` | both iframes (target app and agent pane) |
-| `app/vendor/` | both iframes |
-| `app/tools/` | the agent pane iframe only |
-| user's project directory | the target app iframe only |
+| `app/tools/**` | Hot-reloadable tools XMLUI app code: `Main.xmlui`, `components/**`, `Globals.xs`, `config.json`, `themes/**`, `resources/**`. |
+| user's project directory | Target-pane reload / project dev-server reload, depending on the project setup. |
+| `app/__shell/**` | Rebuild from `src-tauri/`, then relaunch `./bram`. This includes `helpers.js`. |
+| `app/main.js`, `app/index.html`, `app/styles.css` | Rebuild from `src-tauri/`, then relaunch `./bram`. Parent-shell code is not hot-reloaded. |
+| `app/vendor/**` | Rebuild from `src-tauri/`, then relaunch `./bram`. |
+| `src-tauri/**` | Rebuild from `src-tauri/`, then relaunch `./bram`. |
 
-The **parent shell** (`app/index.html`, `app/main.js`,
-`app/styles.css`, anything loaded once at WebView startup) is **not**
-hot-reloaded — run `cargo build` and have the user restart. Don't
-suggest `cargo run`; the user prefers rebuild + restart, and the
+Do not describe `app/__shell/helpers.js`, parent-shell assets, vendor
+assets, or Rust as hot-reloadable. Even if the watcher reloads an iframe,
+those paths are shell/runtime code and their behavior can depend on
+pre-XMLUI globals, parent-window state, custom scheme handling, Tauri
+commands, or long-lived listeners. Validate those edits only after a
+fresh build and relaunch of the locally built binary.
+
+Launch discipline for Bram development:
+
+1. For `app/tools/**`, save the file and let the tools iframe reload.
+2. For every other Bram runtime path, run `cargo build` from
+   `src-tauri/`, then relaunch the locally built `./bram` symlink
+   (`src-tauri/target/debug/bram`), not an installed/older app.
+
+The Bram binary embeds the `app/` tree at build time
+(`include_dir!("$CARGO_MANIFEST_DIR/../app")`, plus Tauri
+`frontendDist: "../app"`). That embedding is the reason the rebuild rule
+exists for shell/runtime assets: a plain restart of the wrong binary, or
+a build followed by relaunching that wrong binary, still runs stale code.
+
+Don't suggest `cargo run`; the user prefers rebuild + restart, and the
 incremental build is fast.
 
 ### Updating GitHub issues via gh

@@ -65,6 +65,14 @@ prefix) is in `@app/__shell/conventions.md`, `@`-imported below.
 - `app/__shell/helpers.js` — window helpers loaded by `index.html` via
   `xmlui://localhost/__shell/helpers.js`
 
+Reload boundary: only `app/tools/**` is hot-reloadable Bram app code
+(`Main.xmlui`, `components/**`, `Globals.xs`, `config.json`, themes, and
+resources). For every other Bram runtime path, `app/__shell/**`
+including `helpers.js`, `app/vendor/**`, `app/index.html`, `app/main.js`,
+`app/styles.css`, and `src-tauri/**`, rebuild from `src-tauri/` and
+relaunch the locally built `./bram` symlink. Do not assume a plain restart
+or an installed/older binary picked up the edit.
+
 ## Working on the target app
 
 The embedded target app is **optional and off by default** — most sessions

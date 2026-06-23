@@ -976,7 +976,9 @@ window.__bramWithStagedImageMarkers = function (text, target, voiceTarget) {
 // Pure predicate — voice-target whitelist for text-input destinations.
 // xs delegator in Globals.xs preserves the bare-name callability.
 window.__bramIsWorklistTextVoiceTarget = function (target) {
-  return ["message-agent", "feedback", "new-item", "new-issue"].indexOf(target || "") !== -1;
+  var t = target || "";
+  return ["message-agent", "feedback", "new-item", "new-issue"].indexOf(t) !== -1
+    || t.indexOf("feedback:") === 0;
 };
 
 // Inflight + submitted-message helpers (audit step 6). All pure data
@@ -2681,6 +2683,13 @@ window.bramStagingPastedImageCount = function () {
 // works, since the callback is invoked from plain JS later.
 window._voiceSession = null;
 window._voiceStartedListener = null;
+window._voiceSessionTarget = "";
+window.__bramVoiceRecorderState = window.__bramVoiceRecorderState || {
+  state: "idle",
+  requestId: null,
+  target: "",
+  at: Date.now(),
+};
 function _voiceLog(stage, payload) {
   try {
     window.logToHost(
@@ -2691,6 +2700,21 @@ function _voiceLog(stage, payload) {
     );
   } catch (e) {}
 }
+window.__bramHasActiveVoiceSession = function () {
+  return !!window._voiceSession;
+};
+window.__bramActiveVoiceSessionTarget = function () {
+  return window._voiceSessionTarget || "";
+};
+window.__bramNotifyVoiceBusy = function (detail) {
+  try {
+    window.dispatchEvent(new CustomEvent("bram:voice-busy", {
+      detail: Object.assign({ at: Date.now() }, detail || {}),
+    }));
+  } catch (e) {
+    console.error("[bram] voice-busy dispatch failed:", e);
+  }
+};
 function _voiceRemoveStartedListener() {
   if (window._voiceStartedListener) {
     try {
@@ -2700,17 +2724,32 @@ function _voiceRemoveStartedListener() {
   }
 }
 window.voiceStart = function (onStarted, onFailed) {
+  var meta =
+    arguments.length >= 3 && arguments[2] && typeof arguments[2] === "object"
+      ? arguments[2]
+      : {};
   if (window._voiceSession) {
     _voiceLog("voiceStart-rejected-already-active", {
       currentSession: window._voiceSession,
+      target: window._voiceSessionTarget || "",
     });
+    if (typeof onFailed === "function") {
+      try {
+        onFailed({
+          requestId: window._voiceSession,
+          reason: "already-active",
+          target: window._voiceSessionTarget || "",
+        });
+      } catch (e) {}
+    }
     return;
   }
   _voiceRemoveStartedListener();
   var requestId =
     "voice-" + Date.now() + "-" + Math.random().toString(36).slice(2);
   window._voiceSession = requestId;
-  _voiceLog("voiceStart", { requestId: requestId });
+  window._voiceSessionTarget = meta.target || "";
+  _voiceLog("voiceStart", { requestId: requestId, target: window._voiceSessionTarget });
   function onStartedMsg(ev) {
     var data = ev && ev.data;
     if (!data || (data.type !== "voice-recording-started" && data.type !== "voice-into-result")) return;
@@ -2722,6 +2761,7 @@ window.voiceStart = function (onStarted, onFailed) {
     if (data.type === "voice-into-result") {
       if (window._voiceSession === requestId) {
         window._voiceSession = null;
+        window._voiceSessionTarget = "";
       }
       _voiceLog("voiceStart-rejected-by-parent", {
         requestId: requestId,
@@ -2747,21 +2787,28 @@ window.voiceStart = function (onStarted, onFailed) {
   window._voiceStartedListener = onStartedMsg;
   window.addEventListener("message", onStartedMsg);
   window.parent.postMessage(
-    { type: "right-pane", kind: "voice-start", requestId: requestId },
+    {
+      type: "right-pane",
+      kind: "voice-start",
+      requestId: requestId,
+      target: window._voiceSessionTarget,
+    },
     "*",
   );
 };
 window.voiceStop = function (callback) {
   var requestId = window._voiceSession;
+  var target = window._voiceSessionTarget || "";
   var stopAtMs = Date.now();
   window._voiceSession = null;
+  window._voiceSessionTarget = "";
   _voiceRemoveStartedListener();
   if (!requestId) {
     _voiceLog("voiceStop-no-session", { stopAtMs: stopAtMs });
     if (typeof callback === "function") callback("");
     return;
   }
-  _voiceLog("voiceStop", { requestId: requestId, stopAtMs: stopAtMs });
+  _voiceLog("voiceStop", { requestId: requestId, stopAtMs: stopAtMs, target: target });
   function onResult(ev) {
     var data = ev && ev.data;
     if (!data || data.type !== "voice-into-result") return;
@@ -2785,12 +2832,14 @@ window.voiceStop = function (callback) {
       stopToResultMs: resultAtMs - resultStopAtMs,
       parentStopToDeliverMs:
         typeof data.stopToDeliverMs === "number" ? data.stopToDeliverMs : null,
+      target: data.target || target || "",
     };
     _voiceLog("voice-into-result", {
       requestId: requestId,
       stopAtMs: resultStopAtMs,
       stopToResultMs: voiceMeta.stopToResultMs,
       parentStopToDeliverMs: voiceMeta.parentStopToDeliverMs,
+      target: voiceMeta.target,
       transcriptLength: transcript.length,
       transcriptPreview: transcript.slice(0, 80),
     });
@@ -2798,7 +2847,13 @@ window.voiceStop = function (callback) {
   }
   window.addEventListener("message", onResult);
   window.parent.postMessage(
-    { type: "right-pane", kind: "voice-stop", requestId: requestId, stopAtMs: stopAtMs },
+    {
+      type: "right-pane",
+      kind: "voice-stop",
+      requestId: requestId,
+      target: target,
+      stopAtMs: stopAtMs,
+    },
     "*",
   );
 };
@@ -3312,6 +3367,48 @@ window.__bramSetLatestVoiceState = function (t, meta) {
   }
 };
 
+window.addEventListener("message", function (ev) {
+  var data = ev && ev.data;
+  if (!data || data.type !== "voice-state") return;
+  window.__bramVoiceRecorderState = {
+    state: data.state || "idle",
+    requestId: data.requestId || null,
+    target: data.target || "",
+    reason: data.reason || "",
+    transcriptLength:
+      typeof data.transcriptLength === "number" ? data.transcriptLength : null,
+    at: Date.now(),
+  };
+  try {
+    window.dispatchEvent(new CustomEvent("bram:voice-recorder-state", {
+      detail: window.__bramVoiceRecorderState,
+    }));
+  } catch (e) {
+    console.error("[bram] voice-recorder-state dispatch failed:", e);
+  }
+});
+
+window.bramSubscribeVoiceRecorderState = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bram] voice-recorder-state subscriber threw:", e); }
+      });
+    };
+    window.addEventListener("bram:voice-recorder-state", notify);
+    factory = function (emit) {
+      var fire = function () { emit(window.__bramVoiceRecorderState); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
 // External-driven voice-arrival bridge. xs-side writes to module vars
 // (worklistVoiceSeq, worklistVoiceText) don't propagate through XMLUI's
 // reactive system when triggered from arrow-body callbacks (see
@@ -3323,25 +3420,26 @@ window.bramSubscribeVoiceArrival = (function () {
   return function () {
     if (factory) return factory;
     var subscribers = new Set();
-    var lastEvent = null;
+    var currentEvent = null;
     var notify = function () {
       subscribers.forEach(function (fn) {
         try { fn(); } catch (e) { console.error("[bram] voice-arrival subscriber threw:", e); }
       });
     };
     window.addEventListener("bram:voice-arrival", function (evt) {
-      lastEvent = (evt && evt.detail) || null;
-      try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "external-event-received", tLen: ((lastEvent && lastEvent.transcript) || "").length, subscribers: subscribers.size }); } catch (e) {}
+      currentEvent = (evt && evt.detail) || null;
+      try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "external-event-received", tLen: ((currentEvent && currentEvent.transcript) || "").length, subscribers: subscribers.size }); } catch (e) {}
       notify();
+      currentEvent = null;
     });
     factory = function (emit) {
       var fire = function () {
-        try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "external-fire", hasEvent: !!lastEvent }); } catch (e) {}
-        emit(lastEvent);
+        try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "external-fire", hasEvent: !!currentEvent }); } catch (e) {}
+        emit(currentEvent);
       };
       subscribers.add(fire);
       try { window.__bramIframeTrace && window.__bramIframeTrace("voice-trace", { stage: "external-subscribed", totalSubscribers: subscribers.size }); } catch (e) {}
-      fire();
+      emit(null);
       return function () { subscribers.delete(fire); };
     };
     return factory;
@@ -3366,6 +3464,24 @@ window.addEventListener("message", function (event) {
   }
 });
 
+window.addEventListener("message", function (event) {
+  var data = event && event.data;
+  if (!data || data.type !== "bram-voice-busy") return;
+  try {
+    window.dispatchEvent(new CustomEvent("bram:voice-busy", {
+      detail: {
+        requester: String(data.requester || ""),
+        activeWas: String(data.activeWas || ""),
+        activeRequestId: String(data.activeRequestId || ""),
+        activeTarget: String(data.activeTarget || ""),
+        at: Date.now(),
+      },
+    }));
+  } catch (e) {
+    console.error("[bram] voice-busy dispatch failed:", e);
+  }
+});
+
 window.bramSubscribeWhisperUnavailable = (function () {
   var factory;
   return function () {
@@ -3378,6 +3494,31 @@ window.bramSubscribeWhisperUnavailable = (function () {
       });
     };
     window.addEventListener("bram:whisper-unavailable", function (evt) {
+      lastEvent = (evt && evt.detail) || null;
+      notify();
+    });
+    factory = function (emit) {
+      var fire = function () { emit(lastEvent); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
+window.bramSubscribeVoiceBusy = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var lastEvent = null;
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bram] voice-busy subscriber threw:", e); }
+      });
+    };
+    window.addEventListener("bram:voice-busy", function (evt) {
       lastEvent = (evt && evt.detail) || null;
       notify();
     });

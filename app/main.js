@@ -968,6 +968,30 @@ const { listen } = window.__TAURI__.event;
     }
   };
 
+  const postIframeVoiceState = (state, extra) => {
+    if (!active || active === "toolbar" || !active.source) return;
+    try {
+      active.source.postMessage(
+        Object.assign(
+          {
+            type: "voice-state",
+            state,
+            requestId: active.requestId,
+            target: active.voiceTarget || "",
+          },
+          extra || {},
+        ),
+        "*",
+      );
+    } catch (e) {
+      voiceLog("voice-state-postmessage-error", {
+        requestId: currentRequestId(),
+        state,
+        error: String(e),
+      });
+    }
+  };
+
   const resetActiveState = () => {
     clearActiveWatchdog();
     active = null;
@@ -1175,6 +1199,37 @@ const { listen } = window.__TAURI__.event;
     }
   };
 
+  const notifyVoiceBusy = (requester) => {
+    const activeWas = activeKind();
+    const activeRequestId = currentRequestId();
+    const activeTarget =
+      active && typeof active === "object" ? active.voiceTarget || "" : activeWas || "";
+    voiceLog("voice-busy-notice", {
+      requester: requester || "",
+      activeWas,
+      activeRequestId,
+      activeTarget,
+      activeAgeMs: activeAgeMs(),
+    });
+    try {
+      const tools = document.getElementById("tools-pane");
+      if (tools && tools.contentWindow) {
+        tools.contentWindow.postMessage(
+          {
+            type: "bram-voice-busy",
+            requester: requester || "",
+            activeWas,
+            activeRequestId,
+            activeTarget,
+          },
+          "*",
+        );
+      }
+    } catch (e) {
+      voiceLog("voice-busy-notice-error", { error: String(e) });
+    }
+  };
+
   const stopStream = () => {
     if (stream) {
       stream.getTracks().forEach((t) => t.stop());
@@ -1209,6 +1264,7 @@ const { listen } = window.__TAURI__.event;
           {
             type: "voice-into-result",
             requestId: active.requestId,
+            target: active.voiceTarget || "",
             transcript: text,
             stopAtMs: activeStopAtMs,
             stopToDeliverMs: stopToDeliverMs,
@@ -1236,6 +1292,7 @@ const { listen } = window.__TAURI__.event;
         });
       });
     }
+    postIframeVoiceState("idle", { transcriptLength: text.length });
     active = null;
     mediaRecorder = null;
     resetActiveState();
@@ -1275,6 +1332,7 @@ const { listen } = window.__TAURI__.event;
           activeAgeMs: activeAgeMs(),
           activeWas: activeKind(),
         });
+        notifyVoiceBusy(target === "toolbar" ? "toolbar" : "iframe");
         // Already busy: tell the new requester nothing came of it.
         if (target && typeof target === "object" && target.source) {
           try {
@@ -1282,6 +1340,7 @@ const { listen } = window.__TAURI__.event;
               {
                 type: "voice-into-result",
                 requestId: target.requestId,
+                target: target.voiceTarget || "",
                 transcript: "",
                 rejected: true,
                 reason: "busy",
@@ -1304,6 +1363,7 @@ const { listen } = window.__TAURI__.event;
     const isToolbar = target === "toolbar";
     if (isToolbar) toolbarRequestId = incomingId;
     if (isToolbar) setToolbarState("starting");
+    postIframeVoiceState("starting");
     const serverResult = await ensureServerRunning();
     if (!serverResult.ready) {
       console.error("whisper-server did not become ready");
@@ -1312,6 +1372,7 @@ const { listen } = window.__TAURI__.event;
         reason: serverResult.reason,
       });
       notifyWhisperUnavailable(serverResult.reason);
+      postIframeVoiceState("idle", { reason: serverResult.reason || "whisper-unavailable" });
       const t = active;
       resetActiveState();
       if (isToolbar) setToolbarState("idle");
@@ -1343,6 +1404,7 @@ const { listen } = window.__TAURI__.event;
         name: e && e.name ? e.name : "",
         message: e && e.message ? e.message : "",
       });
+      postIframeVoiceState("idle", { reason: "getUserMedia-error" });
       const t = active;
       resetActiveState();
       if (isToolbar) setToolbarState("idle");
@@ -1372,6 +1434,7 @@ const { listen } = window.__TAURI__.event;
         requestId: incomingId,
         error: String(e),
       });
+      postIframeVoiceState("idle", { reason: "mediaRecorder-create-error" });
       stopStream();
       const t = active;
       resetActiveState();
@@ -1492,9 +1555,14 @@ const { listen } = window.__TAURI__.event;
       setToolbarState("recording");
     } else if (active && typeof active === "object" && active.source) {
       armIframeRecordingWatchdog();
+      postIframeVoiceState("recording");
       try {
         active.source.postMessage(
-          { type: "voice-recording-started", requestId: active.requestId },
+          {
+            type: "voice-recording-started",
+            requestId: active.requestId,
+            target: active.voiceTarget || "",
+          },
           "*",
         );
       } catch (e) {
@@ -1511,6 +1579,7 @@ const { listen } = window.__TAURI__.event;
     activeStopReceivedAtMs = Date.now();
     activeStopRequested = true;
     clearActiveWatchdog();
+    postIframeVoiceState("processing");
     voiceLog("stopRecording", {
       requestId: currentRequestId(),
       source: source || "unknown",
@@ -1530,6 +1599,10 @@ const { listen } = window.__TAURI__.event;
 
   toolbarBtn.addEventListener("click", () => {
     const state = toolbarBtn.dataset.state;
+    if (active && active !== "toolbar") {
+      notifyVoiceBusy("toolbar");
+      return;
+    }
     if (state === "recording") {
       setToolbarState("processing");
       stopRecording(Date.now(), "toolbar-click");
@@ -1553,7 +1626,7 @@ const { listen } = window.__TAURI__.event;
     if (!d || d.type !== "right-pane") return;
     if (d.kind === "voice-start") {
       voiceLog("iframe-voice-start", { requestId: d.requestId });
-      startRecording({ source: ev.source, requestId: d.requestId });
+      startRecording({ source: ev.source, requestId: d.requestId, voiceTarget: d.target || "" });
     } else if (d.kind === "voice-stop") {
       const stopAtMs = typeof d.stopAtMs === "number" ? d.stopAtMs : Date.now();
       voiceLog("iframe-voice-stop", {
@@ -1585,6 +1658,7 @@ const { listen } = window.__TAURI__.event;
               {
                 type: "voice-into-result",
                 requestId: d.requestId,
+                target: d.target || "",
                 transcript: "",
                 stopAtMs: stopAtMs,
                 stopToDeliverMs: Date.now() - stopAtMs,

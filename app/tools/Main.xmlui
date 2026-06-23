@@ -20,12 +20,19 @@
     id="whisperNotice"
     initial="{null}"
     subscribe="{window.bramSubscribeWhisperUnavailable()}" />
+  <External
+    id="voiceBusyNotice"
+    initial="{null}"
+    subscribe="{window.bramSubscribeVoiceBusy()}" />
   <ChangeListener
     listenTo="{whisperNotice.value &amp;&amp; whisperNotice.value.at}"
     onDidChange="(c) => { if (c.newValue) { toast.error('Whisper server is not running and could not be started automatically. Start it manually — see the README Voice input section: https://github.com/judell/bram#voice-input'); } }" />
   <ChangeListener
+    listenTo="{voiceBusyNotice.value &amp;&amp; voiceBusyNotice.value.at}"
+    onDidChange="(c) => { if (c.newValue) { toast('A voice recording is already in progress. Return to that recording to stop it.'); } }" />
+  <ChangeListener
     listenTo="{footerVoiceArrival.value &amp;&amp; footerVoiceArrival.value.at}"
-    onDidChange="() => { const ev = footerVoiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; if (t &amp;&amp; worklistVoiceTarget === 'message-agent' &amp;&amp; footerComposerBox) window.__bramAppendVoiceToBox(footerComposerBox, t); footerVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
+    onDidChange="() => { const ev = footerVoiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; const target = (ev &amp;&amp; ev.meta &amp;&amp; ev.meta.target) || ''; if (target === 'message-agent') { if (t &amp;&amp; footerComposerBox) window.__bramAppendVoiceToBox(footerComposerBox, t); footerVoiceRecording = false; worklistVoiceRecordingActive = false; } }" />
   <ChangeListener
     listenTo="{enhanceStatusEvt.value}"
     onDidChange="() => { enhanceStatus.refetch(); startBramLatestJsonlPolling(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }" />

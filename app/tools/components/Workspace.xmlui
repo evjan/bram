@@ -351,7 +351,7 @@
         subscribe="{window.bramSubscribeVoiceArrival()}" />
       <ChangeListener
         listenTo="{voiceArrival.value &amp;&amp; voiceArrival.value.at}"
-        onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; if (t &amp;&amp; worklistVoiceTarget === 'message-agent' &amp;&amp; worklistInputBox) window.__bramAppendVoiceToBox(worklistInputBox, t); messageVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
+        onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; const target = (ev &amp;&amp; ev.meta &amp;&amp; ev.meta.target) || ''; if (target === 'message-agent') { if (t &amp;&amp; worklistInputBox) window.__bramAppendVoiceToBox(worklistInputBox, t); messageVoiceRecording = false; worklistVoiceRecordingActive = false; } }" />
     <VStack gap="0" width="100%" height="*">
       <!-- Top composer hidden (not removed) — the App Footer composer replaces it. Flip when back to show. -->
       <HStack when="{false}" horizontalAlignment="center" width="100%" marginBottom="$space-6">
@@ -588,7 +588,7 @@
                     size="xs"
                     tooltip="Voice feedback"
                     enabled="{!(feedbackInputSentIds || []).includes($item.id) &amp;&amp; !submitting &amp;&amp; !isWorklistVoiceProcessingTarget('feedback') &amp;&amp; (!feedbackVoiceRecording || (feedbackVoiceRecordingItemId === $item.id &amp;&amp; worklistVoiceRecordingActive))}"
-                    onClick="setWorklistVoiceTarget('feedback'); if (!feedbackVoiceRecording) feedbackVoiceRecordingItemId = $item.id; feedbackVoiceRecording = toggleVoiceForCurrentTarget(feedbackVoiceRecording)" />
+                    onClick="setWorklistVoiceTarget('feedback:' + $item.id); if (!feedbackVoiceRecording) feedbackVoiceRecordingItemId = $item.id; feedbackVoiceRecording = toggleVoiceForCurrentTarget(feedbackVoiceRecording)" />
                   <TextArea
                     id="feedbackBox"
                     initialValue="{(feedbackDraftsById || {})[$item.id] || ''}"
@@ -608,12 +608,12 @@
                     enabled="{!(submitting &amp;&amp; submittedItemId === $item.id)}" />
                   <ChangeListener
                     listenTo="{voiceArrival.value &amp;&amp; voiceArrival.value.at}"
-                    onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; const recordingId = feedbackVoiceRecordingItemId || ''; if (t &amp;&amp; worklistVoiceTarget === 'feedback' &amp;&amp; recordingId === $item.id) { const newValue = window.__bramAppendVoiceToBox(feedbackBox, t); if (newValue !== false) { const draftsNext = Object.assign({}, feedbackDraftsById || {}); draftsNext[$item.id] = newValue; feedbackDraftsById = draftsNext; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } } feedbackVoiceRecording = false; feedbackVoiceRecordingItemId = ''; worklistVoiceRecordingActive = false; }" />
+                    onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; const target = (ev &amp;&amp; ev.meta &amp;&amp; ev.meta.target) || ''; if (target === ('feedback:' + $item.id)) { if (t) { const newValue = window.__bramAppendVoiceToBox(feedbackBox, t); if (newValue !== false) { const draftsNext = Object.assign({}, feedbackDraftsById || {}); draftsNext[$item.id] = newValue; feedbackDraftsById = draftsNext; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } } feedbackVoiceRecording = false; feedbackVoiceRecordingItemId = ''; worklistVoiceRecordingActive = false; } }" />
                   <ChangeListener
                     listenTo="{awaitingResponse}"
                     onDidChange="(c) => { if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedItemId === $item.id &amp;&amp; !(feedbackInputSentIds || []).includes($item.id)) { const next = Object.assign({}, feedbackDraftsById || {}); delete next[$item.id]; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } }" />
                   <Theme size-Spinner="14px">
-                    <Spinner when="{isWorklistVoiceProcessingTarget('feedback') &amp;&amp; feedbackVoiceRecordingItemId === $item.id}" />
+                    <Spinner when="{isWorklistVoiceProcessingTarget('feedback:' + $item.id)}" />
                   </Theme>
                   <Button
                     label="ⓘ"
@@ -1013,7 +1013,7 @@ Before you `Approve` a `TO-APPLY` item you can `Iterate` to refine the proposal.
           <Text fontWeight="$fontWeight-bold" fontSize="$fontSize-sm" value="Ask the agent to propose an item" />
           <ChangeListener
             listenTo="{voiceArrival.value &amp;&amp; voiceArrival.value.at}"
-            onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; if (t &amp;&amp; worklistVoiceTarget === 'new-item' &amp;&amp; newItemBox) window.__bramAppendVoiceToBox(newItemBox, t); newItemVoiceRecording = false; worklistVoiceRecordingActive = false; }" />
+            onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; const target = (ev &amp;&amp; ev.meta &amp;&amp; ev.meta.target) || ''; if (target === 'new-item') { if (t &amp;&amp; newItemBox) window.__bramAppendVoiceToBox(newItemBox, t); newItemVoiceRecording = false; worklistVoiceRecordingActive = false; } }" />
           <HStack
             when="{newItemHelp &amp;&amp; !openIssues.value}"
             gap="$space-2"

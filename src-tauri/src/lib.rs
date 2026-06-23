@@ -3723,6 +3723,73 @@ fn pty_menu_cell() -> &'static Mutex<Option<PtyMenu>> {
     PTY_MENU.get_or_init(|| Mutex::new(None))
 }
 
+// xterm-grid cut-over (branch xterm-grid-screen-read): the parent shell
+// reads the clean permission-menu structure from xterm.js's grid (where the
+// emulator has already resolved the redraw jumble that strip_ansi can't) and
+// reports it here. We store the latest options + a timestamp and splice them
+// into the emitted menu when fresh — see the override in the PTY-menu detect
+// path. Command text / signature still come from the JSONL / `⏺` line, not
+// the grid (the grid's verbose scope-option label is stale-cell-prone).
+fn latest_grid_menu_cell() -> &'static Mutex<Option<(Vec<MenuOption>, u128)>> {
+    static LATEST_GRID_MENU: OnceLock<Mutex<Option<(Vec<MenuOption>, u128)>>> =
+        OnceLock::new();
+    LATEST_GRID_MENU.get_or_init(|| Mutex::new(None))
+}
+
+#[tauri::command]
+fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
+    let present = payload
+        .get("present")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let mut cell = match latest_grid_menu_cell().lock() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    if !present {
+        *cell = None;
+        return;
+    }
+    let options: Vec<MenuOption> = payload
+        .get("options")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|o| {
+                    let n = o.get("n").and_then(|v| v.as_i64())?;
+                    let label = o
+                        .get("label")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.trim().to_string())?;
+                    if label.is_empty() {
+                        return None;
+                    }
+                    Some(MenuOption {
+                        key: n.to_string(),
+                        label,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if options.len() < 2 {
+        return;
+    }
+    if bram_trace_enabled() {
+        let labels = options
+            .iter()
+            .map(|o| format!("{}.{}", o.key, o.label))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        append_bram_trace_line(
+            &app,
+            "grid-menu",
+            &format!("op=report count={} [{}]", options.len(), labels),
+        );
+    }
+    *cell = Some((options, unix_now_ms() as u128));
+}
+
 fn pty_menu_suppressed_cell() -> &'static Mutex<Option<(String, std::time::Instant)>> {
     PTY_MENU_SUPPRESSED.get_or_init(|| Mutex::new(None))
 }
@@ -4320,6 +4387,48 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         menu.tool_call_content = lookup.content;
         if menu.tool_call_signature.is_none() {
             menu.text.clear();
+        }
+    }
+
+    // xterm-grid cut-over: replace the strip_ansi-parsed options with the
+    // clean structure the parent shell read from xterm.js's grid, when a
+    // fresh report exists. Options are the #187-fragile field (collapsed /
+    // missing options on redraw); the grid renders them correctly. The
+    // command text / signature enriched above are unchanged. Trace both so
+    // we can see when the host's count was wrong and the grid fixed it.
+    if let Some(menu) = detected.as_mut() {
+        if let Ok(cell) = latest_grid_menu_cell().lock() {
+            if let Some((grid_opts, ts)) = cell.as_ref() {
+                let age = (unix_now_ms() as u128).saturating_sub(*ts);
+                if age < 1500 && grid_opts.len() >= 2 {
+                    if bram_trace_enabled() {
+                        let host = menu
+                            .options
+                            .iter()
+                            .map(|o| format!("{}.{}", o.key, o.label))
+                            .collect::<Vec<_>>()
+                            .join(" | ");
+                        let grid = grid_opts
+                            .iter()
+                            .map(|o| format!("{}.{}", o.key, o.label))
+                            .collect::<Vec<_>>()
+                            .join(" | ");
+                        append_bram_trace_line(
+                            app,
+                            "grid-menu",
+                            &format!(
+                                "op=override age_ms={} host_count={} grid_count={} host=[{}] grid=[{}]",
+                                age,
+                                menu.options.len(),
+                                grid_opts.len(),
+                                host,
+                                grid
+                            ),
+                        );
+                    }
+                    menu.options = grid_opts.clone();
+                }
+            }
         }
     }
 
@@ -23879,6 +23988,7 @@ pub fn run() {
             queue_feedback_draft,
             pty_resize,
             log_from_right_pane,
+            report_grid_menu,
             open_devtools,
             open_url,
             save_trace_export,

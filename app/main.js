@@ -580,6 +580,133 @@ term.onData((data) => {
   invoke("pty_write", { data }).catch((e) => console.error("pty_write", e));
 });
 
+// ===== xterm-grid screen reader (branch xterm-grid-screen-read) =====
+// Phase 1: read the CLEAN rendered screen from xterm.js's grid instead of
+// the host's strip_ansi parse of the raw PTY stream. Detect a LIVE
+// permission menu by shape near the cursor, parse its options + the
+// command/prose above it, and shadow-log the structured result
+// (`[iframe] subkind=xterm-grid-menu`) so we can compare it against the
+// host's parse before any cut-over. Self-contained.
+let __gridLastMenuKey = null;
+
+// Live region only: the menu always sits at/near the cursor, never deep in
+// scrollback. Reading the last ~60 rows avoids matching scrollback menus or
+// menu-shaped text shown in a diff.
+function __gridReadLiveRows() {
+  const buf = term.buffer && term.buffer.active;
+  if (!buf) return null;
+  const len = buf.length;
+  const start = Math.max(0, len - 60);
+  const rows = [];
+  for (let i = start; i < len; i++) {
+    const ln = buf.getLine(i);
+    rows.push(
+      ln
+        ? { text: ln.translateToString(true), wrapped: ln.isWrapped }
+        : { text: "", wrapped: false },
+    );
+  }
+  return rows;
+}
+
+// A menu requires the full shape: a footer ("Esc to cancel"), a header
+// ("Do you want to…" / "requires approval"), and >= 2 numbered options
+// between them. Wrapped option labels (option 2 spilling onto the next row)
+// are rejoined onto the prior option.
+function __gridDetectMenu(rows) {
+  let footer = -1;
+  for (let r = rows.length - 1; r >= 0; r--) {
+    if (/Esc to cancel/.test(rows[r].text)) {
+      footer = r;
+      break;
+    }
+  }
+  if (footer < 0) return null;
+  let header = -1;
+  for (let r = footer - 1; r >= Math.max(0, footer - 30); r--) {
+    if (/Do you want to|requires approval|^\s*Allow .*\?/i.test(rows[r].text)) {
+      header = r;
+      break;
+    }
+  }
+  if (header < 0) return null;
+  const options = [];
+  for (let r = header + 1; r < footer; r++) {
+    const t = rows[r].text;
+    const m = t.match(/^\s*([❯>])?\s*(\d)\.\s*(.+)$/);
+    if (m) {
+      options.push({ n: Number(m[2]), label: m[3].trim(), selected: !!m[1] });
+    } else if (options.length && t.trim()) {
+      options[options.length - 1].label += " " + t.trim();
+    }
+  }
+  if (options.length < 2) return null;
+  // Command + assistant prose above the header; strip the ⏺ / ⎿ bullet
+  // chrome and box-drawing borders so the shadow log is readable.
+  const above = [];
+  for (let r = Math.max(0, header - 20); r < header; r++) {
+    const t = rows[r].text;
+    if (!t.trim()) continue;
+    if (/^[─-╿\s]+$/.test(t)) continue;
+    above.push(t.replace(/^[⏺⎿\s]+/, "").trimEnd());
+  }
+  // rawRows: the untouched per-row grid text from header..footer, so we can
+  // see whether garbled options are stale right-column leakage, a mid-paint
+  // read, or a rejoin bug. Diagnostic only.
+  const rawRows = rows
+    .slice(header, Math.min(rows.length, footer + 1))
+    .map((r) => r.text);
+  return { header: rows[header].text.trim(), options, above, rawRows };
+}
+
+let __gridMenuPresent = false;
+function __gridShadowCheck() {
+  try {
+    const rows = __gridReadLiveRows();
+    if (!rows) return;
+    const menu = __gridDetectMenu(rows);
+    if (!menu) {
+      if (__gridMenuPresent) {
+        __gridMenuPresent = false;
+        __gridLastMenuKey = null;
+        invoke("report_grid_menu", { payload: { present: false } }).catch(
+          () => {},
+        );
+      }
+      return;
+    }
+    const key =
+      menu.header + "|" + menu.options.map((o) => o.n + o.label).join("|");
+    if (key === __gridLastMenuKey) return;
+    __gridLastMenuKey = key;
+    __gridMenuPresent = true;
+    // Authoritative: feed the clean structure to the host, which splices the
+    // options into the emitted permission menu.
+    invoke("report_grid_menu", {
+      payload: { present: true, header: menu.header, options: menu.options },
+    }).catch(() => {});
+    // Light shadow trace for comparison against the host's parse.
+    invoke("log_from_right_pane", {
+      payload: {
+        kind: "iframe-trace",
+        subkind: "xterm-grid-menu",
+        header: menu.header,
+        options: menu.options,
+      },
+    }).catch(() => {});
+  } catch (e) {
+    invoke("log_from_right_pane", {
+      payload: {
+        kind: "iframe-trace",
+        subkind: "xterm-grid-menu-error",
+        error: String(e),
+      },
+    }).catch(() => {});
+  }
+}
+term.onWriteParsed(() => requestAnimationFrame(__gridShadowCheck));
+// ===== end xterm-grid screen reader =====
+
 let pendingPtySize = null;
 let lastSentPtySize = null;
 let ptyResizeTimer = null;

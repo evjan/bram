@@ -596,7 +596,9 @@ function __gridReadLiveRows() {
   const buf = term.buffer && term.buffer.active;
   if (!buf) return null;
   const len = buf.length;
-  const start = Math.max(0, len - 60);
+  // Wide enough to hold the whole menu even when a TUI leaves stale lines
+  // below it (Codex renders its menu well above the buffer bottom).
+  const start = Math.max(0, len - 200);
   const rows = [];
   for (let i = start; i < len; i++) {
     const ln = buf.getLine(i);
@@ -614,59 +616,121 @@ function __gridReadLiveRows() {
 // between them. Wrapped option labels (option 2 spilling onto the next row)
 // are rejoined onto the prior option.
 function __gridDetectMenu(rows) {
-  let footer = -1;
-  for (let r = rows.length - 1; r >= 0; r--) {
-    if (/Esc to cancel/.test(rows[r].text)) {
-      footer = r;
-      break;
-    }
-  }
-  if (footer < 0) return null;
-  let header = -1;
-  for (let r = footer - 1; r >= Math.max(0, footer - 30); r--) {
-    if (/Do you want to|requires approval|^\s*Allow .*\?/i.test(rows[r].text)) {
-      header = r;
-      break;
-    }
-  }
-  if (header < 0) return null;
-  const options = [];
-  for (let r = header + 1; r < footer; r++) {
+  // Shape-driven so it covers both providers:
+  //  - Claude: "Do you want to proceed?" + numbered options + "Esc to cancel".
+  //  - Codex:  "Would you like to run…" + numbered options ending in
+  //    (y)/(p)/(esc); NO "Esc to cancel" footer.
+  // A menu is a contiguous block of numbered options near the cursor, with a
+  // cursor marker (❯ or >) on the selected one, plus a recognizable signal
+  // (header / footer / Codex keystroke hint) to guard against numbered lists
+  // in ordinary content.
+  const opts = [];
+  let inOption = false;
+  for (let r = 0; r < rows.length; r++) {
     const t = rows[r].text;
-    const m = t.match(/^\s*([❯>])?\s*(\d)\.\s*(.+)$/);
+    const m = t.match(/^\s*([❯>])?\s*(\d)\.\s+(.+)$/);
     if (m) {
-      options.push({ n: Number(m[2]), label: m[3].trim(), selected: !!m[1] });
-    } else if (options.length && t.trim()) {
-      options[options.length - 1].label += " " + t.trim();
+      opts.push({ n: Number(m[2]), label: m[3].trim(), selected: !!m[1], row: r });
+      inOption = true;
+    } else if (!t.trim()) {
+      inOption = false;
+    } else if (inOption) {
+      if (/Esc to cancel|esc to cancel|Press enter to confirm/i.test(t))
+        inOption = false;
+      else opts[opts.length - 1].label += " " + t.trim();
     }
   }
-  if (options.length < 2) return null;
-  // Command + assistant prose above the header; strip the ⏺ / ⎿ bullet
-  // chrome and box-drawing borders so the shadow log is readable.
-  const above = [];
-  for (let r = Math.max(0, header - 20); r < header; r++) {
-    const t = rows[r].text;
-    if (!t.trim()) continue;
-    if (/^[─-╿\s]+$/.test(t)) continue;
-    above.push(t.replace(/^[⏺⎿\s]+/, "").trimEnd());
+  if (opts.length < 2) return null;
+  // Trailing consecutive run starting at option 1 = the live menu.
+  let start = -1;
+  for (let i = opts.length - 1; i >= 0; i--) {
+    if (opts[i].n === 1) {
+      start = i;
+      break;
+    }
   }
-  // rawRows: the untouched per-row grid text from header..footer, so we can
-  // see whether garbled options are stale right-column leakage, a mid-paint
-  // read, or a rejoin bug. Diagnostic only.
-  const rawRows = rows
-    .slice(header, Math.min(rows.length, footer + 1))
-    .map((r) => r.text);
-  return { header: rows[header].text.trim(), options, above, rawRows };
+  if (start < 0) return null;
+  const menu = [opts[start]];
+  for (let i = start + 1; i < opts.length; i++) {
+    if (opts[i].n === menu.length + 1) menu.push(opts[i]);
+    else break;
+  }
+  if (menu.length < 2) return null;
+
+  const hasCursor = menu.some((o) => o.selected);
+  const blockTop = menu[0].row;
+  const blockBottom = menu[menu.length - 1].row;
+  const aboveRows = rows.slice(Math.max(0, blockTop - 8), blockTop);
+  const belowText = rows
+    .slice(blockBottom + 1, blockBottom + 4)
+    .map((r) => r.text)
+    .join(" ");
+  const labels = menu.map((o) => o.label).join(" ");
+  const headerRe = /Do you want to|requires approval|Would you like to run/i;
+  const headerSignal = aboveRows.some((r) => headerRe.test(r.text));
+  const footerSignal =
+    /Esc to cancel|esc to cancel|Press enter to confirm/i.test(belowText);
+  const codexSignal =
+    /\((y|p|esc)\)/.test(labels) ||
+    /tell Codex/.test(labels) ||
+    /Yes, proceed/.test(labels) ||
+    /Press enter to confirm/i.test(belowText);
+  // KEY discriminator from the agent's OWN prose: a permission menu's first
+  // option is always "Yes" (Claude: "Yes"; Codex: "Yes, proceed (y)"). Prose
+  // can contain numbered lists + menu-ish words ((esc) / Esc to cancel / tell
+  // Codex) and otherwise false-trigger here, rendering a bogus menu. Requiring
+  // option 1 == "Yes…" excludes prose while accepting both providers, so we no
+  // longer need the (cursor-or-codex) relaxation that let prose through.
+  if (!/^\s*Yes\b/i.test(menu[0].label)) return null;
+  if (!(headerSignal || footerSignal || codexSignal)) return null;
+
+  const headerRow = aboveRows
+    .slice()
+    .reverse()
+    .find((r) => headerRe.test(r.text));
+  const above = rows
+    .slice(Math.max(0, blockTop - 12), blockTop)
+    .map((r) => r.text.replace(/^[⏺⎿\s]+/, "").trimEnd())
+    .filter((s) => s.trim());
+  return {
+    header: headerRow ? headerRow.text.trim() : "",
+    options: menu.map((o) => ({ n: o.n, label: o.label, selected: o.selected })),
+    above,
+  };
 }
 
 let __gridMenuPresent = false;
 let __gridLastMenu = null;
+let __gridMissKey = null;
 function __gridShadowCheck() {
   try {
     const rows = __gridReadLiveRows();
     if (!rows) return;
     const menu = __gridDetectMenu(rows);
     if (!menu) {
+      // Miss diagnostic: the grid clearly holds a menu (numbered options + a
+      // Claude/Codex signal) but __gridDetectMenu rejected it. Log the raw
+      // live rows once so we can see why (cursor glyph, option format) and
+      // tune the patterns against the real rendered text.
+      const txt = rows.map((r) => r.text).join("\n");
+      if (
+        /^\s*[>❯]?\s*1\.\s+Yes\b/im.test(txt) &&
+        /proceed|tell Codex|\(esc\)|Do you want to|Esc to cancel|Press enter to confirm/i.test(
+          txt,
+        )
+      ) {
+        const k = txt.slice(-220);
+        if (k !== __gridMissKey) {
+          __gridMissKey = k;
+          invoke("log_from_right_pane", {
+            payload: {
+              kind: "iframe-trace",
+              subkind: "xterm-grid-miss",
+              rows: rows.filter((r) => r.text.trim()).map((r) => r.text),
+            },
+          }).catch(() => {});
+        }
+      }
       if (__gridMenuPresent) {
         __gridMenuPresent = false;
         __gridLastMenu = null;

@@ -3778,6 +3778,9 @@ fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
                 return;
             }
             if bram_trace_enabled() {
+                let provider = hinted_session_provider(&app)
+                    .map(session_provider_label)
+                    .unwrap_or("?");
                 let labels = options
                     .iter()
                     .map(|o| format!("{}.{}", o.key, o.label))
@@ -3786,7 +3789,12 @@ fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
                 append_bram_trace_line(
                     &app,
                     "grid-menu",
-                    &format!("op=report count={} [{}]", options.len(), labels),
+                    &format!(
+                        "op=report provider={} count={} [{}]",
+                        provider,
+                        options.len(),
+                        labels
+                    ),
                 );
             }
             *cell = Some((options, unix_now_ms() as u128));
@@ -4434,11 +4442,15 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                             .map(|o| format!("{}.{}", o.key, o.label))
                             .collect::<Vec<_>>()
                             .join(" | ");
+                        let provider = hinted_session_provider(app)
+                            .map(session_provider_label)
+                            .unwrap_or("?");
                         append_bram_trace_line(
                             app,
                             "grid-menu",
                             &format!(
-                                "op=override host_count={} grid_count={} host=[{}] grid=[{}]",
+                                "op=override provider={} host_count={} grid_count={} host=[{}] grid=[{}]",
+                                provider,
                                 menu.options.len(),
                                 grid_opts.len(),
                                 host,
@@ -4470,7 +4482,10 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                                 app,
                                 "grid-menu",
                                 &format!(
-                                    "op=build tool={} grid_count={} grid=[{}]",
+                                    "op=build provider={} tool={} grid_count={} grid=[{}]",
+                                    hinted_session_provider(app)
+                                        .map(session_provider_label)
+                                        .unwrap_or("?"),
                                     tool,
                                     grid_opts.len(),
                                     grid_labels()

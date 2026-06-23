@@ -227,7 +227,7 @@
           fontStyle="italic"
           color="$color-primary-600"
           overflowMode="none"
-          value="{window.__bramInflightActionLabel(headerInflightClaim.value.kind) + ' ' + (headerInflightClaim.value.ids || []).join(', ')}" />
+          value="{window.__bramInflightBannerLabel(headerInflightClaim.value)}" />
         <SpaceFiller />
         <Theme fontSize-Button="$fontSize-lg">
           <Button

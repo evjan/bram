@@ -22009,6 +22009,45 @@ fn route_request<R: tauri::Runtime>(
             Some(p) => std::fs::read_to_string(&p).unwrap_or_else(|_| "{}".to_string()),
             None => "{}".to_string(),
         };
+        // Augment with a "TO APPLY" / "TO COMMIT" label for the claimed
+        // item(s), read from worklist.json, so the header inflight banner can
+        // show which transition the approval drives. Falls back to the raw
+        // claim body if anything is missing.
+        let body = (|| -> Option<String> {
+            let mut claim: serde_json::Value = serde_json::from_str(&body).ok()?;
+            let ids: Vec<String> = claim
+                .get("ids")?
+                .as_array()?
+                .iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
+            if ids.is_empty() {
+                return None;
+            }
+            let wl: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(worklist_file(app)?).ok()?).ok()?;
+            let label = wl.get("items")?.as_array()?.iter().find_map(|item| {
+                let id = item.get("id").and_then(|v| v.as_str())?;
+                if ids.iter().any(|c| c == id) {
+                    let status = item
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("proposed");
+                    Some(if status == "applied" {
+                        "TO COMMIT"
+                    } else {
+                        "TO APPLY"
+                    })
+                } else {
+                    None
+                }
+            })?;
+            claim
+                .as_object_mut()?
+                .insert("statusLabel".into(), serde_json::json!(label));
+            serde_json::to_string(&claim).ok()
+        })()
+        .unwrap_or(body);
         return (200, "application/json; charset=utf-8", body.into_bytes());
     }
 

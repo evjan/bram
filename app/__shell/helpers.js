@@ -990,6 +990,16 @@ window.__bramInflightActionLabel = function (kind) {
   return "";
 };
 
+// Full header inflight-banner label: "<Action> <ids> (TO APPLY|TO COMMIT)".
+// statusLabel is supplied by the /__inflight route from worklist.json.
+window.__bramInflightBannerLabel = function (claim) {
+  if (!claim || !claim.ids || !claim.ids.length) return "";
+  var action = window.__bramInflightActionLabel(claim.kind);
+  var ids = (claim.ids || []).join(", ");
+  var status = claim.statusLabel ? " (" + claim.statusLabel + ")" : "";
+  return action + " " + ids + status;
+};
+
 window.__bramStripImageMarkerPrefix = function (text) {
   return (text || "").replace(/^(\s*Read this screenshot: @\S+\s*)+/, "").trim();
 };

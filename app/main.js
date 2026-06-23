@@ -628,7 +628,10 @@ function __gridDetectMenu(rows) {
   let inOption = false;
   for (let r = 0; r < rows.length; r++) {
     const t = rows[r].text;
-    const m = t.match(/^\s*([❯>])?\s*(\d)\.\s+(.+)$/);
+    // \s* (not \s+) after the dot: grid stale-cell garbling can collapse
+    // "2. Yes" to "2.Yes" with no space, which dropped the option and made
+    // the whole menu undetectable (the Claude menu-miss bug).
+    const m = t.match(/^\s*([❯>])?\s*(\d)\.\s*(.+)$/);
     if (m) {
       opts.push({ n: Number(m[2]), label: m[3].trim(), selected: !!m[1], row: r });
       inOption = true;

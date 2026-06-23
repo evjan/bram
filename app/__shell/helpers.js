@@ -2924,9 +2924,7 @@ window.getRightPaneSize = function (callback) {
 // Subscribe to session-JSONL change events. The parent shell receives
 // `talk-session-changed` Tauri events from the file watcher; same-origin
 // iframes consume them through this bridge. Used by Transcript / Workspace
-// to refetch immediately on provider session-file writes — eliminates the
-// poll-window lag where short-lived menu or turn-boundary state could come
-// and go between ticks.
+// to receive latest-tail deltas immediately on provider session-file writes.
 var __talkSessionSubscribers = [];
 var __talkSessionMainUnsub = null;
 window.onTalkSessionChange = function (fn) {
@@ -3109,8 +3107,9 @@ try {
       // trace report delta_to_emit_ms — host emit → this point and,
       // via subscriber forwarding, host emit → listener-fired and
       // host emit → refetch-called.
-      var correlationId = (event && event.payload && event.payload.correlation_id) || "";
-      var atHostMs = (event && event.payload && typeof event.payload.at_host_ms === "number") ? event.payload.at_host_ms : 0;
+      var payload = (event && event.payload) || {};
+      var correlationId = payload.correlation_id || "";
+      var atHostMs = (typeof payload.at_host_ms === "number") ? payload.at_host_ms : 0;
       try {
         if (typeof window.logToHost === "function") {
           window.logToHost({
@@ -3127,7 +3126,7 @@ try {
       } catch (e) {}
       var n = __talkSessionSubscribers.length;
       for (var i = 0; i < n; i++) {
-        try { __talkSessionSubscribers[i](correlationId, atHostMs); } catch (e) {}
+        try { __talkSessionSubscribers[i](correlationId, atHostMs, payload); } catch (e) {}
       }
       var t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
       __tscBatchTick(t1 - t0);
@@ -3736,13 +3735,12 @@ window.bramSubscribeAgentMenu = (function () {
   };
 })();
 
-// Shared cache for the latest session-tail JSONL. A helper-side poller
-// fetches /__sessions/latest-tail and calls setLatestJsonl() on each
-// new value; both the Worklist tab (Workspace.xmlui) and the Transcript
-// tab subscribe via onLatestJsonlChange() so they share one fetch and
-// survive tab switches without losing the cached value. Keeping the
-// fetch in helpers.js avoids routing large JSONL response bodies through
-// XMLUI DataSource tracing / Inspector retention.
+// Shared cache for the latest session-tail JSONL. The host pushes the
+// latest-tail envelope on talk-session-changed, and both the Worklist tab
+// (Workspace.xmlui) and the Transcript tab subscribe via
+// onLatestJsonlChange() so they share one cache and survive tab switches.
+// Keeping the value in helpers.js avoids routing large JSONL response
+// bodies through XMLUI DataSource tracing / Inspector retention.
 //
 // Why a window-level cache and not global.lastJsonl on the App: XMLUI
 // 0.12.27's global-write path runs the assigned value through its
@@ -3751,7 +3749,8 @@ window.bramSubscribeAgentMenu = (function () {
 // plain JS sidesteps the parser entirely.
 var __latestJsonlValue = null;
 var __latestJsonlSubscribers = [];
-var __latestJsonlPollers = {};
+var __latestJsonlPushers = {};
+var __latestJsonlStartupReplayRequested = false;
 window.getLatestJsonl = function () { return __latestJsonlValue; };
 window.setLatestJsonl = function (value) {
   __latestJsonlValue = value;
@@ -3890,6 +3889,14 @@ window.__bramParseTranscript = function (jsonl) {
   var lines = jsonl.split("\n");
   var events = [];
   var toolById = {};
+  var isSyntheticCodexMessage = function (text) {
+    text = String(text || "").trim();
+    return text.indexOf("<permissions instructions>") === 0 ||
+      text.indexOf("# AGENTS.md instructions for ") === 0 ||
+      text.indexOf("This repo is driven through Bram. The canonical worklist gate") === 0 ||
+      (text.indexOf("Understood. I") === 0 && text.indexOf("worklist gate") >= 0) ||
+      text.indexOf("<turn_aborted>") === 0;
+  };
   var pushImages = function (id, role, images) {
     images = (images || []).filter(Boolean);
     if (!images.length) return;
@@ -3903,6 +3910,7 @@ window.__bramParseTranscript = function (jsonl) {
   };
   var pushText = function (id, role, text) {
     if (!text || !String(text).trim()) return;
+    if (isSyntheticCodexMessage(text)) return;
     var kind = role === "user" ? "user" : "text";
     // Codex currently records many visible messages twice: once as
     // event_msg and once as response_item. Collapse near duplicates so
@@ -4082,93 +4090,100 @@ window.__bramToggleInArray = function (arr, id) {
   if (arr.indexOf(id) >= 0) return arr.filter(function (x) { return x !== id; });
   return arr.concat([id]);
 };
-window.startLatestJsonlPolling = function (key, getProvider) {
-  key = key || "__bramLatestJsonlPoller";
-  if (__latestJsonlPollers[key] && typeof __latestJsonlPollers[key].stop === "function") {
-    try { __latestJsonlPollers[key].stop(); } catch (e) {}
+window.__bramApplyLatestJsonlEnvelope = function (env, source) {
+  if (!env || typeof env !== "object") return;
+  var content = env.content || "";
+  try {
+    if (typeof window.logToHost === "function" && !window.__bramMenuPending) {
+      window.logToHost({
+        kind: "iframe-trace",
+        subkind: "jsonl-fanout",
+        at: new Date().toISOString(),
+        source: source || env.source || "push",
+        len: content.length,
+        reset: !!env.reset,
+        truncated: !!env.truncated,
+        sid: env.sid || "",
+        offset: env.offset || 0,
+      });
+    }
+  } catch (e) {}
+  if (env.reset) {
+    window.setLatestJsonl(content);
+  } else if (content) {
+    window.appendLatestJsonl(content);
   }
-  var sinceOffset = 0;
+};
+
+window.startLatestJsonlPush = function (key, getProvider) {
+  key = key || "__bramLatestJsonlPush";
+  if (__latestJsonlPushers[key] && typeof __latestJsonlPushers[key].stop === "function") {
+    try { __latestJsonlPushers[key].stop(); } catch (e) {}
+  }
   var sessionSid = "";
   var lastProvider = null;
-  var lastTickAt = 0;
-  var inFlight = false;
   var stopped = false;
   function providerValue() {
     try {
-      return typeof getProvider === "function" ? String(getProvider() || "") : "";
+      var value = typeof getProvider === "function" ? getProvider() : "";
+      if (value && typeof value.then === "function") return "";
+      return typeof value === "string" ? value : "";
     } catch (e) {
       return "";
     }
   }
-  function fetchLatest(force) {
-    if (stopped || inFlight) return;
-    var now = Date.now();
-    if (!force && now - lastTickAt < 2000) return;
-    lastTickAt = now;
+  function applyPayload(correlationId, atHostMs, payload) {
+    if (stopped || !payload) return;
     var provider = providerValue();
     if (provider !== lastProvider) {
       lastProvider = provider;
-      sinceOffset = 0;
       sessionSid = "";
     }
-    var url = "/__sessions/latest-tail?provider=" + encodeURIComponent(provider) +
-      "&since=" + encodeURIComponent(String(sinceOffset || 0)) +
-      "&sid=" + encodeURIComponent(sessionSid || "") +
-      "&t=" + encodeURIComponent(String(now));
-    inFlight = true;
-    window.fetch(url)
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (env) {
-        if (!env || stopped) return;
-        var content = env.content || "";
-        try {
-          if (typeof window.logToHost === "function" && !window.__bramMenuPending) {
-            window.logToHost({
-              kind: "iframe-trace",
-              subkind: "jsonl-fanout",
-              at: new Date().toISOString(),
-              source: "helper",
-              len: content.length,
-              reset: !!env.reset,
-              truncated: !!env.truncated,
-            });
-          }
-        } catch (e) {}
-        if (env.reset) {
-          window.setLatestJsonl(content);
-        } else if (content) {
-          window.appendLatestJsonl(content);
-        }
-        sessionSid = env.sid || "";
-        sinceOffset = env.offset || 0;
-      })
-      .catch(function () {})
-      .finally(function () { inFlight = false; });
+    if (provider && payload.provider && provider !== payload.provider) return;
+    if (payload.reset && sessionSid && payload.sid === sessionSid && !payload.content && window.getLatestJsonl()) {
+      try {
+        window.__bramIframeTrace("jsonl-fanout-ignored", {
+          reason: "empty-same-session-reset",
+          sid: payload.sid || "",
+          provider: payload.provider || "",
+          correlation_id: correlationId || "",
+          at_host_ms: atHostMs || 0,
+        });
+      } catch (e) {}
+      return;
+    }
+    window.__bramApplyLatestJsonlEnvelope(payload, "push");
+    sessionSid = payload.sid || "";
   }
-  var unsubscribe = window.subscribeTalkSessionChange(key + "TalkSessionUnsub", function () {
-    fetchLatest(false);
-  });
-  __latestJsonlPollers[key] = {
+  var unsubscribe = window.subscribeTalkSessionChange(key + "TalkSessionUnsub", applyPayload);
+  __latestJsonlPushers[key] = {
     stop: function () {
       stopped = true;
       if (typeof unsubscribe === "function") {
         try { unsubscribe(); } catch (e) {}
       }
-      delete __latestJsonlPollers[key];
+      delete __latestJsonlPushers[key];
     },
   };
-  fetchLatest(true);
-  return __latestJsonlPollers[key].stop;
+  if (!__latestJsonlStartupReplayRequested) {
+    __latestJsonlStartupReplayRequested = true;
+    try {
+      window.fetch("/__startup-ready?event=talk-session-changed", { cache: "no-store" }).catch(function () {});
+    } catch (e) {}
+  }
+  return __latestJsonlPushers[key].stop;
 };
-window.startBramLatestJsonlPolling = function (getProvider) {
+window.startBramLatestJsonlPush = function (getProvider) {
   if (typeof window.__bramLatestJsonlPollerStop === "function") {
     try { window.__bramLatestJsonlPollerStop(); } catch (e) {}
   }
-  window.__bramLatestJsonlPollerStop = window.startLatestJsonlPolling(
-    "__bramLatestJsonlPoller",
+  window.__bramLatestJsonlPollerStop = window.startLatestJsonlPush(
+    "__bramLatestJsonlPush",
     getProvider
   );
 };
+window.startLatestJsonlPolling = window.startLatestJsonlPush;
+window.startBramLatestJsonlPolling = window.startBramLatestJsonlPush;
 // Convenience: subscribe + remember the unsubscriber on window under the
 // caller-supplied key. Avoids `window.X = ...` left-value expressions in
 // XMLUI source, which XMLUI's evaluator rejects with "Left value variable

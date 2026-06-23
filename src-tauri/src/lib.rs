@@ -928,19 +928,69 @@ fn next_talk_session_correlation_id() -> String {
     format!("tsc-{}-{}", now_ms, seq)
 }
 
-fn emit_talk_session_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
+fn emit_talk_session_changed_for_provider<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: Option<SessionProvider>,
+) {
     let correlation_id = next_talk_session_correlation_id();
     let at_host_ms = unix_now_ms();
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "correlation_id": correlation_id,
         "at_host_ms": at_host_ms,
     });
+    if let Some(provider) = provider {
+        if let Some(latest_tail) = latest_tail_push_payload(app, provider) {
+            merge_json_object_fields(&mut payload, &latest_tail);
+        }
+    }
     emit_replayable_payload(app, "talk-session-changed", payload);
     // Push the conversation-state payload too, so the Worklist Chat pane can
     // consume it via an <External> push source instead of refetching
     // /__conversation-state on every signal. Deduped (below) so byte-identical
     // content never re-renders the chat List.
     emit_conversation_state_changed(app);
+}
+
+fn emit_talk_session_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
+    emit_talk_session_changed_for_provider(app, hinted_session_provider(app));
+}
+
+fn emit_talk_session_changed_for_path_providers<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    paths: &[PathBuf],
+    claude_sessions_dir: Option<&PathBuf>,
+    codex_sessions_dir: Option<&PathBuf>,
+) {
+    let mut providers = Vec::new();
+    if paths.iter().any(|p| {
+        p.extension().map_or(false, |e| e == "jsonl")
+            && claude_sessions_dir.map_or(false, |sd| p.starts_with(sd))
+    }) {
+        providers.push(SessionProvider::Claude);
+    }
+    if paths.iter().any(|p| {
+        p.extension().map_or(false, |e| e == "jsonl")
+            && codex_sessions_dir.map_or(false, |sd| p.starts_with(sd))
+    }) {
+        providers.push(SessionProvider::Codex);
+    }
+    if providers.is_empty() {
+        emit_talk_session_changed(app);
+        return;
+    }
+    for provider in providers {
+        emit_talk_session_changed_for_provider(app, Some(provider));
+    }
+}
+
+fn merge_json_object_fields(target: &mut serde_json::Value, source: &serde_json::Value) {
+    if let Some(obj) = target.as_object_mut() {
+        if let Some(source_obj) = source.as_object() {
+            for (key, value) in source_obj {
+                obj.insert(key.clone(), value.clone());
+            }
+        }
+    }
 }
 
 // Last conversation-state bytes pushed via `conversation-state-changed`, used
@@ -10605,6 +10655,16 @@ fn latest_session_path<R: tauri::Runtime>(
     Ok(Some(path))
 }
 
+fn latest_session_path_for_provider<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: SessionProvider,
+) -> Result<Option<std::path::PathBuf>, String> {
+    match provider {
+        SessionProvider::Claude => latest_claude_session_path(app),
+        SessionProvider::Codex => latest_codex_session_path(app),
+    }
+}
+
 fn system_time_ms(t: std::time::SystemTime) -> Option<i64> {
     t.duration_since(std::time::UNIX_EPOCH)
         .ok()
@@ -10705,7 +10765,12 @@ fn read_latest_session_tail<R: tauri::Runtime>(
     Ok(out)
 }
 
-const LATEST_TAIL_MAX_BYTES: usize = 256 * 1024;
+// Match the client-side latest-jsonl buffer cap (__latestJsonlMaxBytes =
+// 1_500_000 in helpers.js). A reset re-seeds the iframe's buffer on reload;
+// if the host cap is smaller than the client cap, every reload shrinks the
+// transcript from the ~1.5 MB it had accumulated down to this size. Keeping
+// them equal lets a reload restore the same window the user was viewing.
+const LATEST_TAIL_MAX_BYTES: usize = 1_500_000;
 
 fn cap_latest_tail_payload(content: Vec<u8>) -> (Vec<u8>, bool) {
     if content.len() <= LATEST_TAIL_MAX_BYTES {
@@ -10720,6 +10785,131 @@ fn cap_latest_tail_payload(content: Vec<u8>) -> (Vec<u8>, bool) {
         return (content, true);
     }
     (content[keep_from..].to_vec(), true)
+}
+
+#[derive(Clone)]
+struct LatestTailCursor {
+    sid: String,
+    offset: u64,
+}
+
+fn latest_tail_cursors_cell() -> &'static Mutex<HashMap<String, LatestTailCursor>> {
+    static CELL: OnceLock<Mutex<HashMap<String, LatestTailCursor>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn clear_latest_tail_cursor_for_current<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let Some(provider) = hinted_session_provider(app) else {
+        return;
+    };
+    let provider_label = session_provider_label(provider).to_string();
+    if let Ok(mut guard) = latest_tail_cursors_cell().lock() {
+        guard.remove(&provider_label);
+    }
+}
+
+fn latest_tail_envelope<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: Option<SessionProvider>,
+    expected_sid: &str,
+    since: u64,
+    lines_param: Option<&str>,
+    bypass_active_hint_gate: bool,
+) -> Result<serde_json::Value, String> {
+    let path_opt = if bypass_active_hint_gate {
+        match provider {
+            Some(provider) => latest_session_path_for_provider(app, provider).unwrap_or(None),
+            None => latest_session_path(app, None).unwrap_or(None),
+        }
+    } else {
+        latest_session_path(app, provider).unwrap_or(None)
+    };
+    let (current_sid, file_size) = match &path_opt {
+        Some(path) => {
+            let sid = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            (sid, size)
+        }
+        None => (String::new(), 0),
+    };
+    let incremental =
+        !expected_sid.is_empty() && expected_sid == current_sid && since > 0 && since <= file_size;
+    let content_result: Result<Vec<u8>, String> = if incremental {
+        match &path_opt {
+            Some(path) => {
+                use std::io::{Read, Seek, SeekFrom};
+                std::fs::File::open(path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|mut f| {
+                        f.seek(SeekFrom::Start(since)).map_err(|e| e.to_string())?;
+                        let mut out = Vec::with_capacity((file_size - since) as usize);
+                        f.read_to_end(&mut out).map_err(|e| e.to_string())?;
+                        Ok(out)
+                    })
+            }
+            None => Ok(Vec::new()),
+        }
+    } else {
+        match lines_param {
+            Some("all") if bypass_active_hint_gate => match &path_opt {
+                Some(path) => std::fs::read(path).map_err(|e| e.to_string()),
+                None => Ok(Vec::new()),
+            },
+            Some("all") => read_latest_session(app, provider),
+            None => read_latest_session_tail(app, provider, 200),
+            Some(s) => match s.parse::<usize>() {
+                Ok(n) => read_latest_session_tail(app, provider, n),
+                Err(_) => read_latest_session_tail(app, provider, 200),
+            },
+        }
+    };
+    content_result.map(|content| {
+        let (content, truncated) = cap_latest_tail_payload(content);
+        serde_json::json!({
+            "sid": current_sid,
+            "offset": file_size,
+            "content": String::from_utf8_lossy(&content).into_owned(),
+            "reset": !incremental || truncated,
+            "truncated": truncated,
+        })
+    })
+}
+
+fn latest_tail_push_payload<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: SessionProvider,
+) -> Option<serde_json::Value> {
+    let provider_label = session_provider_label(provider).to_string();
+    let cursor = latest_tail_cursors_cell()
+        .lock()
+        .ok()
+        .and_then(|guard| guard.get(&provider_label).cloned());
+    let expected_sid = cursor.as_ref().map(|c| c.sid.as_str()).unwrap_or("");
+    let since = cursor.as_ref().map(|c| c.offset).unwrap_or(0);
+    // On a reset (no cursor / sid change / cleared by /__startup-ready on an
+    // iframe reload), ship the full session capped to the recent window
+    // (`cap_latest_tail_payload`) instead of just the last 200 records, so a
+    // reload restores what the user was viewing rather than gutting the
+    // transcript to a tiny slice. Incremental deltas ignore this arg.
+    let mut envelope =
+        latest_tail_envelope(app, Some(provider), expected_sid, since, Some("all"), true).ok()?;
+    if let Ok(mut guard) = latest_tail_cursors_cell().lock() {
+        let sid = envelope
+            .get("sid")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let offset = envelope.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+        guard.insert(provider_label.clone(), LatestTailCursor { sid, offset });
+    }
+    if let Some(obj) = envelope.as_object_mut() {
+        obj.insert("provider".to_string(), serde_json::json!(provider_label));
+        obj.insert("source".to_string(), serde_json::json!("push"));
+    }
+    Some(envelope)
 }
 
 // Detect whether the latest session has a pending tool_use awaiting
@@ -21185,6 +21375,19 @@ fn route_request<R: tauri::Runtime>(
                 br#"{"ok":false,"error":"event query parameter required"}"#.to_vec(),
             );
         }
+        if event == "talk-session-changed" {
+            clear_latest_tail_cursor_for_current(app);
+            emit_talk_session_changed(app);
+            let body = serde_json::to_vec(&serde_json::json!({
+                "ok": true,
+                "exists": true,
+                "name": event,
+                "replayed": true,
+                "seeded": true,
+            }))
+            .unwrap_or_default();
+            return (200, "application/json; charset=utf-8", body);
+        }
         let body = serde_json::to_vec(&replay_tauri_event_live(app, &event)).unwrap_or_default();
         return (200, "application/json; charset=utf-8", body);
     }
@@ -21667,7 +21870,7 @@ fn route_request<R: tauri::Runtime>(
             // falls back to last-N-lines (or full file with `lines=all`).
             // Response is always a JSON envelope: { sid, offset, content, reset }
             // so the client can detect session rotation (sid change ⇒ reset)
-            // and update its `since` cursor for the next poll.
+            // and update its `since` cursor for the next request.
             let mut lines_param: Option<String> = None;
             let mut since: u64 = 0;
             let mut expected_sid = String::new();
@@ -21680,79 +21883,39 @@ fn route_request<R: tauri::Runtime>(
                     expected_sid = percent_decode(v);
                 }
             }
-            // Resolve current latest session path; derive a stable sid from
-            // the file stem so the diff response can carry it back to the client.
-            let path_opt = latest_session_path(app, provider).unwrap_or(None);
-            let (current_sid, file_size) = match &path_opt {
-                Some(path) => {
-                    let sid = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-                    (sid, size)
-                }
-                None => (String::new(), 0),
-            };
-            // since > 0 guards against the iframe reactivity race where
-            // sessionSid is updated before sinceOffset — without this,
-            // `since=0&sid=X` would read the whole file as an "incremental
-            // delta from byte 0" (issue #100 smoke-test caught this).
-            let incremental = !expected_sid.is_empty()
-                && expected_sid == current_sid
-                && since > 0
-                && since <= file_size;
-            let content_result: Result<Vec<u8>, String> = if incremental {
-                match &path_opt {
-                    Some(path) => {
-                        use std::io::{Read, Seek, SeekFrom};
-                        std::fs::File::open(path)
-                            .map_err(|e| e.to_string())
-                            .and_then(|mut f| {
-                                f.seek(SeekFrom::Start(since)).map_err(|e| e.to_string())?;
-                                let mut out = Vec::with_capacity((file_size - since) as usize);
-                                f.read_to_end(&mut out).map_err(|e| e.to_string())?;
-                                Ok(out)
-                            })
-                    }
-                    None => Ok(Vec::new()),
-                }
-            } else {
-                // Fresh fetch (no sid yet, or sid mismatch, or since past EOF).
-                // Default-safe: lines absent or unparseable → last 200 records.
-                // `lines=all` is the only path to the full file.
-                match lines_param.as_deref() {
-                    Some("all") => read_latest_session(app, provider),
-                    None => read_latest_session_tail(app, provider, 200),
-                    Some(s) => match s.parse::<usize>() {
-                        Ok(n) => read_latest_session_tail(app, provider, n),
-                        Err(_) => read_latest_session_tail(app, provider, 200),
-                    },
-                }
-            };
-            let result = content_result.and_then(|content| {
-                let (content, truncated) = cap_latest_tail_payload(content);
-                let appended = content.len();
+            let result = latest_tail_envelope(
+                app,
+                provider,
+                &expected_sid,
+                since,
+                lines_param.as_deref(),
+                false,
+            )
+            .and_then(|envelope| {
+                let appended = envelope
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.len())
+                    .unwrap_or(0);
+                let current_sid = envelope.get("sid").and_then(|v| v.as_str()).unwrap_or("");
+                let file_size = envelope.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                let reset = envelope
+                    .get("reset")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let truncated = envelope
+                    .get("truncated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 eprintln!(
                     "[latest-tail] mode={} sid={} since={} eof={} bytes={} truncated={}",
-                    if incremental { "diff" } else { "fresh" },
+                    if reset { "fresh" } else { "diff" },
                     current_sid,
                     since,
                     file_size,
                     appended,
                     truncated,
                 );
-                let envelope = serde_json::json!({
-                    "sid": current_sid,
-                    "offset": file_size,
-                    "content": String::from_utf8_lossy(&content).into_owned(),
-                    // reset=true ⇒ client REPLACES its lastJsonl buffer.
-                    // reset=false ⇒ client APPENDS content. Authoritative
-                    // signal so the client doesn't have to infer from
-                    // sid equality (handles file-shrink case too).
-                    "reset": !incremental || truncated,
-                    "truncated": truncated,
-                });
                 serde_json::to_vec(&envelope).map_err(|e| e.to_string())
             });
             ("application/json; charset=utf-8", result)
@@ -23941,6 +24104,10 @@ pub fn run() {
             // diff against the on-disk baseline rather than treating the
             // entire current file as "new".
             init_worklist_cache(app.handle());
+            // Seed a replayable latest-tail payload before the tools iframe
+            // subscribes. The iframe no longer pulls /__sessions/latest-tail
+            // on boot; it asks /__startup-ready to replay this event.
+            emit_talk_session_changed(app.handle());
             // Watch contract: events are emitted on two channels, NOT one.
             //   - "right-pane-reload" fires for changes inside proj_root only;
             //     main.js reloads the right-pane iframe alone. The agent
@@ -24279,8 +24446,8 @@ pub fn run() {
 
                     // Session JSONL changes get their own dispatch. The
                     // Transcript / Workspace panes subscribe to
-                    // talk-session-changed and refetch without waiting on
-                    // the regular fallback poll interval.
+                    // talk-session-changed and consume the pushed latest-tail
+                    // delta without waiting on a fallback poll interval.
                     let is_session_event = event.paths.iter().any(|p| {
                         p.extension().map_or(false, |e| e == "jsonl")
                             && (claude_sessions_dir.as_ref().map_or(false, |sd| p.starts_with(sd))
@@ -24359,7 +24526,12 @@ pub fn run() {
                         // next user activity. XMLUI dedupes refetches
                         // via structural sharing, so burst-emitting per
                         // event is fine.
-                        emit_talk_session_changed(&app_handle);
+                        emit_talk_session_changed_for_path_providers(
+                            &app_handle,
+                            &event.paths,
+                            claude_sessions_dir.as_ref(),
+                            codex_sessions_dir.as_ref(),
+                        );
                         continue;
                     }
 

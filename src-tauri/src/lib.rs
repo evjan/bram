@@ -2062,141 +2062,6 @@ fn stamp_pty_menu_payload(
     menu
 }
 
-// Parsed snapshot of Claude's rotating status line. Drives the row's
-// verb, elapsed text, and substate ("thinking some more", "almost done
-// thinking"). Tokens dropped per user request — the live PTY count was
-// fine but the JSONL fallback lagged by tens of seconds, and the
-// resulting mismatch was worse than showing nothing.
-struct ParsedStatusLine {
-    verb: String,
-    elapsed_text: String,
-    substate: Option<String>,
-}
-
-fn is_claude_status_verb_char(ch: char) -> bool {
-    ch.is_alphabetic() || ch == '\''
-}
-
-fn is_valid_claude_status_verb(verb: &str) -> bool {
-    if verb.is_empty() || verb.len() > 40 || verb.chars().count() < 4 {
-        return false;
-    }
-    let Some(first) = verb.chars().next() else {
-        return false;
-    };
-    if !first.is_uppercase() || !verb.chars().all(is_claude_status_verb_char) {
-        return false;
-    }
-    // Strict title-case: only the first char may be uppercase. Rejects
-    // glitches like "GScurriying" where a stray CSI-G column-position
-    // escape leaked a literal G into the walk-back. CC's verbs are
-    // simple gerunds (Hashing, Frying, Architecting) — always one cap.
-    if verb.chars().skip(1).any(|c| c.is_uppercase()) {
-        return false;
-    }
-    true
-}
-
-// Parse Claude's full status line from an ANSI-stripped PTY tail.
-// Anchors on the rightmost "… (" form. Inside the parens, splits on the
-// "·" separator: index 0 is elapsed (always present); remaining segments
-// are either "↓ N tokens" (skipped) or substate phrases. Returns None
-// when the anchor is missing — typically when heavy output has evicted
-// the status line from the 8 KB rolling tail. Unicode-aware to accept
-// accented verbs ("Flambéing").
-fn parse_claude_status_line(stripped_tail: &[u8]) -> Option<ParsedStatusLine> {
-    let s = std::str::from_utf8(stripped_tail).ok()?;
-    let anchor = s.rfind("… (")?;
-    let after_open = anchor + "… (".len();
-    let rel_close = s[after_open..].find(')')?;
-    let inside = &s[after_open..after_open + rel_close];
-
-    // Split inside-parens on "·"; trim each segment.
-    let segs: Vec<String> = inside
-        .split('·')
-        .map(|seg| seg.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if segs.is_empty() {
-        return None;
-    }
-    let elapsed_text = segs[0].clone();
-    // Elapsed sanity: must contain a digit and a time unit.
-    if !elapsed_text.chars().any(|c| c.is_ascii_digit())
-        || !elapsed_text.chars().any(|c| matches!(c, 'h' | 'm' | 's'))
-    {
-        return None;
-    }
-
-    // Substate is the first segment after elapsed that doesn't start
-    // with a token-count arrow ("↓" output, "↑" input — both come and
-    // go on the status line and are skipped here).
-    let is_token_seg = |seg: &str| seg.starts_with('↓') || seg.starts_with('↑');
-    let substate = segs.iter().skip(1).find(|seg| !is_token_seg(seg)).cloned();
-
-    // Walk back from "…" to find the verb. Unicode-aware.
-    let before = s[..anchor].trim_end();
-    let mut verb_start_byte = 0usize;
-    for (idx, ch) in before.char_indices().rev() {
-        if !is_claude_status_verb_char(ch) {
-            verb_start_byte = idx + ch.len_utf8();
-            break;
-        }
-    }
-    let verb = before[verb_start_byte..].to_string();
-    // Reject mid-paint partials. CC's gerund verbs are always 5+ chars
-    // (Hashing, Frying, Undulating, Flibbertigibbeting…). A 2–3 char
-    // capture is almost certainly the parser sampling the tail between
-    // two repaints, catching only the leading bytes of the next verb.
-    if !is_valid_claude_status_verb(&verb) {
-        return None;
-    }
-
-    Some(ParsedStatusLine {
-        verb,
-        elapsed_text,
-        substate,
-    })
-}
-
-// Verb-only fallback: handles the standalone form CC writes briefly at
-// turn start (just "Verb…" with no elapsed parens) and during rapid
-// repaints where the trailing "(...)" group hasn't landed in the tail
-// yet. Anchors on the rightmost lone "…" and walks back for the verb.
-// Unicode-aware. Skips matches that are immediately followed by " ("
-// since those are the full-form case already handled by
-// parse_claude_status_line.
-fn parse_claude_status_verb_only(stripped_tail: &[u8]) -> Option<String> {
-    let s = std::str::from_utf8(stripped_tail).ok()?;
-    // Walk from the rightmost "…" and try each; pick the first one that
-    // yields a valid verb and isn't part of the full-form "… (".
-    let mut search_end = s.len();
-    while let Some(rel) = s[..search_end].rfind('…') {
-        let after = &s[rel + '…'.len_utf8()..];
-        // Skip full-form occurrences (parse_claude_status_line handles those).
-        let is_full_form = after.starts_with(' ') && after.trim_start().starts_with('(');
-        if is_full_form {
-            search_end = rel;
-            continue;
-        }
-        let before = s[..rel].trim_end();
-        let mut verb_start_byte = 0usize;
-        for (idx, ch) in before.char_indices().rev() {
-            if !is_claude_status_verb_char(ch) {
-                verb_start_byte = idx + ch.len_utf8();
-                break;
-            }
-        }
-        let verb = before[verb_start_byte..].to_string();
-        if !is_valid_claude_status_verb(&verb) {
-            search_end = rel;
-            continue;
-        }
-        return Some(verb);
-    }
-    None
-}
-
 // Sticky-verb cache. Holds the most recently parsed verb so that when
 // the status line gets evicted from the PTY tail for a few seconds, the
 // row keeps showing "Hashing…" instead of flickering to generic
@@ -2215,15 +2080,6 @@ struct StickyVerb {
 static STICKY_VERB_CELL: OnceLock<Mutex<Option<StickyVerb>>> = OnceLock::new();
 fn sticky_verb_cell() -> &'static Mutex<Option<StickyVerb>> {
     STICKY_VERB_CELL.get_or_init(|| Mutex::new(None))
-}
-
-fn sticky_verb_remember(verb: &str) {
-    if let Ok(mut guard) = sticky_verb_cell().lock() {
-        *guard = Some(StickyVerb {
-            verb: verb.to_string(),
-            captured_at_ms: unix_now_ms(),
-        });
-    }
 }
 
 fn sticky_verb_recall() -> Option<String> {
@@ -2265,15 +2121,6 @@ fn sticky_substate_cell() -> &'static Mutex<Option<StickySubstate>> {
     STICKY_SUBSTATE_CELL.get_or_init(|| Mutex::new(None))
 }
 
-fn sticky_substate_remember(s: &str) {
-    if let Ok(mut guard) = sticky_substate_cell().lock() {
-        *guard = Some(StickySubstate {
-            substate: s.to_string(),
-            captured_at_ms: unix_now_ms(),
-        });
-    }
-}
-
 fn sticky_substate_recall() -> Option<String> {
     let now = unix_now_ms();
     sticky_substate_cell().lock().ok().and_then(|guard| {
@@ -2288,203 +2135,6 @@ fn sticky_substate_clear() {
     if let Ok(mut guard) = sticky_substate_cell().lock() {
         *guard = None;
     }
-}
-
-// Parsed CC natural-end banner ("* Brewed for 30s", "* Worked for 1m
-// 2s"). Carries the past-tense verb and the duration text so the
-// status row can briefly show "Brewed · 30s" as a finished cue
-// instead of just disappearing when the turn ends.
-struct ParsedEndBanner {
-    verb: String,
-    duration_text: String,
-}
-
-// Detect CC's natural-end banner in the stripped PTY tail. Format:
-// "* <PastTenseVerb> for <duration>" (e.g. "* Worked for 1m 2s",
-// "* Brewed for 12s", "* Sautéed for 45s"). When present, this is the
-// most authoritative "turn just ended" signal — stronger than silence,
-// independent of menu / escape state. pty_agent_status_update uses it
-// to end the turn even within the post-escape suppression window.
-//
-// Returns the parsed verb + duration so callers can surface them as a
-// "finished" cue. Last (rightmost-in-tail) match wins.
-fn parse_claude_natural_end_banner(stripped: &[u8]) -> Option<ParsedEndBanner> {
-    let s = std::str::from_utf8(stripped).unwrap_or("");
-    // CC's banner prefix glyph varies (`*`, `✻`, `✶`, `✳`, …) and the
-    // exact whitespace differs (strip_ansi inserts spaces in place of
-    // CSI G column-position escapes). Skip the prefix concern entirely:
-    // scan the input for every `" for "` occurrence and check whether
-    // the word just before is a single capitalized past-tense-looking
-    // verb and the word just after is a duration. The last (rightmost)
-    // valid match wins.
-    //
-    // Previously this iterated `s.lines()` and called `line.find(" for ")`
-    // — first match per line, `continue` on validation failure. On
-    // Windows, when strip_ansi collapses several status updates onto
-    // one stripped line, the first `" for "` is typically a substate
-    // phrase like `"thought for 7s"` whose lowercase verb fails the
-    // capitalization check; the actual banner (`"Cooked for 19s"`)
-    // later on the same line was then never reached. Live evidence:
-    // PTY at 23:17:07.594 contained `✻ Cooked for 19s` after
-    // `thought for 7s)` on the row above, JSONL fired at .735 and
-    // `finished-cue verb=(none)`. Refs #187 banner-verb-miss.
-    let mut best: Option<ParsedEndBanner> = None;
-    let needle = " for ";
-    let mut search_start = 0;
-    while let Some(rel) = s[search_start..].find(needle) {
-        let idx = search_start + rel;
-        search_start = idx + 1;
-        // Verb: walk back from idx over alphabetic chars; reject if no
-        // verb or not Capitalized-then-lowercase.
-        let before = &s[..idx];
-        let verb_start = before
-            .char_indices()
-            .rev()
-            .take_while(|(_, c)| c.is_alphabetic())
-            .last()
-            .map(|(i, _)| i);
-        let Some(vstart) = verb_start else { continue };
-        let verb = &before[vstart..];
-        if verb.chars().count() < 4 {
-            continue;
-        }
-        let mut cs = verb.chars();
-        let Some(first) = cs.next() else { continue };
-        if !first.is_uppercase() || !cs.all(|c| c.is_lowercase()) {
-            continue;
-        }
-        // Duration: first non-whitespace char after " for " must be a
-        // digit. Accept a run of digits / 'h' / 'm' / 's' / spaces;
-        // stop at anything else (e.g. " · 5 messages" trailing the
-        // duration on some CC builds).
-        let after_full = &s[idx + needle.len()..];
-        // Bound the duration scan to the rest of the line so a
-        // following line's content (e.g. another banner candidate)
-        // can't accidentally extend a malformed duration. Without
-        // this, scanning the whole input could grab digit+letter
-        // runs that span newlines.
-        let line_end = after_full.find('\n').unwrap_or(after_full.len());
-        let after = after_full[..line_end].trim_start();
-        if !after
-            .chars()
-            .next()
-            .map(|c| c.is_ascii_digit())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        let mut end = 0usize;
-        for (i, c) in after.char_indices() {
-            if c.is_ascii_digit() || matches!(c, 'h' | 'm' | 's') || c == ' ' {
-                end = i + c.len_utf8();
-            } else {
-                break;
-            }
-        }
-        // If extraction stopped mid-word (next char is alphabetic),
-        // we grabbed only the leading digit + an incidental h/m/s
-        // letter from prose like "Listed for 5 minutes" or
-        // "30 cups". Reject — real banner durations are followed by
-        // whitespace, punctuation (·), or end-of-line.
-        if after[end..]
-            .chars()
-            .next()
-            .map(|c| c.is_alphabetic())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        let candidate = after[..end].trim();
-        if candidate.is_empty() {
-            continue;
-        }
-        // strip_ansi inserts a single space for each CSI G column-
-        // positioning escape. CC's TUI paints multi-unit durations
-        // like "1m 22s" piecewise — e.g. "1m 2\x1b[19Gs" — which
-        // arrives here as "1m 2 s". Strip internal whitespace and
-        // re-tokenize as (\d+)([hms])+. Lossy for the split-unit
-        // case ("1m 22s" reconstructs as "1m 2s" because the second
-        // "2" lived in the prior screen state we can't recover) but
-        // good enough that the row shows the verb instead of
-        // freezing on the previous turn's cue.
-        let compact: String = candidate.chars().filter(|c| !c.is_whitespace()).collect();
-        let mut tokens: Vec<String> = Vec::new();
-        let mut current_digits = String::new();
-        let mut valid = true;
-        for c in compact.chars() {
-            if c.is_ascii_digit() {
-                current_digits.push(c);
-            } else if matches!(c, 'h' | 'm' | 's') && !current_digits.is_empty() {
-                let mut token = std::mem::take(&mut current_digits);
-                token.push(c);
-                tokens.push(token);
-            } else {
-                valid = false;
-                break;
-            }
-        }
-        if !valid || !current_digits.is_empty() || tokens.is_empty() {
-            continue;
-        }
-        let duration_text = tokens.join(" ");
-        best = Some(ParsedEndBanner {
-            verb: verb.to_string(),
-            duration_text,
-        });
-    }
-    best
-}
-
-// Scan the stripped PTY tail for known CC thinking-phase phrases. CC's
-// TUI paints the status line piecewise with column-positioning ANSI
-// escapes, so the full "(elapsed · ↓ tokens · substate)" group rarely
-// arrives contiguously in our 8 KB tail; the substate phrase itself
-// almost always does. Order matters: try the longer / more specific
-// phrases first, and on ties pick the rightmost (most recent) match
-// by comparing the END position of each match. Word-boundary check
-// rejects substring matches like "rethinking" or "extended-thinking".
-fn parse_substate_phrase_scan(stripped: &[u8]) -> Option<String> {
-    let s = std::str::from_utf8(stripped).ok()?;
-    const PHRASES: &[&str] = &[
-        "almost done thinking",
-        "thinking some more",
-        "thinking even more",
-        "thinking more",
-        "still thinking",
-        "thinking",
-    ];
-    let bytes = s.as_bytes();
-    let mut best: Option<(usize, &str)> = None;
-    for &p in PHRASES {
-        if let Some(pos) = s.rfind(p) {
-            // Left word boundary: start of string, whitespace, or "·".
-            let left_ok = pos == 0 || {
-                let prev = bytes[pos - 1];
-                prev.is_ascii_whitespace() || prev == b'\xb7' // U+00B7 ·
-            };
-            if !left_ok {
-                continue;
-            }
-            // Right word boundary: end of string, whitespace, ")", or
-            // start of digit (e.g. "thought for 3s" — accept digit).
-            let end = pos + p.len();
-            let right_ok = end >= bytes.len() || {
-                let next = bytes[end];
-                next.is_ascii_whitespace() || next == b')' || next.is_ascii_digit()
-            };
-            if !right_ok {
-                continue;
-            }
-            // Pick the match whose END is rightmost — covers the case
-            // where "thinking" appears inside "almost done thinking" and
-            // we want the longer phrase.
-            if best.map(|(b_end, _)| end > b_end).unwrap_or(true) {
-                best = Some((end, p));
-            }
-        }
-    }
-    let (_end, phrase) = best?;
-    Some(phrase.to_string())
 }
 
 // Format elapsed milliseconds as "1m 53s" / "23s" / "1h 5m" matching
@@ -2561,9 +2211,8 @@ const POST_ESCAPE_NO_KILL_WINDOW_MS: i64 = 15_000;
 // gate has observed. When pty_agent_status_update sees a fresh
 // stats.user_ts_ms (advance past this stamp), it drains pty_tail_cell so
 // the prior turn's "* <Verb>ed for X" banner — still sitting in the
-// rolling 8KB buffer — cannot falsely match
-// parse_claude_natural_end_banner and kill the status row mid-turn.
-// Refs #178.
+// rolling 8KB buffer — cannot falsely match the natural-end banner
+// gate and kill the status row mid-turn. Refs #178.
 static LAST_BANNER_USER_TS_MS: OnceLock<Mutex<i64>> = OnceLock::new();
 fn last_banner_user_ts_ms_cell() -> &'static Mutex<i64> {
     LAST_BANNER_USER_TS_MS.get_or_init(|| Mutex::new(0))
@@ -2609,7 +2258,7 @@ fn schedule_pty_turn_finished<R: tauri::Runtime>(
     let app_handle = app.clone();
     let started_ms = unix_now_ms();
     // No sticky-verb fallback. If `verb` is None here it means the
-    // JSONL detector fired but `parse_claude_natural_end_banner`
+    // JSONL detector fired but the natural-end banner gate
     // didn't find a past-tense `<Verb> for <duration>` shape in the
     // tail. Falling back to `sticky_verb_recall` would emit the most
     // recent *working* verb (gerund — e.g. "Newspapering",
@@ -3071,7 +2720,6 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
             }
         }
     }
-    let stripped = pty_tail_cell().lock().ok().map(|tail| strip_ansi(&tail));
     // Working emit runs only while JSONL says the turn is active;
     // otherwise the stale status line still in the PTY tail would
     // re-emit "working". The finished transition is owned by the
@@ -3080,27 +2728,8 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
     if !stats.is_working {
         return;
     }
-    let full = stripped.as_ref().and_then(|s| parse_claude_status_line(s));
-    // Phrase scan for substate — runs regardless of full-form parse,
-    // because CC paints the status line piecewise and the substate
-    // word usually arrives in the tail even when "… (" doesn't.
-    let scanned_substate = stripped
-        .as_ref()
-        .and_then(|s| parse_substate_phrase_scan(s));
-    if let Some(ref s) = scanned_substate {
-        sticky_substate_remember(s);
-        if bram_trace_enabled() {
-            append_bram_trace_line(
-                app,
-                "status-substate",
-                &format!("source=scan phrase={:?}", s),
-            );
-        }
-    }
-
-    // xterm-grid cut-over: when a fresh grid status exists, drive the working
-    // row from it (clean verb/elapsed/substate, full-fidelity, no sticky-cache
-    // flicker). The strip_ansi parse below stays as the fallback.
+    // xterm-grid: the working row is driven entirely by the grid status read
+    // clean from xterm.js (full-fidelity verb/elapsed/substate, no flicker).
     let grid_status = latest_grid_status_cell()
         .lock()
         .ok()
@@ -3117,52 +2746,20 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
             updated_at_ms: unix_now_ms(),
             source: Some("grid-status".to_string()),
         }
-    } else if let Some(p) = full {
-        sticky_verb_remember(&p.verb);
-        if let Some(ref s) = p.substate {
-            sticky_substate_remember(s);
-        }
-        // Prefer parsed substate from the full-form (most precise),
-        // then phrase-scan result, then sticky.
-        let substate = p
-            .substate
-            .clone()
-            .or_else(|| scanned_substate.clone())
-            .or_else(sticky_substate_recall);
-        AgentStatus {
-            provider: Some("claude".to_string()),
-            state: "working".to_string(),
-            verb: Some(p.verb),
-            elapsed_text: Some(p.elapsed_text),
-            substate,
-            // Tokens dropped per user request — distracting. The JSONL
-            // sum and PTY parse still populate cache/parsed fields, but
-            // we deliberately don't surface them on the row.
-            output_tokens_text: None,
-            updated_at_ms: unix_now_ms(),
-            source: Some("pty-status".to_string()),
-        }
     } else {
-        // Full-form parse missed. Try the standalone "Verb…" form
-        // (early in turn, between repaints), then fall back to sticky.
-        let verb_only = pty_tail_cell()
-            .lock()
-            .ok()
-            .map(|tail| strip_ansi(&tail))
-            .and_then(|stripped| parse_claude_status_verb_only(&stripped));
-        if let Some(ref v) = verb_only {
-            sticky_verb_remember(v);
-        }
+        // No fresh grid status — the early-turn window before Claude has
+        // painted the verb. Generic working row with a computed elapsed; no
+        // strip_ansi parsing, no sticky caches.
         let elapsed_ms = (unix_now_ms() - stats.user_ts_ms).max(0);
         AgentStatus {
             provider: Some("claude".to_string()),
             state: "working".to_string(),
-            verb: verb_only.or_else(sticky_verb_recall),
+            verb: None,
             elapsed_text: Some(format_elapsed_text(elapsed_ms)),
-            substate: scanned_substate.or_else(sticky_substate_recall),
+            substate: None,
             output_tokens_text: None,
             updated_at_ms: unix_now_ms(),
-            source: Some("pty-status-fallback".to_string()),
+            source: Some("working-fallback".to_string()),
         }
     };
 
@@ -4407,7 +4004,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // complete CSI/OSC escapes; partial leading escape bytes
         // (e.g. "5Gthought" left after dropping the first 3 bytes of
         // "\x1b[35Gthought") would survive as literal text and corrupt
-        // downstream parsers — notably parse_claude_natural_end_banner,
+        // downstream parsers — notably the natural-end banner gate,
         // which would then walk back across "Gthought" and treat the
         // leading "G" as a capitalized verb prefix, falsely matching
         // "Gthought for 4s" and emitting it as a finished verb.
@@ -16263,12 +15860,6 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
                     .and_then(|c| c.clone())
                     .filter(|(_, _, ts)| (unix_now_ms() - ts) < 4000)
                     .map(|(v, e, _)| (Some(v), Some(e)))
-                    .or_else(|| {
-                        stripped
-                            .as_ref()
-                            .and_then(|s| parse_claude_natural_end_banner(s))
-                            .map(|b| (Some(b.verb), Some(b.duration_text)))
-                    })
                     .unwrap_or((None, None));
                 // banner-miss: JSONL says the turn ended, but the
                 // `<Verb> for <duration>` banner wasn't found in the
@@ -18271,100 +17862,10 @@ impl IfEmpty for String {
 #[cfg(test)]
 mod agent_status_tests {
     use super::{
-        parse_claude_natural_end_banner, parse_claude_status_line, parse_claude_status_verb_only,
         pty_chunk_has_codex_working_status, should_clear_status_on_turn_activity_stop,
         should_emit_finished_status, should_set_codex_jsonl_working,
         should_suppress_codex_spinner_after_completion, JsonlCompletionDecision,
     };
-
-    #[test]
-    fn parses_apostrophe_claude_status_verb_full_line() {
-        let parsed = parse_claude_status_line("Beboppin'… (12s · thinking more)".as_bytes())
-            .expect("status line should parse");
-
-        assert_eq!(parsed.verb, "Beboppin'");
-        assert_eq!(parsed.elapsed_text, "12s");
-        assert_eq!(parsed.substate.as_deref(), Some("thinking more"));
-    }
-
-    #[test]
-    fn parses_apostrophe_claude_status_verb_standalone() {
-        let verb = parse_claude_status_verb_only("Beboppin'…".as_bytes())
-            .expect("standalone status verb should parse");
-
-        assert_eq!(verb, "Beboppin'");
-    }
-
-    #[test]
-    fn parses_brewed_claude_status_verb_full_line() {
-        let parsed =
-            parse_claude_status_line("Brewed… (15s)".as_bytes()).expect("status line should parse");
-
-        assert_eq!(parsed.verb, "Brewed");
-        assert_eq!(parsed.elapsed_text, "15s");
-        assert!(parsed.substate.is_none());
-    }
-
-    #[test]
-    fn parses_brewed_natural_end_banner() {
-        let banner =
-            parse_claude_natural_end_banner(b"* Brewed for 30s").expect("banner should parse");
-
-        assert_eq!(banner.verb, "Brewed");
-        assert_eq!(banner.duration_text, "30s");
-    }
-
-    #[test]
-    fn parses_compound_duration_natural_end_banner() {
-        let banner =
-            parse_claude_natural_end_banner(b"* Worked for 1m 2s").expect("banner should parse");
-
-        assert_eq!(banner.verb, "Worked");
-        assert_eq!(banner.duration_text, "1m 2s");
-    }
-
-    #[test]
-    fn natural_end_banner_takes_rightmost_match() {
-        // Older line first, newer second — the newer banner wins.
-        let tail = b"* Worked for 5s\n\n* Brewed for 30s\n";
-        let banner = parse_claude_natural_end_banner(tail).expect("banner should parse");
-
-        assert_eq!(banner.verb, "Brewed");
-        assert_eq!(banner.duration_text, "30s");
-    }
-
-    #[test]
-    fn natural_end_banner_ignores_prose_for() {
-        assert!(parse_claude_natural_end_banner(b"working for the weekend").is_none());
-        assert!(parse_claude_natural_end_banner(b"file for review").is_none());
-    }
-
-    #[test]
-    fn natural_end_banner_ignores_tool_descriptions_with_digit_for() {
-        // CC streams tool descriptions like
-        // "Searched for 1 pattern, read 1 file" mid-turn. The "for 1"
-        // chunk would otherwise look like a banner with duration "1".
-        assert!(parse_claude_natural_end_banner(b"Searched for 1 pattern, read 1 file").is_none());
-        assert!(parse_claude_natural_end_banner(b"Listed for 5 minutes").is_none());
-        assert!(parse_claude_natural_end_banner(b"Brewed for 30 cups").is_none());
-    }
-
-    #[test]
-    fn parses_duration_with_internal_whitespace_from_csi_g_split() {
-        // CC's TUI paints multi-unit durations piecewise:
-        // "1m 22s" arrives as "1m 2\x1b[19Gs", and strip_ansi turns
-        // the CSI G into a single space, leaving "1m 2 s". The
-        // detector should still recognize this as a banner so the
-        // row doesn't stay frozen on the prior turn's verb. The
-        // reconstructed duration is lossy ("1m 2s" instead of
-        // "1m 22s") because the missing "2" lived in the prior
-        // screen state we can't recover from the chunk alone.
-        let banner = parse_claude_natural_end_banner(b"* Brewed for 1m 2 s")
-            .expect("banner should parse despite the strip_ansi-induced split");
-
-        assert_eq!(banner.verb, "Brewed");
-        assert_eq!(banner.duration_text, "1m 2s");
-    }
 
     #[test]
     fn short_turn_activity_silence_does_not_clear_status_row() {

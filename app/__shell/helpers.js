@@ -834,11 +834,20 @@ window.shouldShowIdleProvider = function (mainAgentStatus, enhanceStatusValue) {
   );
 };
 
-// "<provider> <verb>…" for the working state.
+// "<provider> <verb>… (<elapsed> · <substate>)" for the working state. Now
+// that the grid supplies clean full-fidelity elapsed + the substate signal
+// ("thinking", "almost done thinking", …), surface them on the row. Tokens
+// intentionally omitted (per user: distracting).
 window.headerWorkingLabel = function (mainAgentStatus, enhanceStatusValue) {
   var s = mainAgentStatus || {};
   var verb = s.verb || "working";
-  return window.providerDisplayName(mainAgentStatus, enhanceStatusValue) + " " + verb + "…";
+  var label =
+    window.providerDisplayName(mainAgentStatus, enhanceStatusValue) +
+    " " +
+    verb +
+    "…";
+  var detail = [s.elapsedText, s.substate].filter(Boolean).join(" · ");
+  return detail ? label + " (" + detail + ")" : label;
 };
 
 // "<provider> <verb> · <elapsed>" for the finished state. Verb

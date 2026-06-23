@@ -3793,6 +3793,32 @@ fn report_grid_status(payload: serde_json::Value) {
     }
 }
 
+// (verb, duration_text, ts) for the end-of-turn banner read clean from the
+// grid — supplies the finished-cue elapsed at full fidelity, where strip_ansi
+// drops a digit ("1m 22s" -> "1m 2s").
+fn latest_grid_banner_cell() -> &'static Mutex<Option<(String, String, i64)>> {
+    static LATEST_GRID_BANNER: OnceLock<Mutex<Option<(String, String, i64)>>> =
+        OnceLock::new();
+    LATEST_GRID_BANNER.get_or_init(|| Mutex::new(None))
+}
+
+#[tauri::command]
+fn report_grid_banner(payload: serde_json::Value) {
+    let verb = payload
+        .get("verb")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let elapsed = payload
+        .get("elapsed")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    if let (Some(verb), Some(elapsed)) = (verb, elapsed) {
+        if let Ok(mut cell) = latest_grid_banner_cell().lock() {
+            *cell = Some((verb, elapsed, unix_now_ms()));
+        }
+    }
+}
+
 #[tauri::command]
 fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
     let present = payload
@@ -16228,10 +16254,21 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
                 // bytes after the lock drops.
                 let raw = pty_tail_cell().lock().ok().map(|tail| tail.clone());
                 let stripped = raw.as_ref().map(|t| strip_ansi(t));
-                let (verb, elapsed) = stripped
-                    .as_ref()
-                    .and_then(|s| parse_claude_natural_end_banner(s))
-                    .map(|b| (Some(b.verb), Some(b.duration_text)))
+                // xterm-grid cut-over: prefer the banner read clean from the
+                // grid (full-fidelity duration) when fresh; fall back to the
+                // strip_ansi parse (which drops a digit) otherwise.
+                let (verb, elapsed) = latest_grid_banner_cell()
+                    .lock()
+                    .ok()
+                    .and_then(|c| c.clone())
+                    .filter(|(_, _, ts)| (unix_now_ms() - ts) < 4000)
+                    .map(|(v, e, _)| (Some(v), Some(e)))
+                    .or_else(|| {
+                        stripped
+                            .as_ref()
+                            .and_then(|s| parse_claude_natural_end_banner(s))
+                            .map(|b| (Some(b.verb), Some(b.duration_text)))
+                    })
                     .unwrap_or((None, None));
                 // banner-miss: JSONL says the turn ended, but the
                 // `<Verb> for <duration>` banner wasn't found in the
@@ -24166,6 +24203,7 @@ pub fn run() {
             log_from_right_pane,
             report_grid_menu,
             report_grid_status,
+            report_grid_banner,
             open_devtools,
             open_url,
             save_trace_export,

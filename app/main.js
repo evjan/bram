@@ -811,6 +811,11 @@ function __gridReadStatus() {
     for (let r = rows.length - 1; r >= 0; r--) {
       const m = rows[r].match(/\b([A-Z][a-zé]+) for ((?:\d+m ?)?\d+s)\b/);
       if (m) {
+        // Report every read while the banner is on screen so the host's cell
+        // is fresh when the JSONL turn-end fires.
+        invoke("report_grid_banner", {
+          payload: { verb: m[1], elapsed: m[2] },
+        }).catch(() => {});
         const banner = m[1] + " for " + m[2];
         if (banner !== __gridBannerKey) {
           __gridBannerKey = banner;

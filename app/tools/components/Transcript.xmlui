@@ -22,15 +22,17 @@
     id="agentMenuEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeAgentMenu()}" />
-  <ModalDialog
-    when="{!!fullscreenImage}"
-    onClose="fullscreenImage = null">
-    <Image
-      src="{window.imageSrcForPath(fullscreenImage)}"
-      fit="contain"
-      width="min(88vw, 1200px)"
-      height="min(78vh, 900px)" />
-  </ModalDialog>
+  <Theme maxWidth-ModalDialog="95vw">
+    <ModalDialog
+      when="{!!fullscreenImage}"
+      onClose="fullscreenImage = null">
+      <Image
+        src="{window.imageSrcForPath(fullscreenImage)}"
+        fit="contain"
+        width="100%"
+        height="80vh" />
+    </ModalDialog>
+  </Theme>
   <VStack
     height="100%"
     padding="$space-4"

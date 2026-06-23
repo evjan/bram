@@ -3742,52 +3742,62 @@ fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
         .get("present")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let mut cell = match latest_grid_menu_cell().lock() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    if !present {
-        *cell = None;
-        return;
-    }
-    let options: Vec<MenuOption> = payload
-        .get("options")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|o| {
-                    let n = o.get("n").and_then(|v| v.as_i64())?;
-                    let label = o
-                        .get("label")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.trim().to_string())?;
-                    if label.is_empty() {
-                        return None;
-                    }
-                    Some(MenuOption {
-                        key: n.to_string(),
-                        label,
-                    })
+    // Update the stored grid menu. Scoped so the lock is released before the
+    // forced pty_menu_update() below re-locks it via the detect-path override.
+    {
+        let mut cell = match latest_grid_menu_cell().lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if !present {
+            *cell = None;
+        } else {
+            let options: Vec<MenuOption> = payload
+                .get("options")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|o| {
+                            let n = o.get("n").and_then(|v| v.as_i64())?;
+                            let label = o
+                                .get("label")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.trim().to_string())?;
+                            if label.is_empty() {
+                                return None;
+                            }
+                            Some(MenuOption {
+                                key: n.to_string(),
+                                label,
+                            })
+                        })
+                        .collect()
                 })
-                .collect()
-        })
-        .unwrap_or_default();
-    if options.len() < 2 {
-        return;
+                .unwrap_or_default();
+            if options.len() < 2 {
+                return;
+            }
+            if bram_trace_enabled() {
+                let labels = options
+                    .iter()
+                    .map(|o| format!("{}.{}", o.key, o.label))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                append_bram_trace_line(
+                    &app,
+                    "grid-menu",
+                    &format!("op=report count={} [{}]", options.len(), labels),
+                );
+            }
+            *cell = Some((options, unix_now_ms() as u128));
+        }
     }
-    if bram_trace_enabled() {
-        let labels = options
-            .iter()
-            .map(|o| format!("{}.{}", o.key, o.label))
-            .collect::<Vec<_>>()
-            .join(" | ");
-        append_bram_trace_line(
-            &app,
-            "grid-menu",
-            &format!("op=report count={} [{}]", options.len(), labels),
-        );
-    }
-    *cell = Some((options, unix_now_ms() as u128));
+    // Force a detect/emit cycle now so the grid report is applied immediately
+    // instead of waiting for the next PTY chunk — the PTY goes quiet while a
+    // menu is shown, which is why the override otherwise missed (the host had
+    // already detected before the grid report arrived and didn't re-detect).
+    // Empty chunk appends nothing; pty_menu_update re-scans the current tail.
+    pty_menu_update(&app, &[]);
 }
 
 fn pty_menu_suppressed_cell() -> &'static Mutex<Option<(String, std::time::Instant)>> {
@@ -4390,25 +4400,36 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         }
     }
 
-    // xterm-grid cut-over: replace the strip_ansi-parsed options with the
-    // clean structure the parent shell read from xterm.js's grid, when a
-    // fresh report exists. Options are the #187-fragile field (collapsed /
-    // missing options on redraw); the grid renders them correctly. The
-    // command text / signature enriched above are unchanged. Trace both so
-    // we can see when the host's count was wrong and the grid fixed it.
-    if let Some(menu) = detected.as_mut() {
-        if let Ok(cell) = latest_grid_menu_cell().lock() {
-            if let Some((grid_opts, ts)) = cell.as_ref() {
-                let age = (unix_now_ms() as u128).saturating_sub(*ts);
-                if age < 1500 && grid_opts.len() >= 2 {
+    // xterm-grid grid-primary: a fresh report from xterm.js's clean grid is
+    // authoritative for the APPEAR case. Two sub-cases:
+    //  - host also detected (Some): trust the grid's clean options (the
+    //    #187-fragile field — collapsed / missing options on redraw).
+    //  - host MISSED (None) but the grid sees a menu: BUILD it from the grid
+    //    options + the JSONL/⏺ signature. This is the host-miss fix.
+    // The host detector stays the fallback for menu shapes the grid reader
+    // doesn't yet cover (Codex / skill / AskUserQuestion) — those report
+    // absent, so there is no fresh grid menu here and `detected` is left as the
+    // host produced it. We only ever ADD/correct on present:true; we never
+    // force `detected = None` from the grid, so an uncovered-shape menu the
+    // host caught is never clobbered.
+    let grid_snapshot = latest_grid_menu_cell()
+        .lock()
+        .ok()
+        .and_then(|c| c.clone());
+    if let Some((grid_opts, ts)) = grid_snapshot {
+        if (unix_now_ms() as u128).saturating_sub(ts) < 1500 && grid_opts.len() >= 2 {
+            let grid_labels = || {
+                grid_opts
+                    .iter()
+                    .map(|o| format!("{}.{}", o.key, o.label))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            };
+            match detected.as_mut() {
+                Some(menu) => {
                     if bram_trace_enabled() {
                         let host = menu
                             .options
-                            .iter()
-                            .map(|o| format!("{}.{}", o.key, o.label))
-                            .collect::<Vec<_>>()
-                            .join(" | ");
-                        let grid = grid_opts
                             .iter()
                             .map(|o| format!("{}.{}", o.key, o.label))
                             .collect::<Vec<_>>()
@@ -4417,16 +4438,57 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                             app,
                             "grid-menu",
                             &format!(
-                                "op=override age_ms={} host_count={} grid_count={} host=[{}] grid=[{}]",
-                                age,
+                                "op=override host_count={} grid_count={} host=[{}] grid=[{}]",
                                 menu.options.len(),
                                 grid_opts.len(),
                                 host,
-                                grid
+                                grid_labels()
                             ),
                         );
                     }
-                    menu.options = grid_opts.clone();
+                    menu.options = grid_opts;
+                }
+                None => {
+                    // Host missed the menu box. Only build when there's a LIVE
+                    // pending tool call (signature present) — that's what makes
+                    // it a real host-miss rather than a stale grid read of a
+                    // just-dismissed menu (whose tool call is already gone, so
+                    // signature is None). tool + signature come from the JSONL /
+                    // ⏺ lookup, not the grid (its verbose scope-option label is
+                    // stale-cell-prone).
+                    let lookup = lookup_pending_tool_call(app);
+                    if let Some(sig) = lookup.signature {
+                        let tool = sig
+                            .split('(')
+                            .next()
+                            .map(|t| t.trim())
+                            .filter(|t| !t.is_empty())
+                            .unwrap_or("Bash")
+                            .to_string();
+                        if bram_trace_enabled() {
+                            append_bram_trace_line(
+                                app,
+                                "grid-menu",
+                                &format!(
+                                    "op=build tool={} grid_count={} grid=[{}]",
+                                    tool,
+                                    grid_opts.len(),
+                                    grid_labels()
+                                ),
+                            );
+                        }
+                        detected = Some(PtyMenu {
+                            tool,
+                            text: sig.clone(),
+                            options: grid_opts,
+                            tool_call_signature: Some(sig),
+                            tool_call_diff: lookup.diff,
+                            tool_call_content: lookup.content,
+                            cache_source: None,
+                            at_host_ms: None,
+                            signature_source: Some("jsonl"),
+                        });
+                    }
                 }
             }
         }

@@ -660,6 +660,7 @@ function __gridDetectMenu(rows) {
 }
 
 let __gridMenuPresent = false;
+let __gridLastMenu = null;
 function __gridShadowCheck() {
   try {
     const rows = __gridReadLiveRows();
@@ -668,6 +669,7 @@ function __gridShadowCheck() {
     if (!menu) {
       if (__gridMenuPresent) {
         __gridMenuPresent = false;
+        __gridLastMenu = null;
         __gridLastMenuKey = null;
         invoke("report_grid_menu", { payload: { present: false } }).catch(
           () => {},
@@ -680,8 +682,10 @@ function __gridShadowCheck() {
     if (key === __gridLastMenuKey) return;
     __gridLastMenuKey = key;
     __gridMenuPresent = true;
+    __gridLastMenu = { header: menu.header, options: menu.options };
     // Authoritative: feed the clean structure to the host, which splices the
-    // options into the emitted permission menu.
+    // options into the emitted permission menu (or builds it when the host
+    // missed).
     invoke("report_grid_menu", {
       payload: { present: true, header: menu.header, options: menu.options },
     }).catch(() => {});
@@ -705,6 +709,20 @@ function __gridShadowCheck() {
   }
 }
 term.onWriteParsed(() => requestAnimationFrame(__gridShadowCheck));
+// While a menu is shown the PTY goes quiet, so onWriteParsed stops firing and
+// the host's grid snapshot would age out. Re-report on a timer to keep it
+// fresh (and to re-assert a host-missed menu the host can't see on its own).
+setInterval(() => {
+  if (__gridMenuPresent && __gridLastMenu) {
+    invoke("report_grid_menu", {
+      payload: {
+        present: true,
+        header: __gridLastMenu.header,
+        options: __gridLastMenu.options,
+      },
+    }).catch(() => {});
+  }
+}, 1000);
 // ===== end xterm-grid screen reader =====
 
 let pendingPtySize = null;

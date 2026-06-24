@@ -15670,7 +15670,7 @@ fn coordination_trace_summary(trace_text: &str) -> serde_json::Value {
             }
             last_latest_tail = coordination_trace_line_iso(line);
         }
-        if line.contains("jsonl-fanout") {
+        if line.contains("] [iframe] subkind=jsonl-fanout ") {
             fanout_events += 1;
             if line.contains("\"reset\":true") || line.contains("reset=true") {
                 fanout_resets += 1;
@@ -15830,6 +15830,13 @@ fn startup_run_summary(
     let mut latest_tail_max_content = 0;
     let mut fanout_events = 0;
     let mut fanout_max_len = 0;
+    let mut startup_backpressure_events = 0;
+    let mut startup_backpressure_deferred = 0;
+    let mut startup_backpressure_coalesced = 0;
+    let mut startup_backpressure_admitted = 0;
+    let mut startup_backpressure_dropped = 0;
+    let mut startup_backpressure_max_bytes = 0;
+    let mut startup_backpressure_last = String::new();
     let mut heartbeat_max_drift = 0;
     let mut pty_chunks = 0;
     let mut pty_bytes = 0;
@@ -15840,7 +15847,7 @@ fn startup_run_summary(
         if iso.is_empty() || iso < start_iso || iso > end_iso {
             continue;
         }
-        last_seen = iso;
+        last_seen = iso.clone();
         if line.contains("path=__sessions/latest-tail") && line.contains("phase=exit") {
             latest_tail_requests += 1;
             if let Some(body_size) = trace_field_i64(line, "body_size") {
@@ -15855,7 +15862,7 @@ fn startup_run_summary(
                 latest_tail_truncations += 1;
             }
         }
-        if line.contains("jsonl-fanout") {
+        if line.contains("] [iframe] subkind=jsonl-fanout ") {
             fanout_events += 1;
             if line.contains("\"reset\":true") || line.contains("reset=true") {
                 latest_tail_resets += 1;
@@ -15865,6 +15872,22 @@ fn startup_run_summary(
             {
                 fanout_max_len = fanout_max_len.max(len);
             }
+        }
+        if line.contains("] [iframe] subkind=startup-backpressure ") {
+            startup_backpressure_events += 1;
+            if line.contains("\"action\":\"defer\"") {
+                startup_backpressure_deferred += 1;
+            } else if line.contains("\"action\":\"coalesce\"") {
+                startup_backpressure_coalesced += 1;
+            } else if line.contains("\"action\":\"admit\"") {
+                startup_backpressure_admitted += 1;
+            } else if line.contains("\"action\":\"drop") {
+                startup_backpressure_dropped += 1;
+            }
+            if let Some(bytes) = trace_json_field_i64(line, "bytes") {
+                startup_backpressure_max_bytes = startup_backpressure_max_bytes.max(bytes);
+            }
+            startup_backpressure_last = iso.clone();
         }
         if line.contains("heartbeat-batch") {
             if let Some(max_drift) = trace_json_field_i64(line, "maxDriftMs") {
@@ -15910,6 +15933,13 @@ fn startup_run_summary(
         "latestTailTruncations": latest_tail_truncations,
         "fanoutEvents": fanout_events,
         "fanoutMaxLen": fanout_max_len,
+        "startupBackpressureEvents": startup_backpressure_events,
+        "startupBackpressureDeferred": startup_backpressure_deferred,
+        "startupBackpressureCoalesced": startup_backpressure_coalesced,
+        "startupBackpressureAdmitted": startup_backpressure_admitted,
+        "startupBackpressureDropped": startup_backpressure_dropped,
+        "startupBackpressureMaxBytes": startup_backpressure_max_bytes,
+        "startupBackpressureLast": startup_backpressure_last,
         "heartbeatMaxDrift": heartbeat_max_drift,
         "ptyChunks": pty_chunks,
         "ptyBytes": pty_bytes,
@@ -16571,9 +16601,12 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
             app,
             "startup-run",
             &format!(
-                "latest_tail_max_body={} fanout_max_len={} heartbeat_max_drift={} pty_chunks={} pty_bytes={} trace_export_size={} level={}",
+                "latest_tail_max_body={} fanout_max_len={} startup_backpressure_events={} startup_backpressure_deferred={} startup_backpressure_admitted={} heartbeat_max_drift={} pty_chunks={} pty_bytes={} trace_export_size={} level={}",
                 startup_run["latestTailMaxBody"].as_i64().unwrap_or(0),
                 startup_run["fanoutMaxLen"].as_i64().unwrap_or(0),
+                startup_run["startupBackpressureEvents"].as_i64().unwrap_or(0),
+                startup_run["startupBackpressureDeferred"].as_i64().unwrap_or(0),
+                startup_run["startupBackpressureAdmitted"].as_i64().unwrap_or(0),
                 startup_run["heartbeatMaxDrift"].as_i64().unwrap_or(0),
                 startup_run["ptyChunks"].as_i64().unwrap_or(0),
                 startup_run["ptyBytes"].as_i64().unwrap_or(0),
@@ -16882,6 +16915,20 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
                             startup_run["latestTailTruncations"].as_i64().unwrap_or(0)
                         ),
                         "seen": startup_run["lastSeen"].as_str().unwrap_or(""),
+                    },
+                    {
+                        "signal": "Startup backpressure",
+                        "level": if startup_run["startupBackpressureDropped"].as_i64().unwrap_or(0) > 0 { "warn" } else if startup_run["startupBackpressureEvents"].as_i64().unwrap_or(0) > 0 { "ok" } else { "neutral" },
+                        "state": format!("{} events", startup_run["startupBackpressureEvents"].as_i64().unwrap_or(0)),
+                        "detail": format!(
+                            "deferred {}, coalesced {}, admitted {}, dropped {}, max {} KB",
+                            startup_run["startupBackpressureDeferred"].as_i64().unwrap_or(0),
+                            startup_run["startupBackpressureCoalesced"].as_i64().unwrap_or(0),
+                            startup_run["startupBackpressureAdmitted"].as_i64().unwrap_or(0),
+                            startup_run["startupBackpressureDropped"].as_i64().unwrap_or(0),
+                            (startup_run["startupBackpressureMaxBytes"].as_i64().unwrap_or(0) + 1023) / 1024
+                        ),
+                        "seen": startup_run["startupBackpressureLast"].as_str().unwrap_or(""),
                     },
                     {
                         "signal": "Renderer drift",

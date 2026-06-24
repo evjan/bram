@@ -522,6 +522,36 @@ window.logToHost = function (payload) {
   if (!invoke) return;
   invoke("log_from_right_pane", { payload: payload }).catch(function () {});
 };
+window.__bramTraceSafeValue = function (value, depth) {
+  depth = depth || 0;
+  if (value == null) return value;
+  var t = typeof value;
+  if (t === "string") {
+    return value.length > 500 ? value.slice(0, 500) + "...[truncated " + value.length + " chars]" : value;
+  }
+  if (t === "number" || t === "boolean") return value;
+  if (t !== "object") return String(value);
+  if (depth >= 2) {
+    if (Array.isArray(value)) return { __summary: "array", length: value.length };
+    var keys = Object.keys(value);
+    return { __summary: "object", keys: keys.slice(0, 12), keyCount: keys.length };
+  }
+  if (Array.isArray(value)) {
+    return {
+      __summary: "array",
+      length: value.length,
+      sample: value.slice(0, 3).map(function (v) { return window.__bramTraceSafeValue(v, depth + 1); }),
+    };
+  }
+  var out = {};
+  var objectKeys = Object.keys(value);
+  for (var i = 0; i < objectKeys.length && i < 20; i++) {
+    var key = objectKeys[i];
+    out[key] = window.__bramTraceSafeValue(value[key], depth + 1);
+  }
+  if (objectKeys.length > 20) out.__truncatedKeys = objectKeys.length - 20;
+  return out;
+};
 
 // iframeTrace: the [iframe] category of the comms-path trace log
 // (issue #49). Forwards a structured record to the host's
@@ -550,7 +580,9 @@ window.__bramIframeTrace = function (subkind, fields) {
     if (typeof window.logToHost !== "function") return;
     var payload = { kind: "iframe-trace", subkind: subkind, at: new Date().toISOString() };
     if (fields && typeof fields === "object") {
-      Object.assign(payload, fields);
+      Object.keys(fields).forEach(function (key) {
+        payload[key] = window.__bramTraceSafeValue(fields[key], 0);
+      });
     }
     window.logToHost(payload);
   } catch (e) {}
@@ -3894,6 +3926,14 @@ var __latestJsonlValue = null;
 var __latestJsonlSubscribers = [];
 var __latestJsonlPushers = {};
 var __latestJsonlStartupReplayRequested = false;
+var __latestJsonlStartupBootMs = Date.now();
+var __latestJsonlStartupGateMs = 4500;
+var __latestJsonlStartupGuardMs = 9000;
+var __latestJsonlStartupMinDeferMs = 1500;
+var __latestJsonlStartupStableFrameMs = 40;
+var __latestJsonlStartupStableFrames = 3;
+var __latestJsonlStartupStableFrameMaxWaitMs = 3000;
+var __latestJsonlStartupLargePayloadBytes = 384 * 1024;
 window.getLatestJsonl = function () { return __latestJsonlValue; };
 window.setLatestJsonl = function (value) {
   __latestJsonlValue = value;
@@ -3925,6 +3965,80 @@ window.onLatestJsonlChange = function (fn) {
     if (idx >= 0) __latestJsonlSubscribers.splice(idx, 1);
   };
 };
+function __bramLatestJsonlStartupAgeMs() {
+  return Math.max(0, Date.now() - __latestJsonlStartupBootMs);
+}
+function __bramLatestJsonlPayloadBytes(payload) {
+  if (!payload || typeof payload !== "object") return 0;
+  return ((payload.content || "").length || 0);
+}
+function __bramLatestJsonlStartupGateRemainingMs() {
+  return Math.max(0, __latestJsonlStartupGateMs - __bramLatestJsonlStartupAgeMs());
+}
+function __bramShouldGateLatestJsonlStartup(payload) {
+  return __bramLatestJsonlStartupAgeMs() < __latestJsonlStartupGuardMs
+    && __bramLatestJsonlPayloadBytes(payload) >= __latestJsonlStartupLargePayloadBytes;
+}
+function __bramLatestJsonlStartupBaseWaitMs(deferredAtMs) {
+  var minRemainingMs = deferredAtMs
+    ? Math.max(0, __latestJsonlStartupMinDeferMs - (Date.now() - deferredAtMs))
+    : __latestJsonlStartupMinDeferMs;
+  return Math.max(__bramLatestJsonlStartupGateRemainingMs(), minRemainingMs);
+}
+function __bramAfterLatestJsonlStartupStableFrame(deferredAtMs, done) {
+  var baseWaitMs = __bramLatestJsonlStartupBaseWaitMs(deferredAtMs);
+  window.setTimeout(function () {
+    if (typeof window.requestAnimationFrame !== "function") {
+      done("startup-base-wait", { stableFrames: 0, stableWaitMs: 0 });
+      return;
+    }
+    var probeStartedMs = Date.now();
+    var lastFrameTs = 0;
+    var stableFrames = 0;
+    var bestStableFrames = 0;
+    var finish = function (reason) {
+      done(reason, {
+        stableFrames: bestStableFrames,
+        stableWaitMs: Math.max(0, Date.now() - probeStartedMs),
+      });
+    };
+    var step = function (ts) {
+      if (lastFrameTs > 0 && ts - lastFrameTs <= __latestJsonlStartupStableFrameMs) {
+        stableFrames += 1;
+      } else {
+        stableFrames = 0;
+      }
+      bestStableFrames = Math.max(bestStableFrames, stableFrames);
+      lastFrameTs = ts;
+      if (stableFrames >= __latestJsonlStartupStableFrames) {
+        finish("stable-frame");
+        return;
+      }
+      if (Date.now() - probeStartedMs >= __latestJsonlStartupStableFrameMaxWaitMs) {
+        finish("stable-frame-timeout");
+        return;
+      }
+      window.requestAnimationFrame(step);
+    };
+    window.requestAnimationFrame(step);
+  }, Math.max(100, baseWaitMs));
+}
+function __bramTraceLatestJsonlStartup(action, fields) {
+  try {
+    fields = fields || {};
+    fields.action = action;
+    fields.ageMs = __bramLatestJsonlStartupAgeMs();
+    fields.gateMs = __latestJsonlStartupGateMs;
+    fields.guardMs = __latestJsonlStartupGuardMs;
+    fields.minDeferMs = __latestJsonlStartupMinDeferMs;
+    fields.thresholdBytes = __latestJsonlStartupLargePayloadBytes;
+    fields.route = (window.location && (window.location.hash || window.location.pathname)) || "";
+    var delayMs = Math.max(250, __bramLatestJsonlStartupGateRemainingMs() + 250);
+    window.setTimeout(function () {
+      window.__bramIframeTrace("startup-backpressure", fields);
+    }, delayMs);
+  } catch (e) {}
+}
 
 // --- Transcript (foldable, structured, full history) ---------------------
 // External subscribe factory for the latest session JSONL. Memoized
@@ -4297,6 +4411,10 @@ window.startLatestJsonlPush = function (key, getProvider) {
   var sessionSid = "";
   var lastProvider = null;
   var stopped = false;
+  var deferredPayload = null;
+  var deferredAtMs = 0;
+  var deferredWaitToken = 0;
+  var stopAfterDeferred = false;
   function providerValue() {
     try {
       var value = typeof getProvider === "function" ? getProvider() : "";
@@ -4306,14 +4424,95 @@ window.startLatestJsonlPush = function (key, getProvider) {
       return "";
     }
   }
-  function applyPayload(correlationId, atHostMs, payload) {
+  function tracePayloadDecision(action, correlationId, atHostMs, payload, fields) {
+    fields = fields || {};
+    fields.bytes = __bramLatestJsonlPayloadBytes(payload);
+    fields.reset = !!(payload && payload.reset);
+    fields.sid = (payload && payload.sid) || "";
+    fields.provider = (payload && payload.provider) || "";
+    fields.correlation_id = correlationId || "";
+    fields.at_host_ms = atHostMs || 0;
+    __bramTraceLatestJsonlStartup(action, fields);
+  }
+  function clearDeferredTimer() {
+    deferredWaitToken += 1;
+  }
+  function mergeDeferredPayload(current, next) {
+    if (!current || !current.payload) return next;
+    if (!next || !next.payload) return current;
+    var currentPayload = current.payload;
+    var nextPayload = next.payload;
+    if (nextPayload.reset || currentPayload.sid !== nextPayload.sid) return next;
+    var merged = {};
+    Object.keys(currentPayload).forEach(function (k) { merged[k] = currentPayload[k]; });
+    Object.keys(nextPayload).forEach(function (k) {
+      if (k !== "content") merged[k] = nextPayload[k];
+    });
+    merged.content = (currentPayload.content || "") + (nextPayload.content || "");
+    return {
+      correlationId: next.correlationId,
+      atHostMs: next.atHostMs,
+      payload: merged,
+    };
+  }
+  function flushDeferred(reason) {
+    clearDeferredTimer();
+    var pending = deferredPayload;
+    deferredPayload = null;
+    if (!pending || !pending.payload) return;
+    if (stopped) {
+      tracePayloadDecision("drop-stopped", pending.correlationId, pending.atHostMs, pending.payload, {
+        reason: reason || "stopped",
+        deferredForMs: deferredAtMs ? Date.now() - deferredAtMs : 0,
+      });
+      return;
+    }
+    tracePayloadDecision("admit", pending.correlationId, pending.atHostMs, pending.payload, {
+      reason: reason || "gate-open",
+      deferredForMs: deferredAtMs ? Date.now() - deferredAtMs : 0,
+    });
+    deferredAtMs = 0;
+    applyPayloadNow(pending.correlationId, pending.atHostMs, pending.payload);
+    if (stopAfterDeferred) stopped = true;
+  }
+  function deferPayload(correlationId, atHostMs, payload) {
+    var previous = deferredPayload;
+    var next = { correlationId: correlationId, atHostMs: atHostMs, payload: payload };
+    deferredPayload = mergeDeferredPayload(deferredPayload, next);
+    if (!deferredAtMs) deferredAtMs = Date.now();
+    var waitMs = __bramLatestJsonlStartupBaseWaitMs(deferredAtMs);
+    tracePayloadDecision(previous ? "coalesce" : "defer", correlationId, atHostMs, deferredPayload.payload, {
+      previousBytes: previous ? __bramLatestJsonlPayloadBytes(previous.payload) : 0,
+      reason: "startup-large-payload",
+      delayMs: waitMs,
+    });
+    clearDeferredTimer();
+    var token = deferredWaitToken;
+    __bramAfterLatestJsonlStartupStableFrame(deferredAtMs, function (reason, fields) {
+      if (token !== deferredWaitToken) return;
+      fields = fields || {};
+      tracePayloadDecision("stable-check", correlationId, atHostMs, deferredPayload && deferredPayload.payload, {
+        reason: reason,
+        stableFrames: fields.stableFrames || 0,
+        stableWaitMs: fields.stableWaitMs || 0,
+      });
+      flushDeferred(reason);
+    });
+  }
+  function applyPayloadNow(correlationId, atHostMs, payload) {
     if (stopped || !payload) return;
     var provider = providerValue();
     if (provider !== lastProvider) {
       lastProvider = provider;
       sessionSid = "";
     }
-    if (provider && payload.provider && provider !== payload.provider) return;
+    if (provider && payload.provider && provider !== payload.provider) {
+      tracePayloadDecision("drop-provider-mismatch", correlationId, atHostMs, payload, {
+        expectedProvider: provider,
+        reason: "provider-mismatch",
+      });
+      return;
+    }
     if (payload.reset && sessionSid && payload.sid === sessionSid && !payload.content && window.getLatestJsonl()) {
       try {
         window.__bramIframeTrace("jsonl-fanout-ignored", {
@@ -4329,10 +4528,26 @@ window.startLatestJsonlPush = function (key, getProvider) {
     window.__bramApplyLatestJsonlEnvelope(payload, "push");
     sessionSid = payload.sid || "";
   }
+  function applyPayload(correlationId, atHostMs, payload) {
+    if (stopped || !payload) return;
+    if (deferredPayload) {
+      deferPayload(correlationId, atHostMs, payload);
+      return;
+    }
+    if (__bramShouldGateLatestJsonlStartup(payload)) {
+      deferPayload(correlationId, atHostMs, payload);
+      return;
+    }
+    applyPayloadNow(correlationId, atHostMs, payload);
+  }
   var unsubscribe = window.subscribeTalkSessionChange(key + "TalkSessionUnsub", applyPayload);
   __latestJsonlPushers[key] = {
     stop: function () {
-      stopped = true;
+      if (deferredPayload) {
+        stopAfterDeferred = true;
+      } else {
+        stopped = true;
+      }
       if (typeof unsubscribe === "function") {
         try { unsubscribe(); } catch (e) {}
       }

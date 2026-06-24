@@ -1288,7 +1288,20 @@ static LIVE_CODEX_SESSION: OnceLock<Mutex<Option<(PathBuf, std::time::SystemTime
 // loop until either time elapses or a *different* tool's menu appears.
 static PTY_TAIL: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 static PTY_MENU: OnceLock<Mutex<Option<PtyMenu>>> = OnceLock::new();
-static PTY_MENU_SUPPRESSED: OnceLock<Mutex<Option<(String, std::time::Instant)>>> = OnceLock::new();
+// Fingerprint of the just-dismissed menu so a post-dismiss re-read of the
+// *identical* menu (option labels + signature) is suppressed, while a
+// genuinely different same-tool menu within the window is let through.
+// (Originally guarded byte-rebound from PTY_TAIL; now guards the grid's
+// re-read of the menu still lingering on screen for ~300ms after dismiss.)
+// Refs #193.
+#[derive(Clone)]
+struct DismissedMenu {
+    tool: String,
+    option_labels: Vec<String>,
+    signature: Option<String>,
+    when: std::time::Instant,
+}
+static PTY_MENU_SUPPRESSED: OnceLock<Mutex<Option<DismissedMenu>>> = OnceLock::new();
 
 // The loopback HTTP server's port, captured at setup. Used to inject
 // XMLUI_DESKTOP_PORT into the PTY child's environment so the agent can
@@ -3069,7 +3082,7 @@ fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
     pty_menu_update(&app, &[]);
 }
 
-fn pty_menu_suppressed_cell() -> &'static Mutex<Option<(String, std::time::Instant)>> {
+fn pty_menu_suppressed_cell() -> &'static Mutex<Option<DismissedMenu>> {
     PTY_MENU_SUPPRESSED.get_or_init(|| Mutex::new(None))
 }
 
@@ -3808,50 +3821,70 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     // menu's text is still sitting in PTY_TAIL.
     if let Some(ref new_menu) = detected {
         if let Ok(suppressed) = pty_menu_suppressed_cell().lock() {
-            if let Some((suppressed_tool, when)) = suppressed.as_ref() {
-                if suppressed_tool == &new_menu.tool
-                    && when.elapsed() < std::time::Duration::from_secs(10)
+            if let Some(d) = suppressed.as_ref() {
+                if d.tool == new_menu.tool
+                    && d.when.elapsed() < std::time::Duration::from_secs(10)
                 {
-                    eprintln!(
-                        "[pty-menu] suppressed re-detection of tool={} ({}ms after dismissal)",
-                        new_menu.tool,
-                        when.elapsed().as_millis()
+                    // Fingerprint gate (#193): suppress only when this is the
+                    // *identical* just-dismissed menu (matching signature, or
+                    // matching option-label set when no signature). A genuinely
+                    // different same-tool menu within the window is let through.
+                    let sig_match = matches!(
+                        (&d.signature, &new_menu.tool_call_signature),
+                        (Some(a), Some(b)) if a == b
                     );
-                    if bram_trace_enabled() {
-                        // Diagnostic for #185-adjacent menu-state miss: when
-                        // post-dismiss-redetect suppression fires, log the
-                        // *new* menu's option labels and signature too. The
-                        // suppression is meant to drop stale rebounds of the
-                        // just-dismissed menu — but on Windows the user can
-                        // submit a fresh tool call within the 10-second
-                        // window, and its menu legitimately deserves a
-                        // shown emit. If the labels here differ from what
-                        // was just dismissed, that's strong evidence the
-                        // suppression is over-aggressive.
-                        let option_summary = new_menu
+                    let labels_match = d.option_labels.len() == new_menu.options.len()
+                        && new_menu
                             .options
                             .iter()
-                            .map(|o| format!("{}={:?}", o.key, o.label))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let signature_summary = new_menu
-                            .tool_call_signature
-                            .as_deref()
-                            .map(|s| format!(" signature={:?}", s))
-                            .unwrap_or_default();
+                            .all(|o| d.option_labels.contains(&o.label));
+                    let option_summary = new_menu
+                        .options
+                        .iter()
+                        .map(|o| format!("{}={:?}", o.key, o.label))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let signature_summary = new_menu
+                        .tool_call_signature
+                        .as_deref()
+                        .map(|s| format!(" signature={:?}", s))
+                        .unwrap_or_default();
+                    if sig_match || labels_match {
+                        eprintln!(
+                            "[pty-menu] suppressed re-detection of tool={} ({}ms after dismissal)",
+                            new_menu.tool,
+                            d.when.elapsed().as_millis()
+                        );
+                        if bram_trace_enabled() {
+                            append_bram_trace_line(
+                                app,
+                                "pty-menu",
+                                &format!(
+                                    "state=suppressed tool={} reason=post-dismiss-redetect elapsed_ms={} new_options=[{}]{}",
+                                    new_menu.tool,
+                                    d.when.elapsed().as_millis(),
+                                    option_summary,
+                                    signature_summary,
+                                ),
+                            );
+                        }
+                        detected = None;
+                    } else if bram_trace_enabled() {
+                        // Same tool + window, but the fingerprint differs: a
+                        // genuinely new menu, not a stale re-read. Let it through
+                        // (this is the #193 over-fire the old tool-only key hit).
                         append_bram_trace_line(
                             app,
                             "pty-menu",
                             &format!(
-                                "state=suppressed tool={} reason=post-dismiss-redetect elapsed_ms={} new_options=[{}]{}",
+                                "state=shown tool={} reason=post-dismiss-fingerprint-mismatch elapsed_ms={} new_options=[{}]{}",
                                 new_menu.tool,
-                                when.elapsed().as_millis(),
+                                d.when.elapsed().as_millis(),
                                 option_summary,
                                 signature_summary,
                             ),
                         );
                     }
-                    detected = None;
                 }
             }
         }
@@ -4519,11 +4552,17 @@ fn pty_output_clears_inflight(output: &[u8]) -> bool {
 // re-fire when the next PTY chunk arrives (the dismissed text is still
 // in the rolling buffer).
 fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
-    let dismissed_tool: Option<String> = match pty_menu_cell().lock() {
+    let dismissed: Option<(String, Vec<String>, Option<String>)> = match pty_menu_cell().lock() {
         Ok(mut menu) => {
-            let tool = menu.as_ref().map(|m| m.tool.clone());
+            let fp = menu.as_ref().map(|m| {
+                (
+                    m.tool.clone(),
+                    m.options.iter().map(|o| o.label.clone()).collect::<Vec<_>>(),
+                    m.tool_call_signature.clone(),
+                )
+            });
             *menu = None;
-            tool
+            fp
         }
         Err(_) => None,
     };
@@ -4533,7 +4572,7 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
     if let Ok(mut tail) = pty_tail_cell().lock() {
         tail.clear();
     }
-    if let Some(tool) = dismissed_tool {
+    if let Some((tool, option_labels, signature)) = dismissed {
         let clears_inflight = pty_menu_input_clears_inflight(input);
         // Pending menus never emitted `state=shown` to subscribers
         // (their tool name hadn't resolved yet). Don't emit the matching
@@ -4549,7 +4588,7 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
             return;
         }
         eprintln!(
-            "[pty-menu] cleared by user input (tool={}, suppressing for 2s)",
+            "[pty-menu] cleared by user input (tool={}, fingerprint-suppressing for 10s)",
             tool
         );
         if bram_trace_enabled() {
@@ -4564,7 +4603,12 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
             );
         }
         if let Ok(mut s) = pty_menu_suppressed_cell().lock() {
-            *s = Some((tool, std::time::Instant::now()));
+            *s = Some(DismissedMenu {
+                tool,
+                option_labels,
+                signature,
+                when: std::time::Instant::now(),
+            });
         }
         if clears_inflight {
             clear_active_sentinel_with_reason(app, "pty-menu-user-reject");

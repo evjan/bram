@@ -812,7 +812,7 @@ function __gridReadStatus() {
     // End-of-turn banner: "<glyph> <Verb> for <duration>" (capitalized verb
     // distinguishes it from the lowercase "thought for 7s" substate).
     for (let r = rows.length - 1; r >= 0; r--) {
-      const m = rows[r].match(/\b([A-Z][a-zé]+) for ((?:\d+m ?)?\d+s)\b/);
+      const m = rows[r].match(/\b([A-Z][a-zé]+(?:-[a-zé]+)*) for ((?:\d+m ?)?\d+s)\b/);
       if (m) {
         // Report every read while the banner is on screen so the host's cell
         // is fresh when the JSONL turn-end fires.
@@ -836,8 +836,10 @@ function __gridReadStatus() {
     for (let r = rows.length - 1; r >= 0; r--) {
       // Core shape: "<Verb>… (<elapsed> [· <tokens>] [· <substate>])" — match
       // it directly so we catch early-turn statuses without tokens/·, not just
-      // the fully-painted ones.
-      const sm = rows[r].match(/([A-Za-zé']{3,})…\s*\(([^)]*)\)/);
+      // the fully-painted ones. The verb char class includes '-' so hyphenated
+      // verbs ("Razzle-dazzling") are captured whole; the first char is a
+      // letter so a stray leading hyphen can't sneak in.
+      const sm = rows[r].match(/([A-Za-zé'][A-Za-zé'-]{2,})…\s*\(([^)]*)\)/);
       if (sm && /\d+\s*[hms]\b/.test(sm[2])) {
         const verb = sm[1];
         const segs = sm[2].split("·").map((x) => x.trim());

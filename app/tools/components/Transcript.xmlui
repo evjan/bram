@@ -40,7 +40,8 @@
     onInit="window.__bramSetTranscriptMounted(true)"
     onCleanup="window.__bramSetTranscriptMounted(false)"
     var.events="{window.__bramTranscriptEventsWithMenu(jsonlEvt.value, agentMenuEvt.value)}"
-    var.expanded="{[]}">
+    var.expanded="{[]}"
+    var.atBottom="{true}">
     <HStack verticalAlignment="center" gap="$space-2">
       <Heading level="h2">Transcript</Heading>
       <Text fontSize="$fontSize-sm" color="$textColor-secondary" value="{events.length + ' events'}" />
@@ -53,7 +54,7 @@
       id="transcriptList"
       height="*"
       data="{events}"
-      scrollAnchor="bottom">
+      onScroll="(ev) => atBottom = ev.atEnd">
       <property name="emptyListTemplate"><Fragment/></property>
       <VStack gap="$space-1" paddingVertical="$space-1">
         <!-- user message -->
@@ -132,5 +133,14 @@
         <AgentMenuView when="{$item.kind === 'menu'}" menu="{$item.menu}" surface="transcript" />
       </VStack>
     </List>
+    <!-- Explicit follow-bottom (replaces scrollAnchor="bottom" and its
+         content-wrapper re-stick ResizeObserver, xmlui #3599). onScroll keeps
+         atBottom in sync (fires only on user scrolls; programmatic scrolls are
+         guarded), and we re-pin to the end on new content only while the user
+         is parked there — so following never fights reading, and there's no
+         RO-driven re-stick to loop or yank the viewport. -->
+    <ChangeListener
+      listenTo="{events.length}"
+      onDidChange="atBottom ? transcriptList.scrollToBottom() : null" />
   </VStack>
 </Component>

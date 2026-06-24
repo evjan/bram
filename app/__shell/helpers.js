@@ -807,16 +807,17 @@ window.settingsInfoBodies = {
     "Both persist in .bram.json under traces.*.",
 };
 
-// "claude code" for the claude provider, raw provider name otherwise.
-// Falls back through mainAgentStatus.provider →
-// enhanceStatus.activeProvider → '' so the idle state still gets a
-// label. Guards mainAgentStatus against null (idle case).
+// "Claude Code" for the claude provider, Title-cased provider name
+// otherwise ("codex" → "Codex"). Falls back through
+// mainAgentStatus.provider → enhanceStatus.activeProvider → '' so the
+// idle state still gets a label. Guards mainAgentStatus against null.
 window.providerDisplayName = function (mainAgentStatus, enhanceStatusValue) {
   var p =
     (mainAgentStatus && mainAgentStatus.provider) ||
     (enhanceStatusValue && enhanceStatusValue.activeProvider) ||
     "";
-  return p === "claude" ? "claude code" : p;
+  if (p === "claude") return "Claude Code";
+  return p ? p.charAt(0).toUpperCase() + p.slice(1) : p;
 };
 
 // Should the idle-state provider label be visible? True when we have
@@ -843,7 +844,7 @@ window.headerWorkingLabel = function (mainAgentStatus, enhanceStatusValue) {
   var verb = s.verb || "working";
   var label =
     window.providerDisplayName(mainAgentStatus, enhanceStatusValue) +
-    " " +
+    ": " +
     verb +
     "…";
   var detail = [s.elapsedText, s.substate].filter(Boolean).join(" · ");
@@ -865,7 +866,7 @@ window.headerFinishedLabel = function (mainAgentStatus, enhanceStatusValue, last
   } else {
     verb = "Finished";
   }
-  var base = window.providerDisplayName(mainAgentStatus, enhanceStatusValue) + " " + verb;
+  var base = window.providerDisplayName(mainAgentStatus, enhanceStatusValue) + ": " + verb;
   return base + (s.elapsedText ? " · " + s.elapsedText : "");
 };
 

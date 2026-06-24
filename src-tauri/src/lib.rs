@@ -942,6 +942,16 @@ fn emit_talk_session_changed_for_provider<R: tauri::Runtime>(
         if let Some(latest_tail) = latest_tail_push_payload(app, provider) {
             merge_json_object_fields(&mut payload, &latest_tail);
         }
+        // menu-stack-pty-inflight-prose probe: on each Claude session-JSONL
+        // write, correlate the latest assistant-record timestamp against the
+        // open/dismissed menu so we can settle the race. Trace-gated.
+        if matches!(provider, SessionProvider::Claude) && bram_trace_enabled() {
+            if let Ok(Some(path)) = latest_session_path_for_provider(app, provider) {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    menu_prose_probe_check_assistant(app, &content);
+                }
+            }
+        }
     }
     emit_replayable_payload(app, "talk-session-changed", payload);
     // Push the conversation-state payload too, so the Worklist Chat pane can
@@ -1302,6 +1312,128 @@ struct DismissedMenu {
     when: std::time::Instant,
 }
 static PTY_MENU_SUPPRESSED: OnceLock<Mutex<Option<DismissedMenu>>> = OnceLock::new();
+
+// Instrumentation for the records-stacked-behind-menu bug
+// (`menu-stack-pty-inflight-prose`): correlate when the turn's assistant
+// record lands in the session JSONL against when the permission menu opened
+// and was dismissed. Settles the open question of whether the prose flushes
+// during the menu (clean) or only after dismissal (broken), and by how much.
+// Trace-gated (`bram_trace_enabled`); emits `[menu-prose-probe]` lines.
+#[derive(Default)]
+struct MenuProseProbe {
+    menu_open_at_ms: Option<i64>,
+    menu_tool: Option<String>,
+    menu_dismiss_at_ms: Option<i64>,
+    // The most recent assistant-record timestamp we've already logged, so a
+    // repeated read of the same tail does not re-emit an arrival line.
+    last_logged_assistant_ts_ms: Option<i64>,
+}
+static MENU_PROSE_PROBE: OnceLock<Mutex<MenuProseProbe>> = OnceLock::new();
+fn menu_prose_probe() -> &'static Mutex<MenuProseProbe> {
+    MENU_PROSE_PROBE.get_or_init(|| Mutex::new(MenuProseProbe::default()))
+}
+
+// A permission menu became visible: stamp open time + clear any prior
+// dismiss so the next assistant-record arrival is measured against this open.
+fn menu_prose_probe_record_open<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    tool: &str,
+    signature: Option<&str>,
+) {
+    if !bram_trace_enabled() {
+        return;
+    }
+    let now = unix_now_ms();
+    if let Ok(mut p) = menu_prose_probe().lock() {
+        p.menu_open_at_ms = Some(now);
+        p.menu_tool = Some(tool.to_string());
+        p.menu_dismiss_at_ms = None;
+    }
+    append_bram_trace_line(
+        app,
+        "menu-prose-probe",
+        &format!(
+            "event=menu-open at_ms={} tool={} signature={}",
+            now,
+            tool,
+            if signature.is_some() { "present" } else { "absent" },
+        ),
+    );
+}
+
+// The menu was dismissed (user input, or the grid no longer sees it). The
+// broken case is the assistant record landing shortly AFTER this point.
+fn menu_prose_probe_record_dismiss<R: tauri::Runtime>(app: &AppHandle<R>, tool: &str, via: &str) {
+    if !bram_trace_enabled() {
+        return;
+    }
+    let now = unix_now_ms();
+    let since_open = if let Ok(mut p) = menu_prose_probe().lock() {
+        p.menu_dismiss_at_ms = Some(now);
+        p.menu_open_at_ms.map(|o| now - o)
+    } else {
+        None
+    };
+    append_bram_trace_line(
+        app,
+        "menu-prose-probe",
+        &format!(
+            "event=menu-dismiss at_ms={} tool={} via={} since_open_ms={}",
+            now,
+            tool,
+            via,
+            since_open.map(|d| d.to_string()).unwrap_or_else(|| "na".into()),
+        ),
+    );
+}
+
+// On each session-JSONL write, if the latest assistant-record timestamp has
+// advanced and a menu is open (or was dismissed within the last 15s), log the
+// arrival relative to the menu. Outside that window the record is unrelated to
+// any menu, so we update the baseline silently to avoid trace noise.
+fn menu_prose_probe_check_assistant<R: tauri::Runtime>(app: &AppHandle<R>, content: &str) {
+    if !bram_trace_enabled() {
+        return;
+    }
+    let ts = match claude_jsonl_last_assistant_ts_ms(content) {
+        Some(t) => t,
+        None => return,
+    };
+    let now = unix_now_ms();
+    let mut p = match menu_prose_probe().lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    if p.last_logged_assistant_ts_ms == Some(ts) {
+        return;
+    }
+    p.last_logged_assistant_ts_ms = Some(ts);
+    let open = p.menu_open_at_ms;
+    let dismiss = p.menu_dismiss_at_ms;
+    let is_open = match (open, dismiss) {
+        (Some(o), Some(d)) => o > d,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    let recently_dismissed = dismiss.map_or(false, |d| now - d <= 15_000);
+    if !is_open && !recently_dismissed {
+        return;
+    }
+    let tool = p.menu_tool.clone().unwrap_or_else(|| "?".into());
+    append_bram_trace_line(
+        app,
+        "menu-prose-probe",
+        &format!(
+            "event=assistant-record record_ts_ms={} at_ms={} menu={} tool={} since_open_ms={} since_dismiss_ms={}",
+            ts,
+            now,
+            if is_open { "open" } else { "dismissed" },
+            tool,
+            open.map(|o| (now - o).to_string()).unwrap_or_else(|| "na".into()),
+            dismiss.map(|d| (now - d).to_string()).unwrap_or_else(|| "na".into()),
+        ),
+    );
+}
 
 // The loopback HTTP server's port, captured at setup. Used to inject
 // XMLUI_DESKTOP_PORT into the PTY child's environment so the agent can
@@ -4020,15 +4152,18 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                         signature_trace.map(|t| t.3).unwrap_or(0)
                     ),
                 ),
-                (None, Some(prev)) if prev.tool != PENDING_TOOL => append_bram_trace_line(
-                    app,
-                    "pty-menu",
-                    &format!(
-                        "state=dismissed tool={} reason=grace-expired elapsed_ms={}",
-                        prev.tool,
-                        expired_grace_elapsed_ms.unwrap_or(0)
-                    ),
-                ),
+                (None, Some(prev)) if prev.tool != PENDING_TOOL => {
+                    append_bram_trace_line(
+                        app,
+                        "pty-menu",
+                        &format!(
+                            "state=dismissed tool={} reason=grace-expired elapsed_ms={}",
+                            prev.tool,
+                            expired_grace_elapsed_ms.unwrap_or(0)
+                        ),
+                    );
+                    menu_prose_probe_record_dismiss(app, &prev.tool, "grid-lost");
+                }
                 _ => {}
             }
         }
@@ -4051,6 +4186,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             // (200ms, 800ms) and emits an updated payload when the
             // signature arrives. Refs #170.
             if let Some(m) = menu.as_ref() {
+                menu_prose_probe_record_open(app, &m.tool, m.tool_call_signature.as_deref());
                 let needs_signature = m.tool != PENDING_TOOL && m.tool_call_signature.is_none();
                 // Write produces a `Write(<path>)` signature via PTY-scrape,
                 // so the signature-missing branch above does not fire — but
@@ -4602,6 +4738,7 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
                 ),
             );
         }
+        menu_prose_probe_record_dismiss(app, &tool, "user-input");
         if let Ok(mut s) = pty_menu_suppressed_cell().lock() {
             *s = Some(DismissedMenu {
                 tool,

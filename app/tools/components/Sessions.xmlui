@@ -6,6 +6,7 @@
   var.fullscreenImage="{null}"
   var.query=""
   var.scope="recent"
+  var.sessionsExpanded="{false}"
   var.selectedSnippet="{false}"
   var.renamingSession="{null}"
   var.renameDraft=""
@@ -24,10 +25,21 @@
         currentProvider = data.provider;
         expandedId = null;
         expandedProvider = null;
+        sessionsExpanded = false;
       }
     }" />
 
-  <DataSource id="sessionsList" url="/__sessions/list" />
+  <DataSource
+    id="sessionsFirstPage"
+    url="/__sessions/list"
+    queryParams="{{ limit: 20, provider: currentProvider }}"
+    when="{!!currentProvider}" />
+
+  <DataSource
+    id="sessionsFull"
+    url="/__sessions/list"
+    queryParams="{{ provider: currentProvider }}"
+    when="{sessionsExpanded &amp;&amp; !!currentProvider}" />
 
   <DataSource
     id="sessionContent"
@@ -38,16 +50,20 @@
   <DataSource
     id="searchResults"
     url="/__sessions/search"
-    queryParams="{{ q: query, scope: scope }}"
+    queryParams="{{ q: query, scope: scope, provider: currentProvider }}"
     when="{!!query &amp;&amp; query.trim().length >= 2}" />
 
   <variable
+    name="sessionsSource"
+    value="{(sessionsExpanded &amp;&amp; sessionsFull.value) ? sessionsFull.value : (sessionsFirstPage.value || [])}" />
+
+  <variable
     name="displayedSessions"
-    value="{window.selectDisplayed(query, searchResults.value, sessionsList.value)}" />
+    value="{window.selectDisplayed(query, searchResults.value, sessionsSource)}" />
 
   <variable
     name="selectedSession"
-    value="{!expandedId ? null : (displayedSessions.find(s => s.id === expandedId &amp;&amp; s.provider === expandedProvider) || (sessionsList.value || []).find(s => s.id === expandedId &amp;&amp; s.provider === expandedProvider))}" />
+    value="{!expandedId ? null : (displayedSessions.find(s => s.id === expandedId &amp;&amp; s.provider === expandedProvider) || (sessionsSource || []).find(s => s.id === expandedId &amp;&amp; s.provider === expandedProvider))}" />
 
   <SearchHitModal
     id="searchHitModalRef"
@@ -72,7 +88,7 @@
     confirmTitle="Delete session?"
     confirmMessage="This cannot be undone."
     completedNotificationMessage="Session deleted. Restart the agent to refresh its session list."
-    onSuccess="pendingDeletes = pendingDeletes.concat([lastDeleteId]); savePendingSessionDeletes(pendingDeletes); if (expandedId === lastDeleteId &amp;&amp; expandedProvider === lastDeleteProvider) { expandedId = null; expandedProvider = null; } sessionsList.refetch();" />
+    onSuccess="pendingDeletes = pendingDeletes.concat([lastDeleteId]); savePendingSessionDeletes(pendingDeletes); if (expandedId === lastDeleteId &amp;&amp; expandedProvider === lastDeleteProvider) { expandedId = null; expandedProvider = null; } sessionsFirstPage.refetch(); if (sessionsExpanded) sessionsFull.refetch();" />
 
   <APICall
     id="renameSession"
@@ -80,7 +96,7 @@
     method="get"
     queryParams="{{ id: $param.id, provider: $param.provider, title: $param.title }}"
     completedNotificationMessage="Session renamed. Restart the agent to see the new title."
-    onSuccess="pendingRenames = pendingRenames.concat([lastRenameId]); savePendingSessionRenames(pendingRenames); renamingSession = null; renameDraft = ''; sessionsList.refetch();" />
+    onSuccess="pendingRenames = pendingRenames.concat([lastRenameId]); savePendingSessionRenames(pendingRenames); renamingSession = null; renameDraft = ''; sessionsFirstPage.refetch(); if (sessionsExpanded) sessionsFull.refetch();" />
 
   <ModalDialog
     when="{renamingSession}"
@@ -99,7 +115,7 @@
       <Text
         color="$textColor-secondary"
         fontSize="$fontSize-sm"
-        value="Note: codex /resume creates a forked session with a new id, so the [current] marker will not follow the renamed session. The rename does persist in codex's /resume picker — use it to find this session by name." />
+        value="Note: codex /resume can create additional bootstrap-only session files. Bram hides those from this list and keeps [current] on the live session file when it can identify it." />
       <HStack horizontalAlignment="end" gap="$space-2">
         <Button label="Cancel" variant="outlined" onClick="renamingSession = null; renameDraft = ''" />
         <Button
@@ -116,7 +132,7 @@
     subscribe="{window.bramSubscribeTauriEvent('sessions-list-changed')}" />
   <ChangeListener
     listenTo="{sessionsListChangedEvt.value &amp;&amp; sessionsListChangedEvt.value.tick}"
-    onDidChange="() => { sessionsMeta.refetch(); sessionsList.refetch(); if (expandedId &amp;&amp; expandedProvider) sessionContent.refetch(); }" />
+    onDidChange="() => { sessionsMeta.refetch(); sessionsFirstPage.refetch(); if (sessionsExpanded) sessionsFull.refetch(); if (expandedId &amp;&amp; expandedProvider) sessionContent.refetch(); }" />
   <HSplitter height="100%"
     initialPrimarySize="{window.__bramRestoreSplitterSize('sessions', '50%')}"
     onResize="(px) => window.__bramSaveSplitterSize('sessions', px)">
@@ -155,7 +171,7 @@
           initialValue="{scope}"
           orientation="horizontal"
           onDidChange="(v) => scope = v">
-          <Option label="Recent 10" value="recent" />
+          <Option label="Recent 20" value="recent" />
           <Option label="All sessions" value="all" />
         </RadioGroup>
       </HStack>
@@ -217,6 +233,28 @@
             </Link>
           </VStack>
         </Items>
+        <Link
+          when="{(!query || query.trim().length &lt; 2) &amp;&amp; !sessionsExpanded &amp;&amp; sessionsMeta.value &amp;&amp; sessionsMeta.value.count > 20}"
+          onClick="sessionsExpanded = true"
+          noIndicator="true">
+          <Text
+            paddingHorizontal="$space-3"
+            paddingVertical="$space-2"
+            fontSize="$fontSize-xs"
+            color="$textColor-secondary"
+            value="More ({sessionsMeta.value.count - 20} more)" />
+        </Link>
+        <Link
+          when="{(!query || query.trim().length &lt; 2) &amp;&amp; sessionsExpanded &amp;&amp; sessionsSource.length > 20}"
+          onClick="sessionsExpanded = false"
+          noIndicator="true">
+          <Text
+            paddingHorizontal="$space-3"
+            paddingVertical="$space-2"
+            fontSize="$fontSize-xs"
+            color="$textColor-secondary"
+            value="Show fewer" />
+        </Link>
       </VStack>
     </VStack>
 

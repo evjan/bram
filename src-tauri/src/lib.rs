@@ -8858,6 +8858,72 @@ fn codex_session_meta(path: &Path) -> std::io::Result<Option<(String, String)>> 
     Ok(None)
 }
 
+fn codex_startup_context_text(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("# AGENTS.md instructions for ")
+        || trimmed.starts_with("<environment_context>")
+        || trimmed.starts_with("This repo is driven through Bram. The canonical worklist gate")
+}
+
+fn codex_payload_has_real_user_activity(payload: &serde_json::Value) -> bool {
+    if payload.get("role").and_then(|v| v.as_str()) != Some("user") {
+        return false;
+    }
+    if payload.get("type").and_then(|v| v.as_str()) != Some("message") {
+        return false;
+    }
+    let Some(content) = payload.get("content") else {
+        return false;
+    };
+    if let Some(text) = content.as_str() {
+        let text = text.trim();
+        return !text.is_empty() && !codex_startup_context_text(text);
+    }
+    content
+        .as_array()
+        .map(|arr| {
+            arr.iter().any(|part| {
+                let part_type = part.get("type").and_then(|v| v.as_str());
+                if matches!(part_type, Some("input_image")) {
+                    return true;
+                }
+                if !matches!(part_type, Some("input_text") | Some("text")) {
+                    return false;
+                }
+                let text = part
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                !text.is_empty() && !codex_startup_context_text(text)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn codex_session_has_real_user_activity(path: &Path) -> std::io::Result<bool> {
+    let reader = BufReader::new(std::fs::File::open(path)?);
+    for line in reader.lines().take(200) {
+        let line = line?;
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if record.get("type").and_then(|v| v.as_str()) != Some("response_item") {
+            continue;
+        }
+        let Some(payload) = record.get("payload") else {
+            continue;
+        };
+        if codex_payload_has_real_user_activity(payload) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn codex_session_title(path: &Path) -> std::io::Result<Option<String>> {
     let reader = BufReader::new(std::fs::File::open(path)?);
     for line in reader.lines() {
@@ -8880,6 +8946,9 @@ fn codex_session_title(path: &Path) -> std::io::Result<Option<String>> {
         let Some(message) = payload.get("message").and_then(|v| v.as_str()) else {
             continue;
         };
+        if codex_startup_context_text(message) {
+            continue;
+        }
         return Ok(Some(message.chars().take(120).collect()));
     }
     Ok(None)
@@ -8921,6 +8990,7 @@ fn find_snippets(text: &str, q_lower: &str, max_count: usize) -> Vec<String> {
 
 fn discover_claude_sessions<R: tauri::Runtime>(
     app: &AppHandle<R>,
+    limit: Option<usize>,
 ) -> Result<Vec<SessionRecord>, String> {
     let lookup = claude_sessions_dir_lookup(app)?;
     let dir = lookup.chosen;
@@ -8930,7 +9000,7 @@ fn discover_claude_sessions<R: tauri::Runtime>(
         Err(e) => return Err(e.to_string()),
     };
 
-    let mut sessions = Vec::new();
+    let mut candidates: Vec<(PathBuf, u64, u64, String)> = Vec::new();
     for entry in entries {
         let Ok(entry) = entry else { continue };
         let path = entry.path();
@@ -8949,17 +9019,25 @@ fn discover_claude_sessions<R: tauri::Runtime>(
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
+        candidates.push((path, mtime, metadata.len(), id));
+    }
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    if let Some(limit) = limit {
+        candidates.truncate(limit);
+    }
+
+    let mut sessions = Vec::new();
+    for (path, mtime, size, id) in candidates {
         let title = claude_session_title(&path).ok().flatten();
         sessions.push(SessionRecord {
             provider: SessionProvider::Claude,
             id,
             path,
             mtime,
-            size: metadata.len(),
+            size,
             title,
         });
     }
-    sessions.sort_by(|a, b| b.mtime.cmp(&a.mtime));
     Ok(sessions)
 }
 
@@ -8985,6 +9063,7 @@ fn claude_discovery_notes(lookup: &SessionsDirLookup) -> Vec<String> {
 
 fn discover_codex_sessions<R: tauri::Runtime>(
     app: &AppHandle<R>,
+    limit: Option<usize>,
 ) -> Result<Vec<SessionRecord>, String> {
     let project = project_root(Some(app)).ok_or("could not resolve project root")?;
     let project_cwd = canonical_path_string(&project);
@@ -8994,7 +9073,9 @@ fn discover_codex_sessions<R: tauri::Runtime>(
     let mut paths = Vec::new();
     collect_codex_session_paths(&sessions_root, &mut paths)?;
 
-    let mut sessions = Vec::new();
+    let mut candidates: Vec<(PathBuf, u64, u64, String)> = Vec::new();
+    let mut total = 0usize;
+    let mut hidden_bootstrap = 0usize;
     for path in paths {
         let Some((id, cwd)) = codex_session_meta(&path).map_err(|e| e.to_string())? else {
             continue;
@@ -9002,6 +9083,7 @@ fn discover_codex_sessions<R: tauri::Runtime>(
         if canonical_path_string(Path::new(&cwd)) != project_cwd {
             continue;
         }
+        total += 1;
         let metadata = path.metadata().map_err(|e| e.to_string())?;
         let mtime = metadata
             .modified()
@@ -9009,6 +9091,21 @@ fn discover_codex_sessions<R: tauri::Runtime>(
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        candidates.push((path, mtime, metadata.len(), id));
+    }
+    candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+    let mut sessions = Vec::new();
+    for (path, mtime, size, id) in candidates {
+        if let Some(limit) = limit {
+            if sessions.len() >= limit {
+                break;
+            }
+        }
+        if !codex_session_has_real_user_activity(&path).unwrap_or(false) {
+            hidden_bootstrap += 1;
+            continue;
+        }
         let title = titles
             .get(&id)
             .cloned()
@@ -9018,11 +9115,23 @@ fn discover_codex_sessions<R: tauri::Runtime>(
             id: id.clone(),
             path,
             mtime,
-            size: metadata.len(),
+            size,
             title,
         });
     }
-    sessions.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    append_bram_trace_line(
+        app,
+        "sessions",
+        &format!(
+            "op=discover provider=codex total={} visible={} hidden_bootstrap={} limit={}",
+            total,
+            sessions.len(),
+            hidden_bootstrap,
+            limit
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "all".to_string())
+        ),
+    );
     Ok(sessions)
 }
 
@@ -9046,10 +9155,18 @@ fn choose_session_provider(
 fn sessions_for_provider<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,
+    limit: Option<usize>,
 ) -> Result<(SessionProvider, Vec<SessionRecord>), String> {
-    let claude = discover_claude_sessions(app)?;
-    let codex = discover_codex_sessions(app)?;
     let preferred = preferred.or_else(|| hinted_session_provider(app));
+    if let Some(provider) = preferred {
+        let sessions = match provider {
+            SessionProvider::Claude => discover_claude_sessions(app, limit)?,
+            SessionProvider::Codex => discover_codex_sessions(app, limit)?,
+        };
+        return Ok((provider, sessions));
+    }
+    let claude = discover_claude_sessions(app, None)?;
+    let codex = discover_codex_sessions(app, None)?;
     let provider = choose_session_provider(preferred, &claude, &codex);
     let sessions = match provider {
         SessionProvider::Claude => claude,
@@ -9058,12 +9175,63 @@ fn sessions_for_provider<R: tauri::Runtime>(
     Ok((provider, sessions))
 }
 
+fn count_claude_sessions<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<usize, String> {
+    let lookup = claude_sessions_dir_lookup(app)?;
+    let entries = match std::fs::read_dir(&lookup.chosen) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut count = 0usize;
+    for entry in entries {
+        let Ok(entry) = entry else { continue };
+        if entry.path().extension().and_then(|s| s.to_str()) == Some("jsonl") {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn count_codex_sessions<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<usize, String> {
+    let project = project_root(Some(app)).ok_or("could not resolve project root")?;
+    let project_cwd = canonical_path_string(&project);
+    let home = home_dir().ok_or("no HOME or USERPROFILE")?;
+    let sessions_root = home.join(".codex").join("sessions");
+    let mut paths = Vec::new();
+    collect_codex_session_paths(&sessions_root, &mut paths)?;
+
+    let mut count = 0usize;
+    for path in paths {
+        let Some((_, cwd)) = codex_session_meta(&path).map_err(|e| e.to_string())? else {
+            continue;
+        };
+        if canonical_path_string(Path::new(&cwd)) != project_cwd {
+            continue;
+        }
+        if codex_session_has_real_user_activity(&path).unwrap_or(false) {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 fn session_meta<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,
 ) -> Result<SessionsMeta, String> {
-    let (provider, sessions) = sessions_for_provider(app, preferred)?;
-    let discovery_notes = if provider == SessionProvider::Claude && sessions.is_empty() {
+    let preferred = preferred.or_else(|| hinted_session_provider(app));
+    let provider = if let Some(provider) = preferred {
+        provider
+    } else {
+        let claude = discover_claude_sessions(app, Some(1))?;
+        let codex = discover_codex_sessions(app, Some(1))?;
+        choose_session_provider(None, &claude, &codex)
+    };
+    let count = match provider {
+        SessionProvider::Claude => count_claude_sessions(app)?,
+        SessionProvider::Codex => count_codex_sessions(app)?,
+    };
+    let discovery_notes = if provider == SessionProvider::Claude && count == 0 {
         claude_sessions_dir_lookup(app)
             .map(|lookup| claude_discovery_notes(&lookup))
             .unwrap_or_default()
@@ -9072,8 +9240,8 @@ fn session_meta<R: tauri::Runtime>(
     };
     Ok(SessionsMeta {
         provider,
-        count: sessions.len(),
-        current_id: sessions.first().map(|s| s.id.clone()),
+        count,
+        current_id: live_session_id(app, provider),
         discovery_notes,
     })
 }
@@ -9089,8 +9257,11 @@ fn search_sessions<R: tauri::Runtime>(
         return Ok(Vec::new());
     }
     let q_lower = q.to_lowercase();
-    let (provider, mut sessions) = sessions_for_provider(app, preferred)?;
-    sessions.truncate(limit);
+    let bounded_limit = if limit == usize::MAX { None } else { Some(limit) };
+    let (provider, mut sessions) = sessions_for_provider(app, preferred, bounded_limit)?;
+    if bounded_limit.is_none() {
+        sessions.truncate(limit);
+    }
 
     let mut results: Vec<serde_json::Value> = Vec::new();
     for session in sessions {
@@ -9139,29 +9310,29 @@ fn search_sessions<R: tauri::Runtime>(
 fn list_sessions<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,
+    limit: Option<usize>,
 ) -> Result<Vec<SessionEntry>, String> {
-    let (provider, sessions) = sessions_for_provider(app, preferred)?;
-    // For Claude sessions, mark the live one using the same hysteresis-
-    // backed picker that the Transcript pane uses. For Codex (or anything else),
-    // fall back to "newest mtime" via idx == 0.
-    let live_claude_id: Option<String> = match provider {
-        SessionProvider::Claude => latest_claude_session_path(app)
-            .ok()
-            .flatten()
-            .and_then(|p| {
-                p.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_string())
-            }),
-        _ => None,
-    };
+    let (provider, sessions) = sessions_for_provider(app, preferred, limit)?;
+    let live_id = live_session_id(app, provider);
+    append_bram_trace_line(
+        app,
+        "sessions",
+        &format!(
+            "op=list provider={} visible={} current_id={} limit={}",
+            session_provider_label(provider),
+            sessions.len(),
+            live_id.as_deref().unwrap_or(""),
+            limit
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "all".to_string())
+        ),
+    );
     Ok(sessions
         .into_iter()
-        .enumerate()
-        .map(|(idx, session)| {
-            let current = match &live_claude_id {
+        .map(|session| {
+            let current = match &live_id {
                 Some(live_id) => session.id == *live_id,
-                None => idx == 0,
+                None => false,
             };
             SessionEntry {
                 id: session.id,
@@ -9175,6 +9346,26 @@ fn list_sessions<R: tauri::Runtime>(
         .collect())
 }
 
+fn live_session_id<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: SessionProvider,
+) -> Option<String> {
+    match provider {
+        SessionProvider::Claude => latest_claude_session_path(app)
+            .ok()
+            .flatten()
+            .and_then(|p| {
+                p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+            }),
+        SessionProvider::Codex => latest_codex_session_path(app)
+            .ok()
+            .flatten()
+            .and_then(|p| codex_session_meta(&p).ok().flatten().map(|(id, _)| id)),
+    }
+}
+
 fn read_session<R: tauri::Runtime>(
     app: &AppHandle<R>,
     id: &str,
@@ -9183,7 +9374,7 @@ fn read_session<R: tauri::Runtime>(
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("invalid session id".to_string());
     }
-    let (_, sessions) = sessions_for_provider(app, preferred)?;
+    let (_, sessions) = sessions_for_provider(app, preferred, None)?;
     let session = sessions
         .into_iter()
         .find(|session| session.id == id)
@@ -9203,7 +9394,7 @@ fn delete_session<R: tauri::Runtime>(
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("invalid session id".to_string());
     }
-    let (_, sessions) = sessions_for_provider(app, preferred)?;
+    let (_, sessions) = sessions_for_provider(app, preferred, None)?;
     let session = sessions
         .into_iter()
         .find(|session| session.id == id)
@@ -9264,7 +9455,7 @@ fn rename_session<R: tauri::Runtime>(
     if trimmed.is_empty() {
         return Err("empty title".to_string());
     }
-    let (provider, sessions) = sessions_for_provider(app, preferred)?;
+    let (provider, sessions) = sessions_for_provider(app, preferred, None)?;
     let session = sessions
         .into_iter()
         .find(|session| session.id == id)
@@ -9427,46 +9618,28 @@ fn latest_codex_session_path<R: tauri::Runtime>(
     if all.is_empty() {
         return Ok(None);
     }
-    let (raw_best_mtime, raw_best_path) = all
+    // Multiple Codex processes can write same-cwd JSONL files at once. Ignore
+    // bootstrap-only stubs, then follow the most recent real writer. A resumed
+    // terminal can keep appending to an older rollout file, so creation-order
+    // alone is not authoritative.
+    let raw_best = all
         .iter()
-        .max_by_key(|(t, _)| *t)
+        .max_by_key(|(mtime, _)| *mtime)
         .cloned()
         .expect("non-empty");
+    let active_best = all
+        .iter()
+        .filter_map(
+            |(mtime, path)| match codex_session_has_real_user_activity(path) {
+                Ok(true) => Some((*mtime, path.clone())),
+                Ok(false) => None,
+                Err(_) => None,
+            },
+        )
+        .max_by_key(|(mtime, _)| *mtime);
+    let (chosen_mtime, chosen) = active_best.unwrap_or(raw_best);
     let cache_cell = LIVE_CODEX_SESSION.get_or_init(|| Mutex::new(None));
     let mut cached = cache_cell.lock().map_err(|e| e.to_string())?;
-    let chosen: PathBuf = match cached.as_ref() {
-        Some((cached_path, _)) => {
-            let cached_now = all.iter().find(|(_, p)| p == cached_path).map(|(t, _)| *t);
-            match cached_now {
-                None => raw_best_path.clone(),
-                Some(cached_mtime) => {
-                    let now = std::time::SystemTime::now();
-                    let cached_age = now
-                        .duration_since(cached_mtime)
-                        .unwrap_or_else(|_| std::time::Duration::from_secs(0));
-                    let raw_age = now
-                        .duration_since(raw_best_mtime)
-                        .unwrap_or_else(|_| std::time::Duration::from_secs(0));
-                    let different = &raw_best_path != cached_path;
-                    let cond_b = cached_age > std::time::Duration::from_secs(30)
-                        && raw_best_mtime > cached_mtime;
-                    let cond_c = raw_age < std::time::Duration::from_secs(5)
-                        && cached_age > std::time::Duration::from_secs(5);
-                    if different && (cond_b || cond_c) {
-                        raw_best_path.clone()
-                    } else {
-                        cached_path.clone()
-                    }
-                }
-            }
-        }
-        None => raw_best_path.clone(),
-    };
-    let chosen_mtime = all
-        .iter()
-        .find(|(_, p)| p == &chosen)
-        .map(|(t, _)| *t)
-        .unwrap_or(raw_best_mtime);
     *cached = Some((chosen.clone(), chosen_mtime));
     Ok(Some(chosen))
 }
@@ -17280,9 +17453,28 @@ mod pty_menu_tests {
 mod turn_completion_tests {
     use super::{
         claude_jsonl_completion_decision, codex_jsonl_completion_decision,
-        codex_latest_user_message_ts_ms, jsonl_completion_provider_for_path,
+        codex_latest_user_message_ts_ms, codex_session_has_real_user_activity,
+        jsonl_completion_provider_for_path,
     };
     use std::path::Path;
+
+    fn write_codex_activity_fixture(
+        name: &str,
+        records: Vec<serde_json::Value>,
+    ) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "bram-codex-session-activity-{}-{}.jsonl",
+            std::process::id(),
+            name
+        ));
+        let mut text = String::new();
+        for record in records {
+            text.push_str(&serde_json::to_string(&record).unwrap());
+            text.push('\n');
+        }
+        std::fs::write(&path, text).expect("codex session fixture should be written");
+        path
+    }
 
     #[test]
     fn claude_end_turn_detects_completion() {
@@ -17366,6 +17558,59 @@ mod turn_completion_tests {
             codex_latest_user_message_ts_ms(content),
             Some(1781151411662)
         );
+    }
+
+    #[test]
+    fn codex_session_activity_skips_bootstrap_context_only() {
+        let path = write_codex_activity_fixture(
+            "bootstrap",
+            vec![serde_json::json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        { "type": "input_text", "text": "# AGENTS.md instructions for /Users/jonudell/bram\n\n<INSTRUCTIONS>..." },
+                        { "type": "input_text", "text": "<environment_context>\n  <cwd>/Users/jonudell/bram</cwd>\n</environment_context>" },
+                        { "type": "input_text", "text": "This repo is driven through Bram. The canonical worklist gate is carried by codex's developer_instructions." }
+                    ]
+                }
+            })],
+        );
+
+        assert!(!codex_session_has_real_user_activity(&path).unwrap());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn codex_session_activity_detects_real_user_after_bootstrap() {
+        let path = write_codex_activity_fixture(
+            "real",
+            vec![
+                serde_json::json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            { "type": "input_text", "text": "# AGENTS.md instructions for /Users/jonudell/bram\n\n<INSTRUCTIONS>..." },
+                            { "type": "input_text", "text": "<environment_context>\n  <cwd>/Users/jonudell/bram</cwd>\n</environment_context>" }
+                        ]
+                    }
+                }),
+                serde_json::json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{ "type": "input_text", "text": "resume the prior session" }]
+                    }
+                }),
+            ],
+        );
+
+        assert!(codex_session_has_real_user_activity(&path).unwrap());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
@@ -20006,6 +20251,7 @@ fn route_request<R: tauri::Runtime>(
         let mut q = String::new();
         let mut scope = String::from("recent");
         let mut title = String::new();
+        let mut limit: Option<usize> = None;
         for pair in query.split('&') {
             if let Some(v) = pair.strip_prefix("provider=") {
                 provider = SessionProvider::from_str(&percent_decode(v));
@@ -20017,6 +20263,8 @@ fn route_request<R: tauri::Runtime>(
                 scope = percent_decode(v);
             } else if let Some(v) = pair.strip_prefix("title=") {
                 title = percent_decode(v);
+            } else if let Some(v) = pair.strip_prefix("limit=") {
+                limit = percent_decode(v).parse::<usize>().ok().map(|n| n.max(1));
             }
         }
 
@@ -20029,7 +20277,7 @@ fn route_request<R: tauri::Runtime>(
         } else if rest == "list" {
             (
                 "application/json; charset=utf-8",
-                list_sessions(app, provider)
+                list_sessions(app, provider, limit)
                     .and_then(|entries| serde_json::to_vec(&entries).map_err(|e| e.to_string())),
             )
         } else if rest == "latest" {
@@ -20109,7 +20357,7 @@ fn route_request<R: tauri::Runtime>(
                 read_session(app, &session_id, provider),
             )
         } else if rest == "search" {
-            let limit = if scope == "all" { usize::MAX } else { 10 };
+            let limit = if scope == "all" { usize::MAX } else { 20 };
             (
                 "application/json; charset=utf-8",
                 search_sessions(app, &q, limit, provider)

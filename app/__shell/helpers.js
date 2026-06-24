@@ -13,6 +13,107 @@
 
 window._xsLogs = window._xsLogs || [];
 
+// ResizeObserver flood detector (diagnostic, #150 startup unresponsiveness).
+// The browser logs "ResizeObserver loop completed with undelivered
+// notifications" but names no culprit. We wrap the constructor (class extends
+// so observe/disconnect/instanceof keep working natively; we only intercept
+// the callback to count fires) and, once per second while the global fire rate
+// exceeds a flood threshold, log to bram-trace WHICH element(s) are looping.
+// Loaded before xmlui-standalone (tools/index.html), so it wraps every XMLUI
+// Splitter/layout observer. Remove once the flood source is identified.
+(function installResizeObserverFloodDetector() {
+  var Native = window.ResizeObserver;
+  if (!Native || Native.__bramFloodWrapped) return;
+  var FLOOD_PER_SEC = 50;
+  var total = 0;
+  var counts = Object.create(null);
+  function describe(el) {
+    try {
+      if (!el || el.nodeType !== 1) return String(el);
+      var id = el.id ? "#" + el.id : "";
+      var cls = (typeof el.className === "string" && el.className.trim())
+        ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".")
+        : "";
+      return el.tagName.toLowerCase() + id + cls;
+    } catch (e) { return "?"; }
+  }
+  var Wrapped = class extends Native {
+    constructor(cb) {
+      super(function (entries, observer) {
+        total += entries.length || 1;
+        for (var i = 0; i < entries.length; i++) {
+          var k = describe(entries[i] && entries[i].target);
+          counts[k] = (counts[k] || 0) + 1;
+        }
+        return cb.call(this, entries, observer);
+      });
+    }
+  };
+  Wrapped.__bramFloodWrapped = true;
+  window.ResizeObserver = Wrapped;
+  setInterval(function () {
+    var t = total; total = 0;
+    var snap = counts; counts = Object.create(null);
+    if (t < FLOOD_PER_SEC) return;
+    var top = Object.keys(snap)
+      .map(function (k) { return [k, snap[k]]; })
+      .sort(function (a, b) { return b[1] - a[1]; })
+      .slice(0, 6)
+      .map(function (p) { return p[0] + "=" + p[1]; });
+    if (typeof window.__bramIframeTrace === "function") {
+      window.__bramIframeTrace("resizeobserver-flood", {
+        context: "iframe", firesPerSec: t, top: top,
+      });
+    }
+  }, 1000);
+})();
+
+// Input-latency probe (diagnostic, #150 startup unresponsiveness). The other
+// instruments measure iframe-JS steady state; this measures the actual
+// symptom — input responsiveness. Capture-phase pointerdown/keydown stamp a
+// time; the next animation frame measures how long the main thread took to
+// come back. A gap > threshold means input was starved (JS saturation or
+// render jank). hadFocus is logged too, since "needs a double-click after a
+// reload" is often a focus artifact, not saturation. Remove once the #150
+// responsiveness cause is identified.
+(function installInputLatencyProbe() {
+  if (window.__bramInputLatencyProbe) return;
+  window.__bramInputLatencyProbe = true;
+  var THRESHOLD_MS = 200;
+  var lastLog = 0;
+  function describe(el) {
+    try {
+      if (!el || el.nodeType !== 1) return String(el);
+      var id = el.id ? "#" + el.id : "";
+      var cls = (typeof el.className === "string" && el.className.trim())
+        ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".")
+        : "";
+      return el.tagName.toLowerCase() + id + cls;
+    } catch (e) { return "?"; }
+  }
+  function onInput(ev) {
+    var t0 = performance.now();
+    var type = ev.type;
+    var hadFocus = false;
+    try { hadFocus = document.hasFocus(); } catch (e) {}
+    var tgt = describe(ev.target);
+    requestAnimationFrame(function () {
+      var dt = performance.now() - t0;
+      if (dt < THRESHOLD_MS) return;
+      if (t0 - lastLog < THRESHOLD_MS) return;
+      lastLog = t0;
+      if (typeof window.__bramIframeTrace === "function") {
+        window.__bramIframeTrace("input-latency", {
+          context: "iframe", event: type, latencyMs: Math.round(dt),
+          hadFocus: hadFocus, target: tgt,
+        });
+      }
+    });
+  }
+  document.addEventListener("pointerdown", onInput, true);
+  document.addEventListener("keydown", onInput, true);
+})();
+
 // Persist the tools-pane route across iframe reloads. main.js reassigns
 // tools.src on every tools-pane-reload event (drawer code changed under
 // app/tools/), which drops the hash and lands the user on the default

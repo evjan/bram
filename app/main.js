@@ -6,6 +6,120 @@ invoke("log_from_right_pane", {
   payload: { kind: "main.js-loaded", at: new Date().toISOString() },
 }).catch(() => {});
 
+// ResizeObserver flood detector (diagnostic, #150 startup unresponsiveness).
+// Parent-window twin of the iframe detector in helpers.js — catches the
+// terminal fitAddon/webgl observers and shell-button layout here, while the
+// iframe copy catches XMLUI Splitters. Wraps the constructor (class extends so
+// observe/disconnect/instanceof keep working) and logs to bram-trace, once per
+// second while the global fire rate exceeds a flood threshold, WHICH element
+// is looping. Installed before the Terminal + observeTerminalSize() below.
+// Remove once the flood source is identified.
+(function installResizeObserverFloodDetector() {
+  const Native = window.ResizeObserver;
+  if (!Native || Native.__bramFloodWrapped) return;
+  const FLOOD_PER_SEC = 50;
+  let total = 0;
+  let counts = Object.create(null);
+  const describe = (el) => {
+    try {
+      if (!el || el.nodeType !== 1) return String(el);
+      const id = el.id ? "#" + el.id : "";
+      const cls = typeof el.className === "string" && el.className.trim()
+        ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".")
+        : "";
+      return el.tagName.toLowerCase() + id + cls;
+    } catch (e) {
+      return "?";
+    }
+  };
+  const Wrapped = class extends Native {
+    constructor(cb) {
+      super(function (entries, observer) {
+        total += entries.length || 1;
+        for (let i = 0; i < entries.length; i++) {
+          const k = describe(entries[i] && entries[i].target);
+          counts[k] = (counts[k] || 0) + 1;
+        }
+        return cb.call(this, entries, observer);
+      });
+    }
+  };
+  Wrapped.__bramFloodWrapped = true;
+  window.ResizeObserver = Wrapped;
+  setInterval(() => {
+    const t = total;
+    total = 0;
+    const snap = counts;
+    counts = Object.create(null);
+    if (t < FLOOD_PER_SEC) return;
+    const top = Object.keys(snap)
+      .map((k) => [k, snap[k]])
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map((p) => p[0] + "=" + p[1]);
+    invoke("log_from_right_pane", {
+      payload: {
+        kind: "iframe-trace",
+        subkind: "resizeobserver-flood",
+        context: "parent",
+        firesPerSec: t,
+        top,
+      },
+    }).catch(() => {});
+  }, 1000);
+})();
+
+// Input-latency probe (diagnostic, #150). Parent-window twin of the iframe
+// probe in helpers.js — measures responsiveness of the terminal + shell
+// chrome (e.g. the #reload-right button). Capture-phase pointerdown/keydown
+// stamp a time; the next frame measures how long the main thread took to come
+// back. hadFocus distinguishes saturation from a post-reload focus artifact.
+// Remove once the #150 responsiveness cause is identified.
+(function installInputLatencyProbe() {
+  if (window.__bramInputLatencyProbe) return;
+  window.__bramInputLatencyProbe = true;
+  const THRESHOLD_MS = 200;
+  let lastLog = 0;
+  const describe = (el) => {
+    try {
+      if (!el || el.nodeType !== 1) return String(el);
+      const id = el.id ? "#" + el.id : "";
+      const cls = typeof el.className === "string" && el.className.trim()
+        ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".")
+        : "";
+      return el.tagName.toLowerCase() + id + cls;
+    } catch (e) {
+      return "?";
+    }
+  };
+  const onInput = (ev) => {
+    const t0 = performance.now();
+    const type = ev.type;
+    let hadFocus = false;
+    try { hadFocus = document.hasFocus(); } catch (e) {}
+    const tgt = describe(ev.target);
+    requestAnimationFrame(() => {
+      const dt = performance.now() - t0;
+      if (dt < THRESHOLD_MS) return;
+      if (t0 - lastLog < THRESHOLD_MS) return;
+      lastLog = t0;
+      invoke("log_from_right_pane", {
+        payload: {
+          kind: "iframe-trace",
+          subkind: "input-latency",
+          context: "parent",
+          event: type,
+          latencyMs: Math.round(dt),
+          hadFocus,
+          target: tgt,
+        },
+      }).catch(() => {});
+    });
+  };
+  document.addEventListener("pointerdown", onInput, true);
+  document.addEventListener("keydown", onInput, true);
+})();
+
 const TERM_FONT_KEY = "bram.terminal.fontSize";
 const LEGACY_TERM_FONT_KEY = "xmlui-desktop.terminal.fontSize";
 const TERM_FONT_MIN = 8;
@@ -709,6 +823,7 @@ function __gridDetectMenu(rows) {
     header: headerRow ? headerRow.text.trim() : "",
     options: menu.map((o) => ({ n: o.n, label: o.label, selected: o.selected })),
     above,
+    blockTop,
   };
 }
 
@@ -758,6 +873,25 @@ function __gridShadowCheck() {
       menu.header + "|" + menu.options.map((o) => o.n + o.label).join("|");
     if (key === __gridLastMenuKey) return;
     __gridLastMenuKey = key;
+    // DIAGNOSTIC (menu-prose feasibility): once per distinct menu, dump every
+    // row ABOVE the option block — the permission box plus whatever scrollback
+    // sits above it. Answers the open question of whether the in-flight turn's
+    // assistant prose is present as clean rendered text above the box (i.e. the
+    // `menu-stack-pty-inflight-prose` problem is sourceable from the grid), or
+    // whether it's scrolled past the 200-row window / eaten by repaint. Row `i`
+    // is the index within the live-rows window; `w:1` flags a soft-wrap
+    // continuation. Remove once the question is answered.
+    invoke("log_from_right_pane", {
+      payload: {
+        kind: "iframe-trace",
+        subkind: "xterm-grid-prose-probe",
+        blockTop: menu.blockTop,
+        windowRows: rows.length,
+        above: rows
+          .slice(0, menu.blockTop)
+          .map((r, i) => ({ i, w: r.wrapped ? 1 : 0, t: r.text })),
+      },
+    }).catch(() => {});
     __gridMenuPresent = true;
     __gridLastMenu = {
       header: menu.header,

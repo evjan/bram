@@ -35,7 +35,7 @@
     onDidChange="() => { const ev = footerVoiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; const target = (ev &amp;&amp; ev.meta &amp;&amp; ev.meta.target) || ''; if (target === 'message-agent') { if (t &amp;&amp; footerComposerBox) window.__bramAppendVoiceToBox(footerComposerBox, t); footerVoiceRecording = false; worklistVoiceRecordingActive = false; } }" />
   <ChangeListener
     listenTo="{enhanceStatusEvt.value}"
-    onDidChange="() => { enhanceStatus.refetch(); startBramLatestJsonlPush(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }" />
+    onDidChange="() => { window.__bramIframeTrace('refetch-called', {context: 'enhance-status-changed'}); enhanceStatus.refetch(); startBramLatestJsonlPush(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || ''); }" />
   <ChangeListener
     listenTo="{rightPaneSizeEvt.value}"
     onDidChange="() => { const s = rightPaneSizeEvt.value || null; rightPaneSize = s ? (s.width + ' × ' + s.height) : '(measuring…)'; }" />
@@ -50,7 +50,7 @@
     subscribe="{window.bramSubscribeTauriEvent('inflight-claim-changed')}" />
   <ChangeListener
     listenTo="{headerInflightEvt.value}"
-    onDidChange="() => { headerInflightTick = headerInflightTick + 1; }" />
+    onDidChange="() => { headerInflightTick = headerInflightTick + 1; window.__bramIframeTrace('refetch-called', {context: 'header-inflight-claim-changed', tick: headerInflightTick}); }" />
   <!-- Backup driver: the dedicated inflight-claim-changed subscription dedups
        against Workspace's, so also refetch whenever the agent status changes
        (App-scope push that's already proven). An in-flight action always makes

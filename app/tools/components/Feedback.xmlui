@@ -49,7 +49,7 @@
       subscribe="{window.bramSubscribeTauriEvent('feedback-history-changed')}" />
     <ChangeListener
       listenTo="{feedbackHistoryEvt.value &amp;&amp; feedbackHistoryEvt.value.tick}"
-      onDidChange="() => feedbackList.refetch()" />
+      onDidChange="() => { window.__bramIframeTrace('refetch-called', {context: 'feedback-history-changed'}); feedbackList.refetch(); }" />
     <HStack gap="$space-3" verticalAlignment="center">
       <Heading level="h2">Feedback</Heading>
       <SpaceFiller />

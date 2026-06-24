@@ -1289,30 +1289,6 @@ static LIVE_CODEX_SESSION: OnceLock<Mutex<Option<(PathBuf, std::time::SystemTime
 static PTY_TAIL: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 static PTY_MENU: OnceLock<Mutex<Option<PtyMenu>>> = OnceLock::new();
 static PTY_MENU_SUPPRESSED: OnceLock<Mutex<Option<(String, std::time::Instant)>>> = OnceLock::new();
-// Grace window for the "buffer briefly evicted a still-live menu" case.
-// When `pty_menu_detect` returns None but `PTY_MENU` is currently Some,
-// we defer the dismiss emit for MENU_EVICTION_GRACE_MS and re-check on
-// the next pty_menu_update cycle. Re-detection within the window
-// suppresses both the dismiss and the re-show; grace expiry without
-// re-detection emits the dismiss normally. Refs #77 menu-detector
-// stabilization.
-//
-// Grace bumped to 60s for incident #182 #17: when the user steps away
-// from a permission prompt and the menu scrolls past the PTY tail
-// while Claude's TUI keeps presenting it, a 1.5s grace would dismiss
-// the menu host-side even though the terminal is still asking for
-// input. 60s covers a realistic "walk back to the keyboard" window.
-// A subsequent TUI redraw clears the grace via the `detected.is_some()`
-// branch below; if no redraw ever brings the menu back into the tail
-// and 60s passes, dismiss legitimately.
-#[derive(Clone)]
-struct MenuEvictionGrace {
-    started: std::time::Instant,
-    tool: String,
-}
-
-static PTY_MENU_EVICTION_GRACE: OnceLock<Mutex<Option<MenuEvictionGrace>>> = OnceLock::new();
-const MENU_EVICTION_GRACE_MS: u128 = 60_000;
 
 // The loopback HTTP server's port, captured at setup. Used to inject
 // XMLUI_DESKTOP_PORT into the PTY child's environment so the agent can
@@ -1425,68 +1401,13 @@ fn trace_pty_menu_options<R: tauri::Runtime>(app: &AppHandle<R>, payload: &Optio
     );
 }
 
-// Trim the "Do you want to proceed?" footer + numbered options off the
-// captured menu text before it ships to the iframe. The options are
-// already parsed separately into `PtyMenu.options` and rendered as
-// proper buttons, so leaving them in `text` made them appear twice
-// (once as plain text bleeding into the tool-use preview, once as
-// buttons). Refs menu-bleed-into-tool-use-preview screenshot.
-fn trim_menu_text_for_preview(text: &str) -> String {
-    if let Some(idx) = text.find("Do you want to proceed?") {
-        text[..idx].trim_end().to_string()
-    } else {
-        text.to_string()
-    }
-}
-
-// Parse `1. Foo` / `❯1. Foo` / `❯ 2. Bar` lines out of the captured menu
-// text. Cursor marker `❯` (U+276F) may or may not lead the first option;
-// subsequent options have a numeric prefix only. Stops at the first non-
-// matching line after at least one option has been collected so trailing
-// PTY chatter doesn't get swept in. Returns an empty Vec on no matches —
-// the UI falls back to its hardcoded buttons in that case.
-// Heuristic for the #187 "options collapsed onto one line" symptom.
-// A real Claude menu option label never contains the marker for the
-// *next* option — `<digit>.` followed by `Yes` or `No`. So when we
-// see that pattern past position 0 inside a parsed label, it's
-// strong evidence that the inter-option boundary was lost and two
-// options merged. Used to gate the
-// `bram-pty-menu-options-collapsed.txt` snapshot capture.
-//
-// The Y/N follower requirement is what excludes Mac fixture false
-// positives like `python3.13` (digit-dot-digit, never an option
-// marker). Refs #187.
-fn label_has_inner_numbered_marker(label: &str) -> bool {
-    let bytes = label.as_bytes();
-    if bytes.len() < 4 {
-        return false;
-    }
-    // Skip position 0 — a label starting with `<digit>.` is just the
-    // option's own marker leaked through if anything.
-    for i in 1..bytes.len() - 2 {
-        if !bytes[i].is_ascii_digit() || bytes[i + 1] != b'.' {
-            continue;
-        }
-        // Skip optional whitespace after the dot; the follower must be
-        // a Y/N letter (the only first-letter shapes Claude permission
-        // option labels start with — "Yes", "Yes,…", "No").
-        let mut k = i + 2;
-        while k < bytes.len() && bytes[k] == b' ' {
-            k += 1;
-        }
-        if k < bytes.len() && matches!(bytes[k], b'Y' | b'y' | b'N' | b'n') {
-            return true;
-        }
-    }
-    false
-}
 
 // True when `line` looks like the menu footer — "Esc to cancel",
 // "Tab to amend", or "ctrl+e to explain". Whitespace-insensitive so
 // the strip_ansi-collapsed shape ("Esctocancel·Tabtoamend…") matches
-// the same as the literal `\r\n`-spaced shape. Used by
-// `parse_menu_options` to terminate the option list when the footer
-// appears, instead of relying on a blank line — which Mac fixture
+// the same as the literal `\r\n`-spaced shape. Used to terminate the
+// option list when the footer appears, instead of relying on a blank
+// line — which Mac fixture
 // `bram-pty-menu-options-collapsed.txt` showed can also appear
 // *between* options when Claude TUI wraps a long option-2 label.
 // Refs #187.
@@ -1501,274 +1422,9 @@ fn line_is_menu_footer(line: &str) -> bool {
         || collapsed.contains("ctrl+etoexplain")
 }
 
-// Diagnostic-only marker for Codex Action Required menus where the
-// parser returned fewer than three options even though the tail still
-// appears to contain option 3. Keep this stricter than a generic
-// "No, and tell Codex" text match because Codex can also render a real
-// two-option deny/cancel menu whose option 2 starts with that phrase.
-fn codex_tail_has_third_option_marker(tail: &[u8]) -> bool {
-    for i in 0..tail.len().saturating_sub(1) {
-        if tail[i] != b'3' || tail[i + 1] != b'.' {
-            continue;
-        }
-        if i > 0 && tail[i - 1].is_ascii_alphanumeric() {
-            continue;
-        }
-        let mut k = i + 2;
-        while k < tail.len() && matches!(tail[k], b' ' | b'\t') {
-            k += 1;
-        }
-        if k >= tail.len() || matches!(tail[k], b'\r' | b'\n' | b'N' | b'n') {
-            return true;
-        }
-    }
-    false
-}
 
-// Pre-pass for the #187 multi-option-on-one-line shape. Walks `text`
-// and inserts `\n` before any inner `<digit>.<ws>?<Y|y|N|n>` pattern
-// where the digit is past position 0 in its line. The Y/N follower
-// requirement matches the same constraint as
-// `label_has_inner_numbered_marker` and rejects version-number
-// labels like `python3.13` (digit-dot-digit, never an option marker).
-//
-// This is a fallback for late-redraw frames that put multiple options
-// on one literal `\n`-separated line; on Windows the `strip_ansi`
-// CSI H/f newline-emit (Layer 1) usually produces clean per-row
-// lines before this runs, but a redraw frame that fits in one row
-// can still surface the collapsed shape. Mac fixture
-// `bram-pty-menu-options-collapsed.txt` shows the same shape via a
-// different mechanism (TUI line-wrap rendering options 2 and 3 on
-// the same row). Same pre-pass handles both.
-fn split_collapsed_option_lines(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for (idx, line) in text.split('\n').enumerate() {
-        if idx > 0 {
-            out.push('\n');
-        }
-        let bytes = line.as_bytes();
-        let mut last = 0usize;
-        let mut i = 0usize;
-        while i + 2 < bytes.len() {
-            if i == 0 || !bytes[i].is_ascii_digit() || bytes[i + 1] != b'.' {
-                i += 1;
-                continue;
-            }
-            let mut k = i + 2;
-            while k < bytes.len() && bytes[k] == b' ' {
-                k += 1;
-            }
-            if k < bytes.len() && matches!(bytes[k], b'Y' | b'y' | b'N' | b'n') {
-                out.push_str(&line[last..i]);
-                out.push('\n');
-                last = i;
-            }
-            i += 1;
-        }
-        out.push_str(&line[last..]);
-    }
-    out
-}
 
-fn parse_menu_options(text: &str) -> Vec<MenuOption> {
-    let mut opts: Vec<MenuOption> = Vec::new();
-    // Normalize line endings. `.lines()` only honors `\n` and `\r\n`;
-    // Claude TUI mid-redraw byte patterns (observed at 22:55 UTC,
-    // 2026-06-10) can emit a standalone `\r` between options, which
-    // would otherwise collapse two options into one. Naïve two-pass
-    // replacement (`\r\n` → `\n` then `\r` → `\n`) creates `\n\n`
-    // blank lines from `\r\r\n` inputs; we used to rely on those
-    // blank lines as the option-list terminator, but Mac fixture
-    // evidence (#187) shows blank lines also appear *between*
-    // options when long labels wrap, so the parser now uses an
-    // explicit footer match instead. Single-pass collapse turns any
-    // `\r` run into one `\n`. Refs #182 #12 shape 4, #187.
-    let normalized: String = {
-        let mut s = String::with_capacity(text.len());
-        let mut chars = text.chars().peekable();
-        while let Some(c) = chars.next() {
-            if c == '\r' {
-                while chars.peek() == Some(&'\r') {
-                    chars.next();
-                }
-                if chars.peek() == Some(&'\n') {
-                    chars.next();
-                }
-                s.push('\n');
-            } else {
-                s.push(c);
-            }
-        }
-        s
-    };
-    // Pre-pass: split any line containing multiple `<digit>.<Y|N>`
-    // option markers into separate lines.
-    let normalized = split_collapsed_option_lines(&normalized);
-    for raw in normalized.lines() {
-        // Strip leading cursor marker (with optional space / NBSP) and whitespace.
-        let mut trimmed =
-            raw.trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
-        // If the cursor glyph appears mid-line — e.g. ANSI strip collapsed
-        // the "Do you want to proceed? ❯1. Yes" prompt onto one line —
-        // restart parsing from the cursor position so option 1 doesn't
-        // get swallowed as pre-menu chatter. Observed live at
-        // 2026-06-02 ~04:42Z: panel rendered options 2 and 3 but missing
-        // 1 because option 1's line had the menu header in front of it.
-        // Refs #170.
-        if let Some(cursor_idx) = trimmed.find('❯') {
-            trimmed = trimmed[cursor_idx..]
-                .trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
-        }
-        if trimmed.is_empty() {
-            // Blank lines no longer terminate — they get skipped. The
-            // option list ends at the footer (`line_is_menu_footer`).
-            continue;
-        }
-        // The footer ("Esc to cancel · Tab to amend · ctrl+e to
-        // explain") is the option-list terminator. Match whitespace-
-        // insensitively so the strip_ansi-collapsed shape
-        // ("Esctocancel·Tabtoamend…") also terminates.
-        if line_is_menu_footer(trimmed) {
-            break;
-        }
-        // Match leading digit(s) followed by "." and a label.
-        let (digits, rest) = match trimmed.find('.') {
-            Some(idx) => trimmed.split_at(idx),
-            None => (trimmed, ""),
-        };
-        let is_numbered =
-            !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty();
-        if !is_numbered {
-            // Non-numbered, non-empty line. If we have a previous option,
-            // treat it as a wrapped continuation of that option's label —
-            // strip_ansi removes the cursor-positioning escapes Claude
-            // Code uses for indentation, so we can't rely on leading
-            // whitespace to distinguish continuation lines from
-            // post-menu chatter. The footer above is the terminator.
-            if let Some(last) = opts.last_mut() {
-                last.label.push(' ');
-                last.label.push_str(trimmed);
-            }
-            // Pre-menu chatter (no options yet) just gets skipped.
-            continue;
-        }
-        let label = rest.trim_start_matches('.').trim();
-        if label.is_empty() {
-            continue;
-        }
-        opts.push(MenuOption {
-            key: digits.to_string(),
-            label: label.to_string(),
-        });
-    }
-    opts
-}
 
-#[cfg(test)]
-mod parse_menu_options_line_ending_tests {
-    use super::parse_menu_options;
-
-    #[test]
-    fn parses_three_options_with_lf_separators() {
-        // Baseline: standard \n line endings.
-        let text = "1. Yes\n2. Yes, and don't ask again\n3. No\n";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3);
-        assert_eq!(opts[0].key, "1");
-        assert_eq!(opts[0].label, "Yes");
-        assert_eq!(opts[1].key, "2");
-        assert_eq!(opts[1].label, "Yes, and don't ask again");
-        assert_eq!(opts[2].key, "3");
-        assert_eq!(opts[2].label, "No");
-    }
-
-    #[test]
-    fn parses_three_options_with_crlf_separators() {
-        // CRLF (Windows-style). The \r\n -> \n normalization must
-        // not produce extra blank lines or the parser would
-        // terminate prematurely.
-        let text = "1. Yes\r\n2. Yes, and don't ask again\r\n3. No\r\n";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3);
-        assert_eq!(opts[0].label, "Yes");
-        assert_eq!(opts[1].label, "Yes, and don't ask again");
-        assert_eq!(opts[2].label, "No");
-    }
-
-    #[test]
-    fn parses_three_options_with_bare_cr_separators() {
-        // 2026-06-10 22:55 UTC trace evidence: Claude TUI emitted
-        // option labels separated by bare \r during a mid-redraw
-        // cycle. Pre-fix this would collapse to one option with
-        // all three labels concatenated.
-        let text = "1. Yes\r2. Yes, and don't ask again\r3. No\r";
-        let opts = parse_menu_options(text);
-        assert_eq!(
-            opts.len(),
-            3,
-            "expected 3 options after \\r split, got {}: {:?}",
-            opts.len(),
-            opts.iter().map(|o| &o.label).collect::<Vec<_>>()
-        );
-        assert_eq!(opts[0].label, "Yes");
-        assert_eq!(opts[1].label, "Yes, and don't ask again");
-        assert_eq!(opts[2].label, "No");
-    }
-
-    #[test]
-    fn parses_three_options_with_cr_cr_lf_does_not_create_blank_line() {
-        // 2026-06-10 23:25 UTC trace evidence: Claude TUI mid-redraw
-        // emitted `\r\r\n` between options. A two-pass normalization
-        // (`\r\n` → `\n` then bare `\r` → `\n`) would create `\n\n`
-        // (blank line) and terminate parsing after option 1, producing
-        // a partial menu render where only "Yes" was visible. The
-        // single-pass run-collapse handles this correctly.
-        let text = "1. Yes\r\r\n2. Yes, and don't ask again\r\r\n3. No\r\r\n";
-        let opts = parse_menu_options(text);
-        assert_eq!(
-            opts.len(),
-            3,
-            "expected 3 options after \\r\\r\\n collapse, got: {:?}",
-            opts.iter().map(|o| &o.label).collect::<Vec<_>>()
-        );
-        assert_eq!(opts[0].label, "Yes");
-        assert_eq!(opts[1].label, "Yes, and don't ask again");
-        assert_eq!(opts[2].label, "No");
-    }
-
-    #[test]
-    fn preserves_genuine_blank_line_between_options_and_footer() {
-        // A trailing `\n\n` (blank line) separates the option list
-        // from the menu footer ("Esc to cancel · Tab to amend · …").
-        // The normalization must NOT collapse this blank line, else
-        // the parser would walk into the footer and emit non-option
-        // text as wrapped continuation of option 3.
-        let text = "1. Yes\n2. Yes, and don't ask\n3. No\n\nEsc to cancel\n";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3);
-        assert_eq!(opts[2].label, "No");
-    }
-
-    #[test]
-    fn regression_2026_06_10_2255_collapsed_options_payload() {
-        // The exact payload shape from the 22:55:50.319 trace line
-        // that collapsed three options into one before this fix:
-        //
-        //   [pty-menu-options] tool=Bash count=1
-        //   options=[1="Yes\r  2. Yes, and don't ask again for similar
-        //   commands in\r  "...]
-        //
-        // The \r line endings and two-space indentation match what
-        // Claude TUI emitted mid-redraw. Pre-fix: count=1. Post-fix:
-        // count=3.
-        let text = "1. Yes\r  2. Yes, and don't ask again for similar commands in /Users/jonudell\r  3. No\r  ";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3);
-        assert_eq!(opts[0].label, "Yes");
-        assert!(opts[1].label.starts_with("Yes, and don't ask"));
-        assert_eq!(opts[2].label, "No");
-    }
-}
 
 // PtyMenu equality compares only `tool` — `text` carries surrounding
 // PTY bytes captured by position (`pos1 - 200`..`pos2 + 200`), which
@@ -3417,17 +3073,6 @@ fn pty_menu_suppressed_cell() -> &'static Mutex<Option<(String, std::time::Insta
     PTY_MENU_SUPPRESSED.get_or_init(|| Mutex::new(None))
 }
 
-fn pty_menu_eviction_grace_cell() -> &'static Mutex<Option<MenuEvictionGrace>> {
-    PTY_MENU_EVICTION_GRACE.get_or_init(|| Mutex::new(None))
-}
-
-fn pty_menu_eviction_grace_elapsed_ms() -> Option<u128> {
-    pty_menu_eviction_grace_cell()
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|state| state.started.elapsed().as_millis()))
-}
-
 // Sampled timestamp for `[pty-menu-scan]` instrumentation. Throttles
 // scan-trace emission to ~5 Hz so spinner-driven PTY chatter (10+
 // chunks/s during a working turn) doesn't flood bram-trace.log.
@@ -3785,7 +3430,7 @@ fn pty_menu_scan_excerpt(stripped: &[u8]) -> String {
 // Diagnostic summary of which menu-detection anchors are present in
 // the current PTY tail. Returns a compact `k=v` string suitable for
 // embedding in a `[pty-menu-scan]` trace line. Re-runs the same
-// anchor checks `pty_menu_detect` uses but doesn't do the full
+// anchor checks the menu scan uses but doesn't do the full
 // detection — cheap to compute (a handful of byte scans) and tells
 // us *why* a detection cycle decided not to fire. `is_fire` selects
 // whether the content excerpt is always included (fire) or only when
@@ -3918,9 +3563,8 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     tail.extend_from_slice(chunk);
     // Bumped from 8 KB to 64 KB for incident #182 #17: a wider scan
     // window gives Claude's TUI redraws more chances to bring the
-    // current menu's bytes back into the detector's view before the
-    // eviction grace expires. Byte-pattern scan at this size is still
-    // sub-millisecond. Paired with MENU_EVICTION_GRACE_MS = 60s.
+    // current menu's bytes back into the detector's view. Byte-pattern
+    // scan at this size is still sub-millisecond.
     if tail.len() > 65536 {
         let drop = tail.len() - 65536;
         tail.drain(..drop);
@@ -3941,14 +3585,17 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     }
     // menus.parseAndDisplay off (the default): the rolling pty_tail is kept up
     // to date above -- pty_agent_status_update reads it to scrape the status
-    // verb, so the append must NOT be skipped -- but skip menu detection /
-    // parse_menu_options / the pty-menu-changed emit so nothing is parsed or
+    // verb, so the append must NOT be skipped -- but skip menu detection
+    // and the pty-menu-changed emit so nothing is parsed or
     // rendered.
     if !bram_menus_parse_enabled() {
         return;
     }
     let codex_action_required_title = pty_codex_action_required_pos(&tail).is_some();
-    let mut detected = pty_menu_detect(&tail);
+    // Byte detection retired: the grid (read clean from xterm.js, applied a few
+    // lines below) is now the sole menu detector. Start from None and let the
+    // grid override/build set it.
+    let mut detected: Option<PtyMenu> = None;
 
     // Sample the scan diagnostic at ~5 Hz so spinner activity doesn't
     // flood the trace. Emit after the lock is released so the trace
@@ -3996,7 +3643,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             signature_chars,
             lookup.tail_bytes,
         ));
-        // PTY-preferred: if `pty_menu_detect` already populated a
+        // PTY-preferred: if menu detection already populated a
         // signature from the rendered `⏺ <Tool>(...)` tail line, keep
         // it. Use JSONL only when PTY missed. Diff is always JSONL —
         // it's an enrichment field, not a fallback. Refs #170 follow-up.
@@ -4215,7 +3862,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     // call back into pty_menu_cell (they don't today, but cheap to avoid).
     let mut emit_payload: Option<Option<PtyMenu>> = None;
     let mut recheck_target: Option<String> = None;
-    let mut expired_grace_elapsed_ms: Option<u128> = None;
+    let expired_grace_elapsed_ms: Option<u128> = None;
 
     if let Ok(mut menu) = pty_menu_cell().lock() {
         let prev_menu = menu.as_ref().cloned();
@@ -4241,113 +3888,9 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             }
         }
 
-        // Sticky-against-eviction guard. If detection returned None but
-        // a menu was previously shown, defer the dismiss emit for up
-        // to MENU_EVICTION_GRACE_MS. Re-detection within the window
-        // suppresses both the dismiss and the re-show — the menu was
-        // just briefly hidden in the rolling buffer behind intervening
-        // TUI noise. The user-input dismissal path (`pty_menu_clear`)
-        // is independent and unaffected. Refs #77 menu-detector
-        // stabilization.
-        if detected.is_none() && prev_menu.is_some() {
-            if let Ok(mut grace) = pty_menu_eviction_grace_cell().lock() {
-                match grace.as_ref().cloned() {
-                    None => {
-                        *grace = Some(MenuEvictionGrace {
-                            started: std::time::Instant::now(),
-                            tool: prev_menu
-                                .as_ref()
-                                .map(|p| p.tool.clone())
-                                .unwrap_or_else(|| "?".to_string()),
-                        });
-                        eprintln!(
-                            "[pty-menu] eviction grace started for tool={}",
-                            prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?")
-                        );
-                        if bram_trace_enabled() {
-                            append_bram_trace_line(
-                                app,
-                                "pty-menu",
-                                &format!(
-                                    "state=hold-start tool={} reason=buffer-evicted grace_ms={}",
-                                    prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?"),
-                                    MENU_EVICTION_GRACE_MS
-                                ),
-                            );
-                        }
-                        return;
-                    }
-                    Some(state) if state.started.elapsed().as_millis() < MENU_EVICTION_GRACE_MS => {
-                        let current_tool =
-                            prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?");
-                        if bram_trace_enabled() {
-                            if state.tool != current_tool {
-                                append_bram_trace_line(
-                                    app,
-                                    "pty-menu",
-                                    &format!(
-                                        "state=hold-stacked previous_tool={} current_tool={} reason=buffer-evicted elapsed_ms={} grace_ms={}",
-                                        state.tool,
-                                        current_tool,
-                                        state.started.elapsed().as_millis(),
-                                        MENU_EVICTION_GRACE_MS
-                                    ),
-                                );
-                            }
-                            append_bram_trace_line(
-                                app,
-                                "pty-menu",
-                                &format!(
-                                    "state=holding tool={} reason=buffer-evicted elapsed_ms={} grace_ms={}",
-                                    current_tool,
-                                    state.started.elapsed().as_millis(),
-                                    MENU_EVICTION_GRACE_MS
-                                ),
-                            );
-                        }
-                        return;
-                    }
-                    Some(state) => {
-                        let elapsed_ms = state.started.elapsed().as_millis();
-                        expired_grace_elapsed_ms = Some(elapsed_ms);
-                        *grace = None;
-                        eprintln!(
-                            "[pty-menu] eviction grace expired ({}ms); proceeding with dismiss",
-                            elapsed_ms
-                        );
-                        if bram_trace_enabled() {
-                            append_bram_trace_line(
-                                app,
-                                "pty-menu",
-                                &format!(
-                                    "state=hold-expired tool={} reason=grace-expired elapsed_ms={}",
-                                    prev_menu.as_ref().map(|p| p.tool.as_str()).unwrap_or("?"),
-                                    elapsed_ms
-                                ),
-                            );
-                        }
-                    }
-                }
-            }
-        } else if detected.is_some() {
-            if let Ok(mut grace) = pty_menu_eviction_grace_cell().lock() {
-                if let Some(state) = grace.as_ref() {
-                    eprintln!("[pty-menu] eviction grace cleared by re-detection");
-                    if bram_trace_enabled() {
-                        append_bram_trace_line(
-                            app,
-                            "pty-menu",
-                            &format!(
-                                "state=hold-cleared tool={} reason=redetected elapsed_ms={}",
-                                state.tool,
-                                state.started.elapsed().as_millis()
-                            ),
-                        );
-                    }
-                    *grace = None;
-                }
-            }
-        }
+        // Eviction grace removed: the grid reads the screen, so a visible menu is
+        // never lost to byte-window eviction — present:false is an authoritative
+        // dismiss with no grace needed.
 
         // Don't downgrade a known menu to pending. If detection returned
         // a pending menu but the previous cycle had a definitive tool
@@ -4364,9 +3907,9 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // Symmetric: don't downgrade a known menu's options to a
         // smaller parsed count for the same signed tool call. Same rolling-
         // buffer drift cause as the tool-name carry-forward above —
-        // a later pty_menu_detect cycle anchors on `❯1.` but the
+        // a later menu-detect cycle anchors on `❯1.` but the
         // 200-byte `text` window no longer contains all option lines,
-        // so parse_menu_options returns []. Without this guard the
+        // so the parser returns []. Without this guard the
         // iframe sees options=0, pendingMenu.options.length === 0
         // evaluates true, and the panel falls back to the hardcoded
         // 3-button HStack instead of the #169 dynamic vertical
@@ -4573,7 +4116,7 @@ fn try_signature_recheck_on_jsonl_change<R: tauri::Runtime>(app: &AppHandle<R>) 
                     updated_chars,
                     text_source,
                     text_chars,
-                    pty_menu_eviction_grace_elapsed_ms().unwrap_or(0)
+                    0
                 ),
             );
         }
@@ -4701,7 +4244,7 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                             signature_chars,
                             text_source,
                             text_chars,
-                            pty_menu_eviction_grace_elapsed_ms().unwrap_or(0)
+                            0
                         ),
                     );
                 }
@@ -4729,7 +4272,7 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
 // Claude TUI on Windows draws menu rows and status rows with a mix of
 // both shapes within a single redraw, and emitting `\n` for every
 // forward row jump shreds the stripped output into per-character
-// lines that `parse_menu_options` can't reassemble. Defined at module
+// lines that the menu parser can't reassemble. Defined at module
 // scope so it's testable on every platform — its callers are
 // `#[cfg(windows)]` but the parsing logic itself is OS-independent.
 // Refs #187 menu-miss-after-rebuild.
@@ -4803,7 +4346,7 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
                     // emits one every ~200 bytes (measured against the
                     // captured fixtures under `tests/fixtures/`). Without
                     // compensation, dropping the escape merges consecutive
-                    // rows into a single line and parse_menu_options sees
+                    // rows into a single line and the menu parser sees
                     // `1.Yes2.Yes,…3.No` collapsed. Emit one `\n` when the
                     // row advances past the previously-emitted row; drop
                     // (intra-row move) when row stays the same; reset the
@@ -4824,7 +4367,7 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
                             // this when re-drawing the same logical menu line
                             // word-by-word at different column offsets, and a
                             // newline there shreds the stripped output into
-                            // per-fragment lines that `parse_menu_options`
+                            // per-fragment lines that the menu parser
                             // can't reassemble (live miss observed on the Read
                             // `~\Desktop\foo.bar` permission menu — fp_head
                             // decoded to `\nlo ia\n* v t\ni i`). Emit a space
@@ -4897,114 +4440,6 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
 // the anchor survives the format drift. Walk back to older arrows when
 // the newest one is a redraw artifact rather than the option-1 row.
 // Refs #36.
-// Scan the ANSI-stripped PTY tail for the rightmost `⏺ <Tool>(...)`
-// line — Claude's standard tool-call render. The cursor glyph
-// (U+23FA, three UTF-8 bytes E2 8F BA) must sit at start-of-line to
-// avoid matches inside prose / tool output. Walks the argument body
-// paren-balanced AND quote-aware so multi-line Bash with embedded
-// quoted parens (`Bash(grep "foo (bar)" file)`) parses correctly.
-// Returns `Some((tool_name, signature))` where `signature` is the full
-// `<Tool>(args)` slice (matching what the panel renders). Returns None
-// when no anchor is found OR the paren walk hits buffer end without
-// closing — partial captures are not emitted. Refs #170 follow-up.
-// Symmetric with `extract_codex_command_signature`. Anchors on Claude's
-// PTY tool-call marker `⏺<ToolName>(` (cursor glyph U+23FA followed by
-// optional space then a name token then an open paren), then walks
-// forward through balanced quotes and parens to the matching close.
-// Bounded by construction: the signature returned is exactly the
-// `<Name>(...)` byte range, never upstream PTY noise. Refs #182 #12.
-fn extract_claude_command_signature(stripped_tail: &[u8]) -> Option<(String, String)> {
-    let cursor_glyph: &[u8] = b"\xe2\x8f\xba";
-    let mut search_end = stripped_tail.len();
-    while let Some(rel) = stripped_tail[..search_end]
-        .windows(cursor_glyph.len())
-        .rposition(|w| w == cursor_glyph)
-    {
-        // Anchor must be the first non-whitespace on its line. Claude
-        // positions the cursor at column 3 via ANSI escapes; after
-        // `strip_ansi` those positioning bytes are gone but the cursor
-        // glyph still sits with leading whitespace before it. Walk back
-        // to the line start (or buffer start), then verify only spaces /
-        // tabs / carriage returns intervene. Refs #170 follow-up.
-        let line_start = stripped_tail[..rel]
-            .iter()
-            .rposition(|&b| b == b'\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let prefix = &stripped_tail[line_start..rel];
-        let at_line_start = prefix
-            .iter()
-            .all(|&b| b == b' ' || b == b'\t' || b == b'\r');
-        if !at_line_start {
-            search_end = rel;
-            continue;
-        }
-        let mut k = rel + cursor_glyph.len();
-        if stripped_tail.get(k) == Some(&b' ') {
-            k += 1;
-        }
-        let name_start = k;
-        while let Some(&b) = stripped_tail.get(k) {
-            if b.is_ascii_alphanumeric() || b == b'_' || b == b':' {
-                k += 1;
-            } else {
-                break;
-            }
-        }
-        if k == name_start || stripped_tail.get(k) != Some(&b'(') {
-            search_end = rel;
-            continue;
-        }
-        let Ok(name) = std::str::from_utf8(&stripped_tail[name_start..k]) else {
-            search_end = rel;
-            continue;
-        };
-        let body_start = k + 1;
-        let mut depth: i32 = 1;
-        let mut in_single = false;
-        let mut in_double = false;
-        let mut escape = false;
-        let mut end_idx = body_start;
-        let mut found_close: Option<usize> = None;
-        while let Some(&b) = stripped_tail.get(end_idx) {
-            if escape {
-                escape = false;
-            } else if (in_single || in_double) && b == b'\\' {
-                escape = true;
-            } else if in_double {
-                if b == b'"' {
-                    in_double = false;
-                }
-            } else if in_single {
-                if b == b'\'' {
-                    in_single = false;
-                }
-            } else if b == b'"' {
-                in_double = true;
-            } else if b == b'\'' {
-                in_single = true;
-            } else if b == b'(' {
-                depth += 1;
-            } else if b == b')' {
-                depth -= 1;
-                if depth == 0 {
-                    found_close = Some(end_idx);
-                    break;
-                }
-            }
-            end_idx += 1;
-        }
-        if let Some(close_idx) = found_close {
-            let signature_bytes = &stripped_tail[name_start..=close_idx];
-            if let Ok(signature) = std::str::from_utf8(signature_bytes) {
-                return Some((name.to_string(), signature.to_string()));
-            }
-        }
-        search_end = rel;
-    }
-    None
-}
-
 fn pty_menu_anchor_pos(tail: &[u8]) -> Option<usize> {
     let arrow: &[u8] = b"\xe2\x9d\xaf";
     let mut end = tail.len();
@@ -5050,35 +4485,6 @@ fn pty_any_numbered_menu_anchor_pos(tail: &[u8]) -> Option<usize> {
     tail.windows(2).rposition(|w| w == b"1.")
 }
 
-fn pty_text_looks_like_permission_menu(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("do you want")
-        || lower.contains("action required")
-        || lower.contains("codex to run")
-        || lower.contains("approve")
-        || lower.contains("approval")
-        || lower.contains("permission")
-        || lower.contains("sandbox")
-        // Skill-permission prompts (`Use skill "<skill>"?`, banner
-        // "Claude may use instructions, code, or files from this Skill.")
-        // carry none of the keywords above and no "Do you want" header,
-        // so a chevron-anchored skill menu was reaching this guard and
-        // returning None -> op=skip. See docs/pty-menu-shapes.md (skill
-        // row) and #197. The two fragments below are the source-string
-        // anchors CodeExam confirmed are stable across the header + banner.
-        || lower.contains("use skill")
-        || lower.contains("from this skill")
-        || (lower.contains("allow") && lower.contains("deny"))
-}
-
-fn pty_text_looks_like_stale_worklist_menu_false_positive(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("diff --git")
-        || lower.contains("worklist")
-        || lower.contains("resources/worklist")
-        || lower.contains("src-tauri/src/lib.rs")
-}
-
 fn pty_codex_action_required_pos(tail: &[u8]) -> Option<usize> {
     let title = b"Action Required";
     let mut end = tail.len();
@@ -5094,684 +4500,6 @@ fn pty_codex_action_required_pos(tail: &[u8]) -> Option<usize> {
         end = pos;
     }
     None
-}
-
-fn codex_fragmented_menu_options(text: &str) -> Vec<MenuOption> {
-    let flattened = codex_flattened_menu_options(text);
-    if !flattened.is_empty() {
-        return flattened;
-    }
-
-    let parsed = parse_menu_options(text);
-    if !parsed.is_empty() {
-        return parsed;
-    }
-
-    let mut keys: Vec<String> = Vec::new();
-    for raw in text.lines() {
-        let trimmed =
-            raw.trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
-        let Some((digits, rest)) = trimmed.split_once('.') else {
-            continue;
-        };
-        if digits.is_empty()
-            || !digits.chars().all(|c| c.is_ascii_digit())
-            || !rest.trim().is_empty()
-        {
-            continue;
-        }
-        let key = digits.to_string();
-        if !keys.contains(&key) {
-            keys.push(key);
-        }
-    }
-
-    keys.into_iter()
-        .map(|key| MenuOption {
-            label: format!("Option {key}"),
-            key,
-        })
-        .collect()
-}
-
-fn codex_flattened_menu_options(text: &str) -> Vec<MenuOption> {
-    let mut markers: Vec<(usize, String, usize)> = Vec::new();
-    for (idx, _) in text.char_indices() {
-        let rest = &text[idx..];
-        let rest =
-            rest.trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
-        let skipped = text[idx..].len() - rest.len();
-        let marker_idx = idx + skipped;
-        let Some(dot_idx) = rest.find('.') else {
-            continue;
-        };
-        let digits = &rest[..dot_idx];
-        if digits.is_empty() || digits.len() > 2 || !digits.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        let before = text[..marker_idx].chars().next_back();
-        if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '.') {
-            continue;
-        }
-        if markers
-            .last()
-            .is_some_and(|(prev_idx, _, _)| *prev_idx == marker_idx)
-        {
-            continue;
-        }
-        let after_dot = marker_idx + dot_idx + 1;
-        markers.push((marker_idx, digits.to_string(), after_dot));
-    }
-
-    let start = markers.iter().position(|(_, key, _)| key == "1");
-    let Some(start) = start else {
-        return Vec::new();
-    };
-
-    let mut opts: Vec<MenuOption> = Vec::new();
-    let mut expected = 1usize;
-    for i in start..markers.len() {
-        let (marker_idx, key, label_start) = &markers[i];
-        let Ok(key_num) = key.parse::<usize>() else {
-            break;
-        };
-        if key_num != expected {
-            break;
-        }
-        let next_marker = markers
-            .get(i + 1)
-            .map(|(idx, _, _)| *idx)
-            .unwrap_or(text.len());
-        if next_marker.saturating_sub(*marker_idx) > 512 {
-            break;
-        }
-        let raw_label = text[*label_start..next_marker].trim();
-        let label = normalize_codex_menu_label(raw_label);
-        opts.push(MenuOption {
-            key: key.clone(),
-            label: if label.is_empty() {
-                format!("Option {key}")
-            } else {
-                label
-            },
-        });
-        expected += 1;
-    }
-
-    if opts.len() >= 2 {
-        opts
-    } else {
-        Vec::new()
-    }
-}
-
-fn normalize_codex_menu_label(raw_label: &str) -> String {
-    let without_footer = strip_codex_menu_footer(raw_label);
-    let collapsed = collapse_menu_label_whitespace(without_footer);
-    repair_codex_collapsed_label(&collapsed)
-}
-
-fn strip_codex_menu_footer(raw_label: &str) -> &str {
-    let lower = raw_label.to_ascii_lowercase();
-    let mut end = raw_label.len();
-    for needle in [
-        "press enter to confirm",
-        "esc to cancel",
-        "tab to amend",
-        "ctrl+e to explain",
-    ] {
-        if let Some(idx) = lower.find(needle) {
-            end = end.min(idx);
-        }
-    }
-    raw_label[..end].trim()
-}
-
-fn collapse_menu_label_whitespace(raw_label: &str) -> String {
-    let mut out = String::new();
-    let mut pending_space = false;
-    for c in raw_label.chars() {
-        if c == '\r' || c == '\n' || c == '\u{a0}' || c.is_whitespace() {
-            pending_space = !out.is_empty();
-            continue;
-        }
-        if pending_space {
-            out.push(' ');
-            pending_space = false;
-        }
-        out.push(c);
-    }
-    out.trim().to_string()
-}
-
-fn repair_codex_collapsed_label(label: &str) -> String {
-    if label.contains(' ') {
-        return label.to_string();
-    }
-    let lower = label.to_ascii_lowercase();
-    if lower == "yes,proceed(y)" {
-        return "Yes, proceed (y)".to_string();
-    }
-    let ask_again = "yes,anddon'taskagainforcommandsthatstartwith";
-    if lower.starts_with(ask_again) {
-        let suffix = &label[ask_again.len()..];
-        return format!(
-            "Yes, and don't ask again for commands that start with {}",
-            space_shortcut_suffix(suffix)
-        )
-        .trim()
-        .to_string();
-    }
-    let no_prefix = "no,andtellcodexwhattododifferently";
-    if lower.starts_with(no_prefix) {
-        let suffix = &label[no_prefix.len()..];
-        return format!(
-            "No, and tell Codex what to do differently{}",
-            if suffix.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", space_shortcut_suffix(suffix))
-            }
-        );
-    }
-    label.to_string()
-}
-
-fn space_shortcut_suffix(suffix: &str) -> String {
-    let mut out = String::new();
-    let mut prev = '\0';
-    for c in suffix.chars() {
-        if c == '(' && !out.is_empty() && prev != ' ' {
-            out.push(' ');
-        }
-        out.push(c);
-        prev = c;
-    }
-    out
-}
-
-fn codex_menu_line_is_numbered_option(line: &str) -> bool {
-    let trimmed = line.trim_start_matches(|c: char| c == '❯' || c == '\u{a0}' || c.is_whitespace());
-    let Some((digits, _rest)) = trimmed.split_once('.') else {
-        return false;
-    };
-    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
-}
-
-fn codex_menu_line_is_command_candidate(line: &str) -> bool {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.contains("action required")
-        || lower.contains("codex to run")
-        || lower.contains("approve")
-        || lower.contains("approval")
-        || lower.contains("permission")
-        || lower.contains("sandbox")
-        || lower.contains("allow")
-        || lower.contains("deny")
-        || lower.starts_with("esc to cancel")
-        || codex_menu_line_is_numbered_option(trimmed)
-    {
-        return false;
-    }
-    true
-}
-
-fn codex_command_end(candidate: &str) -> usize {
-    for (idx, ch) in candidate.char_indices() {
-        if ch == '\n' || ch == '\r' || ch == '❯' || ch == '›' {
-            return idx;
-        }
-    }
-    candidate.len()
-}
-
-fn extract_codex_dollar_prompt_command(text: &str) -> Option<String> {
-    for (idx, _) in text.match_indices('$').rev() {
-        let candidate = text[idx + 1..].trim_start();
-        let end = codex_command_end(candidate);
-        let command = candidate[..end].trim();
-        if !command.is_empty() {
-            return Some(command.to_string());
-        }
-    }
-    None
-}
-
-fn codex_prompt_field_value(text: &str, marker: &str) -> Option<String> {
-    let lower = text.to_ascii_lowercase();
-    let idx = lower.find(marker)?;
-    let mut value = String::new();
-    let mut started = false;
-    for ch in text[idx + marker.len()..].chars() {
-        if !started {
-            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '/' || ch == '.' {
-                started = true;
-                value.push(ch);
-            }
-            continue;
-        }
-        if ch == '"'
-            || ch == '\''
-            || ch == '\\'
-            || ch == ','
-            || ch == '}'
-            || ch == '>'
-            || ch == '›'
-            || ch == '❯'
-            || ch == '\n'
-            || ch == '\r'
-            || ch.is_whitespace()
-        {
-            break;
-        }
-        value.push(ch);
-    }
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
-}
-
-fn codex_path_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric()
-        || matches!(
-            ch,
-            '/' | '.' | '-' | '_' | '+' | '~' | '@' | ':' | '=' | '%'
-        )
-}
-
-fn extract_longest_absolute_path(text: &str) -> Option<String> {
-    let mut best = String::new();
-    for (idx, _) in text.match_indices('/') {
-        let mut candidate = String::new();
-        for ch in text[idx..].chars() {
-            if codex_path_char(ch) {
-                candidate.push(ch);
-            } else {
-                break;
-            }
-        }
-        if candidate.len() > best.len() {
-            best = candidate;
-        }
-    }
-    if best.is_empty() {
-        None
-    } else {
-        Some(best)
-    }
-}
-
-fn extract_codex_mcp_signature(text: &str) -> Option<(String, String)> {
-    let lower = text.to_ascii_lowercase();
-    if !lower.contains("mcp") {
-        return None;
-    }
-    let tool = codex_prompt_field_value(text, "tool")?;
-    let path =
-        extract_longest_absolute_path(text).or_else(|| codex_prompt_field_value(text, "path:"))?;
-    Some((tool.clone(), format!("filesystem:{}({})", tool, path)))
-}
-
-fn extract_codex_command_signature(text: &str) -> Option<(String, String)> {
-    if let Some(sig) = extract_codex_mcp_signature(text) {
-        return Some(sig);
-    }
-    if let Some(command) = extract_codex_dollar_prompt_command(text) {
-        return Some(("Bash".to_string(), format!("Bash({})", command)));
-    }
-
-    let mut candidates: Vec<String> = Vec::new();
-    for raw in text.lines() {
-        let line = raw.trim();
-        if codex_menu_line_is_numbered_option(line) {
-            break;
-        }
-        if codex_menu_line_is_command_candidate(line) {
-            candidates.push(line.trim_start_matches("$ ").to_string());
-        }
-    }
-    let command = candidates.last()?.trim();
-    if command.is_empty() {
-        None
-    } else {
-        Some(("Bash".to_string(), format!("Bash({})", command)))
-    }
-}
-
-// Look for claude's permission menu in the rolling tail. Pattern:
-// "1. Yes" appears, followed by "2. " within ~512 bytes (the menu's
-// options are tightly grouped). Tool name is best-effort guessed
-// from preceding context. Runs on the ANSI-stripped tail — the raw
-// bytes contain escape sequences interleaved within the visible menu
-// text, which would fragment the literal needle match.
-fn pty_menu_detect(raw_tail: &[u8]) -> Option<PtyMenu> {
-    let raw_codex_action = pty_codex_action_required_pos(raw_tail).is_some();
-    let stripped = strip_ansi(raw_tail);
-    let tail = stripped.as_slice();
-    // Prefer Claude's selection-cursor anchor (❯, U+276F) followed by an
-    // optional run of spaces / NBSP, then "1.". Codex prompts can render
-    // as a plain numbered approval menu, but only trust that shape when
-    // the raw PTY title says Action Required. Plain numbered prose in the
-    // transcript/worklist stream is otherwise too easy to mistake for a
-    // permission menu.
-    let needle2: &[u8] = b"2.";
-    let header: &[u8] = b"Do you want";
-    let pos1_from_cursor = pty_menu_anchor_pos(tail);
-    let pos1_opt = pos1_from_cursor.or_else(|| {
-        if raw_codex_action {
-            pty_numbered_menu_anchor_pos(tail).or_else(|| pty_any_numbered_menu_anchor_pos(tail))
-        } else {
-            None
-        }
-    });
-    let pos_header = tail.windows(header.len()).rposition(|w| w == header);
-
-    let result = (|| -> Option<PtyMenu> {
-        let pos1 = pos1_opt?;
-        let after = &tail[pos1..];
-        let rel = after.windows(needle2.len()).position(|w| w == needle2)?;
-        let pos2 = pos1 + rel;
-        if pos2 - pos1 > 512 {
-            return None;
-        }
-        let start = pos1.saturating_sub(200);
-        let after_pos2 = if raw_codex_action { 1200 } else { 200 };
-        let end = (pos2 + after_pos2).min(tail.len());
-        let text = String::from_utf8_lossy(&tail[start..end]).into_owned();
-        // False-positive guards. Originally both were gated on
-        // `pos1_from_cursor.is_none()` because the chevron anchor was
-        // treated as definitive. The chevron-in-codeblock case
-        // (screenshot 2026-06-10 22:49 UTC) showed the keyword guard
-        // needs to run universally so a chevron in rendered chat
-        // markdown lacking "do you want" gets rejected.
-        //
-        // The stale-worklist guard stays gated on `is_none()`. Its
-        // job is to reject *non-cursor* anchors (raw numbered prompts)
-        // whose surrounding text looks like a diff or repo path. A
-        // chevron-anchored Claude menu whose surrounding 900-byte
-        // text window happens to include "src-tauri/src/lib.rs",
-        // "worklist", or "diff --git" — e.g., right after a git
-        // command or commit-message recall — IS a real menu and
-        // must not be rejected. The restart at 23:01 UTC surfaced
-        // this regression: a legit Bash menu was suppressed because
-        // the just-typed commit message containing repo paths sat in
-        // the PTY tail around the menu anchor.
-        // Keyword and footer guards check the FULL stripped tail, not
-        // the 400-byte text window. Claude TUI redraws the menu more
-        // than once per cycle on Windows, and the rightmost cursor
-        // anchor (pos1) often points at a redraw frame that omits the
-        // "Do you want" header — which was emitted by an earlier
-        // frame, hundreds of bytes back. The window approach was
-        // correct for extracting option text (bounds the parse) but
-        // too tight for the keyword check. Same for the footer.
-        // Refs #187 "[pty-menu-trace] miss: header_at=N pos1_at=N+670"
-        // diagnostic captured live with header at byte 1425 and pos1
-        // at byte 2095.
-        let full_text = String::from_utf8_lossy(tail);
-        if !raw_codex_action && !pty_text_looks_like_permission_menu(&full_text) {
-            return None;
-        }
-        // Live Claude permission menus always render the footer
-        // ("Esc to cancel · Tab to amend · ctrl+e to explain"); chat
-        // text that happens to quote a menu's option list (e.g. a prior
-        // assistant message containing markdown like `1. Yes` / `2. …` /
-        // `3. No`) generally doesn't. Require a footer line somewhere
-        // in the rolling PTY tail so the buffer at session-restart
-        // doesn't surface a stale chat-rendered menu as a fresh
-        // permission prompt. Codex menus use a different layout and
-        // footer pattern and go through their own parser, so this
-        // guard is Claude-only. Refs #187 stale-launch regression.
-        if !raw_codex_action && !full_text.lines().any(line_is_menu_footer) {
-            return None;
-        }
-        if pos1_from_cursor.is_none()
-            && !raw_codex_action
-            && pty_text_looks_like_stale_worklist_menu_false_positive(&text)
-        {
-            return None;
-        }
-        // Prefer parsing the tool name from the menu's own
-        // "Do you want to use X?" header (which lives inside `text`).
-        // Falls back to the pre-menu context grep when the header is
-        // missing or unparseable. The header-parse moves with the menu
-        // through the rolling buffer, so the reported tool name stays
-        // stable across short eviction cycles instead of flipping to
-        // whatever earlier prompt's tool name happens to still be in
-        // the 200-byte pre-context window. Refs #77 menu-detector
-        // stabilization (the 18:52:51Z 31-events-in-one-second burst
-        // with Bash <-> Tool <-> Read flapping).
-        let tool = match pty_menu_tool_from_header(&text) {
-            Some(t) => t,
-            None => {
-                if raw_codex_action {
-                    let options = codex_fragmented_menu_options(&text);
-                    let extracted = extract_codex_command_signature(&text);
-                    let tool = extracted
-                        .as_ref()
-                        .map(|(tool, _)| tool.clone())
-                        .unwrap_or_else(|| "Bash".to_string());
-                    let signature = extracted.map(|(_, signature)| signature);
-                    let signature_source = if signature.is_some() {
-                        Some("pty")
-                    } else {
-                        None
-                    };
-                    return Some(PtyMenu {
-                        tool,
-                        text: trim_menu_text_for_preview(&text),
-                        options,
-                        tool_call_signature: signature,
-                        tool_call_diff: None,
-                        tool_call_content: None,
-                        cache_source: None,
-                        at_host_ms: None,
-                        signature_source,
-                    });
-                }
-                // Header text hasn't landed in this cycle's tail. If
-                // the previous cycle was already pending, we've waited
-                // a full cycle and the header still isn't here — fall
-                // back to the pre-menu grep now. Otherwise mark the
-                // menu pending so `pty_menu_update` suppresses the
-                // shown emit until we either get a header next cycle
-                // or convert to grep on the cycle after. Refs #77
-                // tighten-pty-menu-emit-cadence.
-                let prev_was_pending = pty_menu_cell()
-                    .lock()
-                    .ok()
-                    .and_then(|m| m.as_ref().map(|p| p.tool == PENDING_TOOL))
-                    .unwrap_or(false);
-                if prev_was_pending {
-                    pty_menu_guess_tool(&tail[..pos1])
-                } else {
-                    PENDING_TOOL.to_string()
-                }
-            }
-        };
-        let options = if raw_codex_action {
-            codex_fragmented_menu_options(&text)
-        } else {
-            parse_menu_options(&text)
-        };
-        // Structural anti-false-positive: every option's label in a
-        // real Claude permission menu is either exactly "yes" / "no"
-        // (option 1, sometimes option 3) or starts with "yes," /
-        // "no," (option 2's "Yes, and don't ask…" / "Yes, allow…" /
-        // option 3's rarer "No, and tell agent…"). The comma terminator
-        // is what distinguishes real labels from chat sentences that
-        // happen to start with "Yes" or "No" followed by a word
-        // (e.g., "No further investigation needed", "Yes please").
-        //
-        // Markdown chat that contains `1. Yes` / `2.` / `3.` won't
-        // follow this pattern — option 2's label will be whatever
-        // prose wrapped onto that "line", virtually never starting
-        // with "yes," or "no,". Necessary because keyword/footer
-        // guards are too weak in a development context: our own
-        // discussion of the detector contains "do you want",
-        // "approve", "Esc to cancel", etc., so those don't
-        // distinguish chat from a real menu.
-        //
-        // Skipped for codex_action paths (different layout +
-        // separate option parser). Refs #187 stale-chat-still-passes.
-        if !raw_codex_action {
-            let label_looks_real = |label: &str| {
-                let lower = label.trim().to_ascii_lowercase();
-                lower == "yes"
-                    || lower == "no"
-                    || lower.starts_with("yes,")
-                    || lower.starts_with("no,")
-            };
-            let all_labels_real =
-                !options.is_empty() && options.iter().all(|o| label_looks_real(&o.label));
-            if !all_labels_real {
-                return None;
-            }
-        }
-        // PTY-preferred signature. Scan the full ANSI-stripped tail for
-        // `⏺ <Tool>(...)`. When found, override the menu's tool name with
-        // the PTY-derived one — `pty_menu_tool_from_header` /
-        // `pty_menu_guess_tool` have proven unreliable (live: "MultiEdit"
-        // header for a Bash gh issue comment, and again for a Write). The
-        // PTY scan finds the actual tool call. Refs #170 follow-up.
-        let pty_call = extract_claude_command_signature(tail);
-        let codex_signature = if raw_codex_action {
-            extract_codex_command_signature(&text)
-        } else {
-            None
-        };
-        let (final_tool, signature, signature_source) = match pty_call {
-            Some((name, signature)) => (name, Some(signature), Some("pty")),
-            None if codex_signature.is_some() => {
-                let (tool, signature) = codex_signature.unwrap();
-                (tool, Some(signature), Some("pty"))
-            }
-            None => (tool, None, None),
-        };
-        Some(PtyMenu {
-            tool: final_tool,
-            text: trim_menu_text_for_preview(&text),
-            options,
-            tool_call_signature: signature,
-            tool_call_diff: None,
-            tool_call_content: None,
-            cache_source: None,
-            at_host_ms: None,
-            signature_source,
-        })
-    })();
-
-    // Windows evidence-capture snapshots. Distinct filenames per failure
-    // mode under `std::env::temp_dir()` so one mode's capture never
-    // overwrites another's, and the path is portable across OSes
-    // (Unix `/tmp`, Windows `%TEMP%`). Each failure mode writes BOTH
-    // the post-strip tail (the bytes the parsers actually saw) and
-    // the pre-strip raw_tail (the bytes strip_ansi consumed); the
-    // pre-strip copy is what a strip_ansi unit test needs as input.
-    // All writes use `let _ =` so a failed write never affects the
-    // live menu-detect path.
-    let temp = std::env::temp_dir();
-    // detect-miss: pty_menu_detect rejected, and EITHER the cursor
-    // anchor OR the "Do you want" header was present in the tail —
-    // i.e., something menu-shaped was there but a guard rejected.
-    // Catches: (a) Write-to-Desktop shape where Claude's prompt
-    // wording doesn't trip the keyword guard (cursor present), (b)
-    // header-far-from-cursor redraw shape (header present, cursor
-    // at a stale offset), (c) various other menu-recognition gaps.
-    // Supersedes the prior `[pty-menu-trace] miss:` eprintln that
-    // used to spam stderr on every chunk where pos_header was found —
-    // the full tail dropped here is strictly more useful than the
-    // 300-byte mid-window printable the eprintln produced.
-    if result.is_none() && (pos1_from_cursor.is_some() || pos_header.is_some()) {
-        let _ = std::fs::write(temp.join("bram-pty-menu-detect-miss.txt"), tail);
-        let _ = std::fs::write(temp.join("bram-pty-menu-detect-miss-raw.txt"), raw_tail);
-    }
-    // options-collapsed: menu was detected but at least one parsed
-    // option's label contains an inner `<digit>.` marker, suggesting
-    // strip_ansi dropped the inter-option boundary and the next option's
-    // marker leaked into this option's label. Catches the #187 shape.
-    if let Some(menu) = result.as_ref() {
-        if menu
-            .options
-            .iter()
-            .any(|o| label_has_inner_numbered_marker(&o.label))
-        {
-            let _ = std::fs::write(temp.join("bram-pty-menu-options-collapsed.txt"), tail);
-            let _ = std::fs::write(
-                temp.join("bram-pty-menu-options-collapsed-raw.txt"),
-                raw_tail,
-            );
-        }
-    }
-    // codex-incomplete-options: Codex Action Required was detected and
-    // parsed, but the visible option list is incomplete even though the
-    // tail still has an option-3 marker. This captures the live Windows
-    // shape where the UI showed only options 1/2 and missed the third
-    // cancel choice.
-    if raw_codex_action {
-        if let Some(menu) = result.as_ref() {
-            if menu.options.len() < 3 && codex_tail_has_third_option_marker(tail) {
-                let _ = std::fs::write(
-                    temp.join("bram-pty-menu-codex-incomplete-options.txt"),
-                    tail,
-                );
-                let _ = std::fs::write(
-                    temp.join("bram-pty-menu-codex-incomplete-options-raw.txt"),
-                    raw_tail,
-                );
-            }
-        }
-    }
-
-    result
-}
-
-// Extract the tool name from a "Do you want to use X?" prompt header
-// inside the captured menu text. Returns None when the header is absent
-// or unparseable so the caller can fall back to pre-menu context grep.
-// The token after "use " is read up to the first non-name character;
-// covers `Bash`, `Edit`, `Write`, `MultiEdit`, `Read`, `mcp__foo__bar`,
-// `WebFetch`, etc. Trailing punctuation (`?`, `,`, whitespace) is not
-// captured. Refs #77 menu-detector stabilization.
-fn pty_menu_tool_from_header(text: &str) -> Option<String> {
-    let needle = "Do you want to use ";
-    let start = text.find(needle)? + needle.len();
-    let rest = &text[start..];
-    let end = rest
-        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '.' && c != '-')
-        .unwrap_or(rest.len());
-    let tok = &rest[..end];
-    if tok.is_empty() {
-        None
-    } else {
-        Some(tok.to_string())
-    }
-}
-
-fn pty_menu_guess_tool(context: &[u8]) -> String {
-    let s = String::from_utf8_lossy(context);
-    for tool in &[
-        "MultiEdit",
-        "ToolSearch",
-        "WebFetch",
-        "WebSearch",
-        "Bash",
-        "Edit",
-        "Write",
-        "Read",
-        "Grep",
-        "Glob",
-    ] {
-        if s.contains(tool) {
-            return (*tool).to_string();
-        }
-    }
-    "Tool".to_string()
 }
 
 fn pty_menu_input_clears_inflight(input: &str) -> bool {
@@ -5805,11 +4533,6 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
     if let Ok(mut tail) = pty_tail_cell().lock() {
         tail.clear();
     }
-    // User dismissal supersedes any pending eviction-grace deferral.
-    let grace_elapsed_ms = pty_menu_eviction_grace_elapsed_ms();
-    if let Ok(mut grace) = pty_menu_eviction_grace_cell().lock() {
-        *grace = None;
-    }
     if let Some(tool) = dismissed_tool {
         let clears_inflight = pty_menu_input_clears_inflight(input);
         // Pending menus never emitted `state=shown` to subscribers
@@ -5836,7 +4559,7 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
                 &format!(
                     "state=dismissed tool={} reason=user-input grace_elapsed_ms={}",
                     tool,
-                    grace_elapsed_ms.unwrap_or(0)
+                    0
                 ),
             );
         }
@@ -17891,264 +16614,12 @@ mod agent_status_tests {
 #[cfg(test)]
 mod pty_menu_tests {
     use super::{
-        codex_tail_has_third_option_marker, extract_codex_command_signature,
         extract_pending_tool_call_from_jsonl, format_pending_tool_call,
-        label_has_inner_numbered_marker, parse_menu_options, pty_menu_detect,
         pty_menu_input_clears_inflight, pty_menu_preview_chars, pty_menu_preview_source,
         pty_menu_same_identity_for_option_carry, pty_output_clears_inflight,
-        split_collapsed_option_lines,
     };
     use serde_json::json;
 
-    #[test]
-    fn label_inner_marker_detects_collapsed_options() {
-        // Real failure: option 1 ("Yes") and option 2 ("Yes, and don't…")
-        // collapsed onto one line by strip_ansi dropping the CSI H
-        // between rows. Option 1's parsed label ends up containing
-        // option 2's marker.
-        assert!(label_has_inner_numbered_marker(
-            "Yes2.Yes,anddon'taskagainfor:cargotest*"
-        ));
-        // Same shape with a space surviving between marker and label.
-        assert!(label_has_inner_numbered_marker(
-            "Yes2. Yes,allowreadingfrompaste/duringthissession  3. No"
-        ));
-    }
-
-    #[test]
-    fn label_inner_marker_ignores_clean_labels() {
-        // Real Claude option labels never contain their own next-option
-        // marker, so these must not trigger.
-        assert!(!label_has_inner_numbered_marker("Yes"));
-        assert!(!label_has_inner_numbered_marker("No"));
-        assert!(!label_has_inner_numbered_marker(
-            "Yes, and don't ask again for: cargo test *"
-        ));
-        assert!(!label_has_inner_numbered_marker(
-            "Yes, allow all edits in Desktop/ during this session (shift+tab)"
-        ));
-    }
-
-    #[test]
-    fn label_inner_marker_ignores_version_numbers() {
-        // From Mac fixture bram-pty-menu-options-collapsed.txt: a
-        // legitimate option label can include a version number like
-        // `python3.13`. The digit-dot pattern is there, but the
-        // follower is another digit (not Y/N), so the tightened
-        // heuristic must not fire. Otherwise every Mac menu for a
-        // command containing a dotted version number generates a
-        // false-positive snapshot. Refs #187.
-        assert!(!label_has_inner_numbered_marker(
-            "Yes, and don't ask again for: python3.13 --version"
-        ));
-        assert!(!label_has_inner_numbered_marker(
-            "Yes, save to v2.0 directory"
-        ));
-    }
-
-    #[test]
-    fn codex_third_option_marker_detects_missing_cancel_evidence() {
-        assert!(codex_tail_has_third_option_marker(
-            b"1. Yes, proceed  2. Yes, and don't ask again  3. No, and tell Codex"
-        ));
-        assert!(codex_tail_has_third_option_marker(b"1.\n2.\n3.\n"));
-    }
-
-    #[test]
-    fn codex_third_option_marker_ignores_two_option_and_versions() {
-        assert!(!codex_tail_has_third_option_marker(
-            b"1. Yes, proceed  2. No, and tell Codex what to do differently"
-        ));
-        assert!(!codex_tail_has_third_option_marker(
-            b"command: python3.13 --version\n1.\n2.\n"
-        ));
-    }
-
-    #[test]
-    fn split_collapsed_lines_separates_windows_csi_h_collapse() {
-        // Real Windows ConPTY shape after strip_ansi drops the CSI H
-        // between menu rows: options 1/2/3 all land on one literal line.
-        // Pre-pass must insert `\n` before each inner `<digit>.<Y|N>`
-        // marker so the main parser sees one option per line.
-        let collapsed = "1.Yes2.Yes,andalwaysallowaccesstoDesktop\\fromthisproject3.NoEsctocancel";
-        let out = split_collapsed_option_lines(collapsed);
-        let lines: Vec<&str> = out.lines().collect();
-        assert!(lines.iter().any(|l| l.starts_with("1.")), "got {:?}", lines);
-        assert!(lines.iter().any(|l| l.starts_with("2.")), "got {:?}", lines);
-        assert!(lines.iter().any(|l| l.starts_with("3.")), "got {:?}", lines);
-    }
-
-    #[test]
-    fn split_collapsed_lines_preserves_version_numbers() {
-        // Legitimate option-2 label with `python3.13` must not get
-        // split at the `3.` — the follower is a digit, not Y/N. This
-        // is the cross-platform parser-regression test against the
-        // Mac fixture shape.
-        let line = "2. Yes, and don't ask again for: python3.13 --version";
-        let out = split_collapsed_option_lines(line);
-        assert_eq!(out.lines().count(), 1, "should not split: got {:?}", out);
-        assert_eq!(out.trim_end(), line);
-    }
-
-    #[test]
-    fn parse_menu_options_tolerates_blank_line_between_options() {
-        // Mac fixture shape: when option 2's label is long enough,
-        // Claude TUI inserts a visual blank line before option 3.
-        // Old parser terminated on the blank → option 3 silently
-        // dropped. New parser skips blanks; the footer is the
-        // terminator. Refs #187 Mac fixture.
-        let text = "\
-❯ 1. Yes
- 2. Yes, and don't ask again for: python3.13 --version
-
- 3. No
-
- Esc to cancel · Tab to amend · ctrl+e to explain
-";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3, "got {:?}", opts);
-        assert_eq!(opts[0].label, "Yes");
-        assert!(opts[1].label.starts_with("Yes, and don't ask again"));
-        assert_eq!(opts[2].label, "No");
-    }
-
-    #[test]
-    fn parse_menu_options_terminates_on_collapsed_footer() {
-        // The whitespace-collapsed footer shape that arrives after
-        // strip_ansi has chewed the literal spaces ("Esctocancel·
-        // Tabtoamend·ctrl+etoexplain") must still terminate the
-        // option list rather than getting appended as continuation
-        // to option 3's label.
-        let text = "\
-❯1. Yes
-2. Yes, and don't ask again
-3. No
-Esctocancel·Tabtoamend·ctrl+etoexplain
-";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3, "got {:?}", opts);
-        assert_eq!(opts[2].label, "No");
-    }
-
-    #[test]
-    fn parses_macos_options_collapsed_fixture_to_three_options() {
-        // Cross-platform regression test against the Mac stripped
-        // fixture from `tests/fixtures/macos-pty/`. The fixture
-        // contains the rolling 8 KB tail at the moment the
-        // options-collapsed snapshot fired (because of an inner
-        // `python3.13` triggering the now-tightened heuristic).
-        // The actual menu has the blank-line-between-options shape;
-        // parser must yield three options.
-        let text = include_str!("../tests/fixtures/macos-pty/bram-pty-menu-options-collapsed.txt");
-        let opts = parse_menu_options(text);
-        assert!(
-            opts.len() >= 3,
-            "expected at least 3 options, got {} ({:?})",
-            opts.len(),
-            opts
-        );
-        assert!(opts[0].label.to_ascii_lowercase().starts_with("yes"));
-        assert_eq!(opts[2].label.to_ascii_lowercase(), "no");
-    }
-
-    #[test]
-    fn pty_menu_detect_accepts_menu_redraw_with_header_far_from_cursor() {
-        // Observed live (`[pty-menu-trace] miss: header_at=1425
-        // '1. Yes'_at=Some(2095) '2. '_after_pos1_at=Some(2105)`):
-        // Claude TUI on Windows redraws the menu more than once per
-        // PTY cycle. The rightmost cursor anchor lands at a redraw
-        // frame that omits the "Do you want" header — the header was
-        // emitted by an earlier frame, hundreds of bytes back. The
-        // old window-scoped keyword guard rejected this as not-a-menu.
-        // The full-tail keyword/footer check now accepts it.
-        let header_frame = "Do you want to proceed?\n ❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No\n\n Esc to cancel · Tab to amend · ctrl+e to explain\n";
-        // 700+ bytes of unrelated TUI noise between the header frame
-        // and the cursor-only redraw frame — far enough that the
-        // 400-byte window centered on the redraw cursor can't reach
-        // the header.
-        let noise = " ".repeat(750);
-        let redraw_frame = "\n ❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No\n";
-        let combined = format!("{header_frame}{noise}{redraw_frame}");
-        let result = pty_menu_detect(combined.as_bytes());
-        assert!(
-            result.is_some(),
-            "menu with header far from rightmost cursor must still detect, got None"
-        );
-        let menu = result.unwrap();
-        assert_eq!(menu.options.len(), 3);
-        assert!(menu.options[0].label.starts_with("Yes"));
-        assert_eq!(menu.options[2].label, "No");
-    }
-
-    #[test]
-    fn pty_menu_detect_rejects_chat_quoted_menu_whose_option2_is_prose() {
-        // Stale-launch regression observed live after the rebuild
-        // that included Layers 1/2/2b/2c. Earlier guard layers all
-        // PASS this shape — the keyword "Do you want", the literal
-        // option markers `1. Yes`, `2. …`, `3. No`, and the footer
-        // "Esc to cancel · Tab to amend · ctrl+e to explain" are
-        // ALL present in the rolling tail because my own chat about
-        // the detector literally includes a markdown code-quote of
-        // a menu shape plus paragraph text discussing it. The shape
-        // that distinguishes chat from a real menu: every real
-        // Claude option label begins with "yes" or "no" (case
-        // insensitive). Chat text that happens to break across a
-        // `2.` boundary almost never has the next "option" starting
-        // with one of those words.
-        let chat = "\
-Do you want to see a real failing case?
- ❯ 1. Yes ... 2. pattern that anchors correctly. So: still expected
-to clear with the rebuild. The captured byte stream from
- 3. No further investigation needed
- Esc to cancel · Tab to amend · ctrl+e to explain
-";
-        let result = pty_menu_detect(chat.as_bytes());
-        assert!(
-            result.is_none(),
-            "chat quoting a menu where option 2's label is prose must be rejected, got {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn pty_menu_detect_rejects_stale_chat_quoted_menu_without_footer() {
-        // Stale-launch regression observed live: when the rolling
-        // PTY tail at session restart contains chat text that quotes
-        // a menu (e.g. a prior assistant message rendering markdown
-        // like `1. Yes` / `2. …` / `3. No`), the new blank-line-
-        // tolerant parser used to surface a fake menu where option 3's
-        // label got polluted with continuation text from the chat.
-        // Real Claude menus always end with "Esc to cancel · Tab to
-        // amend · ctrl+e to explain"; chat quotations of menus don't.
-        // Require the footer line in the parsed window.
-        let stale_chat = "\
-Do you want to know about the bug?
- ❯ 1. Yes
- 2. Yes, and don't ask again fo: python3.13 --version ← blank line
- 3. No parse_menu_options (lib.rs:1194) treats a blank line
-";
-        let result = pty_menu_detect(stale_chat.as_bytes());
-        assert!(
-            result.is_none(),
-            "stale chat quote without menu footer should be rejected, got {:?}",
-            result
-        );
-
-        // Sanity check: a real-shaped menu (footer immediately follows
-        // option 3, no chat noise in between) is still detected.
-        let live_menu = "\
-Do you want to proceed?
- ❯ 1. Yes
- 2. Yes, and don't ask again
- 3. No
- Esc to cancel · Tab to amend · ctrl+e to explain
-";
-        let result = pty_menu_detect(live_menu.as_bytes());
-        assert!(
-            result.is_some(),
-            "real menu with footer should still be detected, got None"
-        );
-    }
 
     #[test]
     fn strip_ansi_macos_raw_does_not_inject_spurious_newlines() {
@@ -18228,7 +16699,7 @@ Do you want to proceed?
         // an existing row region (e.g. word-by-word at columns 5, 11, 17
         // on the same target row). The previous Layer 1 rule fired `\n`
         // on any forward row advance, which shredded these mid-line
-        // positions into per-fragment lines that `parse_menu_options`
+        // positions into per-fragment lines that the menu parser
         // could not reassemble. The new rule only emits `\n` when col=1
         // (a true line-start write); mid-line positions emit a space so
         // word boundaries survive without introducing breaks.
@@ -18265,18 +16736,6 @@ Do you want to proceed?
         assert_eq!(super::parse_csi_h_row_col(b"5;xyz"), (5, 1));
     }
 
-    #[test]
-    fn parses_three_option_claude_menu() {
-        let text = "Do you want to use Bash?\n❯1. Yes\n  2. Yes, and don't ask again\n  3. No, and tell agent what to do\n";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3);
-        assert_eq!(opts[0].key, "1");
-        assert_eq!(opts[0].label, "Yes");
-        assert_eq!(opts[1].key, "2");
-        assert_eq!(opts[1].label, "Yes, and don't ask again");
-        assert_eq!(opts[2].key, "3");
-        assert_eq!(opts[2].label, "No, and tell agent what to do");
-    }
 
     #[test]
     fn pending_tool_call_uses_latest_unresolved_tool_use() {
@@ -18482,317 +16941,6 @@ Do you want to proceed?
         assert_eq!(state.turn_stamp.as_deref(), Some("1781386705079"));
     }
 
-    #[test]
-    fn parses_two_option_menu() {
-        // Real PTY menus emit a blank line between options and the
-        // "Esc to cancel · Tab to amend …" footer, which is what the
-        // parser uses to know the option list is done.
-        let text = "❯ 1. Allow\n  2. Deny\n\nEsc to cancel\n";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 2);
-        assert_eq!(opts[0].label, "Allow");
-        assert_eq!(opts[1].label, "Deny");
-    }
-
-    #[test]
-    fn ignores_numbered_permission_text_without_codex_action_required_title() {
-        let text = "Permission request\nRun command: cargo test\n\n  1. Allow\n  2. Deny\n\n";
-
-        assert!(pty_menu_detect(text.as_bytes()).is_none());
-    }
-
-    #[test]
-    fn detects_codex_action_required_menu_with_fragmented_options() {
-        let text = "\x1b]0;[ ! ] Action Required | bram\x07\
-\nrm -f /Users/jonudell/Desktop/foo.bar\n\
-1.\n\
-2.\n\
-3.\n";
-        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
-
-        assert_eq!(menu.tool, "Bash");
-        assert_eq!(
-            menu.tool_call_signature.as_deref(),
-            Some("Bash(rm -f /Users/jonudell/Desktop/foo.bar)")
-        );
-        assert_eq!(menu.options.len(), 3);
-        assert_eq!(menu.options[0].key, "1");
-        assert_eq!(menu.options[0].label, "Option 1");
-        assert_eq!(menu.options[1].key, "2");
-        assert_eq!(menu.options[1].label, "Option 2");
-        assert_eq!(menu.options[2].key, "3");
-        assert_eq!(menu.options[2].label, "Option 3");
-    }
-
-    #[test]
-    fn detects_codex_action_required_menu_when_title_arrives_after_options() {
-        let text = "\nrm -f /Users/jonudell/Desktop/foo.bar\n\
-1.\n\
-2.\n\
-3.\n\
-\x1b]0;[ ! ] Action Required | bram\x07";
-        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
-
-        assert_eq!(menu.tool, "Bash");
-        assert_eq!(
-            menu.tool_call_signature.as_deref(),
-            Some("Bash(rm -f /Users/jonudell/Desktop/foo.bar)")
-        );
-        assert_eq!(menu.options.len(), 3);
-        assert_eq!(menu.options[2].label, "Option 3");
-    }
-
-    #[test]
-    fn codex_fragmented_two_option_menu_does_not_invent_third_choice() {
-        let text = "\x1b]0;[ ! ] Action Required | bram\x07\
-\ncat /Users/jonudell/Desktop/foo.bar\n\
-1.\n\
-2.\n";
-        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
-
-        assert_eq!(
-            menu.tool_call_signature.as_deref(),
-            Some("Bash(cat /Users/jonudell/Desktop/foo.bar)")
-        );
-        assert_eq!(menu.options.len(), 2);
-        assert_eq!(menu.options[0].key, "1");
-        assert_eq!(menu.options[0].label, "Option 1");
-        assert_eq!(menu.options[1].key, "2");
-        assert_eq!(menu.options[1].label, "Option 2");
-    }
-
-    #[test]
-    fn codex_parsed_menu_preserves_cancel_label() {
-        let text = "\x1b]0;[ ! ] Action Required | bram\x07\
-\n❯ 1. Yes, proceed\n\
-  2. No, and tell Codex what to do differently\n\n";
-        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
-
-        assert_eq!(menu.options.len(), 2);
-        assert_eq!(menu.tool_call_signature, None);
-        assert_eq!(menu.options[1].key, "2");
-        assert_eq!(
-            menu.options[1].label,
-            "No, and tell Codex what to do differently"
-        );
-    }
-
-    #[test]
-    fn detects_codex_action_required_menu_with_flattened_options() {
-        let text = "\x1b]0;[ ! ] Action Required | bram\x07\
-command: pwd     1. Yes, proceed (y)  2. Yes, and don't ask again for commands that start with `pwd` (p)  3. No, and tell Codex what to do differently Esc to cancel";
-        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
-
-        assert_eq!(menu.options.len(), 3);
-        assert_eq!(menu.options[0].key, "1");
-        assert_eq!(menu.options[0].label, "Yes, proceed (y)");
-        assert_eq!(menu.options[1].key, "2");
-        assert_eq!(
-            menu.options[1].label,
-            "Yes, and don't ask again for commands that start with `pwd` (p)"
-        );
-        assert_eq!(menu.options[2].key, "3");
-        assert_eq!(
-            menu.options[2].label,
-            "No, and tell Codex what to do differently"
-        );
-    }
-
-    #[test]
-    fn codex_flattened_menu_repairs_collapsed_spacing_and_footer() {
-        let text = "\x1b]0;[ ! ] Action Required | bram\x07\
-command: pwd ❯1.Yes,proceed(y)2.Yes,anddon'taskagainforcommandsthatstartwith`pwd`(p)3.No,andtellCodexwhattododifferently(esc)Press enter to confirm or esc to cancel";
-        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
-
-        assert_eq!(menu.options.len(), 3);
-        assert_eq!(menu.options[0].label, "Yes, proceed (y)");
-        assert_eq!(
-            menu.options[1].label,
-            "Yes, and don't ask again for commands that start with `pwd` (p)"
-        );
-        assert_eq!(
-            menu.options[2].label,
-            "No, and tell Codex what to do differently (esc)"
-        );
-    }
-
-    #[test]
-    fn detects_codex_action_required_menu_with_long_wrapped_option_two() {
-        let long_command = "New-Item -ItemType File -Path \"$env:USERPROFILE\\Desktop\\foo.bar\" -Force | Select-Object FullName,Length";
-        let padding = " ".repeat(240);
-        let text = format!(
-            "\x1b]0;[ ! ] Action Required | bram\x07\
-Running {long_command}
-
-Would you like to run the following command?
-
-$ {long_command}
-
-› 1. Yes, proceed (y)
-  2. Yes, and don't ask again for commands that start with `{long_command}` (p){padding}
-  3. No, and tell Codex what to do differently (esc)
-
-Press enter to confirm or esc to cancel"
-        );
-        let menu = pty_menu_detect(text.as_bytes()).expect("codex action required menu");
-
-        assert_eq!(menu.options.len(), 3, "got {:?}", menu.options);
-        assert_eq!(menu.options[0].label, "Yes, proceed (y)");
-        assert!(menu.options[1]
-            .label
-            .starts_with("Yes, and don't ask again for commands that start with"));
-        assert_eq!(
-            menu.options[2].label,
-            "No, and tell Codex what to do differently (esc)"
-        );
-    }
-
-    #[test]
-    fn codex_command_signature_ignores_prompt_prose_and_options() {
-        let text = "Codex wants to run this command:\n\
-$ cargo test --manifest-path src-tauri/Cargo.toml\n\
-1.\n\
-2.\n";
-
-        assert_eq!(
-            extract_codex_command_signature(text)
-                .as_ref()
-                .map(|(_, sig)| sig.as_str()),
-            Some("Bash(cargo test --manifest-path src-tauri/Cargo.toml)")
-        );
-    }
-
-    #[test]
-    fn codex_command_signature_prefers_dollar_prompt_in_mashed_text() {
-        let text = "Running rm -f /Users/jonudell/Desktop/foo.barWould you like \
-to run the following command?Reason:Remove the file.$rm -f \
-/Users/jonudell/Desktop/foo.bar› 1. Yes, proceed";
-
-        assert_eq!(
-            extract_codex_command_signature(text)
-                .as_ref()
-                .map(|(_, sig)| sig.as_str()),
-            Some("Bash(rm -f /Users/jonudell/Desktop/foo.bar)")
-        );
-    }
-
-    #[test]
-    fn codex_command_signature_extracts_mcp_tool_and_path_from_mashed_text() {
-        let text = "AllowthefilesystemMCPservertoruntool\\\"write_file\\\"?content:{\
-\\\"nonce\\\":\\\"codex-pending-command-prune-20260604-001\\\",\
-\\\"rout...path:/Users/jonudell/bram/resources/.worklist-intent.json> 1. Allow";
-
-        assert_eq!(
-            extract_codex_command_signature(text)
-                .as_ref()
-                .map(|(tool, sig)| (tool.as_str(), sig.as_str())),
-            Some((
-                "write_file",
-                "filesystem:write_file(/Users/jonudell/bram/resources/.worklist-intent.json)"
-            ))
-        );
-    }
-
-    #[test]
-    fn codex_command_signature_uses_longest_mcp_path() {
-        let text = "filesystem MCP server to run tool \"write_file\"? content: \
-path:/Users/ noisy path:/Users/jonudell/Desktop/foo.bar> 1. Yes";
-
-        assert_eq!(
-            extract_codex_command_signature(text)
-                .as_ref()
-                .map(|(tool, sig)| (tool.as_str(), sig.as_str())),
-            Some((
-                "write_file",
-                "filesystem:write_file(/Users/jonudell/Desktop/foo.bar)"
-            ))
-        );
-    }
-
-    #[test]
-    fn ignores_visible_action_required_prose_without_osc_title() {
-        let text = "The detector should notice Action Required when 1. and 2. are present.\n";
-
-        assert!(pty_menu_detect(text.as_bytes()).is_none());
-    }
-
-    #[test]
-    fn ignores_stale_worklist_diff_numbered_text() {
-        let text = "resources/worklist-drafts/issue.md\n\
-diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs\n\
-The Worklist permission panel proposal:\n\
-1. Extend pty_menu_detect\n\
-2. Reuse parse_menu_options\n";
-
-        assert!(pty_menu_detect(text.as_bytes()).is_none());
-    }
-
-    #[test]
-    fn ignores_plain_numbered_terminal_output() {
-        let text = "Next steps:\n  1. Open the file\n  2. Edit the code\n\n";
-
-        assert!(pty_menu_detect(text.as_bytes()).is_none());
-    }
-
-    #[test]
-    fn cursor_with_nbsp_space_still_parses() {
-        // Newer Claude Code builds emit "❯\u{a0} 1." (cursor + NBSP + space + digit).
-        let text = "❯\u{a0} 1. Yes\n  2. No\n";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 2);
-        assert_eq!(opts[0].key, "1");
-        assert_eq!(opts[1].key, "2");
-    }
-
-    #[test]
-    fn returns_empty_when_no_numbered_lines() {
-        let opts = parse_menu_options("just some preamble text\nwith no options\n");
-        assert!(opts.is_empty());
-    }
-
-    #[test]
-    fn blank_line_terminates_option_collection() {
-        // Footer chatter after the blank line is correctly excluded — it
-        // doesn't appear as a phantom 3rd option, nor does it get
-        // appended to option 2's label.
-        let text = "❯1. Yes\n  2. No\n\nEsc to cancel · Tab to amend\n";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 2);
-        assert_eq!(opts[1].label, "No");
-    }
-
-    #[test]
-    fn wrapped_label_continues_on_indented_line() {
-        // Real-world case from Bash permission: option 2's label wraps to a
-        // second visible line in the PTY because it's long.
-        let text = "❯ 1. Yes\n  2. Yes, and allow access to tmp/ and touch /tmp/bram-menu-test.txt\n     commands\n  3. No\n";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3);
-        assert_eq!(opts[0].label, "Yes");
-        assert!(opts[1].label.starts_with("Yes, and allow access"));
-        assert!(opts[1].label.ends_with("commands"));
-        assert_eq!(opts[2].label, "No");
-    }
-
-    #[test]
-    fn wrapped_label_continues_when_indentation_was_stripped() {
-        // What actually arrives at the parser after `strip_ansi`: Claude
-        // Code renders indentation with cursor-positioning escapes rather
-        // than literal spaces, so the continuation line "commands" starts
-        // at column 0 in the stripped tail. Verified live during the #169
-        // verification pass — captured text snapshot in
-        // /tmp/bram-pty-menu-text.txt during the failing run.
-        let text = "Doyouwanttoproceed?\n❯1.Yes\n2.Yes,andallowaccesstotmp/andtouch/tmp/bram-menu-test.txt\ncommands\n3.No\n\nEsctocancel·Tabtoamend·ctrl+etoexplain\n";
-        let opts = parse_menu_options(text);
-        assert_eq!(opts.len(), 3);
-        assert_eq!(opts[0].key, "1");
-        assert_eq!(opts[0].label, "Yes");
-        assert_eq!(opts[1].key, "2");
-        assert!(opts[1].label.starts_with("Yes,andallowaccess"));
-        assert!(opts[1].label.ends_with("commands"));
-        assert_eq!(opts[2].key, "3");
-        assert_eq!(opts[2].label, "No");
-    }
 
     #[test]
     fn esc_clears_inflight() {

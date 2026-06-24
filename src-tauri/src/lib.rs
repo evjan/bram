@@ -3072,9 +3072,20 @@ fn pty_menu_cell() -> &'static Mutex<Option<PtyMenu>> {
 // into the emitted menu when fresh — see the override in the PTY-menu detect
 // path. Command text / signature still come from the JSONL / `⏺` line, not
 // the grid (the grid's verbose scope-option label is stale-cell-prone).
-fn latest_grid_menu_cell() -> &'static Mutex<Option<(Vec<MenuOption>, u128)>> {
-    static LATEST_GRID_MENU: OnceLock<Mutex<Option<(Vec<MenuOption>, u128)>>> =
-        OnceLock::new();
+// Snapshot of the menu the xterm.js grid reader currently sees: clean
+// options plus the header and the lines above the option block. `header` is
+// the "Do you want to…" prompt (empty for Codex, which renders no header);
+// `above` carries the command/context lines that precede the options (where
+// Codex puts what it's confirming). Both feed the host-miss build.
+#[derive(Clone)]
+struct GridMenuSnapshot {
+    options: Vec<MenuOption>,
+    header: String,
+    above: Vec<String>,
+    ts_ms: u128,
+}
+fn latest_grid_menu_cell() -> &'static Mutex<Option<GridMenuSnapshot>> {
+    static LATEST_GRID_MENU: OnceLock<Mutex<Option<GridMenuSnapshot>>> = OnceLock::new();
     LATEST_GRID_MENU.get_or_init(|| Mutex::new(None))
 }
 
@@ -3183,6 +3194,23 @@ fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
             if options.len() < 2 {
                 return;
             }
+            let header = payload
+                .get("header")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let above: Vec<String> = payload
+                .get("above")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
             if bram_trace_enabled() {
                 let provider = hinted_session_provider(&app)
                     .map(session_provider_label)
@@ -3203,7 +3231,12 @@ fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
                     ),
                 );
             }
-            *cell = Some((options, unix_now_ms() as u128));
+            *cell = Some(GridMenuSnapshot {
+                options,
+                header,
+                above,
+                ts_ms: unix_now_ms() as u128,
+            });
         }
     }
     // Force a detect/emit cycle now so the grid report is applied immediately
@@ -3822,7 +3855,13 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         .lock()
         .ok()
         .and_then(|c| c.clone());
-    if let Some((grid_opts, ts)) = grid_snapshot {
+    if let Some(GridMenuSnapshot {
+        options: grid_opts,
+        header: grid_header,
+        above: grid_above,
+        ts_ms: ts,
+    }) = grid_snapshot
+    {
         if (unix_now_ms() as u128).saturating_sub(ts) < 1500 && grid_opts.len() >= 2 {
             grid_was_fresh = true;
             let grid_labels = || {
@@ -3860,48 +3899,116 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                     menu.options = grid_opts;
                 }
                 None => {
-                    // Host missed the menu box. Only build when there's a LIVE
-                    // pending tool call (signature present) — that's what makes
-                    // it a real host-miss rather than a stale grid read of a
-                    // just-dismissed menu (whose tool call is already gone, so
-                    // signature is None). tool + signature come from the JSONL /
-                    // ⏺ lookup, not the grid (its verbose scope-option label is
-                    // stale-cell-prone).
-                    let lookup = lookup_pending_tool_call(app);
-                    if let Some(sig) = lookup.signature {
-                        let tool = sig
-                            .split('(')
-                            .next()
-                            .map(|t| t.trim())
-                            .filter(|t| !t.is_empty())
-                            .unwrap_or("Bash")
-                            .to_string();
+                    if matches!(
+                        hinted_session_provider(app),
+                        Some(SessionProvider::Codex)
+                    ) {
+                        // Codex parity: the JSONL/⏺ lookup is Claude-shaped and
+                        // can return a stale Claude signature while a Codex menu
+                        // is visible. For Codex, build straight from the fresh
+                        // grid snapshot. Liveness is already gated by the grid
+                        // reader (the "Yes" option-1 discriminator + the
+                        // (y)/(p)/(esc) Codex signal); the #193 fingerprint
+                        // (option labels) + the 1.5s freshness window guard
+                        // post-dismiss ghosts. Codex renders the command in
+                        // `above`.
+                        let is_chrome = |l: &str| {
+                            let lc = l.to_lowercase();
+                            lc.contains("would you like")
+                                || lc.contains("do you want")
+                                || lc.contains("requires approval")
+                                || lc.contains("press enter")
+                                || lc.contains("esc to cancel")
+                                || lc.starts_with("yes,")
+                                || lc.starts_with("no,")
+                        };
+                        let mut command = grid_above
+                            .iter()
+                            .filter(|l| !is_chrome(l))
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        if command.chars().count() > 200 {
+                            command = command.chars().take(200).collect::<String>() + "…";
+                        }
+                        if command.trim().is_empty() {
+                            command = grid_header.clone();
+                        }
+                        let tool = "Shell".to_string();
                         if bram_trace_enabled() {
+                            // Log the raw `above` so the first real Codex menu
+                            // reveals the exact shape and we can refine the
+                            // command/tool extraction without guessing blind.
                             append_bram_trace_line(
                                 app,
                                 "grid-menu",
                                 &format!(
-                                    "op=build provider={} tool={} grid_count={} grid=[{}]",
-                                    hinted_session_provider(app)
-                                        .map(session_provider_label)
-                                        .unwrap_or("?"),
+                                    "op=build-codex tool={} grid_count={} cmd={:?} header={:?} above={:?} grid=[{}]",
                                     tool,
                                     grid_opts.len(),
+                                    command,
+                                    grid_header,
+                                    grid_above,
                                     grid_labels()
                                 ),
                             );
                         }
+                        let signature = format!("{}({})", tool, command);
                         detected = Some(PtyMenu {
                             tool,
-                            text: sig.clone(),
+                            text: command,
                             options: grid_opts,
-                            tool_call_signature: Some(sig),
-                            tool_call_diff: lookup.diff,
-                            tool_call_content: lookup.content,
+                            tool_call_signature: Some(signature),
+                            tool_call_diff: None,
+                            tool_call_content: None,
                             cache_source: None,
                             at_host_ms: None,
-                            signature_source: Some("jsonl"),
+                            signature_source: Some("grid"),
                         });
+                    } else {
+                        // Host missed the menu box. Only build when there's a LIVE
+                        // pending tool call (signature present) — that's what makes
+                        // it a real host-miss rather than a stale grid read of a
+                        // just-dismissed menu (whose tool call is already gone, so
+                        // signature is None). tool + signature come from the JSONL /
+                        // ⏺ lookup, not the grid (its verbose scope-option label is
+                        // stale-cell-prone).
+                        let lookup = lookup_pending_tool_call(app);
+                        if let Some(sig) = lookup.signature {
+                            let tool = sig
+                                .split('(')
+                                .next()
+                                .map(|t| t.trim())
+                                .filter(|t| !t.is_empty())
+                                .unwrap_or("Bash")
+                                .to_string();
+                            if bram_trace_enabled() {
+                                append_bram_trace_line(
+                                    app,
+                                    "grid-menu",
+                                    &format!(
+                                        "op=build provider={} tool={} grid_count={} grid=[{}]",
+                                        hinted_session_provider(app)
+                                            .map(session_provider_label)
+                                            .unwrap_or("?"),
+                                        tool,
+                                        grid_opts.len(),
+                                        grid_labels()
+                                    ),
+                                );
+                            }
+                            detected = Some(PtyMenu {
+                                tool,
+                                text: sig.clone(),
+                                options: grid_opts,
+                                tool_call_signature: Some(sig),
+                                tool_call_diff: lookup.diff,
+                                tool_call_content: lookup.content,
+                                cache_source: None,
+                                at_host_ms: None,
+                                signature_source: Some("jsonl"),
+                            });
+                        }
                     }
                 }
             }

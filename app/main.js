@@ -631,7 +631,7 @@ function __gridDetectMenu(rows) {
     // \s* (not \s+) after the dot: grid stale-cell garbling can collapse
     // "2. Yes" to "2.Yes" with no space, which dropped the option and made
     // the whole menu undetectable (the Claude menu-miss bug).
-    const m = t.match(/^\s*([❯>])?\s*(\d)\.\s*(.+)$/);
+    const m = t.match(/^\s*([❯›>])?\s*(\d)\.\s*(.+)$/);
     if (m) {
       opts.push({ n: Number(m[2]), label: m[3].trim(), selected: !!m[1], row: r });
       inOption = true;
@@ -717,7 +717,7 @@ function __gridShadowCheck() {
       // tune the patterns against the real rendered text.
       const txt = rows.map((r) => r.text).join("\n");
       if (
-        /^\s*[>❯]?\s*1\.\s+Yes\b/im.test(txt) &&
+        /^\s*[>❯›]?\s*1\.\s*Yes\b/im.test(txt) &&
         /proceed|tell Codex|\(esc\)|Do you want to|Esc to cancel|Press enter to confirm/i.test(
           txt,
         )
@@ -749,12 +749,22 @@ function __gridShadowCheck() {
     if (key === __gridLastMenuKey) return;
     __gridLastMenuKey = key;
     __gridMenuPresent = true;
-    __gridLastMenu = { header: menu.header, options: menu.options };
+    __gridLastMenu = {
+      header: menu.header,
+      options: menu.options,
+      above: menu.above,
+    };
     // Authoritative: feed the clean structure to the host, which splices the
     // options into the emitted permission menu (or builds it when the host
-    // missed).
+    // missed). `above` carries the command/context lines for the Codex build
+    // (Codex renders no header, so the confirmed command lives there).
     invoke("report_grid_menu", {
-      payload: { present: true, header: menu.header, options: menu.options },
+      payload: {
+        present: true,
+        header: menu.header,
+        options: menu.options,
+        above: menu.above,
+      },
     }).catch(() => {});
     // Light shadow trace for comparison against the host's parse.
     invoke("log_from_right_pane", {
@@ -786,6 +796,7 @@ setInterval(() => {
         present: true,
         header: __gridLastMenu.header,
         options: __gridLastMenu.options,
+        above: __gridLastMenu.above,
       },
     }).catch(() => {});
   }

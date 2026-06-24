@@ -2479,11 +2479,7 @@ fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
     // xterm-grid: the working row is driven entirely by the grid status read
     // clean from xterm.js (full-fidelity verb/elapsed/substate, no flicker).
-    let grid_status = latest_grid_status_cell()
-        .lock()
-        .ok()
-        .and_then(|c| c.clone())
-        .filter(|(_, _, _, ts)| (unix_now_ms() - ts) < 2000);
+    let grid_status = latest_fresh_grid_status_for("claude");
     let next = if let Some((verb, elapsed, substate, _)) = grid_status {
         AgentStatus {
             provider: Some("claude".to_string()),
@@ -2705,15 +2701,29 @@ fn agent_status_set_codex_working<R: tauri::Runtime>(
         .saturating_duration_since(active_since)
         .as_millis()
         .min(i64::MAX as u128) as i64;
-    let next = AgentStatus {
-        provider: Some("codex".to_string()),
-        state: "working".to_string(),
-        verb: Some("working".to_string()),
-        elapsed_text: Some(format_elapsed_text(elapsed_ms)),
-        substate: None,
-        output_tokens_text: None,
-        updated_at_ms: unix_now_ms(),
-        source: Some(source.to_string()),
+    let grid_status = latest_fresh_grid_status_for("codex");
+    let next = if let Some((verb, elapsed, substate, _)) = grid_status {
+        AgentStatus {
+            provider: Some("codex".to_string()),
+            state: "working".to_string(),
+            verb: Some(verb),
+            elapsed_text: Some(elapsed),
+            substate,
+            output_tokens_text: None,
+            updated_at_ms: unix_now_ms(),
+            source: Some("grid-status".to_string()),
+        }
+    } else {
+        AgentStatus {
+            provider: Some("codex".to_string()),
+            state: "working".to_string(),
+            verb: Some("working".to_string()),
+            elapsed_text: Some(format_elapsed_text(elapsed_ms)),
+            substate: None,
+            output_tokens_text: None,
+            updated_at_ms: unix_now_ms(),
+            source: Some(source.to_string()),
+        }
     };
     let mut emit_payload: Option<AgentStatus> = None;
     if let Ok(mut cur) = agent_status_cell().lock() {
@@ -2731,11 +2741,16 @@ fn agent_status_set_codex_working<R: tauri::Runtime>(
     }
     if let Some(payload) = emit_payload {
         maybe_emit_agent_status(app, &payload);
-        update_turn_state(app, source, "codex-working", |s| {
-            s.provider = Some("codex".to_string());
-            s.phase = "working".to_string();
-            s.pending_menu = None;
-        });
+        update_turn_state(
+            app,
+            payload.source.as_deref().unwrap_or(source),
+            "codex-working",
+            |s| {
+                s.provider = Some("codex".to_string());
+                s.phase = "working".to_string();
+                s.pending_menu = None;
+            },
+        );
     }
 }
 
@@ -2750,15 +2765,29 @@ fn agent_status_set_codex_jsonl_working<R: tauri::Runtime>(
     }
     let started_at_ms = turn_started_at_ms.unwrap_or(file_mtime_ms).max(0);
     let elapsed_ms = unix_now_ms().saturating_sub(started_at_ms);
-    let next = AgentStatus {
-        provider: Some("codex".to_string()),
-        state: "working".to_string(),
-        verb: Some("working".to_string()),
-        elapsed_text: Some(format_elapsed_text(elapsed_ms)),
-        substate: None,
-        output_tokens_text: None,
-        updated_at_ms: unix_now_ms(),
-        source: Some("jsonl-non-final".to_string()),
+    let grid_status = latest_fresh_grid_status_for("codex");
+    let next = if let Some((verb, elapsed, substate, _)) = grid_status {
+        AgentStatus {
+            provider: Some("codex".to_string()),
+            state: "working".to_string(),
+            verb: Some(verb),
+            elapsed_text: Some(elapsed),
+            substate,
+            output_tokens_text: None,
+            updated_at_ms: unix_now_ms(),
+            source: Some("grid-status".to_string()),
+        }
+    } else {
+        AgentStatus {
+            provider: Some("codex".to_string()),
+            state: "working".to_string(),
+            verb: Some("working".to_string()),
+            elapsed_text: Some(format_elapsed_text(elapsed_ms)),
+            substate: None,
+            output_tokens_text: None,
+            updated_at_ms: unix_now_ms(),
+            source: Some("jsonl-non-final".to_string()),
+        }
     };
     let mut emit_payload: Option<AgentStatus> = None;
     if let Ok(mut cur) = agent_status_cell().lock() {
@@ -3123,18 +3152,32 @@ fn gap_tracker_cell() -> &'static Mutex<Option<(String, i64, bool)>> {
     GAP_TRACKER.get_or_init(|| Mutex::new(None))
 }
 
-// (verb, elapsed_text, substate, ts) read clean from xterm's grid — drives the
-// working agent-status row in place of the strip_ansi parse + sticky caches.
-fn latest_grid_status_cell(
-) -> &'static Mutex<Option<(String, String, Option<String>, i64)>> {
-    static LATEST_GRID_STATUS: OnceLock<
-        Mutex<Option<(String, String, Option<String>, i64)>>,
-    > = OnceLock::new();
+// (provider, verb, elapsed_text, substate, ts) read clean from xterm's grid —
+// drives the working agent-status row in place of strip_ansi / spinner fallback.
+type GridStatusSnapshot = (String, String, String, Option<String>, i64);
+
+fn latest_grid_status_cell() -> &'static Mutex<Option<GridStatusSnapshot>> {
+    static LATEST_GRID_STATUS: OnceLock<Mutex<Option<GridStatusSnapshot>>> = OnceLock::new();
     LATEST_GRID_STATUS.get_or_init(|| Mutex::new(None))
+}
+
+fn latest_fresh_grid_status_for(provider: &str) -> Option<(String, String, Option<String>, i64)> {
+    latest_grid_status_cell()
+        .lock()
+        .ok()
+        .and_then(|c| c.clone())
+        .filter(|(p, _, _, _, ts)| p == provider && (unix_now_ms() - *ts) < 2000)
+        .map(|(_, verb, elapsed, substate, ts)| (verb, elapsed, substate, ts))
 }
 
 #[tauri::command]
 fn report_grid_status(payload: serde_json::Value) {
+    let provider = payload
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .filter(|s| matches!(*s, "claude" | "codex"))
+        .unwrap_or("claude")
+        .to_string();
     let verb = payload
         .get("verb")
         .and_then(|v| v.as_str())
@@ -3149,7 +3192,7 @@ fn report_grid_status(payload: serde_json::Value) {
         .map(|s| s.to_string());
     if let (Some(verb), Some(elapsed)) = (verb, elapsed) {
         if let Ok(mut cell) = latest_grid_status_cell().lock() {
-            *cell = Some((verb, elapsed, substate, unix_now_ms()));
+            *cell = Some((provider, verb, elapsed, substate, unix_now_ms()));
         }
     }
 }

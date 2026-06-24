@@ -1044,6 +1044,29 @@ function __gridReadStatus() {
     // can drive the agent-status row from the grid (clean, full-fidelity, no
     // sticky-cache flicker). Strip the leading rotating spinner glyph first.
     for (let r = rows.length - 1; r >= 0; r--) {
+      const cm = rows[r].match(/\bWorking\s*\(([^)]*esc to interrupt[^)]*)\)/i);
+      if (cm) {
+        const segs = cm[1].split(/[·•]/).map((x) => x.trim());
+        const elapsed =
+          segs.find((x) => /\d+\s*[hms]\b/.test(x) && !/token/i.test(x)) || null;
+        if (elapsed) {
+          invoke("report_grid_status", {
+            payload: { provider: "codex", verb: "Working", elapsed, substate: null },
+          }).catch(() => {});
+          const verbKey = "codex|Working|";
+          if (verbKey !== __gridStatusVerbKey) {
+            __gridStatusVerbKey = verbKey;
+            invoke("log_from_right_pane", {
+              payload: {
+                kind: "iframe-trace",
+                subkind: "grid-status",
+                status: rows[r].trim(),
+              },
+            }).catch(() => {});
+          }
+        }
+        break;
+      }
       // Core shape: "<Verb>… (<elapsed> [· <tokens>] [· <substate>])" — match
       // it directly so we catch early-turn statuses without tokens/·, not just
       // the fully-painted ones. The verb char class includes '-' so hyphenated
@@ -1061,9 +1084,9 @@ function __gridReadStatus() {
           ) || null;
         if (verb && elapsed) {
           invoke("report_grid_status", {
-            payload: { verb, elapsed, substate },
+            payload: { provider: "claude", verb, elapsed, substate },
           }).catch(() => {});
-          const verbKey = verb + "|" + (substate || "");
+          const verbKey = "claude|" + verb + "|" + (substate || "");
           if (verbKey !== __gridStatusVerbKey) {
             __gridStatusVerbKey = verbKey;
             invoke("log_from_right_pane", {

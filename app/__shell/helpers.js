@@ -1513,6 +1513,36 @@ window.__bramTurnsLooselyEqual = function (a, b) {
   return true;
 };
 
+window.__bramIsSyntheticCodexMessage = function (text) {
+  text = String(text || "").trim();
+  if (!text) return false;
+  if (text.indexOf("<turn_aborted>") === 0) return true;
+  if (/^<[^>\s]*(instructions|context)[^>\s]*>/i.test(text)) return true;
+  if (/^#\s+AGENTS\.md instructions for /i.test(text)) return true;
+  if (text.indexOf("Understood. I") === 0 && text.indexOf("worklist gate") >= 0) return true;
+  var compact = text.replace(/\s+/g, " ");
+  var markers = [
+    "This repo is driven through Bram. The canonical worklist gate",
+    "bram worklist gate. Use the worklist for material file/code changes",
+    "Filesystem sandboxing defines which files can be read or written",
+    "Use the worklist for material file/code changes unless the user explicitly opts out",
+    "request_user_input availability",
+    "Apps (Connectors) can be explicitly triggered in user messages",
+    "An app is equivalent to a set of MCP tools",
+    "A skill is a set of instructions provided through a SKILL.md source",
+    "Below is the list of skills that can be used",
+    "Each entry includes a name, description, and source locator",
+    "Collaboration Mode:",
+    "You are Codex, a coding agent",
+    "Knowledge cutoff:"
+  ];
+  var hits = 0;
+  for (var i = 0; i < markers.length; i++) {
+    if (compact.indexOf(markers[i]) >= 0) hits++;
+  }
+  return hits >= 2 || (hits >= 1 && compact.length > 700);
+};
+
 window.__bramParseLinesToTurns = function (lines, toolIndex) {
   toolIndex = toolIndex || {};
   var turns = [];
@@ -1593,6 +1623,8 @@ window.__bramParseLinesToTurns = function (lines, toolIndex) {
     if (entries.length === 0 && inlineImages.length === 0) continue;
     var originalJoined = entries.filter(function (e) { return e.kind === "text"; })
       .map(function (e) { return e.text; }).join("\n\n");
+    if (entries.every(function (e) { return e.kind === "text"; })
+        && window.__bramIsSyntheticCodexMessage(originalJoined)) continue;
     var pathsFromText = window.__bramExtractImagePaths(originalJoined);
     for (var ei = 0; ei < entries.length; ei++) {
       var e2 = entries[ei];
@@ -4000,14 +4032,6 @@ window.__bramParseTranscript = function (jsonl) {
   var lines = jsonl.split("\n");
   var events = [];
   var toolById = {};
-  var isSyntheticCodexMessage = function (text) {
-    text = String(text || "").trim();
-    return text.indexOf("<permissions instructions>") === 0 ||
-      text.indexOf("# AGENTS.md instructions for ") === 0 ||
-      text.indexOf("This repo is driven through Bram. The canonical worklist gate") === 0 ||
-      (text.indexOf("Understood. I") === 0 && text.indexOf("worklist gate") >= 0) ||
-      text.indexOf("<turn_aborted>") === 0;
-  };
   var pushImages = function (id, role, images) {
     images = (images || []).filter(Boolean);
     if (!images.length) return;
@@ -4021,7 +4045,7 @@ window.__bramParseTranscript = function (jsonl) {
   };
   var pushText = function (id, role, text) {
     if (!text || !String(text).trim()) return;
-    if (isSyntheticCodexMessage(text)) return;
+    if (window.__bramIsSyntheticCodexMessage(text)) return;
     var kind = role === "user" ? "user" : "text";
     // Codex currently records many visible messages twice: once as
     // event_msg and once as response_item. Collapse near duplicates so

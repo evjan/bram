@@ -4145,6 +4145,45 @@ window.__bramParseTranscript = function (jsonl) {
 // Transcript keeps this interleaved view as the only full menu renderer.
 window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {
   var events = window.__bramParseTranscript(jsonl);
+  // menu-stack-pty-inflight-prose: while a permission menu is up, Claude hasn't
+  // written the turn's assistant record to its JSONL yet, so the explanatory
+  // prose is missing from the transcript. Show the grid-sourced prose
+  // (menu.inflightProse) as a PROVISIONAL block above the menu. A live menu
+  // supplies the prose; once it's dismissed there is a ~0.5–1.6s gap before the
+  // real record lands, during which we KEEP showing the prose (bridge) so it
+  // doesn't blink out and back. The bridge clears when the real record lands
+  // (content match) or after an 8s backstop (a no-tool_use prompt may never
+  // produce a record). The provisional is a separate block, never inserted into
+  // the record list, so there is no duplicate risk; a stable id keeps XMLUI from
+  // remounting (flashing) across the live→bridge→swap transitions.
+  var prose = ((menu && menu.inflightProse) || "").trim();
+  if (prose) {
+    window.__bramPendingProse = { text: prose, atMs: Date.now() };
+  } else if (
+    window.__bramPendingProse &&
+    Date.now() - window.__bramPendingProse.atMs < 8000
+  ) {
+    prose = window.__bramPendingProse.text;
+  }
+  if (prose) {
+    var key = prose.replace(/\s+/g, " ").trim().toLowerCase().slice(0, 40);
+    var present = false;
+    for (var k = events.length - 1; k >= 0 && events.length - k <= 10; k--) {
+      if (
+        events[k].kind === "text" &&
+        key &&
+        events[k].text.replace(/\s+/g, " ").toLowerCase().indexOf(key) >= 0
+      ) {
+        present = true;
+        break;
+      }
+    }
+    if (present) {
+      window.__bramPendingProse = null;
+    } else {
+      events.push({ id: "menu-prose", kind: "menu-prose", text: prose });
+    }
+  }
   if (menu) {
     events.push({ id: "menu-pending-" + window.__bramMenuIdentity(menu), kind: "menu", menu: menu });
   }

@@ -129,6 +129,14 @@
               value="{$item.result}" />
           </VStack>
         </VStack>
+        <!-- provisional in-flight prose (grid-sourced), shown above the pending
+             menu until the real assistant record lands in the JSONL. Rendered
+             identically to a settled assistant message so the swap is seamless;
+             the content-presence guard in __bramTranscriptEventsWithMenu drops
+             it once the real record renders. -->
+        <Markdown
+          when="{$item.kind === 'menu-prose'}"
+          content="{window.__bramStripImagePaths($item.text)}" />
         <!-- pending agent menu, interleaved at its natural (latest) position -->
         <AgentMenuView when="{$item.kind === 'menu'}" menu="{$item.menu}" surface="transcript" />
       </VStack>

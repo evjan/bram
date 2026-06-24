@@ -1863,6 +1863,29 @@ fn stamp_pty_menu_payload(
     menu
 }
 
+// menu-stack-pty-inflight-prose: emit `pty-menu-changed` with the grid-sourced
+// in-flight prose injected into the payload object. Done at the emit chokepoint
+// (rather than a PtyMenu struct field) to avoid churning every construction and
+// test literal. The prose rides to `window.bramAgentMenu.inflightProse` and
+// feeds the Transcript's provisional-prose reactive guard. Fail-silent: when
+// the extractor found nothing (`None`), no field is added.
+fn emit_pty_menu_with_prose<R: tauri::Runtime>(app: &AppHandle<R>, payload: &Option<PtyMenu>) {
+    let mut value = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = value.as_object_mut() {
+        if let Some(prose) = latest_grid_menu_cell()
+            .lock()
+            .ok()
+            .and_then(|c| c.as_ref().and_then(|s| s.prose.clone()))
+        {
+            obj.insert(
+                "inflightProse".to_string(),
+                serde_json::Value::String(prose),
+            );
+        }
+    }
+    emit_replayable_payload(app, "pty-menu-changed", value);
+}
+
 const PTY_TURN_FINISHED_VERB_GRACE_MS: u64 = 500;
 
 // Format elapsed milliseconds as "1m 53s" / "23s" / "1h 5m" matching
@@ -3082,6 +3105,10 @@ struct GridMenuSnapshot {
     options: Vec<MenuOption>,
     header: String,
     above: Vec<String>,
+    // menu-stack-pty-inflight-prose: the in-flight turn's assistant prose
+    // extracted from the grid by main.js (fail-silent — None when ambiguous).
+    // Injected into the pty-menu-changed payload at emit time.
+    prose: Option<String>,
     ts_ms: u128,
 }
 fn latest_grid_menu_cell() -> &'static Mutex<Option<GridMenuSnapshot>> {
@@ -3211,6 +3238,11 @@ fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
                         .collect()
                 })
                 .unwrap_or_default();
+            let prose = payload
+                .get("prose")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty());
             if bram_trace_enabled() {
                 let provider = hinted_session_provider(&app)
                     .map(session_provider_label)
@@ -3235,6 +3267,7 @@ fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
                 options,
                 header,
                 above,
+                prose,
                 ts_ms: unix_now_ms() as u128,
             });
         }
@@ -3859,6 +3892,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         options: grid_opts,
         header: grid_header,
         above: grid_above,
+        prose: _,
         ts_ms: ts,
     }) = grid_snapshot
     {
@@ -4350,7 +4384,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     if let Some(payload) = emit_payload {
         let payload = stamp_pty_menu_payload(payload, "setAgentMenuFromEvent");
         turn_state_set_menu(app, payload.clone(), "pty-menu", "detected");
-        emit_replayable_payload(app, "pty-menu-changed", &payload);
+        emit_pty_menu_with_prose(app, &payload);
         trace_pty_menu_options(app, &payload);
     }
 
@@ -4441,7 +4475,7 @@ fn try_signature_recheck_on_jsonl_change<R: tauri::Runtime>(app: &AppHandle<R>) 
             "pty-menu",
             "signature-watcher-recheck",
         );
-        emit_replayable_payload(app, "pty-menu-changed", &payload);
+        emit_pty_menu_with_prose(app, &payload);
         trace_pty_menu_options(app, &payload);
     }
 }
@@ -4570,7 +4604,7 @@ fn schedule_signature_recheck<R: tauri::Runtime>(app_handle: AppHandle<R>, targe
                     "pty-menu",
                     "signature-deferred-recheck",
                 );
-                emit_replayable_payload(&app_handle, "pty-menu-changed", &payload);
+                emit_pty_menu_with_prose(&app_handle, &payload);
                 trace_pty_menu_options(&app_handle, &payload);
             }
             return;

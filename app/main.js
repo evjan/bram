@@ -827,6 +827,63 @@ function __gridDetectMenu(rows) {
   };
 }
 
+// Extract the in-flight turn's assistant prose from the grid for the
+// menu-stack-pty-inflight-prose feature: the explanatory text the agent
+// printed just above the permission box. Conservative and FAIL-SILENT —
+// returns "" on any ambiguity so we fall back to today's behavior rather than
+// ever show wrong text (the JSONL delivers the exact prose moments later and
+// replaces whatever we showed). Structure above the options (verified live):
+//   ⏺ Tool(…) → ⎿ Waiting… → ──── border → header → command → description →
+//   "Do you want to proceed?" → options
+// The #206 manual-approval shape has no ⏺ Tool( bullet; its top is the border
+// / ⎿ Waiting. The prose is the "⏺ <text>" bullet block directly above that
+// anchor, where the bullet is NOT a tool call (⏺ Capitalized( ).
+function __gridExtractInflightProse(rows, blockTop) {
+  const toolBullet = /^\s*⏺\s+[A-Z][A-Za-z0-9]*\(/;
+  const anyBullet = /^\s*⏺\s+/;
+  const waiting = /⎿\s*Waiting/i;
+  const border = /^[\s─-]{12,}$/;
+  // 1. Anchor = top of the permission box: prefer the gated ⏺ Tool( bullet,
+  // else the highest border / ⎿ Waiting within a bounded look-up.
+  let anchor = -1;
+  for (let i = blockTop - 1; i >= 0 && blockTop - i <= 18; i--) {
+    const t = rows[i].text;
+    if (toolBullet.test(t)) { anchor = i; break; }
+    if (waiting.test(t) || border.test(t)) anchor = i;
+  }
+  if (anchor < 0) return "";
+  // 2. The line directly above the box (skipping blanks) must be assistant
+  // prose; if it's tool output (⎿), a user line (>), or a tool bullet, this
+  // action had no preceding prose → fail silent.
+  let j = anchor - 1;
+  while (j >= 0 && !rows[j].text.trim()) j--;
+  if (j < 0) return "";
+  const top = rows[j].text;
+  if (/^\s*⎿/.test(top) || /^\s*>/.test(top) || toolBullet.test(top)) return "";
+  // 3. The block is prose ONLY if a ⏺ <non-tool> bullet is the first structural
+  // marker above j. A ⎿ (tool output — e.g. an Edit diff), a ⏺ Tool( bullet, or
+  // a > user line first means the gated call was preceded by tool output, not
+  // prose → fail silent rather than leak that output as "prose".
+  let start = -1;
+  for (let k = j; k >= 0 && j - k <= 40; k--) {
+    const tk = rows[k].text;
+    if (/^\s*⎿/.test(tk) || /^\s*>/.test(tk) || toolBullet.test(tk)) return "";
+    if (anyBullet.test(tk)) { start = k; break; }
+  }
+  if (start < 0) return "";
+  // 4. Join start..j: strip the ⏺ glyph and cosmetic alignment indent, keep
+  // line breaks (hard-wrapped continuations render fine as Markdown lines).
+  const out = [];
+  for (let r = start; r <= j; r++) {
+    out.push(
+      rows[r].text.replace(/^\s*⏺\s+/, "").replace(/\s+$/, "").replace(/^ {1,2}/, ""),
+    );
+  }
+  let prose = out.join("\n").trim();
+  if (prose.length > 1200) prose = prose.slice(0, 1200) + "…";
+  return prose;
+}
+
 let __gridMenuPresent = false;
 let __gridLastMenu = null;
 let __gridMissKey = null;
@@ -873,23 +930,18 @@ function __gridShadowCheck() {
       menu.header + "|" + menu.options.map((o) => o.n + o.label).join("|");
     if (key === __gridLastMenuKey) return;
     __gridLastMenuKey = key;
-    // DIAGNOSTIC (menu-prose feasibility): once per distinct menu, dump every
-    // row ABOVE the option block — the permission box plus whatever scrollback
-    // sits above it. Answers the open question of whether the in-flight turn's
-    // assistant prose is present as clean rendered text above the box (i.e. the
-    // `menu-stack-pty-inflight-prose` problem is sourceable from the grid), or
-    // whether it's scrolled past the 200-row window / eaten by repaint. Row `i`
-    // is the index within the live-rows window; `w:1` flags a soft-wrap
-    // continuation. Remove once the question is answered.
+    // menu-stack-pty-inflight-prose: extract the in-flight turn's prose from
+    // the grid (fail-silent → "" when ambiguous) so the host can ship it with
+    // the menu. Trace it so we can verify the extractor against real menus
+    // before the iframe render consumes it.
+    const inflightProse = __gridExtractInflightProse(rows, menu.blockTop);
     invoke("log_from_right_pane", {
       payload: {
         kind: "iframe-trace",
-        subkind: "xterm-grid-prose-probe",
+        subkind: "inflight-prose",
         blockTop: menu.blockTop,
-        windowRows: rows.length,
-        above: rows
-          .slice(0, menu.blockTop)
-          .map((r, i) => ({ i, w: r.wrapped ? 1 : 0, t: r.text })),
+        chars: inflightProse.length,
+        preview: inflightProse.slice(0, 240),
       },
     }).catch(() => {});
     __gridMenuPresent = true;
@@ -897,6 +949,7 @@ function __gridShadowCheck() {
       header: menu.header,
       options: menu.options,
       above: menu.above,
+      prose: inflightProse,
     };
     // Authoritative: feed the clean structure to the host, which splices the
     // options into the emitted permission menu (or builds it when the host
@@ -908,6 +961,7 @@ function __gridShadowCheck() {
         header: menu.header,
         options: menu.options,
         above: menu.above,
+        prose: inflightProse,
       },
     }).catch(() => {});
     // Light shadow trace for comparison against the host's parse.
@@ -941,6 +995,7 @@ setInterval(() => {
         header: __gridLastMenu.header,
         options: __gridLastMenu.options,
         above: __gridLastMenu.above,
+        prose: __gridLastMenu.prose,
       },
     }).catch(() => {});
   }

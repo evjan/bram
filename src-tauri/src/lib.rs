@@ -4008,6 +4008,45 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                                 at_host_ms: None,
                                 signature_source: Some("jsonl"),
                             });
+                        } else {
+                            // No pending tool_use in the JSONL — Claude hasn't
+                            // flushed the current tool_use while paused on the
+                            // prompt (records-stacked behavior), or this is a
+                            // manual-approval safety prompt with no tool_use at
+                            // all. The grid persistently reports a LIVE menu
+                            // (snapshot <1.5s fresh, iframe re-reports every 1s),
+                            // so build from the grid anyway — the agent pane menu
+                            // must not depend on Claude's JSONL write timing. The
+                            // JSONL signature is enrichment, not a gate. The #193
+                            // fingerprint below (tool + option labels) suppresses
+                            // the post-dismiss stale re-read this gate used to
+                            // guard, and the deferred signature recheck enriches
+                            // the menu if the tool_use lands later. tool defaults
+                            // to "Bash" (the dominant prompt class and a
+                            // deterministic suppression key); refine via grid
+                            // header/above later. Refs #206.
+                            if bram_trace_enabled() {
+                                append_bram_trace_line(
+                                    app,
+                                    "grid-menu",
+                                    &format!(
+                                        "op=build-claude-nosig tool=Bash grid_count={} grid=[{}]",
+                                        grid_opts.len(),
+                                        grid_labels()
+                                    ),
+                                );
+                            }
+                            detected = Some(PtyMenu {
+                                tool: "Bash".to_string(),
+                                text: String::new(),
+                                options: grid_opts,
+                                tool_call_signature: None,
+                                tool_call_diff: None,
+                                tool_call_content: None,
+                                cache_source: None,
+                                at_host_ms: None,
+                                signature_source: Some("grid"),
+                            });
                         }
                     }
                 }

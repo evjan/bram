@@ -461,6 +461,16 @@ const logShellEvent = (payload) => {
   } catch {}
 };
 
+const tracePaneReload = (stage, fields = {}) => {
+  logShellEvent({
+    kind: "iframe-trace",
+    subkind: "pane-reload",
+    at: new Date().toISOString(),
+    stage,
+    ...fields,
+  });
+};
+
 (() => {
   const tools = document.getElementById("tools-pane");
   if (!tools) return;
@@ -1102,8 +1112,22 @@ const { listen } = window.__TAURI__.event;
   // place (the user's project app handles its own loading state); tools
   // pane goes through swapToolsIframe to avoid the flash.
   function reloadAll() {
-    iframe.src = bust(RIGHT_PANE_SRC);
-    swapToolsIframe(bust(TOOLS_PANE_SRC));
+    const rightSrc = bust(RIGHT_PANE_SRC);
+    const toolsSrc = bust(TOOLS_PANE_SRC);
+    tracePaneReload("reload-all-received", {
+      rightSrc,
+      toolsSrc,
+    });
+    iframe.src = rightSrc;
+    tracePaneReload("right-src-set", {
+      source: "reload-all",
+      src: rightSrc,
+    });
+    swapToolsIframe(toolsSrc);
+    tracePaneReload("tools-swap-start", {
+      source: "reload-all",
+      src: toolsSrc,
+    });
   }
   // reloadRightPaneOnly: reload only the right pane. Used by the
   // "right-pane-reload" watcher event for user-project file changes AND
@@ -1113,12 +1137,31 @@ const { listen } = window.__TAURI__.event;
   // here, and keeping it stable avoids postMessage-vs-iframe-rebuild races
   // on Approve/Drop clicks while the agent is writing files.
   async function reloadRightPaneOnly() {
+    const startedAt = Date.now();
+    tracePaneReload("right-listener-fired", {
+      priorSrc: RIGHT_PANE_SRC,
+      iframeSrc: iframe.getAttribute("src") || "",
+    });
     try {
       RIGHT_PANE_SRC = await invoke("get_right_pane_url");
+      tracePaneReload("right-url-resolved", {
+        elapsedMs: Date.now() - startedAt,
+        src: RIGHT_PANE_SRC,
+      });
     } catch (e) {
       console.error("get_right_pane_url failed", e);
+      tracePaneReload("right-url-error", {
+        elapsedMs: Date.now() - startedAt,
+        message: String((e && e.message) || e),
+      });
     }
-    iframe.src = bust(RIGHT_PANE_SRC);
+    const nextSrc = bust(RIGHT_PANE_SRC);
+    iframe.src = nextSrc;
+    tracePaneReload("right-src-set", {
+      source: "right-pane-reload",
+      elapsedMs: Date.now() - startedAt,
+      src: nextSrc,
+    });
   }
   // Single-shot retry: if the right-pane iframe hasn't fired `load`
   // within 1.5s, the project-managed server (from .bram.json)
@@ -1127,12 +1170,36 @@ const { listen } = window.__TAURI__.event;
   // specifically catches the "still connecting" state. `error` is not
   // reliable for iframes; we don't bother listening for it.
   let loaded = false;
-  iframe.addEventListener("load", () => { loaded = true; });
+  iframe.addEventListener("load", () => {
+    loaded = true;
+    tracePaneReload("right-load", {
+      src: iframe.getAttribute("src") || "",
+    });
+  });
   iframe.src = RIGHT_PANE_SRC;
+  tracePaneReload("right-initial-src-set", {
+    src: RIGHT_PANE_SRC,
+  });
   setTimeout(() => {
-    if (!loaded) iframe.src = bust(RIGHT_PANE_SRC);
+    if (!loaded) {
+      const retrySrc = bust(RIGHT_PANE_SRC);
+      tracePaneReload("right-initial-retry", {
+        src: retrySrc,
+      });
+      iframe.src = retrySrc;
+    } else {
+      tracePaneReload("right-initial-retry-skipped", {
+        src: iframe.getAttribute("src") || "",
+      });
+    }
   }, 1500);
-  if (tools) tools.src = toolsSrcWithHash(TOOLS_PANE_SRC);
+  if (tools) {
+    const toolsInitialSrc = toolsSrcWithHash(TOOLS_PANE_SRC);
+    tools.src = toolsInitialSrc;
+    tracePaneReload("tools-initial-src-set", {
+      src: toolsInitialSrc,
+    });
+  }
   setInterval(() => {
     const currentTools = document.getElementById("tools-pane");
     if (currentTools?.contentWindow) persistToolsRoute(currentTools.contentWindow);

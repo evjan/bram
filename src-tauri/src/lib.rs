@@ -1516,6 +1516,68 @@ fn pty_menu_preview_chars(menu: &PtyMenu) -> usize {
         .count()
 }
 
+fn grid_menu_line_is_command_chrome(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lc = trimmed.to_lowercase();
+    if lc == "bash command"
+        || lc.contains("would you like")
+        || lc.contains("do you want")
+        || lc.contains("requires approval")
+        || lc.contains("contains simple_expansion")
+        || lc.contains("press enter")
+        || lc.contains("esc to cancel")
+        || lc.contains("waiting")
+        || lc.starts_with("yes,")
+        || lc.starts_with("no,")
+    {
+        return true;
+    }
+    if trimmed.starts_with('1') || trimmed.starts_with('2') || trimmed.starts_with('3') {
+        let rest = trimmed.chars().skip(1).next();
+        if matches!(rest, Some('.') | Some(')') | Some(' ')) {
+            return true;
+        }
+    }
+    trimmed.chars().all(|c| {
+        c == '-'
+            || c == '─'
+            || c == '━'
+            || c == '═'
+            || c == '│'
+            || c == '┃'
+            || c == '║'
+            || c == '┌'
+            || c == '┐'
+            || c == '└'
+            || c == '┘'
+            || c == '┏'
+            || c == '┓'
+            || c == '┗'
+            || c == '┛'
+            || c == '+'
+            || c == '|'
+    })
+}
+
+fn grid_menu_command_preview(grid_above: &[String], grid_header: &str) -> String {
+    let mut command = grid_above
+        .iter()
+        .filter(|l| !grid_menu_line_is_command_chrome(l))
+        .map(|s| s.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if command.chars().count() > 200 {
+        command = command.chars().take(200).collect::<String>() + "…";
+    }
+    if command.trim().is_empty() {
+        command = grid_header.trim().to_string();
+    }
+    command
+}
+
 // #182 incident 8 instrumentation. Adjacent trace line to every
 // `pty-menu-changed` emit that previews the parsed `options` array —
 // `tool=<name> count=<n> options=[key="label", key="label", ...]`.
@@ -4013,28 +4075,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                         // (option labels) + the 1.5s freshness window guard
                         // post-dismiss ghosts. Codex renders the command in
                         // `above`.
-                        let is_chrome = |l: &str| {
-                            let lc = l.to_lowercase();
-                            lc.contains("would you like")
-                                || lc.contains("do you want")
-                                || lc.contains("requires approval")
-                                || lc.contains("press enter")
-                                || lc.contains("esc to cancel")
-                                || lc.starts_with("yes,")
-                                || lc.starts_with("no,")
-                        };
-                        let mut command = grid_above
-                            .iter()
-                            .filter(|l| !is_chrome(l))
-                            .map(|s| s.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        if command.chars().count() > 200 {
-                            command = command.chars().take(200).collect::<String>() + "…";
-                        }
-                        if command.trim().is_empty() {
-                            command = grid_header.clone();
-                        }
+                        let command = grid_menu_command_preview(&grid_above, &grid_header);
                         let tool = "Shell".to_string();
                         if bram_trace_enabled() {
                             // Log the raw `above` so the first real Codex menu
@@ -4126,20 +4167,22 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                             // to "Bash" (the dominant prompt class and a
                             // deterministic suppression key); refine via grid
                             // header/above later. Refs #206.
+                            let command = grid_menu_command_preview(&grid_above, &grid_header);
                             if bram_trace_enabled() {
                                 append_bram_trace_line(
                                     app,
                                     "grid-menu",
                                     &format!(
-                                        "op=build-claude-nosig tool=Bash grid_count={} grid=[{}]",
+                                        "op=build-claude-nosig tool=Bash grid_count={} cmd={:?} grid=[{}]",
                                         grid_opts.len(),
+                                        command,
                                         grid_labels()
                                     ),
                                 );
                             }
                             detected = Some(PtyMenu {
                                 tool: "Bash".to_string(),
-                                text: String::new(),
+                                text: command,
                                 options: grid_opts,
                                 tool_call_signature: None,
                                 tool_call_diff: None,
@@ -17861,6 +17904,40 @@ mod pty_menu_tests {
         assert_eq!(
             pty_menu_preview_chars(&jsonl_backed),
             signature.chars().count()
+        );
+    }
+
+    #[test]
+    fn grid_menu_command_preview_filters_claude_bash_chrome() {
+        let above = vec![
+            "Bash command".to_string(),
+            "────".to_string(),
+            "$ rg -n \"grid-menu\" src-tauri/src/lib.rs".to_string(),
+            "Contains simple_expansion".to_string(),
+            "Do you want to proceed?".to_string(),
+            "1. Yes".to_string(),
+            "2. No".to_string(),
+        ];
+
+        assert_eq!(
+            super::grid_menu_command_preview(&above, "Bash command"),
+            "$ rg -n \"grid-menu\" src-tauri/src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn grid_menu_command_preview_filters_codex_approval_chrome() {
+        let above = vec![
+            "Requires approval".to_string(),
+            "Shell(Environment: local no-op demo): $ /usr/bin/true".to_string(),
+            "Do you want to proceed?".to_string(),
+            "Yes, proceed".to_string(),
+            "No, and tell Codex what to do differently".to_string(),
+        ];
+
+        assert_eq!(
+            super::grid_menu_command_preview(&above, "Shell"),
+            "Shell(Environment: local no-op demo): $ /usr/bin/true"
         );
     }
 

@@ -84,6 +84,14 @@
   <ChangeListener
     listenTo="{footerSessionsChangedEvt.value &amp;&amp; footerSessionsChangedEvt.value.tick}"
     onDidChange="() => footerSessions.refetch()" />
+  <!-- Light-touch backstop: the always-mounted footer never re-mounts, so its
+       session meta can stay frozen at launch values. Refetch on agent
+       turn-state transitions (the App-scope status push already driving the
+       header) so date/size land on current values after each turn — no
+       polling, ~once per turn. -->
+  <ChangeListener
+    listenTo="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state}"
+    onDidChange="() => footerSessions.refetch()" />
   <APICall
     id="restartServer"
     url="/__restart-server"

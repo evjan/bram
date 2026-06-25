@@ -24,6 +24,13 @@
     id="voiceBusyNotice"
     initial="{null}"
     subscribe="{window.bramSubscribeVoiceBusy()}" />
+  <!-- Pending terminal permission menu (same source the Transcript uses):
+       value is the menu object when a menu is waiting, null otherwise. Drives
+       the subtle pulse on the NavPanel's Terminal menu footer. -->
+  <External
+    id="navMenuPendingEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeAgentMenu()}" />
   <ChangeListener
     listenTo="{whisperNotice.value &amp;&amp; whisperNotice.value.at}"
     onDidChange="(c) => { if (c.newValue) { toast.error('Whisper server is not running and could not be started automatically. Start it manually — see the README Voice input section: https://github.com/judell/bram#voice-input'); } }" />
@@ -287,7 +294,9 @@
       <Fragment/>
     </property>
     <property name="footerTemplate">
-      <VStack gap="$space-1" paddingHorizontal="$space-2">
+      <VStack gap="$space-1" paddingHorizontal="$space-2"
+        animation="{navMenuPendingEvt.value ? 'fadein' : ''}"
+        animationOptions="{{ duration: 1400, reverse: true, loop: true }}">
         <Text
           fontSize="$fontSize-xs"
           color="$textColor-secondary"

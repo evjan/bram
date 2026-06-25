@@ -1,25 +1,59 @@
 # Reading the terminal screen from xterm.js instead of re-parsing the PTY stream
 
-Status: validated by spike (branch `xterm-grid-screen-read`, 2026-06-23).
-Not yet implemented beyond the spike.
+Status: partially implemented. The spike validated the approach on
+2026-06-23; current code now uses the xterm.js grid for live permission-menu
+shape/options, in-flight menu prose, status rows, and finished banners, while
+raw PTY bytes remain in use for transport, activity timing, fallbacks, and
+debugging.
 
 ## Summary
 
-Bram's Rust host keeps a rolling ~8 KB buffer of recent PTY output bytes
-(`PTY_TAIL` / `pty_tail_cell`), runs `strip_ansi` over it, and hand-parses
-the result to detect the permission menu, the agent status line, the
-end-of-turn banner, the `⏺ Tool(...)` signature, and more. That parsing is
-fragile — and the fragility is **structural**, not incidental.
+Bram's Rust host keeps a rolling buffer of recent PTY output bytes
+(`PTY_TAIL` / `pty_tail_cell`). Historically it ran `strip_ansi` over that
+byte stream and hand-parsed the result to detect the permission menu, the
+agent status line, the end-of-turn banner, the `⏺ Tool(...)` signature, and
+more. That parsing is fragile — and the fragility is **structural**, not
+incidental.
 
 Meanwhile the frontend already renders the *same bytes* through **xterm.js**,
-a full terminal emulator that holds a clean 2-D screen grid. We have never
-read text out of that grid. A spike proved the grid yields clean, complete
-screen text exactly where the strip_ansi parse yields mangled fragments.
+a full terminal emulator. **The grid** means xterm.js's rendered 2-D terminal
+buffer: rows and columns of cells after xterm has interpreted PTY bytes,
+ANSI/control sequences, cursor motion, overwrites, wrapping, and redraws. It
+is not the DOM and it is not the raw PTY stream. Bram reads that buffer with
+`term.buffer.active.getLine(n).translateToString(true)` in `app/main.js`.
+A spike proved the grid yields clean, complete screen text exactly where the
+strip_ansi parse yields mangled fragments.
 
-The conclusion: **stop re-deriving the rendered screen in Rust from a
-de-positioned byte stream; read it from the emulator we already run.** The
-host keeps everything that *isn't* screen text (timing, emission, JSONL
-correlation).
+The conclusion remains: **stop re-deriving rendered screen text in Rust from
+a de-positioned byte stream; read it from the emulator we already run.** The
+host keeps everything that *isn't* screen text: transport, timing, emission,
+JSONL correlation, suppression windows, and operational fallbacks.
+
+## Current split
+
+There is still substantial terminal-derived parsing. The important change is
+the source of the user-visible screen facts.
+
+- **Raw PTY bytes/control characters remain for transport and liveness.**
+  User turns still go through `queue_pty_intent` / `pty_write`; PTY chunks
+  still drive activity/silence detection, spinner glyph detection, Codex
+  fallback "Working (`esc to interrupt`)" detection, menu dismissal
+  suppression, stale-sentinel cleanup, PTY-tail debug endpoints, and some
+  fallback banner/status paths.
+- **xterm grid reads now own the clean screen-text path.** `app/main.js`
+  reads live rows near the cursor for permission-menu shape/options and
+  in-flight prose, and reads recent rows for working status and finished
+  banners. Those reports reach Rust through `report_grid_menu`,
+  `report_grid_status`, and `report_grid_banner`.
+- **JSONL/state remains the structured authority.** Provider JSONL supplies
+  completion boundaries, tool-call signatures, diffs/content, and turn
+  correlation. The grid tells Bram what is visibly on screen; JSONL tells
+  Bram what durable provider event that screen state belongs to.
+
+So this migration did not remove parsing. It moved the most failure-prone
+screen parsing from "decode terminal protocol from bytes" to "match text rows
+from the already-rendered terminal buffer." That is cleaner, but still a
+heuristic screen read and still coordinated with PTY timing and JSONL state.
 
 ## Why strip_ansi mangles
 
@@ -45,12 +79,10 @@ prior screen state we can't recover."
 
 ## The unused asset
 
-`app/main.js:32` creates `const term = new Terminal({... allowProposedApi:
-true ...})`; PTY chunks are written in via `term.write` (`:564`). xterm.js
-resolves every repaint/overwrite/animation into a clean grid. Its content
-API is **entirely unused today** — `main.js` reads only scroll geometry
-(`buffer.active.viewportY/baseY`), never a line of text. Everything needed
-is present in the vendored bundle:
+`app/main.js` creates `const term = new Terminal({... allowProposedApi:
+true ...})`; PTY chunks are written in via `term.write`. xterm.js resolves
+every repaint/overwrite/animation into a clean grid. Bram now uses that
+content API for live screen-derived facts. The useful primitives are:
 
 - `buffer.active.getLine(n).translateToString(trimRight)` — clean rendered
   text of grid row *n*.
@@ -66,20 +98,13 @@ the host, `postMessage` to the agent-pane iframe.
 
 ## What the host re-derives today (inventory)
 
-Three buckets (full inventory in commit history / research findings):
+Three buckets:
 
-- **(A) Screen-derived — the migration target.** ~18 load-bearing parsers,
-  ~1,400–1,600 lines plus thousands of lines of Windows/Mac test fixtures.
-  Menu detection + option parsing (`parse_menu_options`,
-  `split_collapsed_option_lines`, `label_has_inner_numbered_marker`,
-  `codex_tail_has_third_option_marker`, the anchor scanners,
-  `pty_menu_detect`), the status line + substate (`parse_claude_status_line`,
-  `parse_claude_status_verb_only`, `parse_substate_phrase_scan` + the
-  sticky-verb/sticky-substate caches that exist only to mask eviction
-  flicker), the end banner (`parse_claude_natural_end_banner`), and the
-  `⏺` signature (`extract_claude_command_signature`,
-  `extract_codex_command_signature`). All of these reconstruct "what is on
-  screen" and all fight the stream/grid mismatch.
+- **(A) Screen-derived — now grid-first.** Menu shape/options/prose, working
+  status rows, and finished banners are read from xterm's rendered rows when
+  fresh. Rust still owns the state machine around those reports, and raw
+  PTY fallbacks/debug paths remain, but fresh grid data is the preferred
+  source for visible screen text.
 - **(B) Stream/timing-derived — stays host-side.** The spinner-cadence
   end-of-turn machine (`pty_agent_turn_update`, glyph/silence detectors).
   Depends on byte timing, not rendered text. xterm.js does not replace it.
@@ -146,13 +171,14 @@ reads the grid → reports clean text to host/iframe → host keeps owning
 timing, emission, and JSONL correlation. That cross-layer hop is the real
 work, not the text extraction.
 
-Recommended sequence:
+The migration sequence is now partly complete:
 
-1. **Pilot: the menu-stack fix** (`menu-stack-pty-inflight-prose`). Read the
-   in-flight assistant prose above `⏺` from the grid, show it transiently
-   above the inline menu, reconcile to the JSONL record by
-   `toolCallSignature`. First real feature on the grid path.
-2. **Migrate screen-derived detection item by item** — menu detect/options,
-   then status line, then banner — each deleting strip_ansi heuristics in
-   favor of a grid query, retiring the matching fixtures.
-3. Leave buckets B and C (timing, JSONL) host-side throughout.
+1. **Done:** read in-flight assistant prose above a pending menu from the
+   grid and show it transiently until JSONL catches up.
+2. **Done:** use grid menu reports to build or override permission-menu
+   options when fresh, including Codex menus.
+3. **Done:** use grid status/banner reports for full-fidelity working and
+   finished text when fresh.
+4. **Still to do:** retire old raw-PTY menu/status fallback code only after
+   traces show no coverage gaps for real Claude/Codex menu shapes.
+5. Leave buckets B and C (timing, transport, JSONL) host-side throughout.

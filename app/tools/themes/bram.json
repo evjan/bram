@@ -9,6 +9,7 @@
     "paddingHorizontal-Button-sm": "$space-1",
     "width-navPanel-App": "$space-32",
     "maxWidth-content-App": "100%",
-    "maxWidth-App": "100%"
+    "maxWidth-App": "100%",
+    "maxWidth-content-Footer": "100%"
   }
 }

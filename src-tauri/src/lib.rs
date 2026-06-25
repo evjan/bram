@@ -1578,6 +1578,50 @@ fn grid_menu_command_preview(grid_above: &[String], grid_header: &str) -> String
     command
 }
 
+// True when the grid snapshot is positively a Bash approval menu. Gates the
+// signature-less `build-claude-nosig` Bash build: only synthesize a Bash menu
+// when the menu really is a Bash one, so Edit/Write diff boxes and phantom
+// frames (assistant prose, tool-call bullets) are held for the signature path
+// instead of mislabeled as Bash. See worklist
+// build-claude-nosig-misclassifies-edit-menu.
+//
+// The discriminator is the OPTION LABELS, which are always captured just above
+// the footer: a Bash menu's allow-all option reads "…and don't ask again for
+// … commands …", whereas Edit/Write read "…allow all edits during this
+// session …". The "Bash command" box title is NOT reliable — it scrolls out
+// of the grid capture for tall command boxes (cf.
+// prose-extractor-tall-command-box), which is what made the first cut hold
+// real Bash menus.
+fn grid_menu_is_bash_command_box(
+    grid_opts: &[MenuOption],
+    grid_above: &[String],
+    grid_header: &str,
+) -> bool {
+    // Primary, capture-robust signal: Claude's command-approval header is
+    // "Do you want to proceed?" — shared by BOTH Bash menu shapes (the
+    // 3-option "don't ask again" prompt and the 2-option manual-approval
+    // safety prompt for compound/redirecting commands), and distinct from
+    // Edit ("Do you want to make this edit to <file>?") and Write ("create").
+    // The header is always captured, so this survives tall command boxes.
+    let proceed = |s: &str| s.to_lowercase().contains("do you want to proceed");
+    if proceed(grid_header) || grid_above.iter().any(|l| proceed(l)) {
+        return true;
+    }
+    // Secondary: the Bash "don't ask again" allow-all option (Edit/Write say
+    // "allow all edits"). Always captured above the footer.
+    if grid_opts
+        .iter()
+        .any(|o| o.label.to_lowercase().contains("ask again"))
+    {
+        return true;
+    }
+    // Fallback: the "Bash command" box title, on frames where it IS captured.
+    // Absent on Edit/Write diff boxes and phantom (prose / tool-bullet) frames
+    // → hold for the signature path.
+    let is_title = |s: &str| s.trim().eq_ignore_ascii_case("bash command");
+    is_title(grid_header) || grid_above.iter().any(|l| is_title(l))
+}
+
 // #182 incident 8 instrumentation. Adjacent trace line to every
 // `pty-menu-changed` emit that previews the parsed `options` array —
 // `tool=<name> count=<n> options=[key="label", key="label", ...]`.
@@ -4150,23 +4194,16 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                                 at_host_ms: None,
                                 signature_source: Some("jsonl"),
                             });
-                        } else {
-                            // No pending tool_use in the JSONL — Claude hasn't
-                            // flushed the current tool_use while paused on the
-                            // prompt (records-stacked behavior), or this is a
-                            // manual-approval safety prompt with no tool_use at
-                            // all. The grid persistently reports a LIVE menu
-                            // (snapshot <1.5s fresh, iframe re-reports every 1s),
-                            // so build from the grid anyway — the agent pane menu
-                            // must not depend on Claude's JSONL write timing. The
-                            // JSONL signature is enrichment, not a gate. The #193
-                            // fingerprint below (tool + option labels) suppresses
-                            // the post-dismiss stale re-read this gate used to
-                            // guard, and the deferred signature recheck enriches
-                            // the menu if the tool_use lands later. tool defaults
-                            // to "Bash" (the dominant prompt class and a
-                            // deterministic suppression key); refine via grid
-                            // header/above later. Refs #206.
+                        } else if grid_menu_is_bash_command_box(&grid_opts, &grid_above, &grid_header) {
+                            // No pending tool_use in the JSONL but the grid box is
+                            // positively a "Bash command" approval box —
+                            // records-stacked behavior, a manual-approval re-prompt,
+                            // simple_expansion, or a compound command. Build from the
+                            // grid anyway: the agent pane must not depend on Claude's
+                            // JSONL write timing, and the deferred signature recheck
+                            // enriches the menu if the tool_use lands later. The #193
+                            // fingerprint below (tool + option labels) guards the
+                            // post-dismiss stale re-read. Refs #206.
                             let command = grid_menu_command_preview(&grid_above, &grid_header);
                             if bram_trace_enabled() {
                                 append_bram_trace_line(
@@ -4191,6 +4228,29 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                                 at_host_ms: None,
                                 signature_source: Some("grid"),
                             });
+                        } else {
+                            // Signature-less AND not a recognizable Bash command box:
+                            // an Edit/Write diff box whose JSONL tool_use hasn't
+                            // flushed yet, or a phantom frame built from assistant
+                            // prose / tool-call bullets. Defaulting to a Bash menu
+                            // here misclassified real Edit menus (Bash/empty/Edit
+                            // flicker, pane never settled) and invented phantom menus
+                            // from non-menu content. Hold the frame — leave
+                            // `detected` as None — so the next poll's signature lookup
+                            // classifies the real tool via the op=build path. See
+                            // worklist build-claude-nosig-misclassifies-edit-menu.
+                            if bram_trace_enabled() {
+                                append_bram_trace_line(
+                                    app,
+                                    "grid-menu",
+                                    &format!(
+                                        "op=hold-nosig reason=no-bash-box grid_count={} header={:?} grid=[{}]",
+                                        grid_opts.len(),
+                                        grid_header,
+                                        grid_labels()
+                                    ),
+                                );
+                            }
                         }
                     }
                 }
@@ -17939,6 +17999,64 @@ mod pty_menu_tests {
             super::grid_menu_command_preview(&above, "Shell"),
             "Shell(Environment: local no-op demo): $ /usr/bin/true"
         );
+    }
+
+    #[test]
+    fn grid_menu_bash_box_gate_distinguishes_bash_from_edit() {
+        let opt = |key: &str, label: &str| super::MenuOption {
+            key: key.to_string(),
+            label: label.to_string(),
+        };
+        let bash_opts = vec![
+            opt("1", "Yes"),
+            opt("2", "Yes, and don't ask again for similar commands in /repo"),
+            opt("3", "No"),
+        ];
+        let edit_opts = vec![
+            opt("1", "Yes"),
+            opt("2", "Yes, allow all edits during this session (shift+tab)"),
+            opt("3", "No"),
+        ];
+
+        // Bash command box (title captured) → Bash.
+        let bash_above = vec![
+            "Bash command".to_string(),
+            "────".to_string(),
+            "$ git status".to_string(),
+        ];
+        assert!(super::grid_menu_is_bash_command_box(&bash_opts, &bash_above, "Bash command"));
+
+        // TALL Bash box: "Bash command" title scrolled out of grid_above, but
+        // the "Do you want to proceed?" header is captured → Bash (the
+        // regression this guards against).
+        assert!(super::grid_menu_is_bash_command_box(&bash_opts, &[], "Do you want to proceed?"));
+
+        // 2-option manual-approval safety prompt (compound command): only
+        // "1. Yes / 2. No", no "don't ask again" option, "Bash command" title
+        // scrolled out — but the "Do you want to proceed?" header is captured
+        // → Bash.
+        let safety_opts = vec![opt("1", "Yes"), opt("2", "No")];
+        let safety_above = vec![
+            "Compound command contains cd with output redirection — manual approval required"
+                .to_string(),
+        ];
+        assert!(super::grid_menu_is_bash_command_box(&safety_opts, &safety_above, "Do you want to proceed?"));
+
+        // Edit approval box → header "make this edit", option "allow all
+        // edits", no "proceed", no "Bash command" title → NOT Bash; hold for
+        // the signature path.
+        let edit_above = vec![
+            "Edit file app/tools/Main.xmlui".to_string(),
+            "╌╌╌╌╌╌╌╌".to_string(),
+        ];
+        assert!(!super::grid_menu_is_bash_command_box(&edit_opts, &edit_above, "Do you want to make this edit to Main.xmlui?"));
+
+        // Phantom frame scraped from assistant prose, no recognizable header
+        // or options → NOT Bash.
+        let prose_above = vec![
+            "Approved → applying. Adding the light-touch refetch trigger".to_string(),
+        ];
+        assert!(!super::grid_menu_is_bash_command_box(&[], &prose_above, ""));
     }
 
     #[test]

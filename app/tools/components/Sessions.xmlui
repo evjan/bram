@@ -14,7 +14,10 @@
   var.pendingRenames="{loadPendingSessionRenames()}"
   var.lastDeleteId="{null}"
   var.lastDeleteProvider="{null}"
-  var.lastRenameId="{null}">
+  var.lastRenameId="{null}"
+  var.lastRenameProvider="{null}"
+  var.lastRenameOriginalTitle=""
+  var.lastRenameTitle="">
 
   <DataSource
     id="sessionsMeta"
@@ -87,7 +90,7 @@
     queryParams="{{ id: $param.id, provider: $param.provider }}"
     confirmTitle="Delete session?"
     confirmMessage="This cannot be undone."
-    completedNotificationMessage="Session deleted. Restart the agent to refresh its session list."
+    completedNotificationMessage="Session deleted. Reload Bram to refresh the session list; you do not need to restart the agent."
     onSuccess="pendingDeletes = pendingDeletes.concat([lastDeleteId]); savePendingSessionDeletes(pendingDeletes); if (expandedId === lastDeleteId &amp;&amp; expandedProvider === lastDeleteProvider) { expandedId = null; expandedProvider = null; } sessionsFirstPage.refetch(); if (sessionsExpanded) sessionsFull.refetch();" />
 
   <APICall
@@ -95,11 +98,12 @@
     url="/__sessions/rename"
     method="get"
     queryParams="{{ id: $param.id, provider: $param.provider, title: $param.title }}"
-    completedNotificationMessage="Session renamed. Restart the agent to see the new title."
-    onSuccess="pendingRenames = pendingRenames.concat([lastRenameId]); savePendingSessionRenames(pendingRenames); renamingSession = null; renameDraft = ''; sessionsFirstPage.refetch(); if (sessionsExpanded) sessionsFull.refetch();" />
+    onSuccess="sessionsFirstPage.refetch(); if (sessionsExpanded) sessionsFull.refetch();"
+    onError="pendingRenames = pendingRenames.filter(id => id !== lastRenameId); savePendingSessionRenames(pendingRenames); renamingSession = { id: lastRenameId, provider: lastRenameProvider, title: lastRenameOriginalTitle }; renameDraft = lastRenameTitle" />
 
   <ModalDialog
-    when="{renamingSession}"
+    id="renameDialog"
+    when="{!!renamingSession}"
     onClose="renamingSession = null; renameDraft = ''"
     title="Rename session">
     <VStack gap="$space-3" padding="$space-4">
@@ -121,7 +125,7 @@
         <Button
           label="Rename"
           enabled="{renameDraft &amp;&amp; renameDraft.trim().length > 0}"
-          onClick="lastRenameId = renamingSession.id; renameSession.execute({ id: renamingSession.id, provider: renamingSession.provider, title: renameDraft })" />
+          onClick="let target = renamingSession; let title = renameDraft; lastRenameId = target.id; lastRenameProvider = target.provider; lastRenameOriginalTitle = target.title || ''; lastRenameTitle = title; pendingRenames = pendingRenames.includes(target.id) ? pendingRenames : pendingRenames.concat([target.id]); savePendingSessionRenames(pendingRenames); renamingSession = null; renameDraft = ''; toast('Session renamed. Reload Bram to see the new title in the session list.'); renameSession.execute({ id: target.id, provider: target.provider, title: title })" />
       </HStack>
     </VStack>
   </ModalDialog>
@@ -200,14 +204,14 @@
                 variant="ghost"
                 size="xs"
                 enabled="{!(pendingDeletes.includes($item.id) || pendingRenames.includes($item.id))}"
-                tooltip="{pendingDeletes.includes($item.id) ? 'delete pending' : (pendingRenames.includes($item.id) ? 'rename pending' : 'Delete session (restart required)')}"
+                tooltip="{pendingDeletes.includes($item.id) ? 'delete pending' : (pendingRenames.includes($item.id) ? 'rename pending' : 'Delete session')}"
                 onClick="lastDeleteId = $item.id; lastDeleteProvider = $item.provider; deleteSession.execute({ id: $item.id, provider: $item.provider })" />
               <Button
                 label="✎"
                 variant="ghost"
                 size="xs"
                 enabled="{!(pendingDeletes.includes($item.id) || pendingRenames.includes($item.id))}"
-                tooltip="{pendingDeletes.includes($item.id) ? 'delete pending' : (pendingRenames.includes($item.id) ? 'rename pending' : 'Rename session (restart required)')}"
+                tooltip="{pendingDeletes.includes($item.id) ? 'delete pending' : (pendingRenames.includes($item.id) ? 'rename pending' : 'Rename session')}"
                 onClick="renamingSession = { id: $item.id, provider: $item.provider, title: ($item.title || '') }; renameDraft = ($item.title || '')" />
               <Link
                 width="*"

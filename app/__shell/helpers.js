@@ -4707,12 +4707,10 @@ window.savePendingSessionDeletes = function (ids) {
 window.loadPendingSessionRenames = function () {
   try {
     var raw = localStorage.getItem("session-pending-renames");
-    // Clear on read: the dim is meant to signal "agent hasn't picked
-    // up the new title yet". A fresh iframe boot (which happens on
-    // Bram relaunch, which respawns the PTY child = agent
-    // restart) means the dim's job is done. Sessions renamed later in
-    // this iframe lifetime stay dimmed via the in-memory append in
-    // Sessions.xmlui's onSuccess handler.
+    // Clear on read: the dim is meant to signal "reload Bram to see
+    // the new title". A fresh iframe boot means the dim's job is done.
+    // Sessions renamed later in this iframe lifetime stay dimmed via
+    // the in-memory append in Sessions.xmlui's onSuccess handler.
     localStorage.removeItem("session-pending-renames");
     if (!raw) return [];
     var v = JSON.parse(raw);

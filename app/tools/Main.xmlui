@@ -1,4 +1,4 @@
-<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}" var.footerVoiceRecording="{false}" var.headerInflightTick="{0}"
+<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}" var.footerVoiceRecording="{false}" var.headerInflightTick="{0}" var.agentSwitcherSelected="{'claude'}" var.agentSwitching="{false}"
   onInit="updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); startBramLatestJsonlPush(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
   <External
     id="mainAgentStatus"
@@ -59,6 +59,24 @@
     listenTo="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state}"
     onDidChange="() => { headerInflightTick = headerInflightTick + 1; window.__bramIframeTrace('header-inflight-refetch', {tick: headerInflightTick, state: (mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state) || ''}); }" />
   <DataSource id="appInfo" url="/__app-info" />
+  <DataSource
+    id="headerSettings"
+    url="/__settings"
+    onLoaded="(v) => window.__bramInitAgentSwitcher(null, settingsAgent(v), agentSwitching, (next) => agentSwitcherSelected = next)" />
+  <!-- Live session meta for the footer echo (mirrors Transcript's source):
+       /__sessions/list flags the current session; refetch on changes so the
+       footer line tracks the growing live file. -->
+  <DataSource
+    id="footerSessions"
+    url="/__sessions/list"
+    queryParams="{{ limit: 20 }}" />
+  <External
+    id="footerSessionsChangedEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('sessions-list-changed')}" />
+  <ChangeListener
+    listenTo="{footerSessionsChangedEvt.value &amp;&amp; footerSessionsChangedEvt.value.tick}"
+    onDidChange="() => footerSessions.refetch()" />
   <APICall
     id="restartServer"
     url="/__restart-server"
@@ -221,6 +239,19 @@
   <AppHeader>
     <Theme fontSize-Button="$fontSize-md">
       <HStack gap="$space-0_5" verticalAlignment="center" width="100%">
+        <Select
+          id="agentSwitcherSelect"
+          when="{headerSettings.loaded}"
+          width="9rem"
+          initialValue="{window.__bramAgentSwitcherInitialProvider(settingsAgent(headerSettings.value))}"
+          enabled="{!agentSwitching}"
+          inProgress="{agentSwitching}"
+          inProgressNotificationMessage="Switching agent"
+          tooltip="{agentSwitching ? 'Agent switch in progress' : 'Switch terminal agent'}"
+          onDidChange="(next) => window.__bramHandleAgentSwitcherChange(next, agentSwitcherSelected, agentSwitcherSelect, (v) => agentSwitcherSelected = v, (v) => agentSwitching = v, toast)">
+          <Option value="claude" label="Claude" />
+          <Option value="codex" label="Codex" />
+        </Select>
         <SpaceFiller />
         <Text
           when="{headerInflightClaim.value &amp;&amp; headerInflightClaim.value.ids &amp;&amp; headerInflightClaim.value.ids.length > 0}"
@@ -443,6 +474,13 @@
         </HStack>
       </Form>
       <PastedImageStrip target="message-agent" />
+      <Text
+        when="{window.__bramSessionMetaLine(window.__bramCurrentSessionOf(footerSessions.value))}"
+        fontSize="$fontSize-sm"
+        color="$textColor-secondary"
+        maxLines="1"
+        paddingHorizontal="$space-1"
+        value="{window.__bramSessionMetaLine(window.__bramCurrentSessionOf(footerSessions.value))}" />
     </VStack>
     </Theme>
   </Footer>

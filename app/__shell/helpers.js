@@ -473,6 +473,196 @@ window.sendKeys = function (text) {
     } catch (le) {}
   });
 };
+window.__bramAgentProviderFromSettings = function (agentSetting) {
+  var s = String(agentSetting || "").toLowerCase();
+  return s.indexOf("codex") >= 0 ? "codex" : "claude";
+};
+window.__bramAgentSwitcherOptions = function () {
+  return [
+    { value: "claude", label: "Claude" },
+    { value: "codex", label: "Codex" },
+  ];
+};
+window.__bramAgentSwitcherInitialProvider = function (agentSetting) {
+  try {
+    var saved = window.sessionStorage && sessionStorage.getItem("bram.agentSwitcher.provider");
+    if (saved === "codex" || saved === "claude") return saved;
+  } catch (e) {}
+  return window.__bramAgentProviderFromSettings(agentSetting);
+};
+window.__bramAgentSwitcherTrace = function (stage, fields) {
+  try {
+    var payload = Object.assign({ stage: stage, at: new Date().toISOString() }, fields || {});
+    window.__bramIframeTrace("agent-switcher", payload);
+  } catch (e) {}
+};
+window.__bramInitAgentSwitcher = function (select, agentSetting, switching, setSelected) {
+  var key = window.__bramAgentSwitcherInitialProvider(agentSetting);
+  window.__bramAgentSwitcherTrace("settings-loaded", {
+    provider: key,
+    switching: !!switching,
+    hasSelect: !!select,
+    agentSetting: String(agentSetting || ""),
+  });
+  if (switching) return key;
+  if (typeof setSelected === "function") setSelected(key);
+  if (select && typeof select.setValue === "function") {
+    select.setValue(key);
+    window.__bramAgentSwitcherTrace("select-set-value", { provider: key });
+  }
+  return key;
+};
+window.__bramRememberAgentSwitcherProvider = function (provider) {
+  var key = String(provider || "").toLowerCase() === "codex" ? "codex" : "claude";
+  try {
+    if (window.sessionStorage) sessionStorage.setItem("bram.agentSwitcher.provider", key);
+  } catch (e) {}
+  return key;
+};
+window.__bramAgentSwitcherLabel = function (provider) {
+  return String(provider || "").toLowerCase() === "codex" ? "Codex" : "Claude";
+};
+window.__bramWithAgentCommandTimeout = function (promise, label) {
+  var timeoutMs = 8000;
+  var timeout = new Promise(function (_, reject) {
+    setTimeout(function () {
+      reject(new Error((label || "agent command") + " did not finish within " + (timeoutMs / 1000) + "s"));
+    }, timeoutMs);
+  });
+  return Promise.race([promise, timeout]);
+};
+window.__bramSwitchAgent = function (provider) {
+  var key = String(provider || "").toLowerCase() === "codex" ? "codex" : "claude";
+  var invoke = getTauriInvoke();
+  if (!invoke) return Promise.reject(new Error("Tauri IPC unavailable"));
+  window.__bramAgentSwitcherTrace("invoke", { provider: key });
+  return window.__bramWithAgentCommandTimeout(invoke("switch_agent", { provider: key }), "agent switch").then(function () {
+    window.__bramAgentSwitcherTrace("sent", { provider: key });
+    return key;
+  }).catch(function (e) {
+    window.__bramAgentSwitcherTrace("error", {
+      provider: key,
+      error: String((e && e.message) || e),
+    });
+    throw e;
+  });
+};
+window.__bramHandleAgentSwitcherChange = function (next, previous, select, setSelected, setSwitching, toastApi) {
+  var key = String(next || "").toLowerCase() === "codex" ? "codex" : (String(next || "").toLowerCase() === "claude" ? "claude" : "");
+  var prev = String(previous || "").toLowerCase() === "codex" ? "codex" : "claude";
+  window.__bramAgentSwitcherTrace("change", { next: key, previous: prev, hasSelect: !!select });
+  if (!key || key === prev) return;
+  if (typeof setSwitching === "function") setSwitching(true);
+  if (typeof setSelected === "function") setSelected(key);
+  window.__bramRememberAgentSwitcherProvider(key);
+  window.__bramSwitchAgent(key).then(function () {
+    window.__bramAgentSwitcherTrace("complete", { provider: key });
+    if (typeof setSwitching === "function") setSwitching(false);
+  }).catch(function (e) {
+    window.__bramAgentSwitcherTrace("revert", {
+      provider: key,
+      previous: prev,
+      error: String((e && e.message) || e),
+    });
+    window.__bramRememberAgentSwitcherProvider(prev);
+    if (typeof setSelected === "function") setSelected(prev);
+    if (select && typeof select.setValue === "function") select.setValue(prev);
+    if (typeof setSwitching === "function") setSwitching(false);
+    try {
+      if (toastApi && typeof toastApi.error === "function") {
+        toastApi.error("Could not switch agent: " + String((e && e.message) || e));
+      }
+    } catch (le) {}
+  });
+};
+window.__bramReloadAgentSession = function (provider, sessionId) {
+  var key = String(provider || "").toLowerCase() === "codex" ? "codex" : "claude";
+  var id = String(sessionId || "");
+  var invoke = getTauriInvoke();
+  if (!invoke) return Promise.reject(new Error("Tauri IPC unavailable"));
+  try {
+    window.__bramIframeTrace("agent-reload", {
+      stage: "invoke",
+      provider: key,
+      session: id,
+      at: new Date().toISOString(),
+    });
+  } catch (e) {}
+  return window.__bramWithAgentCommandTimeout(invoke("reload_agent_session", { provider: key, session: id }), "agent reload").then(function () {
+    try {
+      window.__bramIframeTrace("agent-reload", {
+        stage: "sent",
+        provider: key,
+        session: id,
+        at: new Date().toISOString(),
+      });
+    } catch (e) {}
+    return key;
+  }).catch(function (e) {
+    try {
+      window.__bramIframeTrace("agent-reload", {
+        stage: "error",
+        provider: key,
+        session: id,
+        error: String((e && e.message) || e),
+        at: new Date().toISOString(),
+      });
+    } catch (le) {}
+    throw e;
+  });
+};
+window.__bramReloadAgentSessionClick = function (provider, sessionId, toastApi) {
+  var key = String(provider || "").toLowerCase() === "codex" ? "codex" : "claude";
+  var id = String(sessionId || "");
+  try {
+    window.__bramIframeTrace("agent-reload", {
+      stage: "click",
+      provider: key,
+      session: id,
+      at: new Date().toISOString(),
+    });
+  } catch (e) {}
+  window.__bramReloadAgentSession(key, id).catch(function (e) {
+    try {
+      if (toastApi && typeof toastApi.error === "function") {
+        toastApi.error("Could not reload session: " + String((e && e.message) || e));
+      }
+    } catch (le) {}
+  });
+  try {
+    if (typeof toastApi === "function") toastApi("Reloading session - killing the running agent and resuming.");
+  } catch (e) {}
+};
+// Pick the live session from a /__sessions/list payload: the entry flagged
+// current, else the first returned. Shared by the Transcript header and the
+// footer echo so both point at the same session.
+window.__bramCurrentSessionOf = function (list) {
+  var arr = Array.isArray(list) ? list : [];
+  return arr.find(function (s) { return s && s.current; }) || arr[0] || null;
+};
+// One-line session metadata used at the top of the Transcript and echoed
+// under the footer message box. Plain-JS date formatting (no formatDateTime
+// dependency) keeps it usable from any surface. Returns "" for no session.
+window.__bramSessionMetaLine = function (s) {
+  if (!s) return "";
+  var provider = String(s.provider || "").toUpperCase();
+  var title = s.title || "(untitled)";
+  var id = String(s.id || "");
+  var shortId = id.length > 12 ? id.slice(0, 12) : (id || "unknown");
+  var when = "";
+  if (s.mtime) {
+    var d = new Date(s.mtime * 1000);
+    var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+    when =
+      d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+  var kb = Math.round((s.size || 0) / 1024) + " KB";
+  var parts = [title, "id " + shortId];
+  if (when) parts.push(when);
+  parts.push(kb);
+  return (provider ? provider + "  " : "") + parts.join("  ·  ");
+};
 window.recordToolbarPendingMenuFromEvent = function (event) {
   window.__bramToolbarMenuState = {
     present: !!(event && event.payload),
@@ -893,11 +1083,12 @@ window.__bramSaveSplitterSize = function (key, sizes) {
 // Settings.xmlui to keep the markup readable; the dialog itself
 // stays inline in Settings since it's a single consumer.
 window.settingsInfoBodies = {
-  agentCommand:
+  shell:
     "## Agent command\n\n" +
-    "Typed into the PTY shell at spawn — bash parses it, so flags work " +
-    "(claude --continue, codex resume, etc.). Restart Bram for changes " +
-    "to take effect.",
+    "The agent to launch: `claude` or `codex`.\n\n" +
+    "## First command\n\n" +
+    "An optional command sent to the agent once it starts, for example " +
+    "`/resume` (the default). Leave it empty to send nothing.",
   batchCommitActions:
     "## Batch commit actions\n\n" +
     "Adds Approve all / Drop all controls to the Worklist tab, shown only " +

@@ -5,7 +5,7 @@
   var.expandedProvider="{null}"
   var.fullscreenImage="{null}"
   var.query=""
-  var.scope="recent"
+  var.scope="all"
   var.sessionsExpanded="{false}"
   var.selectedSnippet="{false}"
   var.renamingSession="{null}"
@@ -170,16 +170,6 @@
         </Items>
       </VStack>
 
-      <HStack gap="$space-3" verticalAlignment="center">
-        <RadioGroup
-          initialValue="{scope}"
-          orientation="horizontal"
-          onDidChange="(v) => scope = v">
-          <Option label="Recent 20" value="recent" />
-          <Option label="All sessions" value="all" />
-        </RadioGroup>
-      </HStack>
-
       <VStack gap="0" width="100%">
         <HStack
           gap="$space-3"
@@ -199,6 +189,13 @@
               paddingVertical="$space-2"
               verticalAlignment="start"
               opacity="{(pendingDeletes.includes($item.id) || pendingRenames.includes($item.id)) ? 0.5 : 1}">
+              <Button
+                label="⟳"
+                variant="ghost"
+                size="xs"
+                enabled="{!(pendingDeletes.includes($item.id) || pendingRenames.includes($item.id))}"
+                tooltip="{pendingDeletes.includes($item.id) ? 'delete pending' : (pendingRenames.includes($item.id) ? 'rename pending' : 'Reload: kill the running agent and resume this session')}"
+                onClick="window.__bramReloadAgentSessionClick($item.provider, $item.id, toast)" />
               <Button
                 label="✕"
                 variant="ghost"

@@ -300,6 +300,11 @@ struct ServerConfig {
 struct ShellConfig {
     #[serde(default)]
     agent: Option<String>,
+    // Optional command typed into the agent's TUI once the freshly-started
+    // agent settles (autostart + header switch). Defaults to `/resume` when
+    // the key is absent; an explicit empty string means "send nothing".
+    #[serde(default, rename = "firstCommand")]
+    first_command: Option<String>,
 }
 
 #[derive(Default, Clone, serde::Deserialize)]
@@ -476,6 +481,11 @@ static BRAM_MENUS_PARSE_ENABLED: std::sync::atomic::AtomicBool =
 // so N watcher events during one cycle coalesce into one post-cycle
 // reload — intended behavior.
 static PENDING_TOOLS_RELOAD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+// Set alongside PENDING_TOOLS_RELOAD when the deferred reload was forced (a
+// runtime cross-provider reload, not a dev hot-reload edit). The post-cycle
+// flush fires a forced reload even when toolsPaneHotReload is off.
+static PENDING_TOOLS_RELOAD_FORCED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static STARTUP_RUN_TRACE_EMITTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -2234,6 +2244,20 @@ fn maybe_emit_agent_status<R: tauri::Runtime>(app: &AppHandle<R>, payload: &Agen
         return;
     }
     emit_replayable_payload(app, "agent-status-changed", payload);
+}
+
+// Clear the cached agent status (banner provider + verb) and push the idle
+// state. The verb is host-side and survives an iframe reload, so a
+// cross-provider switch would otherwise leave the previous provider's verb
+// (e.g. "Cogitated") on the banner until the new agent next emits a status.
+// Emits directly (not via maybe_emit_agent_status) so the reset isn't
+// suppressed by a transient pending menu during the switch.
+fn reset_agent_status<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let idle = AgentStatus::idle();
+    if let Ok(mut guard) = agent_status_cell().lock() {
+        *guard = AgentStatus::idle();
+    }
+    emit_replayable_payload(app, "agent-status-changed", &idle);
 }
 
 fn pty_permission_menu_pending() -> bool {
@@ -6736,24 +6760,26 @@ fn pty_spawn(
         }
     });
 
-    // Optional auto-launch: type the configured agent at the bash
-    // prompt. Bash buffers input until interactive; if it's still in
-    // rcfile init the keystrokes queue and run as the first command.
-    if let Some(root) = project_root(Some(&app)) {
-        if let Some(cfg) = load_project_config(&root) {
-            if let Some(agent) = cfg.shell.and_then(|s| s.agent) {
-                let trimmed = agent.trim();
-                if !trimmed.is_empty() {
-                    let payload = format!("{}\r", trimmed);
-                    let mut guard = state.0.lock().unwrap();
-                    if let Some(pty) = guard.as_mut() {
-                        if let Err(e) = pty.writer.write_all(payload.as_bytes()) {
-                            eprintln!("[pty_spawn] failed to write agent autostart: {}", e);
-                        }
-                        let _ = pty.writer.flush();
-                    }
-                }
+    // Auto-launch the selected provider at the bash prompt. The legacy
+    // `shell.agent` setting is now used to choose the default provider
+    // (Codex when it names Codex; Claude otherwise). Bash buffers input
+    // until interactive; if rcfile init is still running, these keystrokes
+    // queue and run as the first command.
+    let provider = configured_agent_provider(&app);
+    if let Some(command) = agent_launch_command(provider) {
+        let payload = format!("{}\r", command);
+        if let Err(e) = pty_write_internal(&app, &state, &payload, "agent-autostart") {
+            eprintln!("[pty_spawn] failed to write agent autostart: {}", e);
+        } else {
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    &app,
+                    "agent-switch",
+                    &format!("op=autostart provider={} command={}", provider, command),
+                );
             }
+            schedule_agent_switch_refresh(app.clone(), provider, "autostart");
+            schedule_agent_first_command(app.clone(), "autostart");
         }
     }
     Ok(())
@@ -7127,6 +7153,284 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
     }
 }
 
+const AGENT_INTERRUPT_GAP_MS: u64 = 150;
+const AGENT_RELAUNCH_SETTLE_MS: u64 = 1200;
+const AGENT_SESSION_REFRESH_MS: u64 = 3000;
+// Delay, measured from writing the launch command, before typing the
+// configured first command into the freshly-started agent's TUI. Gives the
+// CLI time to reach an interactive prompt; tune if /resume is dropped.
+const AGENT_FIRST_COMMAND_SETTLE_MS: u64 = 2500;
+// Delay after a cross-provider switch/reload before auto-reloading the agent
+// pane. Cross-provider has several independent provider caches (the active-agent
+// hint, mainAgentStatus.provider/verb, latest-session caches); flipping them all
+// in place is fragile, so once the target provider's hint is set we reload the
+// pane (the same action the user did by hand) to re-derive everything cleanly.
+const AGENT_CROSS_PROVIDER_RELOAD_MS: u64 = 2500;
+
+#[tauri::command]
+fn switch_agent(
+    app: AppHandle,
+    provider: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let provider_key = match provider.trim().to_ascii_lowercase().as_str() {
+        "codex" => "codex",
+        "claude" | "claud" => "claude",
+        other => return Err(format!("unknown agent provider: {}", other)),
+    };
+    let command = agent_launch_command(provider_key).ok_or("unknown agent provider")?;
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            &app,
+            "agent-switch",
+            &format!("op=start provider={} command={}", provider_key, command),
+        );
+    }
+    // Dismiss any open agent menu/picker first (e.g. a Claude `/resume` list
+    // left open by a prior first-command). Claude exits only on two Ctrl+C at
+    // an empty prompt; an open picker swallows the first Ctrl+C dismissing
+    // itself, so without this the agent never exits and the launch word gets
+    // typed as a prompt. ESC is harmless at a clean prompt.
+    pty_write_internal(&app, &state, "\x1b", "agent-switch-escape")?;
+    trace_agent_pty_step(&app, "switch", provider_key, "escape");
+    std::thread::sleep(std::time::Duration::from_millis(AGENT_INTERRUPT_GAP_MS));
+    pty_write_internal(&app, &state, "\x03", "agent-switch-interrupt-1")?;
+    trace_agent_pty_step(&app, "switch", provider_key, "interrupt-1");
+    std::thread::sleep(std::time::Duration::from_millis(AGENT_INTERRUPT_GAP_MS));
+    pty_write_internal(&app, &state, "\x03", "agent-switch-interrupt-2")?;
+    trace_agent_pty_step(&app, "switch", provider_key, "interrupt-2");
+    std::thread::sleep(std::time::Duration::from_millis(AGENT_RELAUNCH_SETTLE_MS));
+    pty_write_internal(
+        &app,
+        &state,
+        &format!("{}\r", command),
+        "agent-switch-launch",
+    )?;
+    trace_agent_pty_step(&app, "switch", provider_key, "launch");
+    // Switching providers must reset the transcript to the new provider's
+    // latest session, not diff against the old cursor. Without this, the
+    // scheduled refresh emits an empty incremental (reset:false, len:0)
+    // because the cursor still matches, and the transcript keeps showing the
+    // previous provider's conversation until a manual reload. Clearing the new
+    // provider's tail cursor makes schedule_agent_switch_refresh's emit a full
+    // reset, mirroring resync_transcript_to_session on the reload path.
+    let session_provider = if provider_key == "codex" {
+        SessionProvider::Codex
+    } else {
+        SessionProvider::Claude
+    };
+    let crossing = hinted_session_provider(&app) != Some(session_provider);
+    if let Ok(mut guard) = latest_tail_cursors_cell().lock() {
+        guard.remove(session_provider_label(session_provider));
+    }
+    schedule_agent_switch_refresh(app.clone(), provider_key, "switch");
+    schedule_agent_first_command(app.clone(), "switch");
+    if crossing {
+        // Flip the active-provider hint now, then reload the agent pane once the
+        // new agent settles, so the sessions list, banner, agent name and verb
+        // all switch instead of staying stale on the prior provider.
+        write_active_agent_hint(&app, session_provider);
+        schedule_cross_provider_pane_reload(app.clone());
+    }
+    Ok(())
+}
+
+// Resolve a session's on-disk path by id WITHOUT the full, title-parsing
+// session discovery (which can take many seconds on large histories and was
+// blocking reload_agent_session past its UI timeout). Claude files are named
+// `<id>.jsonl`, so construct the path directly; Codex rollout files are not,
+// so fall back to discovery there (callers run this off the command thread).
+fn session_path_for_id<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: SessionProvider,
+    id: &str,
+) -> Option<std::path::PathBuf> {
+    match provider {
+        SessionProvider::Claude => {
+            let path = claude_sessions_dir(app).ok()?.join(format!("{}.jsonl", id));
+            path.exists().then_some(path)
+        }
+        SessionProvider::Codex => sessions_for_provider(app, Some(provider), None)
+            .ok()
+            .and_then(|(_, sessions)| sessions.into_iter().find(|s| s.id == id).map(|s| s.path)),
+    }
+}
+
+// Write the active-agent hint file (provider only), matching the shell
+// wrapper's `_xmlui_mark_agent` format. hinted_session_provider, the
+// auto-detected session lists, and enhanceStatus.activeProvider all read this,
+// so writing it flips Bram's notion of the active provider immediately instead
+// of waiting for the wrapper to rewrite it when the relaunched agent runs.
+fn write_active_agent_hint<R: tauri::Runtime>(app: &AppHandle<R>, provider: SessionProvider) {
+    let Ok(path) = active_agent_hint_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(
+        &path,
+        format!("{{\"provider\":\"{}\"}}\n", session_provider_label(provider)),
+    );
+}
+
+// After a Sessions-page reload resumes a session, the transcript stays on the
+// prior session because the resumed JSONL isn't the most-recent writer yet
+// (observed ~17s lag, or never until the user interacts). Bump the clicked
+// session file's mtime to now so the latest detector returns it immediately,
+// clear the tail cursor so the next emit is a full reset, then emit — the
+// iframe replaces its transcript buffer with the resumed conversation.
+//
+// Claude `--resume <id>` reuses the same file, so it's the final target.
+// Codex `resume` rotates to a NEW sid: bumping the clicked file shows the
+// resumed history right away, and once codex writes the rotated file (real
+// user activity, newer mtime) latest_codex_session_path transitions to it.
+fn resync_transcript_to_session<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: SessionProvider,
+    id: &str,
+) {
+    if id.is_empty() {
+        return;
+    }
+    let Some(path) = session_path_for_id(app, provider, id) else {
+        return;
+    };
+    // Cross-provider reload (Claude session <-> Codex): flip the active-agent
+    // hint to the target now so the auto-detected session lists / meta lines and
+    // enhanceStatus.activeProvider switch immediately, instead of waiting for the
+    // shell wrapper to rewrite the hint when the agent finally launches. The hint
+    // write also fires enhance-status-changed (watcher), refetching activeProvider
+    // in the iframe so the transcript push accepts target-provider payloads.
+    if hinted_session_provider(app) != Some(provider) {
+        write_active_agent_hint(app, provider);
+    }
+    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&path) {
+        let _ = file.set_modified(std::time::SystemTime::now());
+    }
+    if let Ok(mut guard) = latest_tail_cursors_cell().lock() {
+        guard.remove(session_provider_label(provider));
+    }
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "agent-switch",
+            &format!(
+                "op=resync provider={} session={}",
+                session_provider_label(provider),
+                id
+            ),
+        );
+    }
+    // Refresh session-list consumers (the Sessions tab and the transcript
+    // header/footer meta lines) which key off sessions-list-changed, not
+    // talk-session-changed. Emit it first — and before the heavier full-session
+    // read in the talk emit below — so the `[current]` flag and meta lines
+    // update promptly instead of waiting for the file watcher to notice.
+    emit_replayable_signal(app, "sessions-list-changed");
+    emit_talk_session_changed_for_provider(app, Some(provider));
+}
+
+// Run the transcript resync off the Tauri command thread. The resync reads the
+// (possibly multi-MB) resumed session and emits; doing that synchronously inside
+// reload_agent_session contended with the relaunching agent and pushed the
+// command past its 8s UI timeout, surfacing an error toast even though the
+// switch succeeded. Backgrounding keeps the command fast (~the interrupt
+// settle) so the invoke resolves well under the timeout.
+fn schedule_resync_transcript_to_session<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    provider: SessionProvider,
+    id: String,
+) {
+    thread::spawn(move || {
+        resync_transcript_to_session(&app, provider, &id);
+    });
+}
+
+// Auto-reload the agent pane after a cross-provider switch once the new agent
+// has settled. The surgical event-based sync handles same-provider switches,
+// but crossing Claude<->Codex leaves independent caches stale (banner provider
+// and verb from mainAgentStatus, etc.); a pane reload re-derives them all from
+// the now-flipped active-agent hint — the manual reload the user was doing,
+// automated. Only call this when actually crossing providers.
+fn schedule_cross_provider_pane_reload<R: tauri::Runtime>(app: AppHandle<R>) {
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(
+            AGENT_CROSS_PROVIDER_RELOAD_MS,
+        ));
+        // Clear the stale banner verb/provider before reloading — an iframe
+        // reload alone doesn't reset the host-side agent status, so the prior
+        // provider's verb would otherwise persist until the new agent emits.
+        reset_agent_status(&app);
+        if bram_trace_enabled() {
+            append_bram_trace_line(&app, "agent-switch", "op=cross-provider-pane-reload");
+        }
+        // force=true: a runtime cross-provider reload must fire regardless of the
+        // dev toolsPaneHotReload setting (still defers during an inflight cycle).
+        emit_or_defer_tools_pane_reload(&app, true);
+    });
+}
+
+// Reload a specific session into a fresh agent: interrupt the running agent
+// (ctrl+c twice, matching switch_agent), then relaunch the provider's resume
+// command for `session`. Reuses the same PTY write path and refresh schedule.
+#[tauri::command]
+fn reload_agent_session(
+    app: AppHandle,
+    provider: String,
+    session: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let provider_key = match provider.trim().to_ascii_lowercase().as_str() {
+        "codex" => "codex",
+        "claude" | "claud" => "claude",
+        other => return Err(format!("unknown agent provider: {}", other)),
+    };
+    let command = agent_resume_command(provider_key, &session).ok_or("unknown agent provider")?;
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            &app,
+            "agent-switch",
+            &format!(
+                "op=reload provider={} session={} command={}",
+                provider_key, session, command
+            ),
+        );
+    }
+    // Dismiss any open agent menu/picker first so both Ctrl+C land on an empty
+    // prompt and the agent actually exits (see switch_agent for the full
+    // rationale). ESC is harmless at a clean prompt.
+    pty_write_internal(&app, &state, "\x1b", "agent-reload-escape")?;
+    trace_agent_pty_step(&app, "reload", provider_key, "escape");
+    std::thread::sleep(std::time::Duration::from_millis(AGENT_INTERRUPT_GAP_MS));
+    pty_write_internal(&app, &state, "\x03", "agent-reload-interrupt-1")?;
+    trace_agent_pty_step(&app, "reload", provider_key, "interrupt-1");
+    std::thread::sleep(std::time::Duration::from_millis(AGENT_INTERRUPT_GAP_MS));
+    pty_write_internal(&app, &state, "\x03", "agent-reload-interrupt-2")?;
+    trace_agent_pty_step(&app, "reload", provider_key, "interrupt-2");
+    std::thread::sleep(std::time::Duration::from_millis(AGENT_RELAUNCH_SETTLE_MS));
+    pty_write_internal(&app, &state, &format!("{}\r", command), "agent-reload-launch")?;
+    trace_agent_pty_step(&app, "reload", provider_key, "launch");
+    // Point the transcript at the resumed session immediately rather than
+    // waiting for the agent's first write to make it most-recent (see
+    // resync_transcript_to_session).
+    let session_provider = if provider_key == "codex" {
+        SessionProvider::Codex
+    } else {
+        SessionProvider::Claude
+    };
+    let crossing = hinted_session_provider(&app) != Some(session_provider);
+    schedule_resync_transcript_to_session(app.clone(), session_provider, session.clone());
+    schedule_agent_switch_refresh(app.clone(), provider_key, "reload");
+    if crossing {
+        // The resync flips the active-provider hint; reload the agent pane once
+        // the resumed agent settles so the banner/verb and other per-provider
+        // caches re-derive cleanly instead of staying stale on the old provider.
+        schedule_cross_provider_pane_reload(app.clone());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn pty_resize(cols: u16, rows: u16, state: State<'_, AppState>) -> Result<(), String> {
     let guard = state.0.lock().unwrap();
@@ -7171,6 +7475,126 @@ fn project_config_batch_commit_actions(config: Option<ProjectConfig>) -> bool {
         .unwrap_or(false)
 }
 
+fn agent_provider_from_command(command: Option<&str>) -> &'static str {
+    let lower = command.unwrap_or("").to_ascii_lowercase();
+    if lower.contains("codex") {
+        "codex"
+    } else {
+        // Covers claude/claud and the empty/unknown setting default.
+        "claude"
+    }
+}
+
+fn agent_launch_command(provider: &str) -> Option<&'static str> {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "codex" => Some("codex"),
+        "claude" | "claud" => Some("claude"),
+        _ => None,
+    }
+}
+
+// Resume a specific past session for `provider`, using each CLI's own
+// resume syntax. An empty id falls back to the provider's "continue most
+// recent" form. Session ids are uuid/hex-shaped, so no shell quoting.
+fn agent_resume_command(provider: &str, session_id: &str) -> Option<String> {
+    let id = session_id.trim();
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "codex" => Some(if id.is_empty() {
+            "codex resume --last".to_string()
+        } else {
+            format!("codex resume {}", id)
+        }),
+        "claude" | "claud" => Some(if id.is_empty() {
+            "claude --continue".to_string()
+        } else {
+            format!("claude --resume {}", id)
+        }),
+        _ => None,
+    }
+}
+
+fn trace_agent_pty_step<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    op: &str,
+    provider: &str,
+    step: &str,
+) {
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "agent-switch",
+            &format!("op={} provider={} step={}", op, provider, step),
+        );
+    }
+}
+
+fn configured_agent_provider<R: tauri::Runtime>(app: &AppHandle<R>) -> &'static str {
+    project_root(Some(app))
+        .and_then(|root| load_project_config(&root))
+        .and_then(|cfg| cfg.shell.and_then(|s| s.agent))
+        .map(|agent| agent_provider_from_command(Some(&agent)))
+        .unwrap_or("claude")
+}
+
+// The optional first command to type into a freshly-started agent once it
+// settles. Absent key -> `/resume` (the default); an explicit "" disables it.
+fn configured_first_command<R: tauri::Runtime>(app: &AppHandle<R>) -> String {
+    project_root(Some(app))
+        .and_then(|root| load_project_config(&root))
+        .and_then(|cfg| cfg.shell.and_then(|s| s.first_command))
+        .unwrap_or_else(|| "/resume".to_string())
+}
+
+// After a fresh launch (autostart / switch), wait for the agent's TUI to
+// settle, then type the configured first command (e.g. `/resume`). No-op when
+// the command is empty. Runs on its own thread; re-acquires AppState from the
+// handle to reach the PTY writer, mirroring schedule_agent_switch_refresh.
+fn schedule_agent_first_command<R: tauri::Runtime>(app: AppHandle<R>, source: &'static str) {
+    let command = configured_first_command(&app).trim().to_string();
+    if command.is_empty() {
+        return;
+    }
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(AGENT_FIRST_COMMAND_SETTLE_MS));
+        let state = app.state::<AppState>();
+        let payload = format!("{}\r", command);
+        match pty_write_internal(&app, &state, &payload, "agent-first-command") {
+            Ok(()) => {
+                if bram_trace_enabled() {
+                    append_bram_trace_line(
+                        &app,
+                        "agent-switch",
+                        &format!("op=first-command source={} command={}", source, command),
+                    );
+                }
+            }
+            Err(e) => eprintln!("[agent-first-command] write failed: {}", e),
+        }
+    });
+}
+
+fn schedule_agent_switch_refresh<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    provider: &'static str,
+    source: &'static str,
+) {
+    thread::spawn(move || {
+        thread::sleep(std::time::Duration::from_millis(AGENT_SESSION_REFRESH_MS));
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                &app,
+                "agent-switch",
+                &format!("op=refresh provider={} source={}", provider, source),
+            );
+        }
+        let session_provider = match provider {
+            "codex" => Some(SessionProvider::Codex),
+            _ => Some(SessionProvider::Claude),
+        };
+        emit_talk_session_changed_for_provider(&app, session_provider);
+    });
+}
+
 // #182 incident 7 follow-up: master toggle for agent-pane source hot-reload.
 // Default `false`; only an explicit `true` in .bram.json `ui.toolsPaneHotReload`
 // enables. The setting only affects users who edit files under app/tools/
@@ -7192,6 +7616,7 @@ fn tools_pane_hot_reload_enabled<R: tauri::Runtime>(app: &AppHandle<R>) -> bool 
 fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value {
     let (
         agent,
+        first_command,
         batch,
         show_target_app,
         tools_pane_hot_reload,
@@ -7203,8 +7628,17 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
             let traces = c.traces;
             let ui = c.ui;
             let menus = c.menus;
+            let shell = c.shell;
             (
-                c.shell.and_then(|s| s.agent).unwrap_or_default(),
+                // Normalize to the launched provider (`claude` / `codex`) so the
+                // box always shows what actually starts, mapping legacy/blank
+                // values (e.g. "agent") to `claude`. Matches the autostart path.
+                agent_provider_from_command(shell.as_ref().and_then(|s| s.agent.as_deref()))
+                    .to_string(),
+                // Default `/resume` when absent; preserve an explicit "" (none).
+                shell
+                    .and_then(|s| s.first_command)
+                    .unwrap_or_else(|| "/resume".to_string()),
                 c.worklist
                     .and_then(|w| w.batch_commit_actions)
                     .unwrap_or(false),
@@ -7220,10 +7654,19 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
                 menus.and_then(|m| m.parse_and_display).unwrap_or(false),
             )
         }
-        None => (String::new(), false, false, false, false, false, false),
+        None => (
+            "claude".to_string(),
+            "/resume".to_string(),
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ),
     };
     serde_json::json!({
-        "shell": { "agent": agent },
+        "shell": { "agent": agent, "firstCommand": first_command },
         "worklist": { "batchCommitActions": batch },
         "ui": { "showTargetApp": show_target_app, "toolsPaneHotReload": tools_pane_hot_reload },
         "traces": { "enabled": tracing_enabled, "inspectorTap": inspector_tap },
@@ -14432,7 +14875,8 @@ fn clear_inflight_claim_sentinel<R: tauri::Runtime>(
     // cycle (refs #93). Atomic swap-to-false; the previous value tells
     // us whether to fire.
     if PENDING_TOOLS_RELOAD.swap(false, std::sync::atomic::Ordering::SeqCst) {
-        if tools_pane_hot_reload_enabled(app) {
+        let forced = PENDING_TOOLS_RELOAD_FORCED.swap(false, std::sync::atomic::Ordering::SeqCst);
+        if forced || tools_pane_hot_reload_enabled(app) {
             if bram_trace_enabled() {
                 append_bram_trace_line(app, "tools-pane-reload", "op=flushed-on-clear");
             }
@@ -14477,8 +14921,13 @@ fn inflight_sentinel_is_active<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
 // sentinel; suppressing reloads during cycles prevents iframe remount
 // from blowing away the user's mid-cycle context and causing the 7+s
 // of drift / click swallows we measured pre-fix.
-fn emit_or_defer_tools_pane_reload<R: tauri::Runtime>(app: &AppHandle<R>) {
-    if !tools_pane_hot_reload_enabled(app) {
+// `force` distinguishes the two suppression reasons. The toolsPaneHotReload
+// setting gate applies only to dev hot-reload (watcher edits, force=false); a
+// forced reload is a runtime action (e.g. a cross-provider switch) that must
+// fire regardless of the dev setting. Both still honor the inflight-cycle defer
+// so a reload never blows away mid-cycle context.
+fn emit_or_defer_tools_pane_reload<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) {
+    if !force && !tools_pane_hot_reload_enabled(app) {
         if bram_trace_enabled() {
             append_bram_trace_line(
                 app,
@@ -14490,11 +14939,14 @@ fn emit_or_defer_tools_pane_reload<R: tauri::Runtime>(app: &AppHandle<R>) {
     }
     if inflight_sentinel_is_active(app) {
         PENDING_TOOLS_RELOAD.store(true, std::sync::atomic::Ordering::SeqCst);
+        if force {
+            PENDING_TOOLS_RELOAD_FORCED.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         if bram_trace_enabled() {
             append_bram_trace_line(
                 app,
                 "tools-pane-reload",
-                "op=deferred reason=sentinel-active",
+                &format!("op=deferred reason=sentinel-active force={}", force),
             );
         }
         return;
@@ -22470,6 +22922,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             pty_spawn,
             pty_write,
+            switch_agent,
+            reload_agent_session,
             queue_pty_intent,
             queue_feedback_draft,
             pty_resize,
@@ -22847,7 +23301,8 @@ pub fn run() {
                     if let Some(since) = pending_tools_since {
                         if since.elapsed() >= tools_debounce {
                             eprintln!("[watcher] change detected, emitting tools-pane-reload (debounced)");
-                            emit_or_defer_tools_pane_reload(&app_handle);
+                            // force=false: dev hot-reload, gated by toolsPaneHotReload.
+                            emit_or_defer_tools_pane_reload(&app_handle, false);
                             pending_tools_since = None;
                         }
                     }

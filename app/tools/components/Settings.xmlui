@@ -1,13 +1,14 @@
 <Component
   name="Settings"
   var.agentDraft="{''}"
+  var.firstDraft="{''}"
   var.infoTitle="{''}"
   var.infoBody="{''}">
 
   <DataSource
     id="settingsConfig"
     url="/__settings"
-    onLoaded="(v) => agentDraft = settingsAgent(v)" />
+    onLoaded="(v) => { agentDraft = settingsAgent(v); firstDraft = settingsFirstCommand(v); }" />
 
   <APICall
     id="saveSettings"
@@ -42,23 +43,32 @@
             size="xs"
             variant="ghost"
             tooltip="About Shell"
-            onClick="infoTitle = 'Shell'; infoBody = window.settingsInfoBodies.agentCommand; settingInfoDialog.open()" />
+            onClick="infoTitle = 'Shell'; infoBody = window.settingsInfoBodies.shell; settingInfoDialog.open()" />
           <Heading level="h3">Shell</Heading>
         </HStack>
-        <HStack gap="$space-2" verticalAlignment="center">
-          <TextBox
-            id="agentBox"
-            width="*"
-            initialValue="{settingsAgent(settingsConfig.value)}"
-            autoComplete="off"
-            autoCorrect="{false}"
-            spellCheck="{false}"
-            autoCapitalize="off"
-            onDidChange="(v) => agentDraft = v" />
+        <Select
+          id="agentBox"
+          width="25%"
+          initialValue="{settingsAgent(settingsConfig.value)}"
+          onDidChange="(v) => agentDraft = v">
+          <Option value="claude" label="Claude" />
+          <Option value="codex" label="Codex" />
+        </Select>
+        <TextBox
+          id="firstCommandBox"
+          width="25%"
+          placeholder="optional first command"
+          initialValue="{settingsFirstCommand(settingsConfig.value)}"
+          autoComplete="off"
+          autoCorrect="{false}"
+          spellCheck="{false}"
+          autoCapitalize="off"
+          onDidChange="(v) => firstDraft = v" />
+        <HStack>
           <Button
             label="Save"
-            enabled="{agentDraft !== settingsAgent(settingsConfig.value) &amp;&amp; agentDraft.trim().length > 0}"
-            onClick="saveSettings.execute({ shell: { agent: agentDraft } })" />
+            enabled="{(agentDraft !== settingsAgent(settingsConfig.value) || firstDraft !== settingsFirstCommand(settingsConfig.value)) &amp;&amp; agentDraft.trim().length > 0}"
+            onClick="saveSettings.execute({ shell: { agent: agentDraft, firstCommand: firstDraft } })" />
         </HStack>
       </VStack>
 

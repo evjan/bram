@@ -1,11 +1,31 @@
 # PTY menu shapes — detection-axis catalog
 
 **What this is:** the shared model of *which interactive menus Bram's PTY
-scanner should surface*, and for each, which detection axes in
-`src-tauri/src/lib.rs` (`pty_menu_detect`, `pty_menu_scan_diagnostic`)
-catch it. It turns reactive tuning into a checklist: every cataloged
-shape must produce `op=fire`; a miss becomes "shape X regressed on axis
-Y" instead of a guess. Refs #197.
+scanner should surface*, and the shape characteristics that identify each.
+It turns reactive tuning into a checklist: every cataloged shape must
+surface in the agent pane; a miss becomes "shape X regressed" instead of a
+guess. Refs #197.
+
+**Detection is grid-primary.** Byte detection has been retired
+(`src-tauri/src/lib.rs`: "the grid is now the sole menu detector"). The
+iframe reads the xterm grid and reports menus to the host, which builds and
+emits the agent-pane menu. The op vocabulary in `bram-trace.log`
+(`[grid-menu] op=…`) is now:
+
+- `op=report` — the iframe reported a fresh grid menu (its options).
+- `op=build` — host built the menu from a live JSONL tool-use signature
+  (carries `tool=<Edit|Write|Bash|…>`).
+- `op=build-claude-nosig` — signature-less build of a **Bash** menu from the
+  grid (records-stacked / manual-approval / compound cases).
+- `op=hold-nosig` — a signature-less frame that is **not** a Bash menu
+  (Edit/Write awaiting their signature, or a phantom prose / tool-bullet
+  frame); held so the signature path classifies it. See *Signature-less
+  discrimination* below.
+- `op=override` — grid options corrected a host-detected menu.
+
+The old `op=fire` (byte-scanner era) no longer exists. The byte-scanner axes
+below are retained as the **shape vocabulary** (and the historical
+`[pty-menu-scan]` diagnostic), not the live detection path.
 
 **Scope = interactive menus Bram can usefully surface**, organized by
 *family* — not only tool-permission prompts:
@@ -46,10 +66,10 @@ added for #197:
 
 ## Version pin
 
-| Provider | CLI version (observed 2026-06-17) | CodeExam build |
+| Provider | CLI version (observed 2026-06-25) | CodeExam build |
 | --- | --- | --- |
-| Claude Code | `2.1.169` | `2026-06-14` (`.cli_js_from_exe_split_NEW`) |
-| Codex | `codex-cli 0.140.0` | none yet |
+| Claude Code | `2.1.179` | `2026-06-14` (`.cli_js_from_exe_split_NEW`) |
+| Codex | `codex-cli 0.142.2` | none yet |
 
 Strings drift between builds — re-pin on a new version.
 
@@ -64,7 +84,8 @@ Strings drift between builds — re-pin on a new version.
 | overwrite | `Do you want to overwrite` | ✓ | ✓ | ✓ | ✓ | "Replace the contents of `<existing file>` with X" | |
 | notebook insert | `Do you want to insert this cell into` | ✓ | ✓ | ✓ | ✓ | "Add a cell to `<file>.ipynb`" | |
 | notebook delete | `Do you want to delete this cell from` | ✓ | ✓ | ✓ | ✓ | "Remove a cell from `<file>.ipynb`" | |
-| proceed (Bash/tool) | `Do you want to proceed?` | ✓ | ✓ | ✓ | ✓ | "Run `ls -la`" | The generic tool-use prompt. |
+| proceed (Bash/tool, 3-option) | `Do you want to proceed?` | ✓ | ✓ | ✓ | ✓ | "Run `ls -la`" | The generic tool-use prompt: `1. Yes` / `2. Yes, and don't ask again for similar commands in <dir>` / `3. No`. |
+| proceed — manual-approval safety (2-option) | `Do you want to proceed?` | ✓ | ✓ | ✓ | ✓ | various compound / obfuscation patterns: `cd` + output redirection, or quoted / heredoc data (e.g. `cat > f <<'EOF'`) | Only **two** options — `1. Yes` / `2. No`, no "don't ask again" allow-all. The body reason **varies**: "Compound command contains cd with output redirection — manual approval required to prevent path resolution bypass", "Contains data within quote character (expansion obfuscation)", and likely others. All share the `Do you want to proceed?` header, which is why the **header** — not the option count, the box title, or the variable body reason — is the reliable Bash discriminator. See *Signature-less discrimination*. |
 | connection | `Do you want to allow this connection?` | ✓ | ✓ | ✓ | ✓ | a tool/command reaching a host outside the sandbox (e.g. `curl https://example.com`) | Hard to evoke deterministically. |
 | API key | `Do you want to use this API key?` | ✓ | ✓ | ✓ | ✓ | a tool that wants to use a stored API key | Hard to evoke deterministically. |
 | **skill** | `Use skill "<skill>"?` / `from this Skill` | ✓ | **✗** | ✓ | ✓ | "Use the `<skill>` skill to …" | **No `Do you want` header.** Was reaching the keyword guard with no match → `op=skip`. Fixed #197: `use skill` / `from this skill` added to `pty_text_looks_like_permission_menu`. Regression guard — must stay `op=fire`. |
@@ -85,6 +106,40 @@ Yes, use recommended settings / No, maybe later with /terminal-setup
 Relevant to the #187 stale-launch buffer (these appear at startup).
 Encoding + testing a guard against them is a follow-up — it needs
 `menu_bearing` false-positive evidence first.
+
+### Signature-less discrimination (`grid_menu_is_bash_command_box`)
+
+When a permission menu is on screen but its JSONL tool-use signature hasn't
+flushed yet, the grid build path must decide whether to build a Bash menu
+(`op=build-claude-nosig`) or hold (`op=hold-nosig`) for the signature path.
+Defaulting every signature-less frame to Bash mislabeled Edit/Write menus
+(Bash/empty/Edit flicker, pane never settled) and invented phantom Bash
+menus from prose / tool-call bullets.
+
+`grid_menu_is_bash_command_box(grid_opts, grid_above, grid_header)` builds
+Bash on any of three signals, in priority order:
+
+1. **Header `Do you want to proceed?`** — primary. Shared by every Claude
+   command-approval shape (3-option, 2-option safety, tall), and distinct
+   from Edit (`Do you want to make this edit to <file>?`) and Write (`Do you
+   want to create <file>?`). Always captured, so it survives tall command
+   boxes.
+2. **A `…don't ask again…` option label** — the 3-option Bash allow-all
+   (Edit/Write say "allow all edits during this session").
+3. **A `Bash command` box title** — fallback, only on frames where it is
+   captured.
+
+Edit/Write frames match none of these → `op=hold-nosig` → resolved as
+Edit/Write once the signature lands. Phantom frames (prose, tool bullets)
+also match none → held → no phantom menu, no spurious NavPanel pulse.
+
+Two discriminators were tried and rejected (the recurrence the header
+finally settled):
+
+- **Box title only** — scrolls out of the captured grid window for tall
+  command boxes, so real Bash menus were held.
+- **Option label only (`don't ask again`)** — absent on the 2-option
+  manual-approval safety prompt, so that shape was held.
 
 ## Family A — tool-permission prompts (Codex)
 
@@ -133,3 +188,12 @@ skip isn't re-investigated from scratch. A real fix would require the
 real menu to be a coherent *active* block (header → cursor → numbered
 structurally adjacent), not scattered matching tokens — which is exactly
 what `numbered=false` already (correctly) refuses.
+
+**Grid-primary update (2026-06-25).** Under the grid detector the analogous
+hazard is the grid reading decoy prose / tool-call bullets as a menu and
+building a *phantom* Bash menu (which fired the NavPanel pulse with nothing
+to show). The signature-less gate now **holds** these frames
+(`op=hold-nosig`): decoy prose carries no `Do you want to proceed?` header,
+no `don't ask again` option, and no `Bash command` title, so it fails
+`grid_menu_is_bash_command_box` and never builds. See *Signature-less
+discrimination*.

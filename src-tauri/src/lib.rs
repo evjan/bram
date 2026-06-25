@@ -14653,6 +14653,62 @@ fn feedback_draft_belongs_to_item(file_name: &str, item_id: &str) -> bool {
     file_name == format!("{}.md", item_id) || file_name.ends_with(&format!("-{}.md", item_id))
 }
 
+// Resolve one feedbackRef ("<unix_ms>-<itemId>") to its .md body, checking
+// the live draft (resources/feedback-drafts/) first, then the promoted copy
+// (resources/feedback-history/). Reconstructs the filename from the ref — no
+// caller-supplied path, so no traversal. Serves the Transcript's
+// iterate-feedback display and any other consumer holding a feedbackRef.
+fn feedback_content_by_ref<R: tauri::Runtime>(app: &AppHandle<R>, fref: &str) -> Option<String> {
+    if fref.is_empty() || fref.contains('/') || fref.contains('\\') {
+        return None;
+    }
+    for dir in [feedback_drafts_dir(app), feedback_history_dir(app)] {
+        if let Some(dir) = dir {
+            if let Ok(s) = std::fs::read_to_string(dir.join(format!("{}.md", fref))) {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
+
+// Build a { feedbackRef: text } map across feedback-drafts/ + feedback-history/,
+// most-recent `limit` by the <unix_ms>- filename prefix. A ref lives in exactly
+// one dir at a time (drafts until promoted on advance/prune, history after), so
+// a plain union is correct. Lets the Transcript resolve iterate feedback (which
+// rides a feedbackRef, not inline) with one fetch + O(1) lookup.
+fn feedback_ref_map<R: tauri::Runtime>(app: &AppHandle<R>, limit: usize) -> serde_json::Value {
+    let mut rows: Vec<(u64, String, String)> = Vec::new();
+    for dir in [feedback_drafts_dir(app), feedback_history_dir(app)] {
+        let Some(dir) = dir else { continue };
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let Some(stem) = name.strip_suffix(".md") else {
+                continue;
+            };
+            let ts: u64 = stem
+                .split_once('-')
+                .and_then(|(t, _)| t.parse().ok())
+                .unwrap_or(0);
+            let body = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            rows.push((ts, stem.to_string(), body.trim().to_string()));
+        }
+    }
+    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.truncate(limit.max(1));
+    let mut map = serde_json::Map::new();
+    for (_ts, fref, body) in rows {
+        map.entry(fref)
+            .or_insert_with(|| serde_json::Value::String(body));
+    }
+    serde_json::Value::Object(map)
+}
+
 // List recent feedback-history entries for the Feedback tab. Filenames
 // are <unix_ms>-<itemId>.md (per unique_feedback_history_path); a
 // uniqueness suffix `-<n>` may appear before `.md` on the rare collision
@@ -21688,6 +21744,40 @@ fn route_request<R: tauri::Runtime>(
         return (200, "application/json; charset=utf-8", body);
     }
 
+    // /__feedback/content?ref=<feedbackRef> — raw .md body for one feedback
+    // entry, checking feedback-drafts/ (live) then feedback-history/ (promoted).
+    // General-purpose: any consumer holding an iterate feedbackRef resolves its
+    // text. Reconstructs the filename from the ref (no traversal).
+    if path == "__feedback/content" {
+        let mut fref = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("ref=") {
+                fref = percent_decode(v);
+                break;
+            }
+        }
+        return match feedback_content_by_ref(app, &fref) {
+            Some(s) => (200, "text/markdown; charset=utf-8", s.into_bytes()),
+            None => (404, "text/plain; charset=utf-8", Vec::new()),
+        };
+    }
+
+    // /__feedback/map[?limit=N] — { "<feedbackRef>": "<text>", ... } across
+    // feedback-drafts/ + feedback-history/, most-recent N. The Transcript fetches
+    // this once and looks up the feedbackRef on each iterate turn (iterate
+    // feedback is not inline in the turn payload).
+    if path == "__feedback/map" {
+        let mut limit = 200usize;
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("limit=") {
+                limit = percent_decode(v).parse::<usize>().unwrap_or(200);
+            }
+        }
+        let map = feedback_ref_map(app, limit);
+        let body = serde_json::to_vec(&map).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
     // /__feedback-history/content?ts=<unix_ms>&itemId=<id> — raw .md body
     // for one entry. Reconstructs the filename rather than trusting a
     // client-supplied path (no traversal).
@@ -23864,6 +23954,21 @@ pub fn run() {
                     if is_feedback_history_change {
                         trace_dispatch("feedback-history", &[]);
                         emit_replayable_signal(&app_handle, "feedback-history-changed");
+                    }
+
+                    // feedback-drafts-changed: anything under
+                    // resources/feedback-drafts/. The Transcript's feedback-map
+                    // DataSource refetches on this so iterate feedback appears
+                    // live — drafts are NOT promoted to history on a plain test
+                    // iterate, so feedback-history-changed alone wouldn't cover
+                    // them.
+                    let is_feedback_drafts_change = event.paths.iter().any(|p| {
+                        p.components().any(|c| c.as_os_str() == "feedback-drafts")
+                            && p.components().any(|c| c.as_os_str() == "resources")
+                    });
+                    if is_feedback_drafts_change {
+                        trace_dispatch("feedback-drafts", &[]);
+                        emit_replayable_signal(&app_handle, "feedback-drafts-changed");
                     }
 
                     // Codex filesystem lifecycle drain (#130). When Codex

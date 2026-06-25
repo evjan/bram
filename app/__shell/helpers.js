@@ -1550,6 +1550,42 @@ window.__bramStripImagePaths = function (text) {
     .trim();
 };
 
+// Render the structured control turns the Worklist buttons emit
+// (approved: / drop: / iterate: {json}) as "verb: id [— feedback]" instead of
+// dumping raw JSON into the Transcript. Everything else (skip-worklist:, talk:,
+// voice:, plain prose) falls through to image-path stripping unchanged. Lives
+// here (real JS) rather than Globals.xs because the xs engine silently no-ops
+// on JSON.parse / .match / .map (two xs cuts rendered blank). Called from
+// Transcript.xmlui's user-message Markdown as window.__bramFormatUserTurn.
+// `feedbackMap` (optional) is the { feedbackRef: text } object from
+// /__feedback/map; approve/drop carry feedback inline, but iterate carries only
+// a feedbackRef, so its feedback is resolved through the map when present.
+window.__bramFormatUserTurn = function (text, feedbackMap) {
+  if (!text || typeof text !== "string") return window.__bramStripImagePaths(text || "");
+  var verbs = ["approved", "drop", "iterate"];
+  for (var i = 0; i < verbs.length; i++) {
+    var prefix = verbs[i] + ": ";
+    if (text.indexOf(prefix) !== 0) continue;
+    var labels = [];
+    try {
+      var payload = JSON.parse(text.slice(prefix.length).trim());
+      var items = (payload && payload.items) || [];
+      for (var j = 0; j < items.length; j++) {
+        var it = items[j] || {};
+        var label = it.id || "";
+        var fb = it.feedback;
+        if (!fb && it.feedbackRef && feedbackMap) fb = feedbackMap[it.feedbackRef];
+        if (fb) label += " — " + String(fb).replace(/\s+/g, " ").trim();
+        if (label) labels.push(label);
+      }
+    } catch (e) {
+      labels = [];
+    }
+    return labels.length ? verbs[i] + ": " + labels.join(", ") : verbs[i] + ":";
+  }
+  return window.__bramStripImagePaths(text);
+};
+
 window.__bramExtractMarkdownImages = function (text) {
   if (!text) return [];
   var urls = [];

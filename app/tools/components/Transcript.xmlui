@@ -37,6 +37,24 @@
   <ChangeListener
     listenTo="{transcriptSessionsChangedEvt.value &amp;&amp; transcriptSessionsChangedEvt.value.tick}"
     onDidChange="() => transcriptSessions.refetch()" />
+  <!-- { feedbackRef: text } map so iterate turns (whose feedback rides a
+       feedbackRef, not inline) can show their feedback. Refetched when a draft
+       is written or promoted to history. -->
+  <DataSource id="feedbackMap" url="/__feedback/map" />
+  <External
+    id="feedbackDraftsChangedEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('feedback-drafts-changed')}" />
+  <External
+    id="feedbackHistoryChangedEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('feedback-history-changed')}" />
+  <ChangeListener
+    listenTo="{feedbackDraftsChangedEvt.value &amp;&amp; feedbackDraftsChangedEvt.value.tick}"
+    onDidChange="() => feedbackMap.refetch()" />
+  <ChangeListener
+    listenTo="{feedbackHistoryChangedEvt.value &amp;&amp; feedbackHistoryChangedEvt.value.tick}"
+    onDidChange="() => feedbackMap.refetch()" />
   <Theme maxWidth-ModalDialog="95vw">
     <ModalDialog
       when="{!!fullscreenImage}"
@@ -86,7 +104,7 @@
           borderRadius="$borderRadius"
           gap="$space-1">
           <Text value="You" fontWeight="bold" color="$color-primary-600" fontSize="$fontSize-sm" />
-          <Markdown content="{window.__bramStripImagePaths($item.text)}" />
+          <Markdown content="{window.__bramFormatUserTurn($item.text, feedbackMap.value)}" />
         </VStack>
         <!-- assistant text -->
         <Markdown

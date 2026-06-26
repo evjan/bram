@@ -1,6 +1,7 @@
 <Component
   name="Settings"
   var.agentDraft="{''}"
+  var.argsDraft="{''}"
   var.firstDraft="{''}"
   var.infoTitle="{''}"
   var.infoBody="{''}">
@@ -8,7 +9,7 @@
   <DataSource
     id="settingsConfig"
     url="/__settings"
-    onLoaded="(v) => { agentDraft = settingsAgent(v); firstDraft = settingsFirstCommand(v); }" />
+    onLoaded="(v) => { agentDraft = settingsAgent(v); argsDraft = settingsArgs(v); firstDraft = settingsFirstCommand(v); }" />
 
   <APICall
     id="saveSettings"
@@ -55,6 +56,16 @@
           <Option value="codex" label="Codex" />
         </Select>
         <TextBox
+          id="argsBox"
+          width="25%"
+          placeholder="optional launch arguments"
+          initialValue="{settingsArgs(settingsConfig.value)}"
+          autoComplete="off"
+          autoCorrect="{false}"
+          spellCheck="{false}"
+          autoCapitalize="off"
+          onDidChange="(v) => argsDraft = v" />
+        <TextBox
           id="firstCommandBox"
           width="25%"
           placeholder="optional first command"
@@ -67,8 +78,8 @@
         <HStack>
           <Button
             label="Save"
-            enabled="{(agentDraft !== settingsAgent(settingsConfig.value) || firstDraft !== settingsFirstCommand(settingsConfig.value)) &amp;&amp; agentDraft.trim().length > 0}"
-            onClick="saveSettings.execute({ shell: { agent: agentDraft, firstCommand: firstDraft } })" />
+            enabled="{(agentDraft !== settingsAgent(settingsConfig.value) || argsDraft !== settingsArgs(settingsConfig.value) || firstDraft !== settingsFirstCommand(settingsConfig.value)) &amp;&amp; agentDraft.trim().length > 0}"
+            onClick="saveSettings.execute({ shell: { agent: agentDraft, args: argsDraft, firstCommand: firstDraft } })" />
         </HStack>
       </VStack>
 

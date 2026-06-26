@@ -293,13 +293,16 @@ struct ServerConfig {
     path: String,
 }
 
-// Optional shell-startup block. `agent` is a single command string
-// typed verbatim into the bash prompt right after pty_spawn — bash
-// parses it, so flags work: `claude --continue`, `codex resume`, etc.
+// Optional shell-startup block. `agent` is the provider (`claude` /
+// `codex`); `args` holds launch-time CLI flags. Older configs may still
+// have flags after `agent` (for example `claude --continue`), so readers
+// preserve that tail as launch args.
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct ShellConfig {
     #[serde(default)]
     agent: Option<String>,
+    #[serde(default)]
+    args: Option<String>,
     // Optional command typed into the agent's TUI once the freshly-started
     // agent settles (autostart + header switch). Defaults to `/resume` when
     // the key is absent; an explicit empty string means "send nothing".
@@ -6869,7 +6872,13 @@ fn pty_spawn(
     // until interactive; if rcfile init is still running, these keystrokes
     // queue and run as the first command.
     let provider = configured_agent_provider(&app);
-    if let Some(command) = agent_launch_command(provider) {
+    if let Some(base_command) = agent_launch_command(provider) {
+        let args = configured_agent_args(&app);
+        let command = if args.trim().is_empty() {
+            base_command.to_string()
+        } else {
+            format!("{} {}", base_command, args.trim())
+        };
         let payload = format!("{}\r", command);
         if let Err(e) = pty_write_internal(&app, &state, &payload, "agent-autostart") {
             eprintln!("[pty_spawn] failed to write agent autostart: {}", e);
@@ -7281,7 +7290,13 @@ fn switch_agent(
         "claude" | "claud" => "claude",
         other => return Err(format!("unknown agent provider: {}", other)),
     };
-    let command = agent_launch_command(provider_key).ok_or("unknown agent provider")?;
+    let base_command = agent_launch_command(provider_key).ok_or("unknown agent provider")?;
+    let args = configured_agent_args(&app);
+    let command = if args.trim().is_empty() {
+        base_command.to_string()
+    } else {
+        format!("{} {}", base_command, args.trim())
+    };
     if bram_trace_enabled() {
         append_bram_trace_line(
             &app,
@@ -7588,6 +7603,35 @@ fn agent_provider_from_command(command: Option<&str>) -> &'static str {
     }
 }
 
+fn split_command_head_tail(command: &str) -> (&str, &str) {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return ("", "");
+    }
+    if let Some((idx, _)) = trimmed.char_indices().find(|(_, c)| c.is_whitespace()) {
+        (trimmed[..idx].trim(), trimmed[idx..].trim())
+    } else {
+        (trimmed, "")
+    }
+}
+
+fn shell_args_from_config(shell: Option<&ShellConfig>) -> String {
+    let legacy_tail = shell
+        .and_then(|s| s.agent.as_deref())
+        .map(|agent| split_command_head_tail(agent).1.trim())
+        .unwrap_or("");
+    let args = shell
+        .and_then(|s| s.args.as_deref())
+        .map(str::trim)
+        .unwrap_or("");
+    match (legacy_tail.is_empty(), args.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => args.to_string(),
+        (false, true) => legacy_tail.to_string(),
+        (false, false) => format!("{} {}", legacy_tail, args),
+    }
+}
+
 fn agent_launch_command(provider: &str) -> Option<&'static str> {
     match provider.trim().to_ascii_lowercase().as_str() {
         "codex" => Some("codex"),
@@ -7637,6 +7681,13 @@ fn configured_agent_provider<R: tauri::Runtime>(app: &AppHandle<R>) -> &'static 
         .and_then(|cfg| cfg.shell.and_then(|s| s.agent))
         .map(|agent| agent_provider_from_command(Some(&agent)))
         .unwrap_or("claude")
+}
+
+fn configured_agent_args<R: tauri::Runtime>(app: &AppHandle<R>) -> String {
+    project_root(Some(app))
+        .and_then(|root| load_project_config(&root))
+        .map(|cfg| shell_args_from_config(cfg.shell.as_ref()))
+        .unwrap_or_default()
 }
 
 // The optional first command to type into a freshly-started agent once it
@@ -7719,6 +7770,7 @@ fn tools_pane_hot_reload_enabled<R: tauri::Runtime>(app: &AppHandle<R>) -> bool 
 fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value {
     let (
         agent,
+        args,
         first_command,
         batch,
         show_target_app,
@@ -7738,9 +7790,11 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
                 // values (e.g. "agent") to `claude`. Matches the autostart path.
                 agent_provider_from_command(shell.as_ref().and_then(|s| s.agent.as_deref()))
                     .to_string(),
+                shell_args_from_config(shell.as_ref()),
                 // Default `/resume` when absent; preserve an explicit "" (none).
                 shell
-                    .and_then(|s| s.first_command)
+                    .as_ref()
+                    .and_then(|s| s.first_command.clone())
                     .unwrap_or_else(|| "/resume".to_string()),
                 c.worklist
                     .and_then(|w| w.batch_commit_actions)
@@ -7759,6 +7813,7 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
         }
         None => (
             "claude".to_string(),
+            "".to_string(),
             "/resume".to_string(),
             false,
             false,
@@ -7769,7 +7824,7 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
         ),
     };
     serde_json::json!({
-        "shell": { "agent": agent, "firstCommand": first_command },
+        "shell": { "agent": agent, "args": args, "firstCommand": first_command },
         "worklist": { "batchCommitActions": batch },
         "ui": { "showTargetApp": show_target_app, "toolsPaneHotReload": tools_pane_hot_reload },
         "traces": { "enabled": tracing_enabled, "inspectorTap": inspector_tap },

@@ -1,6 +1,6 @@
 echo "You can launch claude or codex here."
 # To auto-launch one on shell start, add to .bram.json:
-#   { "shell": { "agent": "agent --continue" } }
+#   { "shell": { "agent": "claude", "args": "--continue" } }
 
 _XMLUI_SHELL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -46,6 +46,45 @@ _xmlui_pick_agent() {
   printf '%s' "claude"
 }
 
+_xmlui_shell_config_value() {
+  local key="$1"
+  python3 -c '
+import json
+import os
+import sys
+
+key = sys.argv[1]
+for name in (".bram.json", ".xmlui-desktop.json"):
+    try:
+        with open(name, encoding="utf-8") as f:
+            shell = json.load(f).get("shell") or {}
+    except Exception:
+        continue
+    value = shell.get(key)
+    if value is not None:
+        print(str(value), end="")
+    break
+' "$key" 2>/dev/null
+}
+
+_xmlui_startup_args_for() {
+  local provider="$1"
+  local configured configured_provider configured_tail args
+  configured="$(_xmlui_shell_config_value agent)"
+  args="$(_xmlui_shell_config_value args)"
+  if [ -n "$configured" ]; then
+    read -r configured_provider configured_tail <<<"$configured"
+    case "$provider:$configured_provider" in
+      claude:claude|claude:claud|claude:agent|codex:codex)
+        if [ -n "$configured_tail" ]; then
+          args="${configured_tail}${args:+ $args}"
+        fi
+        ;;
+    esac
+  fi
+  printf '%s' "$args"
+}
+
 agent() {
   local provider
   provider="$(_xmlui_pick_agent)"
@@ -66,6 +105,13 @@ agent() {
 
 claude() {
   _xmlui_mark_agent "claude"
+  if [ $# -eq 0 ]; then
+    local startup_args
+    startup_args="$(_xmlui_startup_args_for claude)"
+    if [ -n "$startup_args" ]; then
+      eval "set -- $startup_args"
+    fi
+  fi
   command claude "$@"
 }
 
@@ -85,6 +131,13 @@ _xmlui_codex_hook_installed() {
 
 codex() {
   _xmlui_mark_agent "codex"
+  if [ $# -eq 0 ]; then
+    local startup_args
+    startup_args="$(_xmlui_startup_args_for codex)"
+    if [ -n "$startup_args" ]; then
+      eval "set -- $startup_args"
+    fi
+  fi
   if ! _xmlui_has_repo_setup; then
     command codex "$@"
     return

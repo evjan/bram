@@ -225,6 +225,9 @@ function closeIssueExistingPendingCount(commits) {
 function settingsAgent(s) {
   return (s && s.shell && s.shell.agent) || '';
 }
+function settingsArgs(s) {
+  return (s && s.shell && s.shell.args !== undefined && s.shell.args !== null) ? s.shell.args : '';
+}
 function settingsFirstCommand(s) {
   return (s && s.shell && s.shell.firstCommand !== undefined && s.shell.firstCommand !== null) ? s.shell.firstCommand : '/resume';
 }

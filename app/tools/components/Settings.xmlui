@@ -3,13 +3,14 @@
   var.agentDraft="{''}"
   var.argsDraft="{''}"
   var.firstDraft="{''}"
+  var.continueDraft="{false}"
   var.infoTitle="{''}"
   var.infoBody="{''}">
 
   <DataSource
     id="settingsConfig"
     url="/__settings"
-    onLoaded="(v) => { agentDraft = settingsAgent(v); argsDraft = settingsArgs(v); firstDraft = settingsFirstCommand(v); }" />
+    onLoaded="(v) => { agentDraft = settingsAgent(v); argsDraft = settingsArgs(v); firstDraft = settingsFirstCommand(v); continueDraft = settingsContinueLast(v); }" />
 
   <APICall
     id="saveSettings"
@@ -75,11 +76,15 @@
           spellCheck="{false}"
           autoCapitalize="off"
           onDidChange="(v) => firstDraft = v" />
+        <Switch
+          label="Continue most recent session on startup"
+          initialValue="{settingsContinueLast(settingsConfig.value)}"
+          onDidChange="(v) => continueDraft = v" />
         <HStack>
           <Button
             label="Save"
-            enabled="{(agentDraft !== settingsAgent(settingsConfig.value) || argsDraft !== settingsArgs(settingsConfig.value) || firstDraft !== settingsFirstCommand(settingsConfig.value)) &amp;&amp; agentDraft.trim().length > 0}"
-            onClick="saveSettings.execute({ shell: { agent: agentDraft, args: argsDraft, firstCommand: firstDraft } })" />
+            enabled="{(agentDraft !== settingsAgent(settingsConfig.value) || argsDraft !== settingsArgs(settingsConfig.value) || firstDraft !== settingsFirstCommand(settingsConfig.value) || continueDraft !== settingsContinueLast(settingsConfig.value)) &amp;&amp; agentDraft.trim().length > 0}"
+            onClick="saveSettings.execute({ shell: { agent: agentDraft, args: argsDraft, firstCommand: firstDraft, continueLast: continueDraft } })" />
         </HStack>
       </VStack>
 

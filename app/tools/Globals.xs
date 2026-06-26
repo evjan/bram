@@ -229,7 +229,10 @@ function settingsArgs(s) {
   return (s && s.shell && s.shell.args !== undefined && s.shell.args !== null) ? s.shell.args : '';
 }
 function settingsFirstCommand(s) {
-  return (s && s.shell && s.shell.firstCommand !== undefined && s.shell.firstCommand !== null) ? s.shell.firstCommand : '/resume';
+  return (s && s.shell && s.shell.firstCommand !== undefined && s.shell.firstCommand !== null) ? s.shell.firstCommand : '';
+}
+function settingsContinueLast(s) {
+  return !!(s && s.shell && s.shell.continueLast);
 }
 function settingsBatch(s) {
   return !!(s && s.worklist && s.worklist.batchCommitActions);

@@ -300,10 +300,15 @@ struct ShellConfig {
     #[serde(default)]
     args: Option<String>,
     // Optional command typed into the agent's TUI once the freshly-started
-    // agent settles (autostart + header switch). Defaults to `/resume` when
-    // the key is absent; an explicit empty string means "send nothing".
+    // agent settles (autostart + header switch). Defaults to "" (send nothing)
+    // when the key is absent; the explicit Continue toggle below drives resume.
     #[serde(default, rename = "firstCommand")]
     first_command: Option<String>,
+    // When true, autostart and provider-switch launch the provider's
+    // "continue most recent session" form (`claude --continue` /
+    // `codex resume --last`) instead of a fresh `claude` / `codex`.
+    #[serde(default, rename = "continueLast")]
+    continue_last: Option<bool>,
 }
 
 #[derive(Default, Clone, serde::Deserialize)]
@@ -6868,10 +6873,15 @@ fn pty_spawn(
     // until interactive; if rcfile init is still running, these keystrokes
     // queue and run as the first command.
     let provider = configured_agent_provider(&app);
-    if let Some(base_command) = agent_launch_command(provider) {
+    let base_command = if configured_continue_last(&app) {
+        agent_resume_command(provider, "")
+    } else {
+        agent_launch_command(provider).map(str::to_string)
+    };
+    if let Some(base_command) = base_command {
         let args = configured_agent_args(&app);
         let command = if args.trim().is_empty() {
-            base_command.to_string()
+            base_command
         } else {
             format!("{} {}", base_command, args.trim())
         };
@@ -7314,10 +7324,15 @@ fn switch_agent(
         "claude" | "claud" => "claude",
         other => return Err(format!("unknown agent provider: {}", other)),
     };
-    let base_command = agent_launch_command(provider_key).ok_or("unknown agent provider")?;
+    let base_command = if configured_continue_last(&app) {
+        agent_resume_command(provider_key, "")
+    } else {
+        agent_launch_command(provider_key).map(str::to_string)
+    }
+    .ok_or("unknown agent provider")?;
     let args = configured_agent_args(&app);
     let command = if args.trim().is_empty() {
-        base_command.to_string()
+        base_command
     } else {
         format!("{} {}", base_command, args.trim())
     };
@@ -7715,12 +7730,22 @@ fn configured_agent_args<R: tauri::Runtime>(app: &AppHandle<R>) -> String {
 }
 
 // The optional first command to type into a freshly-started agent once it
-// settles. Absent key -> `/resume` (the default); an explicit "" disables it.
+// settles. Absent key -> "" (send nothing); resume is driven by the explicit
+// Continue toggle (configured_continue_last), not by auto-typing `/resume`.
 fn configured_first_command<R: tauri::Runtime>(app: &AppHandle<R>) -> String {
     project_root(Some(app))
         .and_then(|root| load_project_config(&root))
         .and_then(|cfg| cfg.shell.and_then(|s| s.first_command))
-        .unwrap_or_else(|| "/resume".to_string())
+        .unwrap_or_default()
+}
+
+// Whether autostart / provider-switch should launch the provider's "continue
+// most recent session" form. Absent key -> false (fresh launch).
+fn configured_continue_last<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    project_root(Some(app))
+        .and_then(|root| load_project_config(&root))
+        .and_then(|cfg| cfg.shell.and_then(|s| s.continue_last))
+        .unwrap_or(false)
 }
 
 // After a fresh launch (autostart / switch), wait for the agent's TUI to
@@ -7796,6 +7821,7 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
         agent,
         args,
         first_command,
+        continue_last,
         batch,
         show_target_app,
         tools_pane_hot_reload,
@@ -7815,11 +7841,16 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
                 agent_provider_from_command(shell.as_ref().and_then(|s| s.agent.as_deref()))
                     .to_string(),
                 shell_args_from_config(shell.as_ref()),
-                // Default `/resume` when absent; preserve an explicit "" (none).
+                // Default "" when absent (send nothing); preserve an explicit value.
                 shell
                     .as_ref()
                     .and_then(|s| s.first_command.clone())
-                    .unwrap_or_else(|| "/resume".to_string()),
+                    .unwrap_or_default(),
+                // Default OFF — fresh launch unless the Continue toggle is set.
+                shell
+                    .as_ref()
+                    .and_then(|s| s.continue_last)
+                    .unwrap_or(false),
                 c.worklist
                     .and_then(|w| w.batch_commit_actions)
                     .unwrap_or(false),
@@ -7838,7 +7869,8 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
         None => (
             "claude".to_string(),
             "".to_string(),
-            "/resume".to_string(),
+            "".to_string(),
+            false,
             false,
             false,
             false,
@@ -7848,7 +7880,7 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
         ),
     };
     serde_json::json!({
-        "shell": { "agent": agent, "args": args, "firstCommand": first_command },
+        "shell": { "agent": agent, "args": args, "firstCommand": first_command, "continueLast": continue_last },
         "worklist": { "batchCommitActions": batch },
         "ui": { "showTargetApp": show_target_app, "toolsPaneHotReload": tools_pane_hot_reload },
         "traces": { "enabled": tracing_enabled, "inspectorTap": inspector_tap },

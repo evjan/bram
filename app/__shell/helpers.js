@@ -1086,13 +1086,16 @@ window.settingsInfoBodies = {
   shell:
     "## Agent command\n\n" +
     "The agent to launch: `claude` or `codex`.\n\n" +
+    "## Continue most recent session on startup\n\n" +
+    "When on, the agent launches resuming its most recent session " +
+    "(`claude --continue` / `codex resume --last`) instead of starting fresh. " +
+    "Each CLI continues its own latest session natively — no session id needed.\n\n" +
     "## Arguments\n\n" +
-    "Optional launch-time flags passed to the selected agent, for example " +
-    "`--continue`. Use this for startup behavior; use First command for " +
-    "interactive input sent after the agent starts.\n\n" +
+    "Optional extra launch-time flags passed to the selected agent. Appended " +
+    "after the launch (or continue) command.\n\n" +
     "## First command\n\n" +
-    "An optional command sent to the agent once it starts, for example " +
-    "`/resume` (the default). Leave it empty to send nothing.",
+    "An optional command sent to the agent's TUI once it starts, for example " +
+    "`/resume` to open the interactive picker. Empty by default (send nothing).",
   batchCommitActions:
     "## Batch commit actions\n\n" +
     "Adds Approve all / Drop all controls to the Worklist tab, shown only " +

@@ -151,6 +151,7 @@ without re-shipping content.
 | `/__worklist/init` | HTTP GET | — | same shape as `/__worklist` (file created if missing) | agent pane iframe |
 | `/__worklist/resolve` | HTTP GET | `ids=foo,bar` | active: `{ kind, ids, items, mismatchedIds, issuedAtMs, source, consumedAtMs }` · consumed: `{ kind: "no_active_authorization", consumedAtMs }` | agent (curl) |
 | `/__worklist/mutate` | HTTP POST | body `{ op: "prune" \| "advance", ids: [...], status?: "applied" }` | `{ ok: true, pruned: [...] }` / `{ ok: true, advanced: [...] }`, or 400 `{ error: "…" }` on auth-kind mismatch | agent (curl) |
+| `/__worklist/commit` | HTTP POST | body `{ ids: [...], message: "..." }` | `{ ok: true, sha }`, or 400/500 `{ error: "..." }` | agent (curl) |
 | `/__worklist-config` | HTTP GET | — | `{ batchCommitActions: bool }` from `.bram.json` `worklist` block; defaults to `false` | agent pane iframe (`Workspace.xmlui` gates batch-commit UI on this) |
 
 - `/__worklist` injects a `diff` field on each `applied` item (the output
@@ -183,6 +184,12 @@ without re-shipping content.
   `resources/worklist.json` are for proposal authoring and iterate-time
   prose refinement. The chat doesn't render a diff and the server-side
   auth check is uniform.
+- `/__worklist/commit` is the server-side commit gate for approved TO
+  COMMIT items. It requires an `approved` auth record covering every id,
+  requires every id to be `status:"applied"`, stages only those items'
+  listed `file`/`files`, refuses when unrelated files are already staged,
+  commits with the supplied message, then prunes through the same mutation
+  machinery that clears the inflight sentinel and records history.
 - **Authorization state-machine enforcement.** `record_worklist_authorization_from_input`
   parses the structured turn and calls `build_worklist_authorization_record`
   to verify each supplied item hash against the resolved on-disk worklist
@@ -213,12 +220,12 @@ Codex's sandbox refuses loopback connections (`curl: (7)` even when Bram
 listens), so Codex drives the lifecycle through files instead of the HTTP
 routes above. The host watches the intent file and dispatches it through the
 *same* handlers (`handle_worklist_resolve`, `handle_worklist_mutate`,
-`handle_iterate_begin`, `handle_iterate_end`), so all side effects and auth
-checks are identical.
+`handle_worklist_commit`, `handle_iterate_begin`, `handle_iterate_end`), so all
+side effects and auth checks are identical.
 
 | Surface | Type | Shape |
 |---|---|---|
-| `resources/.worklist-intent.json` | file (agent writes) | `{ nonce, route, body? }` — `route` ∈ `worklist-resolve` \| `worklist-mutate` \| `iterate-begin` \| `iterate-end` \| `worklist-end`; `body` is the matching HTTP route's request body |
+| `resources/.worklist-intent.json` | file (agent writes) | `{ nonce, route, body? }` — `route` ∈ `worklist-resolve` \| `worklist-mutate` \| `worklist-commit` \| `iterate-begin` \| `iterate-end` \| `worklist-end`; `body` is the matching HTTP route's request body |
 | `resources/.worklist-result.json` | file (host writes) | `{ nonce, ok, status, result? , error?, completedAtMs }` — `result` is the HTTP route's response body verbatim; `error` present when `ok:false` |
 
 - The watcher drain reads-then-deletes the intent file (so duplicate notify

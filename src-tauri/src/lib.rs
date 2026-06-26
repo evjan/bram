@@ -22019,8 +22019,8 @@ fn handle_worklist_resolve<R: tauri::Runtime>(
 // check) is unchanged, so this transport grants Codex no power it lacked.
 //
 // Intent shape:  {"nonce": "...", "route": "<r>", "body": { ... }}
-//   routes: worklist-resolve | worklist-mutate | iterate-begin |
-//           iterate-end | worklist-end | issue-close
+//   routes: worklist-resolve | worklist-mutate | worklist-commit |
+//           iterate-begin | iterate-end | worklist-end | issue-close
 // Result shape:  {"nonce": "...", "ok": <bool>, "status": <u16>,
 //                 "result"|"error": <json>, "completedAtMs": <ms>}
 fn drain_worklist_intent<R: tauri::Runtime>(app: &AppHandle<R>) {
@@ -22064,6 +22064,10 @@ fn drain_worklist_intent<R: tauri::Runtime>(app: &AppHandle<R>) {
             }
             "worklist-mutate" => {
                 let (s, _m, b) = handle_worklist_mutate(app, &body_bytes);
+                (s, b)
+            }
+            "worklist-commit" => {
+                let (s, _m, b) = handle_worklist_commit(app, &body_bytes);
                 (s, b)
             }
             "iterate-begin" => {
@@ -22309,6 +22313,137 @@ fn validate_worklist_advance_status(op: &str, new_status: &str) -> Result<(), St
         "unsupported advance status: {}; use op:\"prune\" after a successful commit",
         new_status
     ))
+}
+
+fn ensure_worklist_commit_authorized(
+    ids: &[String],
+    auth: &serde_json::Value,
+) -> Result<(), String> {
+    let auth_kind = auth.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    if auth_kind != "approved" {
+        return Err(format!(
+            "auth kind mismatch: expected approved, got {}",
+            auth_kind
+        ));
+    }
+    let auth_ids = worklist_json_ids(auth, "ids");
+    for id in ids {
+        if !auth_ids.iter().any(|aid| aid == id) {
+            return Err(format!("id not in auth: {}", id));
+        }
+    }
+    Ok(())
+}
+
+fn validate_worklist_commit_paths(paths: &[String]) -> Result<(), String> {
+    for path in paths {
+        let p = Path::new(path);
+        if p.is_absolute() {
+            return Err(format!("approved file path must be relative: {}", path));
+        }
+        if p.components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(format!(
+                "approved file path must not contain '..': {}",
+                path
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn worklist_commit_files_for_ids(
+    items: &[serde_json::Value],
+    ids: &[String],
+) -> Result<Vec<String>, String> {
+    let mut files: Vec<String> = Vec::new();
+    for id in ids {
+        let item = items
+            .iter()
+            .find(|it| it.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .ok_or_else(|| format!("worklist item not found: {}", id))?;
+        let status = item
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("proposed");
+        if status != "applied" {
+            return Err(format!(
+                "worklist commit requires applied status: {} is {}",
+                id, status
+            ));
+        }
+        for file in worklist_item_files(item) {
+            if !files.iter().any(|existing| existing == &file) {
+                files.push(file);
+            }
+        }
+    }
+    if files.is_empty() {
+        return Err("approved items have no files".to_string());
+    }
+    validate_worklist_commit_paths(&files)?;
+    Ok(files)
+}
+
+fn ensure_no_unrelated_staged_files(
+    staged: &[String],
+    approved_files: &[String],
+) -> Result<(), String> {
+    let unrelated: Vec<String> = staged
+        .iter()
+        .filter(|path| !approved_files.iter().any(|approved| approved == *path))
+        .cloned()
+        .collect();
+    if unrelated.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "refusing worklist commit because unrelated files are staged: {}",
+            unrelated.join(", ")
+        ))
+    }
+}
+
+fn git_staged_files<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<String>, String> {
+    let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
+    let out = std::process::Command::new("git")
+        .current_dir(&root)
+        .args(["diff", "--cached", "--name-only", "-z", "--"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    Ok(out
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect())
+}
+
+fn git_run_owned<R: tauri::Runtime>(app: &AppHandle<R>, args: &[String]) -> Result<String, String> {
+    let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
+    let out = std::process::Command::new("git")
+        .current_dir(&root)
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn worklist_json_error(status: u16, message: impl Into<String>) -> (u16, &'static str, Vec<u8>) {
+    (
+        status,
+        "application/json; charset=utf-8",
+        serde_json::json!({ "error": message.into() })
+            .to_string()
+            .into_bytes(),
+    )
 }
 
 fn apply_worklist_mutation(
@@ -22557,7 +22692,7 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
     // failure class as the auth-consume-noop-prune fix. Idempotent: if
     // resolve already consumed it (old apply flow, or the commit gate),
     // consume_worklist_authorization no-ops on the already-consumed record.
-    if (op == "prune" && auth_kind == "drop")
+    if (op == "prune" && (auth_kind == "drop" || auth_kind == "approved"))
         || (op == "advance" && auth_kind == "approved")
     {
         consume_worklist_authorization(app);
@@ -22577,15 +22712,141 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
     )
 }
 
+// POST /__worklist/commit — server-side commit gate for applied worklist
+// items. The agent supplies ids + message; the host verifies approved auth,
+// stages only the approved files, commits only those pathspecs, then prunes via
+// the same mutate path used by the legacy agent-driven commit flow.
+fn handle_worklist_commit<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    body: &[u8],
+) -> (u16, &'static str, Vec<u8>) {
+    let req_json: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return worklist_json_error(400, format!("invalid JSON: {}", e)),
+    };
+    let ids = worklist_json_ids(&req_json, "ids");
+    if ids.is_empty() {
+        return worklist_json_error(400, "ids[] required");
+    }
+    let message = req_json
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if message.is_empty() {
+        return worklist_json_error(400, "message required");
+    }
+
+    let Some(auth_path) = worklist_auth_file(app) else {
+        return worklist_json_error(500, "no project root");
+    };
+    let auth: serde_json::Value = std::fs::read_to_string(&auth_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Err(e) = ensure_worklist_commit_authorized(&ids, &auth) {
+        return worklist_json_error(400, e);
+    }
+
+    let Some(wl_path) = worklist_file(app) else {
+        return worklist_json_error(500, "no project root");
+    };
+    let wl: serde_json::Value = std::fs::read_to_string(&wl_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({"items":[]}));
+    let Some(items) = wl.get("items").and_then(|v| v.as_array()) else {
+        return worklist_json_error(500, "worklist missing items[]");
+    };
+    let files = match worklist_commit_files_for_ids(items, &ids) {
+        Ok(files) => files,
+        Err(e) => return worklist_json_error(400, e),
+    };
+
+    let staged_before = match git_staged_files(app) {
+        Ok(files) => files,
+        Err(e) => return worklist_json_error(500, e),
+    };
+    if let Err(e) = ensure_no_unrelated_staged_files(&staged_before, &files) {
+        return worklist_json_error(400, e);
+    }
+
+    let mut add_args = vec!["add".to_string(), "--".to_string()];
+    add_args.extend(files.iter().cloned());
+    if let Err(e) = git_run_owned(app, &add_args) {
+        return worklist_json_error(500, format!("git add failed: {}", e.trim()));
+    }
+    let staged_after = match git_staged_files(app) {
+        Ok(files) => files,
+        Err(e) => return worklist_json_error(500, e),
+    };
+    if let Err(e) = ensure_no_unrelated_staged_files(&staged_after, &files) {
+        return worklist_json_error(400, e);
+    }
+    if staged_after.is_empty() {
+        return worklist_json_error(400, "no staged changes for approved files");
+    }
+
+    let mut commit_args = vec![
+        "commit".to_string(),
+        "-m".to_string(),
+        message.to_string(),
+        "--".to_string(),
+    ];
+    commit_args.extend(files.iter().cloned());
+    if let Err(e) = git_run_owned(app, &commit_args) {
+        return worklist_json_error(500, format!("git commit failed: {}", e.trim()));
+    }
+    let sha = match git_run(app, &["rev-parse", "HEAD"]) {
+        Ok(s) => s.trim().to_string(),
+        Err(e) => {
+            return worklist_json_error(
+                500,
+                format!("commit created but sha lookup failed: {}", e.trim()),
+            )
+        }
+    };
+
+    let prune_body = serde_json::json!({
+        "op": "prune",
+        "ids": ids,
+    });
+    let prune_bytes = serde_json::to_vec(&prune_body).unwrap_or_default();
+    let (status, _content_type, body) = handle_worklist_mutate(app, &prune_bytes);
+    if !(200..300).contains(&status) {
+        let parsed: serde_json::Value = serde_json::from_slice(&body)
+            .unwrap_or_else(|_| serde_json::json!({ "raw": String::from_utf8_lossy(&body) }));
+        return (
+            status,
+            "application/json; charset=utf-8",
+            serde_json::json!({
+                "error": "commit created but prune failed",
+                "sha": sha,
+                "prune": parsed,
+            })
+            .to_string()
+            .into_bytes(),
+        );
+    }
+
+    (
+        200,
+        "application/json; charset=utf-8",
+        serde_json::json!({ "ok": true, "sha": sha })
+            .to_string()
+            .into_bytes(),
+    )
+}
+
 #[cfg(test)]
 mod worklist_authorization_tests {
     use super::{
-        apply_worklist_mutation, build_worklist_authorization_record,
-        classify_worklist_removals, draft_markdown_path, feedback_draft_path,
-        inflight_claim_fully_covered, parse_worklist_authorization_message, resource_relative_path,
-        turn_text_has_direct_edit_opt_out, validate_post_commit_prune_status,
-        validate_worklist_advance_status, validate_worklist_mutate_authorization,
-        worklist_draft_path,
+        apply_worklist_mutation, build_worklist_authorization_record, classify_worklist_removals,
+        draft_markdown_path, ensure_no_unrelated_staged_files, ensure_worklist_commit_authorized,
+        feedback_draft_path, inflight_claim_fully_covered, parse_worklist_authorization_message,
+        resource_relative_path, turn_text_has_direct_edit_opt_out,
+        validate_post_commit_prune_status, validate_worklist_advance_status,
+        validate_worklist_mutate_authorization, worklist_commit_files_for_ids, worklist_draft_path,
     };
     use serde_json::json;
     use std::path::Path;
@@ -22695,6 +22956,54 @@ mod worklist_authorization_tests {
         let missing_id = validate_worklist_mutate_authorization("prune", &ids(&["b"]), &auth)
             .expect_err("id must be covered by auth");
         assert_eq!(missing_id, "id not in auth: b");
+    }
+
+    #[test]
+    fn worklist_commit_authorization_requires_approved_ids() {
+        let auth = json!({"kind": "approved", "ids": ["a"]});
+        ensure_worklist_commit_authorized(&ids(&["a"]), &auth).expect("approved id is accepted");
+
+        let wrong_kind = json!({"kind": "drop", "ids": ["a"]});
+        let err = ensure_worklist_commit_authorized(&ids(&["a"]), &wrong_kind)
+            .expect_err("commit requires approved auth");
+        assert_eq!(err, "auth kind mismatch: expected approved, got drop");
+
+        let err = ensure_worklist_commit_authorized(&ids(&["b"]), &auth)
+            .expect_err("commit ids must be covered");
+        assert_eq!(err, "id not in auth: b");
+    }
+
+    #[test]
+    fn worklist_commit_files_require_applied_items() {
+        let items = vec![
+            json!({"id": "a", "status": "applied", "files": ["src/a.rs", "docs/a.md"]}),
+            json!({"id": "b", "status": "proposed", "file": "src/b.rs"}),
+        ];
+
+        let files = worklist_commit_files_for_ids(&items, &ids(&["a"]))
+            .expect("applied item files are collected");
+        assert_eq!(files, ids(&["src/a.rs", "docs/a.md"]));
+
+        let err = worklist_commit_files_for_ids(&items, &ids(&["b"]))
+            .expect_err("proposed items cannot be committed");
+        assert_eq!(
+            err,
+            "worklist commit requires applied status: b is proposed"
+        );
+    }
+
+    #[test]
+    fn worklist_commit_rejects_unrelated_staged_files() {
+        let approved = ids(&["src/a.rs", "docs/a.md"]);
+        ensure_no_unrelated_staged_files(&ids(&["src/a.rs"]), &approved)
+            .expect("approved staged files are fine");
+
+        let err = ensure_no_unrelated_staged_files(&ids(&["src/a.rs", "src/other.rs"]), &approved)
+            .expect_err("unrelated staged files are refused");
+        assert_eq!(
+            err,
+            "refusing worklist commit because unrelated files are staged: src/other.rs"
+        );
     }
 
     #[test]
@@ -22889,6 +23198,14 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Re
             let mut buf = Vec::new();
             let _ = request.as_reader().read_to_end(&mut buf);
             handle_worklist_mutate(app, &buf)
+        }
+    } else if path == "__worklist/commit" {
+        if method != "POST" {
+            (405, "text/plain; charset=utf-8", b"POST only".to_vec())
+        } else {
+            let mut buf = Vec::new();
+            let _ = request.as_reader().read_to_end(&mut buf);
+            handle_worklist_commit(app, &buf)
         }
     } else if path == "__iterate/begin" {
         if method != "POST" {

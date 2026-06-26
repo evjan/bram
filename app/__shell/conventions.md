@@ -470,12 +470,16 @@ round-trip. Its return value is dead weight for an apply — the bodies are
 the proposal you authored. So an apply-approve is one call: edit from the
 proposal, then `mutate op:"advance"`.
 
-**Commit gate and drops: still `resolve` before `mutate`.** Resolve
-returns the recorded items — the commit gate genuinely needs them (the
-`close-issue:` / `push-before-close:` lines) — consumes `approved`/`drop`
-auth, *and* writes the sentinel (drops aren't set at approval time).
-Reading `.worklist-authorization.json` directly and jumping to `mutate`
-for these skips the sentinel write and orphans the spinner (refs #133).
+**Commit gate: call `worklist-commit`.** For approved TO COMMIT items,
+send one request with `{ ids, message }`. The host verifies approved auth,
+requires every id to be `applied`, stages only those items' files, refuses
+unrelated staged files, commits, prunes the items, consumes auth, and clears
+the sentinel. Close-on-commit (`close-issue:` / `push-before-close:`) stays
+on the existing `/__issue/close` path after the commit returns its `sha`.
+
+**Drops: still `resolve` before `mutate`.** Resolve returns the recorded
+items and writes the drop sentinel (drops aren't set at approval time), then
+`mutate op:"prune"` clears it.
 
 #### Claude: loopback curl
 
@@ -522,11 +526,12 @@ two coordination dot-files instead:
    { "nonce": "<unique-per-request>", "route": "<route>", "body": { ... } }
    ```
 
-   `route` is one of `worklist-resolve`, `worklist-mutate`, or
+   `route` is one of `worklist-resolve`, `worklist-mutate`, `worklist-commit`, or
    `issue-close`. `body` matches the HTTP route:
    - `worklist-resolve` — omit, or `{ "ids": [...] }` to filter.
    - `worklist-mutate` — `{ "op": "advance", "ids": [...], "status": "applied" }`
      or `{ "op": "prune", "ids": [...] }`.
+   - `worklist-commit` — `{ "ids": [...], "message": "..." }`.
    - `issue-close` — `{ "number": N, "commit": "<full-sha>", "push": <bool> }`
      for the generated-comment verified path, or
      `{ "number": N, "comment": "<user-supplied>" }` for the
@@ -732,10 +737,11 @@ reference: `docs/apis.md` §11. Agent-side conventions:
   automatically (the way it does for `iterate:`). Edit from the proposal
   you authored, then `mutate op:"advance"`, which consumes the `approved`
   auth and clears the sentinel. One call.
-- **`approved:` (commit gate)** → still `resolve` first (you need the
-  recorded bodies for the `close-issue:` / `push-before-close:` lines) →
-  do the work → `mutate op:"prune"` (clears the sentinel). The sentinel is
-  already set at approval time, so a stuck spinner can't predate `resolve`.
+- **`approved:` (commit gate)** → `worklist-commit` with `{ ids, message }`.
+  The host stages only the approved files, commits, prunes, consumes auth,
+  and clears the sentinel. If the approved feedback includes `close-issue:` /
+  `push-before-close:` lines, call the existing `issue-close` route after
+  the commit route returns `sha`.
 - **`drop:`** → `resolve` → `mutate op:"prune"`. Drops aren't set at
   approval time, so `resolve` is what raises the spinner.
 - **`iterate:`** → no agent-side bracket needed. The host detects the

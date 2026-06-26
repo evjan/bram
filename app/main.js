@@ -844,13 +844,19 @@ function __gridExtractInflightProse(rows, blockTop) {
   const waiting = /⎿\s*Waiting/i;
   const border = /^[\s─-]{12,}$/;
   // 1. Anchor = top of the permission box: prefer the gated ⏺ Tool( bullet,
-  // else the highest border / ⎿ Waiting within a bounded look-up.
+  // else the first (closest) border / ⎿ Waiting going up. Scan up to 80 rows
+  // so a TALL command box (whose box top sits far above the options) is still
+  // reachable — the old 18-row cap missed those and returned "" (no prose).
+  // Break on the first border/waiting rather than the topmost, so widening
+  // can't over-scan onto an earlier ──── / ⎿ in prior content.
   let anchor = -1;
-  for (let i = blockTop - 1; i >= 0 && blockTop - i <= 18; i--) {
+  let fallback = -1;
+  for (let i = blockTop - 1; i >= 0 && blockTop - i <= 80; i--) {
     const t = rows[i].text;
     if (toolBullet.test(t)) { anchor = i; break; }
-    if (waiting.test(t) || border.test(t)) anchor = i;
+    if ((waiting.test(t) || border.test(t)) && fallback < 0) fallback = i;
   }
+  if (anchor < 0) anchor = fallback;
   if (anchor < 0) return "";
   // 2. The line directly above the box (skipping blanks) must be assistant
   // prose; if it's tool output (⎿), a user line (>), or a tool bullet, this

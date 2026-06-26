@@ -7164,8 +7164,35 @@ fn drain_pty_intents<R: tauri::Runtime>(
 /// free. Returns silently on any parse failure — non-iterate or
 /// malformed payloads are left alone.
 fn record_iterate_inflight_sentinel<R: tauri::Runtime>(app: &AppHandle<R>, turn_text: &str) {
+    record_prefixed_inflight_sentinel(app, turn_text, "iterate:", "iterate");
+}
+
+/// Mirror of `record_iterate_inflight_sentinel` for `approved:` payloads.
+/// Setting the sentinel here — at approval time, on the toTurn write path —
+/// lets the apply gate (proposed → applied) skip the `/__worklist/resolve`
+/// round-trip whose only remaining job was to raise the spinner. The agent
+/// edits from the proposal it authored and calls `/__worklist/mutate`
+/// op:advance, which consumes the approved auth and clears this sentinel.
+/// Covers both apply- and commit-approve payloads (both are `approved:`):
+/// for commit-approve a later `resolve` simply rewrites the identical
+/// sentinel, and the existing turn-finished clearer is the fallback if the
+/// agent never reaches `mutate` (e.g. it asks a clarifying question instead).
+fn record_approved_inflight_sentinel<R: tauri::Runtime>(app: &AppHandle<R>, turn_text: &str) {
+    record_prefixed_inflight_sentinel(app, turn_text, "approved:", "approved");
+}
+
+/// Shared body for the prefix-triggered sentinel writers: strip `prefix`,
+/// parse `items[].id`, and write the inflight sentinel with `sentinel_kind`.
+/// Returns silently on any parse failure — non-matching or malformed
+/// payloads are left alone.
+fn record_prefixed_inflight_sentinel<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    turn_text: &str,
+    prefix: &str,
+    sentinel_kind: &str,
+) {
     let trimmed = turn_text.trim_start();
-    let Some(rest) = trimmed.strip_prefix("iterate:") else {
+    let Some(rest) = trimmed.strip_prefix(prefix) else {
         return;
     };
     let parsed: serde_json::Value = match serde_json::from_str(rest.trim_start()) {
@@ -7184,7 +7211,7 @@ fn record_iterate_inflight_sentinel<R: tauri::Runtime>(app: &AppHandle<R>, turn_
     if ids.is_empty() {
         return;
     }
-    write_inflight_claim_sentinel(app, &ids, "iterate");
+    write_inflight_claim_sentinel(app, &ids, sentinel_kind);
 }
 
 /// Detect a `skip-worklist:` prefix on the toTurn write path. When
@@ -7244,6 +7271,7 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
 ) -> Result<(), String> {
     record_codex_direct_edit_authorization(app, data);
     record_iterate_inflight_sentinel(app, data);
+    record_approved_inflight_sentinel(app, data);
     record_skip_worklist_authorization(app, data);
     if cfg!(windows) {
         pty_write_internal(app, state, "\x15", "pty-intent-toTurn-windows-clear")?;
@@ -22522,7 +22550,16 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
             emit_replayable_signal(app, "inflight-claim-changed");
         }
     }
-    if op == "prune" && auth_kind == "drop" {
+    // Consume the auth at the mechanical completion point. Drop prunes
+    // consume here; approved advances consume here too so the apply gate
+    // can skip /__worklist/resolve (previously the sole consumer of approved
+    // auth) without leaving a stale pending Authorization record — the same
+    // failure class as the auth-consume-noop-prune fix. Idempotent: if
+    // resolve already consumed it (old apply flow, or the commit gate),
+    // consume_worklist_authorization no-ops on the already-consumed record.
+    if (op == "prune" && auth_kind == "drop")
+        || (op == "advance" && auth_kind == "approved")
+    {
         consume_worklist_authorization(app);
     }
     promote_feedback_drafts_for_items(app, completion_ids, op);

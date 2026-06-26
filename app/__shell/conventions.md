@@ -462,11 +462,20 @@ Both transports dispatch through the same host-side handlers, so
 response kinds, consume-on-read, the inflight sentinel, and the auth
 checks are identical. What differs is *how* the call is made.
 
-**Always `resolve` before `mutate`, including for drops.** Resolve
-returns the recorded items, consumes `approved` auth, *and*
-writes the inflight sentinel the spinner is keyed to. Reading
-`.worklist-authorization.json` directly and jumping to `mutate` skips
-the sentinel write and orphans the spinner (refs #133).
+**Apply gate: skip `resolve` — edit, then `mutate op:"advance"`.** The
+host sets the inflight sentinel at approval time (on the `toTurn` write
+path, the way `iterate:` does), and `mutate op:"advance"` consumes the
+`approved` auth, so `resolve`'s two side effects are covered without a
+round-trip. Its return value is dead weight for an apply — the bodies are
+the proposal you authored. So an apply-approve is one call: edit from the
+proposal, then `mutate op:"advance"`.
+
+**Commit gate and drops: still `resolve` before `mutate`.** Resolve
+returns the recorded items — the commit gate genuinely needs them (the
+`close-issue:` / `push-before-close:` lines) — consumes `approved`/`drop`
+auth, *and* writes the sentinel (drops aren't set at approval time).
+Reading `.worklist-authorization.json` directly and jumping to `mutate`
+for these skips the sentinel write and orphans the spinner (refs #133).
 
 #### Claude: loopback curl
 
@@ -718,16 +727,24 @@ reference: `docs/apis.md` §11. Agent-side conventions:
 
 ### What the agent calls
 
-- **`approved:`** → `resolve` (writes the sentinel as side effect,
-  consumes the auth record) → do the work → `mutate op:"advance"`
-  (clears the sentinel). No explicit `end` needed.
-- **`drop:`** → same shape with `op:"prune"`.
+- **`approved:` (apply gate)** → no `resolve`. The host detects the
+  `approved:` prefix on the `toTurn` write path and sets the sentinel
+  automatically (the way it does for `iterate:`). Edit from the proposal
+  you authored, then `mutate op:"advance"`, which consumes the `approved`
+  auth and clears the sentinel. One call.
+- **`approved:` (commit gate)** → still `resolve` first (you need the
+  recorded bodies for the `close-issue:` / `push-before-close:` lines) →
+  do the work → `mutate op:"prune"` (clears the sentinel). The sentinel is
+  already set at approval time, so a stuck spinner can't predate `resolve`.
+- **`drop:`** → `resolve` → `mutate op:"prune"`. Drops aren't set at
+  approval time, so `resolve` is what raises the spinner.
 - **`iterate:`** → no agent-side bracket needed. The host detects the
   `iterate:` prefix on the `toTurn` write path and sets the sentinel
-  automatically (parallel to how `resolve` sets it for approve/drop);
-  the same turn-finished detectors that clear approve/drop sentinels
-  clear iterate's too. Legacy `/__iterate/begin` and `/__iterate/end`
-  routes still work for back-compat but are no longer required.
+  automatically (parallel to how `resolve` sets it for the commit gate and
+  drops); the same turn-finished detectors that clear approve/drop
+  sentinels clear iterate's too. Legacy `/__iterate/begin` and
+  `/__iterate/end` routes still work for back-compat but are no longer
+  required.
 
 ### Failure modes
 

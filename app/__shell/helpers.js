@@ -379,8 +379,8 @@ window.sendIterateWithFeedbackDraft = function (items, selectedId, text) {
       items: (items || []).filter(function (i) { return i.id === selectedId; })
         .map(function (i) {
           return wroteDraft
-            ? { id: i.id, hash: i.hash, feedbackRef: feedbackId }
-            : { id: i.id, hash: i.hash, feedback: text };
+            ? { id: i.id, feedbackRef: feedbackId }
+            : { id: i.id, feedback: text };
         }),
     }));
   });
@@ -1452,7 +1452,7 @@ window.__bramBuildApprovePayload = function (items, selectedId, feedback) {
   __bramAppMark("build-approve-payload");
   return JSON.stringify({
     items: (items || []).filter(function (i) { return i.id === selectedId; })
-      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback }; }),
+      .map(function (i) { return { id: i.id, feedback: feedback }; }),
   });
 };
 
@@ -1464,8 +1464,8 @@ window.__bramBuildIteratePayload = function (items, selectedId, feedback) {
     items: (items || []).filter(function (i) { return i.id === selectedId; })
       .map(function (i) {
         return feedback && typeof feedback === "object" && feedback.feedbackRef
-          ? { id: i.id, hash: i.hash, feedbackRef: feedback.feedbackRef }
-          : { id: i.id, hash: i.hash, feedback: feedback };
+          ? { id: i.id, feedbackRef: feedback.feedbackRef }
+          : { id: i.id, feedback: feedback };
       }),
   });
 };
@@ -1474,14 +1474,14 @@ window.__bramBuildDropPayload = function (items, selectedId, feedback) {
   __bramAppMark("build-drop-payload");
   return JSON.stringify({
     items: (items || []).filter(function (i) { return i.id === selectedId; })
-      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback }; }),
+      .map(function (i) { return { id: i.id, feedback: feedback }; }),
   });
 };
 
 window.__bramBuildSingleItemApprovePayload = function (itemRef, feedback) {
   __bramAppMark("build-single-item-approve-payload");
   return JSON.stringify({
-    items: [{ id: itemRef.id, hash: itemRef.hash, feedback: feedback }],
+    items: [{ id: itemRef.id, feedback: feedback }],
   });
 };
 
@@ -1493,7 +1493,7 @@ window.__bramBuildBatchApprovePayload = function (items, feedback) {
   __bramAppMark("build-batch-approve-payload");
   return JSON.stringify({
     items: (items || []).filter(function (i) { return (i.status || "proposed") === "applied"; })
-      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback || "" }; }),
+      .map(function (i) { return { id: i.id, feedback: feedback || "" }; }),
   });
 };
 
@@ -1501,7 +1501,7 @@ window.__bramBuildBatchDropPayload = function (items, feedback) {
   __bramAppMark("build-batch-drop-payload");
   return JSON.stringify({
     items: (items || []).filter(function (i) { return (i.status || "proposed") === "applied"; })
-      .map(function (i) { return { id: i.id, hash: i.hash, feedback: feedback || "" }; }),
+      .map(function (i) { return { id: i.id, feedback: feedback || "" }; }),
   });
 };
 

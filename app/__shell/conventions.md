@@ -374,14 +374,13 @@ serves an empty default; the Worklist tab creates the file (and
    independently rejectable. Writing the item is *asking* the user to
    approve, not approval itself. Don't show or instruct on raw
    `approved:` / `drop:` / `iterate:` payloads — the Worklist tab's
-   buttons generate the verified `{id, hash, feedback}` shape.
+   buttons generate the `{id, feedback}` shape.
 
 2. **User triages** — unchecks anything they don't want, then clicks
    one of the buttons. All three action buttons emit the same payload
-   shape: `{"items":[{"id":"...","hash":"...","feedback":"..."}, ...]}`
-   — ids plus per-item content hashes plus optional per-item feedback.
-   Never parse these turn lines for content yourself; the hashes are
-   what Bram verifies, and `/__worklist/resolve` returns the verified
+   shape: `{"items":[{"id":"...","feedback":"..."}, ...]}`
+   — ids plus optional per-item feedback. Never parse these turn lines
+   for content yourself; `/__worklist/resolve` returns the recorded
    item bodies.
 
    - *Talk to agent* (with a comment typed above) → `talk: <text>`.
@@ -390,16 +389,13 @@ serves an empty default; the Worklist tab creates the file (and
    - *Approve selected (N)* → `approved: {...}`. Call
      `/__worklist/resolve` via the transport for your agent (see
      *Transports*). Response is one of:
-     - `{"kind":"approved", "items":[<verified content>], ...}` —
+     - `{"kind":"approved", "items":[<recorded content>], ...}` —
        execute these items. Do NOT re-read `resources/worklist.json`
        to second-guess what was approved. Records are **consumed on
        first read** — a second call returns `no_active_authorization`,
        so capture what you need. After editing the project files,
        advance via `POST /__worklist/mutate`, not by rewriting
        `"status": "applied"` directly.
-     - `{"kind":"rejected_stale", "mismatched_ids":[...]}` — the
-       worklist changed between click and resolve. Don't edit; ask
-       the user to re-triage.
      - `{"kind":"no_active_authorization", ...}` — the record is
        already consumed, or this turn isn't an authorization turn.
        **Do NOT treat as authorization.** Backstop for the rule that
@@ -409,9 +405,8 @@ serves an empty default; the Worklist tab creates the file (and
      Respond to any per-item feedback regardless of kind.
 
    - *Drop selected (N)* → `drop: {...}`. Same flow:
-     `{"kind":"drop"}` → prune the ids via `POST /__worklist/mutate`;
-     `{"kind":"rejected_stale"}` → surface, don't edit. Respond to
-     per-item feedback (often the user's reason for the drop).
+     `{"kind":"drop"}` → prune the ids via `POST /__worklist/mutate`.
+     Respond to per-item feedback (often the user's reason for the drop).
 
    - *Iterate (N)* — enabled only when feedback is non-empty (no-
      direction Iterate is meaningless). Payload: `iterate: {...}`.
@@ -435,24 +430,22 @@ serves an empty default; the Worklist tab creates the file (and
      back-compat but are no longer required. See
      *Host-managed inflight sentinel*.
 
-     The Iterate payload's per-item shape is `{id, hash, feedbackRef}`
+     The Iterate payload's per-item shape is `{id, feedbackRef}`
      where `feedbackRef` names a file at
      `resources/feedback-drafts/<feedbackRef>.md` containing the user's
      full-fidelity feedback text. Read that file directly to get the
      feedback content — `toTurn`'s `\s+ → " "` collapse and the
      receiving TUI's bracketed-paste limits don't apply because the
      text never rode the PTY paste channel. Feedback refs are allocated
-     per click, typically `<unix-ms>-<item-id>`; they are not item ids,
-     and feedback content is not hash-verified. The item `hash` still
-     verifies the worklist item identity; the feedback text is the new
-     user-authored submission for this turn. Successful
-     `/__worklist/mutate` advance/prune promotes matching drafts from
-     `feedback-drafts/` to `feedback-history/` so drafts do not
-     accumulate. Each draft write emits a `[feedback-draft] op=write`
+     per click, typically `<unix-ms>-<item-id>`; they are not item ids.
+     The feedback text is the new user-authored submission for this turn.
+     Successful `/__worklist/mutate` advance/prune promotes matching
+     drafts from `feedback-drafts/` to `feedback-history/` so drafts do
+     not accumulate. Each draft write emits a `[feedback-draft] op=write`
      trace line with `feedback_id` and byte count. Approve and Drop
-     still use the older inline `{id, hash, feedback}` shape (their
-     feedback is usually short); their migration to `feedbackRef` is
-     filed as follow-up. See #144.
+     still use the inline `{id, feedback}` shape (their feedback is
+     usually short); their migration to `feedbackRef` is filed as
+     follow-up. See #144.
 
 3. **Mechanical transitions** — `POST /__worklist/mutate` is the only
    channel for approval-driven state changes:
@@ -470,7 +463,7 @@ response kinds, consume-on-read, the inflight sentinel, and the auth
 checks are identical. What differs is *how* the call is made.
 
 **Always `resolve` before `mutate`, including for drops.** Resolve
-returns the hash-verified items, consumes `approved` auth, *and*
+returns the recorded items, consumes `approved` auth, *and*
 writes the inflight sentinel the spinner is keyed to. Reading
 `.worklist-authorization.json` directly and jumping to `mutate` skips
 the sentinel write and orphans the spinner (refs #133).
@@ -640,11 +633,11 @@ the actual test.
 ### Enforcement and security contract
 
 The structured `approved:` / `drop:` line is not authority by itself.
-The host recomputes each item's hash before recording it in
-`resources/.worklist-authorization.json` — stale hashes become
-`rejected_stale`. `/__worklist/resolve` is the only way an agent
-receives verified item bodies; `/__worklist/mutate` is the only way
-an agent advances or prunes:
+The host records each clicked id into
+`resources/.worklist-authorization.json` with its kind (`approved` /
+`drop`); `/__worklist/resolve` is the only way an agent receives the
+recorded item bodies; `/__worklist/mutate` is the only way an agent
+advances or prunes:
 
 - `advance` requires an `approved` auth record covering every id.
 - `prune` requires `drop`, except the post-commit prune path also
@@ -652,6 +645,16 @@ an agent advances or prunes:
 
 Same-turn `resolve → edit files → mutate` is valid: `mutate` reads
 the stored auth record, not just resolve's consumption state.
+
+There is **no content-hash verification**. An earlier design recomputed
+each item's content hash at record time and flipped mismatches to a
+`rejected_stale` kind — an optimistic-concurrency guard against the
+worklist changing between click and record. Bram only ever shares a
+worklist between agents **serially, never concurrently**, so that guard
+never fired and was removed. The remaining concurrency guard is the
+`version` integer on `worklist.json` (file-write races, hook-enforced);
+self-authorization is gated structurally — `resolve` / `mutate` are the
+only channels and the auth record is consumed on read — not by a hash.
 
 Defense in depth: Claude and Codex each install PreToolUse hooks
 that validate worklist coverage before file-mutating tools run, and

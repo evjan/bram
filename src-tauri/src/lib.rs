@@ -101,19 +101,15 @@ struct WhisperState(Mutex<Option<std::process::Child>>);
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WorklistAuthorizationRecord {
-    // "approved" | "drop" | "rejected_stale" | "none" | "direct-edit"
+    // "approved" | "drop" | "none" | "direct-edit"
     kind: String,
     #[serde(default)]
     ids: Vec<String>,
-    // Full verified item objects, populated when the approve/drop payload
-    // arrived with per-item content hashes that matched the on-disk file.
-    // Empty for legacy payloads (no hash supplied) and for rejected_stale.
+    // Full resolved item objects (metadata + draft prose + feedback) for the
+    // approved/drop ids found on disk. The agent reads these via /__worklist/resolve
+    // instead of re-reading worklist.json. Empty for legacy `{ids:[...]}` drops.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     items: Vec<serde_json::Value>,
-    // Ids whose supplied hash did not match the current `worklist.json`.
-    // Non-empty implies kind == "rejected_stale".
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    mismatched_ids: Vec<String>,
     issued_at_ms: i64,
     source: String,
     #[serde(default)]
@@ -14177,7 +14173,6 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
             kind: "none".to_string(),
             ids: Vec::new(),
             items: Vec::new(),
-            mismatched_ids: Vec::new(),
             issued_at_ms: 0,
             source: "setup".to_string(),
             consumed_at_ms: None,
@@ -19151,13 +19146,13 @@ fn normalize_turn_submission(data: &str) -> String {
 }
 
 // Pure parser of an `approved:` / `drop:` turn line. Returns the kind
-// and the list of (id, optional supplied hash) requests. The hash is
-// None for legacy payloads that arrived as full item objects
-// (`{items: [<full>]}` or `{ids: [...]}` for old drop), or as plain
-// items without a `hash` field.
+// and the list of (id, optional feedback) requests. Feedback is None for
+// the legacy `{ids: [...]}` drop shape, which carries ids only; the
+// modern `{items: [{id, feedback?}, ...]}` shape always carries a feedback
+// key (possibly empty), which is how the build step tells the two apart.
 struct ParsedWorklistAuthorization {
     kind: String,
-    requests: Vec<(String, Option<String>, Option<String>)>,
+    requests: Vec<(String, Option<String>)>,
 }
 
 fn parse_worklist_authorization_message(text: &str) -> Option<ParsedWorklistAuthorization> {
@@ -19167,23 +19162,22 @@ fn parse_worklist_authorization_message(text: &str) -> Option<ParsedWorklistAuth
             continue;
         };
         let value = serde_json::from_str::<serde_json::Value>(rest.trim()).ok()?;
-        let mut requests: Vec<(String, Option<String>, Option<String>)> = Vec::new();
-        // Preferred shape (new per-item, plus legacy approve which carried
-        // top-level feedback): {items: [{id, hash?, feedback?}, ...]}.
+        let mut requests: Vec<(String, Option<String>)> = Vec::new();
+        // Preferred shape (per-item, plus legacy approve which carried
+        // top-level feedback): {items: [{id, feedback?}, ...]}.
         if let Some(items) = value.get("items").and_then(|v| v.as_array()) {
             for item in items {
                 let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
                     continue;
                 };
-                let hash = item
-                    .get("hash")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
+                // Default to Some("") for the items[] shape so a found item
+                // still gets its body embedded even when feedback is omitted.
                 let feedback = item
                     .get("feedback")
                     .and_then(|v| v.as_str())
-                    .map(str::to_string);
-                requests.push((id.to_string(), hash, feedback));
+                    .map(str::to_string)
+                    .or(Some(String::new()));
+                requests.push((id.to_string(), feedback));
             }
         }
         // Legacy drop shape: {ids: [...]} — accept if items[] wasn't present.
@@ -19191,7 +19185,7 @@ fn parse_worklist_authorization_message(text: &str) -> Option<ParsedWorklistAuth
             if let Some(ids) = value.get("ids").and_then(|v| v.as_array()) {
                 for v in ids {
                     if let Some(id) = v.as_str() {
-                        requests.push((id.to_string(), None, None));
+                        requests.push((id.to_string(), None));
                     }
                 }
             }
@@ -19212,62 +19206,38 @@ fn build_worklist_authorization_record(
     source: &str,
 ) -> WorklistAuthorizationRecord {
     let mut ids: Vec<String> = Vec::with_capacity(parsed.requests.len());
-    let mut verified_items: Vec<serde_json::Value> = Vec::new();
-    let mut mismatched_ids: Vec<String> = Vec::new();
-    let mut any_hash_supplied = false;
+    let mut items: Vec<serde_json::Value> = Vec::new();
 
-    for (id, supplied_hash, supplied_feedback) in &parsed.requests {
+    for (id, supplied_feedback) in &parsed.requests {
         ids.push(id.clone());
-        let found = on_disk_items.iter().find(|it| {
-            it.get("id")
-                .and_then(|v| v.as_str())
-                .map_or(false, |x| x == id)
-        });
-        match (supplied_hash, found) {
-            (Some(supplied), Some(item)) => {
-                any_hash_supplied = true;
-                let resolved_item = resolve_worklist_item_draft(drafts_dir, item);
-                if &canonical_item_hash(&resolved_item) == supplied {
-                    let mut enriched = resolved_item;
-                    if let Some(obj) = enriched.as_object_mut() {
-                        obj.insert(
-                            "feedback".to_string(),
-                            serde_json::Value::String(
-                                supplied_feedback.clone().unwrap_or_default(),
-                            ),
-                        );
-                    }
-                    verified_items.push(enriched);
-                } else {
-                    mismatched_ids.push(id.clone());
+        // Embed the resolved body for items[]-shape requests (feedback is
+        // Some, possibly "") that exist on disk. Legacy {ids:[...]} drops
+        // (feedback None) carry ids only. There is no longer any content-hash
+        // comparison: Bram never has concurrent worklist writers, so the old
+        // optimistic-concurrency / rejected_stale guard never fired.
+        if let Some(feedback) = supplied_feedback {
+            let found = on_disk_items.iter().find(|it| {
+                it.get("id")
+                    .and_then(|v| v.as_str())
+                    .map_or(false, |x| x == id)
+            });
+            if let Some(item) = found {
+                let mut enriched = resolve_worklist_item_draft(drafts_dir, item);
+                if let Some(obj) = enriched.as_object_mut() {
+                    obj.insert(
+                        "feedback".to_string(),
+                        serde_json::Value::String(feedback.clone()),
+                    );
                 }
-            }
-            (Some(_), None) => {
-                any_hash_supplied = true;
-                mismatched_ids.push(id.clone());
-            }
-            (None, _) => {
-                // Legacy payload: no hash to verify, so no verified item body.
+                items.push(enriched);
             }
         }
     }
 
-    let kind = if any_hash_supplied && !mismatched_ids.is_empty() {
-        "rejected_stale".to_string()
-    } else {
-        parsed.kind
-    };
-    let items = if mismatched_ids.is_empty() {
-        verified_items
-    } else {
-        Vec::new()
-    };
-
     WorklistAuthorizationRecord {
-        kind,
+        kind: parsed.kind,
         ids,
         items,
-        mismatched_ids,
         issued_at_ms,
         source: source.to_string(),
         consumed_at_ms: None,
@@ -19280,10 +19250,9 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
         return;
     };
 
-    // Look up each requested id in the on-disk worklist, recompute its
-    // canonical hash, and compare against the supplied hash. Mismatches
-    // (or supplied-but-missing items) flip the record to "rejected_stale"
-    // so the agent surfaces the staleness rather than acting blind.
+    // Look up each requested id in the on-disk worklist and embed its
+    // resolved body (metadata + draft prose + feedback) so the agent reads
+    // it via /__worklist/resolve instead of re-reading worklist.json.
     let on_disk_items: Vec<serde_json::Value> = worklist_file(app)
         .and_then(|p| std::fs::read_to_string(&p).ok())
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
@@ -21491,8 +21460,6 @@ fn route_request<R: tauri::Runtime>(
     //     reflexively calls the resolver on a non-authorization turn (iterate,
     //     talk) can't replay stale approval. Drop consumption stays in
     //     `maybe_enforce_worklist_policy` so authorized prunes aren't reverted.
-    //   - "rejected_stale": on-disk worklist drifted between the user's click
-    //     and the watcher reading it — agent should surface staleness.
     //   - "no_active_authorization": prior record has been consumed; the agent
     //     must NOT treat this as authorization. Returned for any consumed
     //     record regardless of original kind.
@@ -22020,7 +21987,7 @@ fn handle_worklist_resolve<R: tauri::Runtime>(
 // the filesystem watcher) dispatches the request through the SAME handlers the
 // HTTP routes use and writes the reply to resources/.worklist-result.json,
 // then deletes the intent file. The intent file is only a request envelope —
-// the authority (hash-verified .worklist-authorization.json, the mutate auth
+// the authority (the recorded .worklist-authorization.json, the mutate auth
 // check) is unchanged, so this transport grants Codex no power it lacked.
 //
 // Intent shape:  {"nonce": "...", "route": "<r>", "body": { ... }}
@@ -22576,7 +22543,7 @@ fn handle_worklist_mutate<R: tauri::Runtime>(
 #[cfg(test)]
 mod worklist_authorization_tests {
     use super::{
-        apply_worklist_mutation, build_worklist_authorization_record, canonical_item_hash,
+        apply_worklist_mutation, build_worklist_authorization_record,
         classify_worklist_removals, draft_markdown_path, feedback_draft_path,
         inflight_claim_fully_covered, parse_worklist_authorization_message, resource_relative_path,
         turn_text_has_direct_edit_opt_out, validate_post_commit_prune_status,
@@ -22591,7 +22558,7 @@ mod worklist_authorization_tests {
     }
 
     #[test]
-    fn approval_record_verifies_hash_and_embeds_feedback() {
+    fn approval_record_embeds_resolved_item_and_feedback() {
         let dir = std::env::temp_dir().join(format!("bram-approval-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp draft dir");
         std::fs::write(
@@ -22606,14 +22573,10 @@ mod worklist_authorization_tests {
             "status": "proposed",
             "file": "docs/a.md",
         });
-        // Hash covers the resolved item (metadata + draft prose) — same shape
-        // the agent computes after reading /__worklist.
-        let resolved = super::resolve_worklist_item_draft(Some(&dir), &item);
-        let hash = canonical_item_hash(&resolved);
-        let msg = format!(
-            r#"approved: {{"items":[{{"id":"doc-update","hash":"{}","feedback":"tighten scope"}}]}}"#,
-            hash
-        );
+        // No hash in the payload — the agent's approve button now sends
+        // {id, feedback} only.
+        let msg =
+            r#"approved: {"items":[{"id":"doc-update","feedback":"tighten scope"}]}"#.to_string();
 
         let parsed = parse_worklist_authorization_message(&msg).expect("approval parses");
         let record =
@@ -22621,11 +22584,15 @@ mod worklist_authorization_tests {
 
         assert_eq!(record.kind, "approved");
         assert_eq!(record.ids, ids(&["doc-update"]));
-        assert!(record.mismatched_ids.is_empty());
         assert_eq!(record.items.len(), 1);
         assert_eq!(
             record.items[0].get("feedback").and_then(|v| v.as_str()),
             Some("tighten scope")
+        );
+        // Draft prose is resolved into the embedded body.
+        assert_eq!(
+            record.items[0].get("after").and_then(|v| v.as_str()),
+            Some("new")
         );
         assert_eq!(record.issued_at_ms, 123);
         assert_eq!(record.source, "test-source");
@@ -22634,24 +22601,18 @@ mod worklist_authorization_tests {
     }
 
     #[test]
-    fn approval_record_rejects_stale_hashes() {
-        let item = json!({
-            "id": "doc-update",
-            "status": "proposed",
-            "file": "docs/a.md",
-            "before": "current",
-            "after": "new"
-        });
+    fn approval_record_omits_body_for_unknown_id_but_keeps_it_in_ids() {
+        // An approved id that isn't on disk is no longer a hard "rejected_stale"
+        // failure — it simply gets no embedded body while staying in `ids`.
         let parsed = parse_worklist_authorization_message(
-            r#"approved: {"items":[{"id":"doc-update","hash":"0000000000000000"}]}"#,
+            r#"approved: {"items":[{"id":"ghost","feedback":""}]}"#,
         )
         .expect("approval parses");
 
-        let record = build_worklist_authorization_record(parsed, &[item], None, 123, "test");
+        let record = build_worklist_authorization_record(parsed, &[], None, 123, "test");
 
-        assert_eq!(record.kind, "rejected_stale");
-        assert_eq!(record.ids, ids(&["doc-update"]));
-        assert_eq!(record.mismatched_ids, ids(&["doc-update"]));
+        assert_eq!(record.kind, "approved");
+        assert_eq!(record.ids, ids(&["ghost"]));
         assert!(record.items.is_empty());
     }
 
@@ -22671,7 +22632,6 @@ mod worklist_authorization_tests {
 
         assert_eq!(record.kind, "drop");
         assert_eq!(record.ids, ids(&["old-drop"]));
-        assert!(record.mismatched_ids.is_empty());
         assert!(record.items.is_empty());
     }
 

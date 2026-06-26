@@ -1086,6 +1086,10 @@ window.settingsInfoBodies = {
   shell:
     "## Agent command\n\n" +
     "The agent to launch: `claude` or `codex`.\n\n" +
+    "## Arguments\n\n" +
+    "Optional launch-time flags passed to the selected agent, for example " +
+    "`--continue`. Use this for startup behavior; use First command for " +
+    "interactive input sent after the agent starts.\n\n" +
     "## First command\n\n" +
     "An optional command sent to the agent once it starts, for example " +
     "`/resume` (the default). Leave it empty to send nothing.",

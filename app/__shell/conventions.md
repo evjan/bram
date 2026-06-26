@@ -498,6 +498,30 @@ runs without a prompt. `$BRAM_PORT` won't work — Claude Code's
 permission matcher doesn't expand variables, so `$` breaks the match
 (see https://code.claude.com/docs/en/permissions.md).
 
+The POST routes (`worklist-mutate`, `worklist-commit`,
+`issue-close`) have their own allowlist entries, but the match is
+narrow — keep the call in this exact shape or it will prompt:
+
+```
+curl -4 -sS --retry-connrefused --retry 3 --retry-delay 1 -X POST \
+  -H "Content-Type: application/json" --data @/tmp/body.json \
+  "http://127.0.0.1:61455/__worklist/commit"
+```
+
+Two pitfalls, both of which prompted a real `worklist-commit` call:
+
+- **Include literal `-X POST`.** The POST allowlist entries require
+  it; relying on `--data` to imply POST matches neither the POST
+  entries (which need `-X POST`) nor the GET entry (whose URL must
+  follow `--retry-delay 1` with no flags between).
+- **Keep the curl a standalone command.** Build the JSON body in a
+  *separate* Bash call (`jq … > /tmp/body.json`), then `--data
+  @/tmp/body.json`. A compound `cat <<EOF … && jq … && curl …` makes
+  the command string start with `cat`, so no `curl …` prefix can
+  match and the whole thing prompts. The body-building step is also
+  where apostrophes/quotes in a commit message belong — out of the
+  allowlisted curl line.
+
 Flag rationale:
 - `-4` + `127.0.0.1` (not `localhost`): Bram binds IPv4 only;
   `localhost` may try `::1` first and fail with `curl: (7)`.

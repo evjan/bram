@@ -12,8 +12,8 @@ Anyone who wants to use AI coding agents in a safe and accountable way.
 
 Bram has opinions. It thinks versioning and collaboration are well-handled by git and GitHub, so it guides agents to make best use of them on your behalf, in conversation with you. And it thinks GitHub is great for accountability, so it also guides agents to join you in orderly and well-documented collaboration that leaves an auditable trail.
 
+<img width="1732" height="980" alt="image" src="https://github.com/user-attachments/assets/a95a969f-c07e-4ebe-bf4f-7e9304e594b2" />
 
-<img width="1638" height="1023" alt="v28" src="https://github.com/user-attachments/assets/f4a63937-8c2e-4e77-b8a4-4f4712492db5" />
 
 ## Blog
 

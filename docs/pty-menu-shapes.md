@@ -1,5 +1,18 @@
 # PTY menu shapes — detection-axis catalog
 
+**Assumed terminal width — line wrapping is out of scope.** Detection and
+option-label extraction assume the terminal (shown or not) lives at a
+*reasonable* width — wide enough that a menu's header, options, and command
+box each render on their own unwrapped lines. When the column is narrow
+enough to wrap a command box or an option label, the grid rows blend and the
+extracted text corrupts (e.g.
+`docs/pty-menu-specimens/2026-06-26-claude-proceed-option-label-command-blend.md`).
+We deliberately **do not** sign up to reconstruct wrapped text on top of the
+detection and discrimination work already cataloged below: wrap artifacts
+are a width problem, not a parsing problem, and the fix is to give the
+terminal a sane width, not to teach the scanner to un-wrap. Specimens of
+wrap corruption are filed as evidence of the boundary, not as bugs to chase.
+
 **What this is:** the shared model of *which interactive menus Bram's PTY
 scanner should surface*, and the shape characteristics that identify each.
 It turns reactive tuning into a checklist: every cataloged shape must
@@ -163,6 +176,27 @@ these. First specimen:
 ## Family C — other
 
 Empty. Add rows as specimens surface unknown shapes.
+
+## Known edge — option label blends with the command box (narrow column)
+
+A correctly *detected* `proceed (Bash/tool, 3-option)` menu can still
+**mis-render** its option-2 label when the "Bash command" box wraps to a
+narrow column. The wrapped command echo and the wrapped
+`Yes, and don't ask again for similar commands in <dir>` label occupy
+overlapping horizontal grid regions, and the grid reader concatenates them
+into one corrupted option string (clipped words, lost `2.` period, the
+command tail interleaved into the label).
+
+All Family A detection axes still match (cursor / header / 1./2. pair /
+footer all ✓) — this is **not** a detection miss; the corruption is a
+**wrapping artifact**, the discriminating signal being the wrapped command
+tail appearing verbatim inside the option-2 label. Specimen:
+`docs/pty-menu-specimens/2026-06-26-claude-proceed-option-label-command-blend.md`.
+
+**Out of scope — per the width assumption at the top of this doc.** This is
+the canonical example of the boundary that note draws: the fix is a sane
+terminal width, not teaching the scanner to un-wrap blended grid rows. Filed
+as evidence of the boundary, not as a bug to chase.
 
 ## Known non-priority edge — self-reference collision
 

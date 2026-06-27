@@ -22388,6 +22388,17 @@ fn worklist_commit_files_for_ids(
     Ok(files)
 }
 
+// Build the `git add` argv for the commit gate. `-A` so a pure deletion
+// (a tracked file already removed from the working tree) stages as a
+// removal instead of failing the pathspec match; the trailing
+// `-- <files>` keeps the add scoped to this item's files, so
+// ensure_no_unrelated_staged_files stays meaningful.
+fn worklist_commit_add_args(files: &[String]) -> Vec<String> {
+    let mut args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
+    args.extend(files.iter().cloned());
+    args
+}
+
 fn ensure_no_unrelated_staged_files(
     staged: &[String],
     approved_files: &[String],
@@ -22773,8 +22784,7 @@ fn handle_worklist_commit<R: tauri::Runtime>(
         return worklist_json_error(400, e);
     }
 
-    let mut add_args = vec!["add".to_string(), "--".to_string()];
-    add_args.extend(files.iter().cloned());
+    let add_args = worklist_commit_add_args(&files);
     if let Err(e) = git_run_owned(app, &add_args) {
         return worklist_json_error(500, format!("git add failed: {}", e.trim()));
     }
@@ -22848,7 +22858,8 @@ mod worklist_authorization_tests {
         feedback_draft_path, inflight_claim_fully_covered, parse_worklist_authorization_message,
         resource_relative_path, turn_text_has_direct_edit_opt_out,
         validate_post_commit_prune_status, validate_worklist_advance_status,
-        validate_worklist_mutate_authorization, worklist_commit_files_for_ids, worklist_draft_path,
+        validate_worklist_mutate_authorization, worklist_commit_add_args,
+        worklist_commit_files_for_ids, worklist_draft_path,
     };
     use serde_json::json;
     use std::path::Path;
@@ -22991,6 +23002,26 @@ mod worklist_authorization_tests {
         assert_eq!(
             err,
             "worklist commit requires applied status: b is proposed"
+        );
+    }
+
+    #[test]
+    fn worklist_commit_add_args_stage_deletions() {
+        // A deletion-bearing file list must reach `git add` with -A so a
+        // tracked file already removed from the working tree stages as a
+        // removal instead of failing the pathspec match (the bug that
+        // blocked committing the Feedback.xmlui deletion).
+        let files = ids(&["src/a.rs", "app/tools/components/Feedback.xmlui"]);
+        let args = worklist_commit_add_args(&files);
+        assert_eq!(
+            args,
+            ids(&[
+                "add",
+                "-A",
+                "--",
+                "src/a.rs",
+                "app/tools/components/Feedback.xmlui"
+            ])
         );
     }
 

@@ -976,7 +976,7 @@ fn emit_talk_session_changed_for_provider<R: tauri::Runtime>(
 }
 
 fn emit_talk_session_changed<R: tauri::Runtime>(app: &AppHandle<R>) {
-    emit_talk_session_changed_for_provider(app, hinted_session_provider(app));
+    emit_talk_session_changed_for_provider(app, current_provider(app));
 }
 
 fn emit_talk_session_changed_for_path_providers<R: tauri::Runtime>(
@@ -1966,7 +1966,7 @@ fn turn_state_set_menu<R: tauri::Runtime>(
         "working"
     };
     update_turn_state(app, source, reason, |s| {
-        s.provider = hinted_session_provider(app).map(|p| session_provider_label(p).to_string());
+        s.provider = current_provider(app).map(|p| session_provider_label(p).to_string());
         s.phase = phase.to_string();
         s.pending_menu = menu;
     });
@@ -2112,7 +2112,7 @@ fn kill_current_claude_turn_with_finished<R: tauri::Runtime>(
     if let Ok(mut g) = last_killed_user_ts_ms_cell().lock() {
         *g = current_ts;
     }
-    let provider = match hinted_session_provider(app) {
+    let provider = match current_provider(app) {
         Some(SessionProvider::Codex) => "codex",
         _ => "claude",
     };
@@ -2179,7 +2179,7 @@ fn schedule_pty_turn_finished<R: tauri::Runtime>(
         // Fail open (finish) when the JSONL is unreadable/missing.
         let jsonl_done = match latest_session_path(&app_handle, None).ok().flatten() {
             Some(path) => match std::fs::read_to_string(&path) {
-                Ok(content) => match hinted_session_provider(&app_handle) {
+                Ok(content) => match current_provider(&app_handle) {
                     Some(SessionProvider::Codex) => {
                         codex_jsonl_completion_decision(&content).detected
                     }
@@ -2394,7 +2394,7 @@ fn start_claude_turn_stats_poll<R: tauri::Runtime>(app_handle: AppHandle<R>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(300));
         if !matches!(
-            hinted_session_provider(&app_handle),
+            current_provider(&app_handle),
             Some(SessionProvider::Claude)
         ) {
             // Clear cache when Claude isn't active so the row doesn't
@@ -2560,7 +2560,7 @@ fn parse_iso_to_ms(iso: &str) -> Option<i64> {
 // emit_claude_finished_from_jsonl_boundary. This function only emits
 // working-state updates (verb / elapsed / substate). Refs #179.
 fn pty_agent_status_update<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let active_provider = hinted_session_provider(app);
+    let active_provider = current_provider(app);
     if !matches!(active_provider, Some(SessionProvider::Claude)) {
         return;
     }
@@ -2805,7 +2805,7 @@ fn agent_status_set_codex_working<R: tauri::Runtime>(
     active_since: std::time::Instant,
     source: &str,
 ) {
-    if !matches!(hinted_session_provider(app), Some(SessionProvider::Codex)) {
+    if !matches!(current_provider(app), Some(SessionProvider::Codex)) {
         return;
     }
     if let Ok(state) = turn_state_cell().lock() {
@@ -2894,7 +2894,7 @@ fn agent_status_set_codex_jsonl_working<R: tauri::Runtime>(
     turn_started_at_ms: Option<i64>,
     reason: &str,
 ) {
-    if !matches!(hinted_session_provider(app), Some(SessionProvider::Codex)) {
+    if !matches!(current_provider(app), Some(SessionProvider::Codex)) {
         return;
     }
     let started_at_ms = turn_started_at_ms.unwrap_or(file_mtime_ms).max(0);
@@ -2967,7 +2967,7 @@ fn agent_status_set_claude_jsonl_working<R: tauri::Runtime>(
     file_mtime_ms: i64,
     reason: &str,
 ) {
-    if !matches!(hinted_session_provider(app), Some(SessionProvider::Claude)) {
+    if !matches!(current_provider(app), Some(SessionProvider::Claude)) {
         return;
     }
     let stats = match claude_turn_stats_cell().lock() {
@@ -3038,7 +3038,7 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     let now = std::time::Instant::now();
     let has_activity_glyph = pty_chunk_has_turn_activity_glyph(chunk);
     let has_codex_working_status =
-        matches!(hinted_session_provider(app), Some(SessionProvider::Codex))
+        matches!(current_provider(app), Some(SessionProvider::Codex))
             && pty_chunk_has_codex_working_status(chunk);
     let has_spinner = has_activity_glyph || has_codex_working_status;
     let mut emit_now = false;
@@ -3115,7 +3115,7 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // keeps the pre-change behavior.
         let jsonl_says_done = match latest_session_path(app, None).ok().flatten() {
             Some(path) => match std::fs::read_to_string(&path) {
-                Ok(content) => match hinted_session_provider(app) {
+                Ok(content) => match current_provider(app) {
                     Some(SessionProvider::Codex) => {
                         codex_jsonl_completion_decision(&content).detected
                     }
@@ -3421,7 +3421,7 @@ fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
                 .map(|s| s.to_string())
                 .filter(|s| !s.is_empty());
             if bram_trace_enabled() {
-                let provider = hinted_session_provider(&app)
+                let provider = current_provider(&app)
                     .map(session_provider_label)
                     .unwrap_or("?");
                 let labels = options
@@ -4091,7 +4091,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                             .map(|o| format!("{}.{}", o.key, o.label))
                             .collect::<Vec<_>>()
                             .join(" | ");
-                        let provider = hinted_session_provider(app)
+                        let provider = current_provider(app)
                             .map(session_provider_label)
                             .unwrap_or("?");
                         append_bram_trace_line(
@@ -4111,7 +4111,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                 }
                 None => {
                     if matches!(
-                        hinted_session_provider(app),
+                        current_provider(app),
                         Some(SessionProvider::Codex)
                     ) {
                         // Codex parity: the JSONL/⏺ lookup is Claude-shaped and
@@ -4178,7 +4178,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                                     "grid-menu",
                                     &format!(
                                         "op=build provider={} tool={} grid_count={} grid=[{}]",
-                                        hinted_session_provider(app)
+                                        current_provider(app)
                                             .map(session_provider_label)
                                             .unwrap_or("?"),
                                         tool,
@@ -4287,7 +4287,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                                 "grid-menu",
                                 &format!(
                                     "op=gap provider={} tool={} options={}",
-                                    hinted_session_provider(app)
+                                    current_provider(app)
                                         .map(session_provider_label)
                                         .unwrap_or("?"),
                                     menu.tool,
@@ -5174,7 +5174,7 @@ fn schedule_single_esc_soft_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, esca
         let mut waited = SETTLE_MS;
         loop {
             if !matches!(
-                hinted_session_provider(&app_handle),
+                current_provider(&app_handle),
                 Some(SessionProvider::Claude)
             ) {
                 return;
@@ -6694,14 +6694,14 @@ fn pty_spawn(
         command.env(k, v);
     }
     command.env("TERM", "xterm-256color");
+    // Reset the host-owned current-provider record at spawn; autostart (below)
+    // or the first deliberate transition writes the new value. The shell no
+    // longer reads or writes this file, so no BRAM_AGENT_HINT env is injected.
     if let Ok(hint_path) = active_agent_hint_path(&app) {
         if let Some(parent) = hint_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::remove_file(&hint_path);
-        let hint = hint_path.to_string_lossy().into_owned();
-        command.env("BRAM_AGENT_HINT", hint.clone());
-        command.env("XMLUI_DESKTOP_AGENT_HINT", hint);
     }
     if let Some(p) = LOOPBACK_PORT.get() {
         command.env("BRAM_PORT", p.to_string());
@@ -6895,6 +6895,9 @@ fn pty_spawn(
                     "agent-switch",
                     &format!("op=autostart provider={} command={}", provider, command),
                 );
+            }
+            if let Some(session_provider) = SessionProvider::from_str(provider) {
+                set_current_provider(&app, session_provider, "autostart");
             }
             schedule_agent_switch_refresh(app.clone(), provider, "autostart");
             schedule_agent_first_command(app.clone(), "autostart");
@@ -7376,7 +7379,7 @@ fn switch_agent(
     } else {
         SessionProvider::Claude
     };
-    let crossing = hinted_session_provider(&app) != Some(session_provider);
+    let crossing = current_provider(&app) != Some(session_provider);
     if let Ok(mut guard) = latest_tail_cursors_cell().lock() {
         guard.remove(session_provider_label(session_provider));
     }
@@ -7386,7 +7389,7 @@ fn switch_agent(
         // Flip the active-provider hint now, then reload the agent pane once the
         // new agent settles, so the sessions list, banner, agent name and verb
         // all switch instead of staying stale on the prior provider.
-        write_active_agent_hint(&app, session_provider);
+        set_current_provider(&app, session_provider, "switch");
         schedule_cross_provider_pane_reload(app.clone());
     }
     Ok(())
@@ -7413,22 +7416,62 @@ fn session_path_for_id<R: tauri::Runtime>(
     }
 }
 
-// Write the active-agent hint file (provider only), matching the shell
-// wrapper's `_xmlui_mark_agent` format. hinted_session_provider, the
-// auto-detected session lists, and enhanceStatus.activeProvider all read this,
-// so writing it flips Bram's notion of the active provider immediately instead
-// of waiting for the wrapper to rewrite it when the relaunched agent runs.
-fn write_active_agent_hint<R: tauri::Runtime>(app: &AppHandle<R>, provider: SessionProvider) {
+// Set the host-owned current-provider record. This is the single fact for
+// "which agent is foregrounded"; current_provider, the auto-detected session
+// lists, and enhanceStatus.activeProvider all read it. It is written ONLY by
+// deliberate host transitions (autostart, header switch, session resume) --
+// the shell no longer participates -- so the record stays stable between those
+// transitions instead of churning on PTY activity (issue 203).
+fn set_current_provider<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: SessionProvider,
+    reason: &str,
+) {
     let Ok(path) = active_agent_hint_path(app) else {
         return;
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(
-        &path,
-        format!("{{\"provider\":\"{}\"}}\n", session_provider_label(provider)),
-    );
+    let old_provider = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+        .and_then(|record| {
+            record
+                .get("provider")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    let provider_label = session_provider_label(provider);
+    let body = serde_json::json!({
+        "provider": provider_label,
+        "reason": reason,
+        "pid": std::process::id(),
+        "updatedAtMs": unix_now_ms(),
+    });
+    let write_result = serde_json::to_vec(&body)
+        .map_err(|e| e.to_string())
+        .and_then(|mut bytes| {
+            bytes.push(b'\n');
+            std::fs::write(&path, bytes).map_err(|e| e.to_string())
+        });
+    if bram_trace_enabled() {
+        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        append_bram_trace_line(
+            app,
+            "agent-hint",
+            &format!(
+                "writer=host reason={} provider={} old_provider={} changed={} path={} result={}",
+                reason,
+                provider_label,
+                old_provider,
+                old_provider != provider_label,
+                file_name,
+                if write_result.is_ok() { "ok" } else { "error" }
+            ),
+        );
+    }
 }
 
 // After a Sessions-page reload resumes a session, the transcript stays on the
@@ -7453,14 +7496,13 @@ fn resync_transcript_to_session<R: tauri::Runtime>(
     let Some(path) = session_path_for_id(app, provider, id) else {
         return;
     };
-    // Cross-provider reload (Claude session <-> Codex): flip the active-agent
-    // hint to the target now so the auto-detected session lists / meta lines and
-    // enhanceStatus.activeProvider switch immediately, instead of waiting for the
-    // shell wrapper to rewrite the hint when the agent finally launches. The hint
-    // write also fires enhance-status-changed (watcher), refetching activeProvider
-    // in the iframe so the transcript push accepts target-provider payloads.
-    if hinted_session_provider(app) != Some(provider) {
-        write_active_agent_hint(app, provider);
+    // Cross-provider reload (Claude session <-> Codex): set the host-owned
+    // current provider to the target now so the auto-detected session lists /
+    // meta lines and enhanceStatus.activeProvider switch immediately. This write
+    // also fires enhance-status-changed (watcher), refetching activeProvider in
+    // the iframe so the transcript push accepts target-provider payloads.
+    if current_provider(app) != Some(provider) {
+        set_current_provider(app, provider, "session-resync");
     }
     if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&path) {
         let _ = file.set_modified(std::time::SystemTime::now());
@@ -7576,7 +7618,7 @@ fn reload_agent_session(
     } else {
         SessionProvider::Claude
     };
-    let crossing = hinted_session_provider(&app) != Some(session_provider);
+    let crossing = current_provider(&app) != Some(session_provider);
     schedule_resync_transcript_to_session(app.clone(), session_provider, session.clone());
     schedule_agent_switch_refresh(app.clone(), provider_key, "reload");
     if crossing {
@@ -9334,11 +9376,11 @@ fn active_agent_hint_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathB
     let encoded = encode_path_for_filename(&abs);
     let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
     Ok(cache_dir
-        .join("agent-hints")
+        .join("current-agent")
         .join(format!("{}.json", encoded)))
 }
 
-fn hinted_session_provider<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<SessionProvider> {
+fn current_provider<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<SessionProvider> {
     let path = active_agent_hint_path(app).ok()?;
     let content = std::fs::read_to_string(path).ok()?;
     let record = serde_json::from_str::<serde_json::Value>(&content).ok()?;
@@ -9930,7 +9972,7 @@ fn sessions_for_provider<R: tauri::Runtime>(
     preferred: Option<SessionProvider>,
     limit: Option<usize>,
 ) -> Result<(SessionProvider, Vec<SessionRecord>), String> {
-    let preferred = preferred.or_else(|| hinted_session_provider(app));
+    let preferred = preferred.or_else(|| current_provider(app));
     if let Some(provider) = preferred {
         let sessions = match provider {
             SessionProvider::Claude => discover_claude_sessions(app, limit)?,
@@ -9992,7 +10034,7 @@ fn session_meta<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,
 ) -> Result<SessionsMeta, String> {
-    let preferred = preferred.or_else(|| hinted_session_provider(app));
+    let preferred = preferred.or_else(|| current_provider(app));
     let provider = if let Some(provider) = preferred {
         provider
     } else {
@@ -10421,7 +10463,7 @@ fn latest_session_path<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,
 ) -> Result<Option<std::path::PathBuf>, String> {
-    let hinted = preferred.or_else(|| hinted_session_provider(app));
+    let hinted = preferred.or_else(|| current_provider(app));
     let Some(provider) = hinted else {
         return Ok(None);
     };
@@ -10589,7 +10631,7 @@ fn latest_tail_cursors_cell() -> &'static Mutex<HashMap<String, LatestTailCursor
 }
 
 fn clear_latest_tail_cursor_for_current<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(provider) = hinted_session_provider(app) else {
+    let Some(provider) = current_provider(app) else {
         return;
     };
     let provider_label = session_provider_label(provider).to_string();
@@ -11323,7 +11365,7 @@ fn build_conversation_cache_entry<R: tauri::Runtime>(
     mtime_ms: i64,
     len: u64,
 ) -> Result<ConversationStateCache, String> {
-    let provider = preferred.or_else(|| hinted_session_provider(app));
+    let provider = preferred.or_else(|| current_provider(app));
     let provider_str = match provider {
         Some(SessionProvider::Claude) => "claude",
         Some(SessionProvider::Codex) => "codex",
@@ -11535,7 +11577,7 @@ fn read_last_exchange<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,
 ) -> Result<Vec<u8>, String> {
-    let provider = preferred.or_else(|| hinted_session_provider(app));
+    let provider = preferred.or_else(|| current_provider(app));
     let provider_str = match provider {
         Some(SessionProvider::Claude) => "claude",
         Some(SessionProvider::Codex) => "codex",
@@ -11706,7 +11748,7 @@ fn read_conversation_state<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,
 ) -> Result<Vec<u8>, String> {
-    let provider = preferred.or_else(|| hinted_session_provider(app));
+    let provider = preferred.or_else(|| current_provider(app));
     let provider_str = match provider {
         Some(SessionProvider::Claude) => "claude",
         Some(SessionProvider::Codex) => "codex",
@@ -12908,7 +12950,7 @@ fn read_session_size<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, S
     } else {
         "red"
     };
-    let provider_label = match hinted_session_provider(app) {
+    let provider_label = match current_provider(app) {
         Some(SessionProvider::Codex) => "codex",
         Some(SessionProvider::Claude) => "claude",
         None => "unknown",
@@ -13558,7 +13600,7 @@ fn context_provider<R: tauri::Runtime>(
     preferred: Option<SessionProvider>,
 ) -> SessionProvider {
     preferred
-        .or_else(|| hinted_session_provider(app))
+        .or_else(|| current_provider(app))
         .unwrap_or(SessionProvider::Claude)
 }
 
@@ -13995,7 +14037,7 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let settings = proj.join(ENHANCE_SETTINGS_REL);
     let worklist_auth = proj.join(WORKLIST_AUTH_REL);
     let codex_hook_script = home_dir().map(|h| h.join(ENHANCE_CODEX_HOOK_INSTALL_REL));
-    let active_provider = hinted_session_provider(app);
+    let active_provider = current_provider(app);
     let is_source_repo = proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
     let claude_md_has_marker = std::fs::read_to_string(&claude_md)
         .map(|s| {
@@ -15714,7 +15756,7 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
     // (resize artifact, banner not yet painted, partial chunk), the
     // row shows generic "Finished". Refs #179.
     let active_matches = matches!(
-        (hinted_session_provider(app), provider),
+        (current_provider(app), provider),
         (
             Some(SessionProvider::Claude),
             JsonlCompletionProvider::Claude
@@ -19342,7 +19384,7 @@ fn record_worklist_authorization_from_input<R: tauri::Runtime>(app: &AppHandle<R
 }
 
 fn record_codex_direct_edit_authorization<R: tauri::Runtime>(app: &AppHandle<R>, turn_text: &str) {
-    if !matches!(hinted_session_provider(app), Some(SessionProvider::Codex)) {
+    if !matches!(current_provider(app), Some(SessionProvider::Codex)) {
         return;
     }
     if !turn_text_has_direct_edit_opt_out(turn_text) {
@@ -23874,12 +23916,13 @@ pub fn run() {
             // immediately instead of waiting on fallback polling.
             let claude_sessions_dir = claude_sessions_dir(&app.handle()).ok();
             let codex_sessions_dir = home_dir().map(|h| h.join(".codex").join("sessions"));
-            // Agent-hint file lives at <app_cache>/agent-hints/<encoded-cwd>.json
-            // and is rewritten by the shell wrapper's _xmlui_mark_agent when
-            // the user switches between `claude` and `codex`. Watching this
-            // dir lets the agent-tools drawer refetch /__enhance/status when
-            // the active provider flips.
-            let agent_hints_dir = active_agent_hint_path(&app.handle())
+            // Current-provider record lives at
+            // <app_cache>/current-agent/<encoded-cwd>.json and is written by the
+            // host (set_current_provider) on deliberate transitions: autostart,
+            // header switch, session resume. Watching this dir lets the
+            // agent-tools drawer refetch /__enhance/status when the active
+            // provider changes.
+            let current_agent_dir = active_agent_hint_path(&app.handle())
                 .ok()
                 .and_then(|p| p.parent().map(|p| p.to_path_buf()));
             // ~/.bram/ holds Bram's user-global Codex hook. Ensure it exists at
@@ -23905,7 +23948,7 @@ pub fn run() {
                     watch_paths.push(bd.clone());
                 }
             }
-            if let Some(ref ah) = agent_hints_dir {
+            if let Some(ref ah) = current_agent_dir {
                 if ah.exists() {
                     watch_paths.push(ah.clone());
                 }
@@ -24285,7 +24328,7 @@ pub fn run() {
                     let is_enhance_event = event.paths.iter().any(|p| {
                         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
                         let in_claude_dir = p.components().any(|c| c.as_os_str() == ".claude");
-                        let in_agent_hints = agent_hints_dir
+                        let in_current_agent = current_agent_dir
                             .as_ref()
                             .map_or(false, |ah| p.starts_with(ah));
                         let in_bram_dir = bram_dir.as_ref().map_or(false, |bd| p.starts_with(bd));
@@ -24295,7 +24338,7 @@ pub fn run() {
                                 && (name == "settings.json"
                                     || name == "settings.local.json"
                                     || name == "worklist-guard.py"))
-                            || in_agent_hints
+                            || in_current_agent
                             || in_bram_dir
                     });
                     if is_enhance_event {

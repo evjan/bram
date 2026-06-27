@@ -152,8 +152,7 @@ saved local state may already depend on them.
   `.xmlui-desktop.json` alias remains accepted for existing projects.
 - Environment variables:
   `XMLUI_DESKTOP_PORT`, `XMLUI_DESKTOP_FAKE_CURRENT`,
-  `XMLUI_DESKTOP_VERSION`, `XMLUI_DESKTOP_BASE_URL`,
-  `XMLUI_DESKTOP_AGENT_HINT`.
+  `XMLUI_DESKTOP_VERSION`, `XMLUI_DESKTOP_BASE_URL`.
 - Local state keys:
   `app/main.js` and `app/__shell/helpers.js` store UI state in
   `localStorage` under `xmlui-desktop.*`.

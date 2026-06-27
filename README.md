@@ -23,51 +23,61 @@ Bram has opinions. It thinks versioning and collaboration are well-handled by gi
 
 ## How does it work?
 
-### Layout
+### Terminal (on the left)
 
-- **Terminal** — where you run an AI coding agent (e.g. `claude` or `codex`).
+A terminal where you run `claude` or `codex`.
 
-- **Agent pane** — where Bram guides the agent through the workflow (Worklist, Issues, Sessions, Status, etc.).
+### Agent pane (on the right)
 
-- **Target app** *(optional, off by default)* — a project iframe for previewing your app inside Bram. Most people run their own web app in their own server and view it in their own browser, so this pane is hidden unless you turn it on (Settings → UI → "Show target app"). It is handy for a very simple app, but it is not the common case.
+- Header: Switches between agents and adjusts font size.
 
-When the optional target-app pane is enabled, Bram's file watcher reloads it automatically as project files change. That auto-reload is purely a convenience for the embedded pane — if you view your app in your own browser, your own dev server handles reloading.
+- Worklist: Guides you through the Bram workflow.
 
-### Glossary
+- Transcript: Shows your terminal session in a more readable form.
 
-A small glossary of the terms used throughout this README, the conventions sidecar, and the UI. When the docs and the UI both use these terms consistently, agents echoing back to you stay consistent too.
+- Issues: Tracks and searches GitHub issues for the repo Bram runs in.
 
-| Term | What it refers to |
-|---|---|
-| **main app** | the whole Bram desktop shell. |
-| **app toolbar** | the top button row in the main app (reload target app · devtools · agent tools · terminal · A− · A+ · voice). |
-| **terminal** | the xterm.js area where Claude / Codex runs. |
-| **target app** | the *optional* project iframe (off by default) for previewing your app inside Bram. |
-| **agent pane** | the area where Bram guides the agent through the workflow — the tabs UI (Worklist, Issues, Commits, Sessions, History, Context, Status, Settings). |
-| **agent nav** | the vertical menu on the left of the agent pane (Worklist, Issues, Commits, Sessions, History, Context, Status, Settings). |
-| **agent toolbar** | controls associated with the agent pane (per-view action bars: Refresh, Approve, etc.). |
+- Commits: Tracks and searches your commits.
+
+- Sessions: Lists your sessions; rename, delete, or switch between them.
+
+- History: Lists and searches your worklist items.
+
+- Settings: Shows and changes global (repo-independent) settings.
+
+- Footer: Shows agent status and the current session, and lets you message the agent.
+
 
 ### Workflow
 
 Bram encourages an issue-first workflow as the foundation for a worklist item. It is optional, not required. If you want to use it, ask an agent to file an issue first, then use that issue as the basis for a proposed worklist item.
 
-On the **Issues** tab, `+ New issue` lets you ask Bram to file a GitHub issue. On the **Workspace** tab, `+ New item` lets you ask Bram to propose a worklist item, with an optional picklist of open issues so a proposal can be anchored to an existing issue.
+On the *Issues* tab, use `+ New issue` to ask Bram to file a GitHub issue. On the *Worklist* tab, use `+ New item` to ask Bram to propose a worklist item, with an optional picklist of open issues so a proposal can be anchored to an existing issue.
 
-There are three phases for an item on the worklist: **proposed** → **applied** → **committed**. The arrows between the phases are approval gates where you can dwell and iterate with your agent to: research and write code, create, refine, and close issues; organize commits as an orderly audit trail.
+An item on the worklist lives in one of three phases: *proposed* → *applied* → *committed*. The arrows between the phases are approval gates where you can dwell and iterate with your agent to:
 
-By default every change request flows through the worklist regardless of size. To opt out of the worklist for a specific request, include a phrase like *"just do it"*, *"no worklist for this"*, or *"commit directly"* in the same turn — see [`app/__shell/conventions.md`](./app/__shell/conventions.md) for the full opt-out list and worked examples.
+- discuss and refine a proposal
 
-### Agent conventions
+- discuss and refine an implementation
 
-Conventions are written in
-[`app/__shell/conventions.md`](./app/__shell/conventions.md). Claude is
-bound to that file directly through `CLAUDE.md` and the installed
-`.claude` hook/config path. Codex is bound through a repo-local
-`AGENTS.md` block installed by setup, with the shell startup seed as a
-backup for wrapped launches, then reinforced by the shared
-provider-neutral setup machinery plus local Codex config, memories, and
-rules.
+- create, refine, and close issues
 
+- organize commits
+
+By default every change request flows through the worklist. That's overkill for small things so, when messaging the agent from Bram's footer, you can use the *skip worklist* button instead of *send*. And when messaging the agent from a worklist item, prefix your message with *skip-worklist:* or end it with "just do it".
+
+
+### Workflow conventions
+
+The rules an agent follows when driving the Bram workflow — proposing worklist
+items, moving them through the approval gates, coordinating commits and issues —
+live in [`app/__shell/conventions.md`](./app/__shell/conventions.md). Each agent
+loads that file automatically: Claude through `CLAUDE.md` and the installed
+`.claude` hook/config path, Codex through a repo-local `AGENTS.md` block that
+setup installs. These aren't merely advisory: a `PreToolUse` hook on each agent
+enforces the core rule, rejecting file edits that aren't covered by an approved
+worklist item — so the convention enforces itself rather than relying on the
+agent's goodwill.
 
 
 ## Prerequisites
@@ -113,49 +123,12 @@ Downloads `bram-windows-amd64.zip`, verifies its SHA256, extracts `bram.exe` to 
 
 On some Windows 11 setups, Smart App Control may block the unsigned binary — most users report no problem. If you do hit a block, you can disable SAC under **Windows Security → App & browser control → Smart App Control settings**. Before flipping the switch, read Microsoft's [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/smart-app-control-frequently-asked-questions-285ea03d-fa88-4d56-882e-6698afdb7003) so you understand the consequences for your machine — the re-enable path has changed across Windows updates.
 
-### Agent tools
+### First-run setup
 
-- **Worklist** — the `proposed → applied → committed` approval surface that coordinates multi-step agent work. Each item is a small, independently approvable diff with a `before → after` summary. Select one item at a time (radio); three ghost actions act on it — **Approve** (TO APPLY → on-disk edits, transitions to TO COMMIT; TO COMMIT → git commit), **Iterate** (refine in place — agent revises the proposed text or edits the on-disk files per your feedback, item keeps its state), **Drop** (remove the item; for TO COMMIT, disk edits stay until you ask the agent to revert). Each row's `+ feedback` link expands a per-item message-to-agent textarea that travels with whichever action you click. The agent never advances state unilaterally. Bram always writes local `resources/worklist-history/` snapshots for auditability, while committing that directory is an opt-in repo policy.
+The first time you launch `claude` or `codex` in a repo, Bram checks what that provider needs and prompts once if anything is missing — no prompt on later launches. Accepting it installs the same two things for either provider: the worklist conventions the agent reads each session, and a `PreToolUse` guard hook that blocks file edits not covered by an approved worklist item. A provider-neutral authorization record plus a watcher-revert fallback back the hook up.
 
-  The Worklist view also carries the live agent conversation surface: pending permission menus, current-turn tool uses, the last agent response, pasted or dropped image previews, and the message box used to ask the agent for a new worklist item or follow-up.
-
-- **Commits** — HSplitter list of recent commits on the left, selected commit on the right. Full-history search via `git log --grep` across subject, body, and author; matched commits expand to clickable hit-row snippets, and the target app stacks `snippetAroundLine` previews for every hit. The target app header is an `ExpandableItem` revealing the full commit message body. Unpushed commits surface a "Push" button; it runs `git push origin`, and on a non-fast-forward rejection it fetches `origin` and rebases the branch on `origin/<branch>` before retrying (linear history, no merge commits).
-
-- **Issues** — HSplitter list of GitHub issues on the left (via `gh issue list`), selected issue on the right. Search runs `gh issue list --search` and tags hits per title/body line; clicking a hit filters the target app body to paragraphs containing the query. The expanded issue refetches every 30s so edits made via `gh` or github.com surface without collapse-and-reopen.
-
-- **Sessions** — HSplitter list of local claude/codex JSONL sessions on the left, selected session's turns on the right. Search runs server-side across user and assistant text; hits filter the target app to matching paragraphs. Each row has a ✕ delete (with confirm) and a ✎ rename: on Claude the rename appends a `custom-title` record to the session JSONL, on codex it appends a `{id,thread_name,updated_at}` entry to `~/.codex/session_index.jsonl`. After the action, the row dims and the buttons disable until the next agent restart picks up the change. Codex's `/resume` creates a forked session with a new id, so the `[current]` marker won't follow a renamed codex session — the rename modal documents that caveat inline.
-
-- **History** — browse the `resources/worklist-history/` snapshots Bram writes on every worklist change: the `proposed → applied → committed` audit trail, grouped by item phase, with summarized item prose so the reasoning behind past items survives after they're committed or dropped. Backed by `/__worklist-history/list` plus `/__worklist-history/search` for substring filtering.
-
-- **Context** — provider-aware HSplitter view of the active agent's durable local context sources. For Claude, that means `CLAUDE.md`, its `@`-imports, the per-project memory tree, hooks, and settings. For Codex, that means repo-local `AGENTS.md` when present plus Codex-side sources such as `~/.codex/config.toml`, project-local `.codex/` files, memories, and rules. Substring search shows grep-style hit snippets in the list and `snippetAroundLine` context on the right.
-
-- **Status** — a coordination-health view of the host↔agent plumbing: port-file consistency, loopback HTTP responsiveness, the inflight spinner sentinel, and the latest worklist authorization records. Use it to diagnose a stuck spinner or a refused loopback connection.
-
-- **Settings** — bidirectional view of `.bram.json`. Surfaces the agent-command (`shell.agent`), the worklist's batch-commit-actions toggle, and the show-target-app switch (off by default — reveals the optional target-app pane; otherwise the agent pane fills the right column). Edits persist to disk; hand-edits to `.bram.json` flow back through a `settings-changed` Tauri event without manual reload. Agent-command changes require a Bram restart to take effect (consumed at PTY spawn); the other settings apply live.
-
-The four search-capable tabs (Issues, Commits, Sessions, History) all share a single `<SearchBox>` (250 ms debounce, ✕ to clear, inline spinner during fetch) and a single `<SearchHitModal>`. Clicking a hit opens the modal centered on the matched term within a 500-character window, with the match visibly highlighted. Diff renders across the Worklist TO COMMIT expander and the Commits per-file patch through a single `<DiffView>` that goes through a backend `/__diff/annotate` route for word-level intra-line emphasis.
-
-The toolbar's `ⓘ` (top-right of the agent pane's AppHeader) opens a target app info modal with the current URL, version, project-server config, and a `README on GitHub` link to this document.
-
-### Toolbar
-
-- **↻ reload xmlui app** — force-reload the target app iframe (file watcher does this automatically, but useful after edits to the parent shell).
-- **🔍 browser devtools** — open the WebView devtools for debugging the target app.
-- **🛠 agent tools** — toggle the agent pane above.
-- **▢ terminal** — toggle the terminal (hide it to give the web app full width). Window and splitter resizes preserve the terminal viewport instead of snapping scrollback to the top.
-- **A− / A+** — decrease / increase the terminal font size (Cmd+− / Cmd+=).
-- **🎤 voice** — toggle local-Whisper voice dictation into the terminal (Cmd+Shift+D). See [Voice input](#voice-input).
-
-Pinned across the top of the agent pane (stays reachable from any tab):
-
-- **ⓘ info** — show a target app info modal (URL, project-server status, "Open in browser").
-- **A− / A+** — decrease / increase the target app / agent pane iframe font size.
-- **1 / 2 / 3** — send numeric keystrokes to the active agent's terminal session.
-- **Yes / No** — send "yes" or "no" as a complete user turn (handy for the agent's conversational prompts).
-- **Esc** — send `Esc` to interrupt the agent mid-response.
-- **🎤 voice** — local-Whisper dictation; click to start, click again to send the transcript as a fresh user turn. Same engine as the shell toolbar's voice button.
-- **🔍 Inspector** — open the XMLUI Inspector to reproduce a UI issue and export a trace JSON for analysis.
-### Provider-aware setup
+<details>
+<summary>Setup internals: hook adapters, guard source-of-truth, and how conventions.md binds each provider</summary>
 
 Once you launch an agent through the wrapped terminal functions (`claude` or `codex`), the agent pane checks what that provider still needs for the current repo and prompts only when setup is missing.
 
@@ -185,7 +158,7 @@ PreToolUse hooks are the generic extension point — both Claude Code and codex 
 
 That means first-run setup is provider-aware in when it prompts but provider-symmetric in what it installs: launching either `claude` or `codex` and accepting the prompt sets up the shared core, the codex-side `AGENTS.md` guidance block, the codex `developer_instructions`, and the Claude and codex hook adapters.
 
-### How `conventions.md` governs both agents
+#### How `conventions.md` governs both agents
 
 `app/__shell/conventions.md` is the canonical project convention file.
 It governs Claude and Codex in different ways:
@@ -210,47 +183,31 @@ The provider hooks validate direct edits to `resources/worklist.json`. Proposal 
 
 The hook is a Python script and needs Python 3 to run. On macOS and Linux it's invoked directly via its shebang (`#!/usr/bin/env python3`), so `python3` must be on PATH — almost always the case. On Windows it's invoked via `py -3 <path>`; the `py` launcher ships with the python.org installer and resolves Python via the Windows registry, independent of PATH. If Python isn't installed at all, Claude Code shows "Failed with non-blocking status code" for every Write/Edit and the validator is silently inert — writes still proceed, but the worklist guard isn't actually checking them. Install Python 3 to enable enforcement.
 
-## Build
+</details>
 
-The frontend is static — no bundler, no `package.json`. The only build
-step is the Tauri/Rust build.
+## Configuration
 
-From `src-tauri/`:
+`.bram.json` at project root is the primary config file. Legacy `.xmlui-desktop.json` is still accepted as a compatibility alias from Bram's prior name.
 
-- **Dev:** `cargo run` (or `cargo tauri dev` with the Tauri CLI)
-- **Release:** `cargo tauri build`
+### Startup
 
-Tauri docs: <https://tauri.app/develop/>, <https://tauri.app/distribute/>.
+Bram autostarts an agent in the terminal at launch. Configure it under
+`shell` in `.bram.json` (the same keys Settings writes):
 
-### Calling Bram from project code
-
-Because the target app is same-origin with the parent shell
-(`tauri://localhost`), project code can reach the Tauri command bridge
-directly through `window.parent` — no `postMessage` shim needed:
-
-```js
-const { invoke } = window.parent.__TAURI__.core;
-const url = await invoke("get_right_pane_url");
+```json
+{
+  "shell": {
+    "agent": "claude",
+    "continueLast": true
+  }
+}
 ```
 
-Use this when an XMLUI app embedded in the target app needs to read
-filesystem state, hit one of Bram's `__`-prefixed loopback
-endpoints, or invoke any of the Rust IPC commands. The `helpers.js`
-script loaded by the embedded XMLUI surfaces (`toShell`, `toTurn`,
-`openExternal`, `logToHost`) is built on top of this bridge — opt
-into the helpers for project XMLUI apps that need to talk back to
-the running agent.
-
-## Layout
-
-- `Main.xmlui`, `components/`, `resources/`, `Globals.xs`,
-  `config.json`, `index.html` — the XMLUI app at the repo root.
-- `app/` — parent shell (Tauri webview entry, terminal wiring, vendor
-  scripts, and `__shell/helpers.js` that the target app includes).
-- `src-tauri/` — Rust backend (PTY for the terminal, custom `tauri://`
-  URI scheme handler that proxies the target app iframe to the project's
-  HTTP server, filesystem watcher, IPC handlers).
-- `scripts/` — auxiliary scripts.
+- `agent` — which provider to launch, `claude` or `codex` (defaults to `claude`).
+- `args` — optional extra arguments appended to the launch command.
+- `continueLast` — when `true`, resume the most recent session
+  (`claude --continue` / `codex resume --last`) instead of starting fresh.
+- `firstCommand` — optional command typed into the agent once it's ready.
 
 ## Voice input
 
@@ -306,40 +263,14 @@ That's the whole install. Bram handles starting/stopping `whisper-server` on its
 
 The same setup is expected to work on non-WSL Linux, using the host process path and port `18080`.
 
-## Screen capture
+## Target app
 
-The screenshot helper currently exists but is not surfaced in the
-default Codex-themed UI. When enabled, it grabs an interactive
-rect-select screenshot, writes the PNG to the OS app cache, and
-injects `Read this screenshot: @<path>` into the terminal as a fresh
-user turn so the agent picks it up via its `Read` tool. No install
-ceremony — it shells out to a system binary.
+An optional pane above the agent pane, **off by default** — a project iframe for previewing your app inside Bram. Most people run their app in their own server and view it in their own browser, so it stays hidden unless you turn it on (Settings → UI → "Show target app"). It's handy for a very simple app or a quick check, not the common case. When enabled, Bram runs a basic static webserver and reloads the pane automatically as project files change.
 
-Currently **macOS-only**: the implementation invokes
-`/usr/sbin/screencapture -i`, which ships with macOS. On Linux and
-Windows it returns "screenshot capture is currently
-macOS-only"; if you want a port (e.g. via `grim` / `slurp` on Wayland
-or a PowerShell snippet on Windows), please open an issue.
+<details>
+<summary>Serving a real backend: fixed origin, project server, URL parameters</summary>
 
-## Configuration
-
-`.bram.json` at project root is the primary config file. Legacy `.xmlui-desktop.json` is still accepted as a compatibility alias from Bram's prior name.
-
-### Startup
-
-You can specify how to launch the agent in the terminal.
-
-```
-{
-  "shell": {
-    "agent": "agent --continue"
-  }
-}
-```
-
-`agent` dispatches to `claude` or `codex` at shell startup. Set `BRAM_STARTUP_AGENT=claude` or `BRAM_STARTUP_AGENT=codex` to pin the default; if unset, the shell falls back to `codex` when available and otherwise `claude`.
-
-### Working with a real backend
+#### Working with a real backend
 
 `Bram` binds the target app HTTP server to
 `127.0.0.1:<random-port>` (it uses port `0` and lets the OS pick).
@@ -356,7 +287,7 @@ callbacks, CORS allowlists, hardcoded API base URLs.
 > while keeping the real backend running for API calls. Otherwise,
 > open the project in a standalone browser.
 
-#### Declare a project server
+##### Declare a project server
 
 Add `.bram.json` at the project root:
 
@@ -397,14 +328,14 @@ The app-under-test does not need to be an XMLUI app — `.bram.json`
 is Bram's own config file, separate from XMLUI's `config.json`. Legacy
 `.xmlui-desktop.json` remains supported.
 
-### URL parameters
+#### URL parameters
 
 Use query strings to parameterize the frontend without rebuilding —
 e.g. `?city=santarosa` to switch tenant. Pass them on the command line
 to your server's command or bake them into `path` (e.g.
 `"path": "/?city=santarosa"`).
 
-### Working example
+#### Working example
 
 [community-calendar](https://github.com/judell/community-calendar) uses
 `.bram.json` for GitHub-OAuth-via-Supabase development. See
@@ -412,7 +343,7 @@ to your server's command or bake them into `path` (e.g.
 for the Supabase URL-Configuration setup that requires the fixed
 `localhost:8080/**` origin.
 
-#### Fallback: the redirect pattern
+##### Fallback: the redirect pattern
 
 If you can't add a config file (e.g. you're working in a repo you
 don't own), you can still target a fixed origin by adding a
@@ -433,6 +364,11 @@ project root. Its iframe loads the random-port URL once, your script
 bounces it to `localhost:8080`. `.bram.json` is the preferred
 mechanism — it auto-spawns the server, surfaces logs, and doesn't
 pollute the project's HTML.
+
+</details>
+
+<details>
+<summary>Service workers, auth callbacks, and DevTools</summary>
 
 #### Service workers don't register on macOS/Linux
 
@@ -491,7 +427,7 @@ For Supabase specifically:
 implements this in `xmlui/components/SignInDialog.xmlui` and
 `xmlui/shell.js` (`window.signInWithEmail` + `window.verifyEmailOtp`).
 
-### DevTools
+#### DevTools
 
 Tauri uses the platform's native webview, so the DevTools you get
 inside the target app depend on the OS:
@@ -514,7 +450,7 @@ same storage. A regular browser tab pointed at the project's own
 `localhost:8080` server, by contrast, is a different origin with its
 own independent storage.
 
-#### WebKit quirks worth knowing
+##### WebKit quirks worth knowing
 
 The macOS/Linux Web Inspector behaves differently from Chromium's
 DevTools in a few ways that bite when you're testing auth flows:
@@ -541,3 +477,47 @@ origin — but remember that the tab's `localStorage` is a separate
 store from the target app's (the target app is at `tauri://localhost`,
 a different origin), so a session created there won't carry into
 Bram.
+
+</details>
+
+## Build
+
+The frontend is static — no bundler, no `package.json`. The only build
+step is the Tauri/Rust build.
+
+From `src-tauri/`:
+
+- **Dev:** `cargo run` (or `cargo tauri dev` with the Tauri CLI)
+- **Release:** `cargo tauri build`
+
+Tauri docs: <https://tauri.app/develop/>, <https://tauri.app/distribute/>.
+
+### Calling Bram from project code
+
+Because the target app is same-origin with the parent shell
+(`tauri://localhost`), project code can reach the Tauri command bridge
+directly through `window.parent` — no `postMessage` shim needed:
+
+```js
+const { invoke } = window.parent.__TAURI__.core;
+const url = await invoke("get_right_pane_url");
+```
+
+Use this when an XMLUI app embedded in the target app needs to read
+filesystem state, hit one of Bram's `__`-prefixed loopback
+endpoints, or invoke any of the Rust IPC commands. The `helpers.js`
+script loaded by the embedded XMLUI surfaces (`toShell`, `toTurn`,
+`openExternal`, `logToHost`) is built on top of this bridge — opt
+into the helpers for project XMLUI apps that need to talk back to
+the running agent.
+
+## Layout
+
+- `Main.xmlui`, `components/`, `resources/`, `Globals.xs`,
+  `config.json`, `index.html` — the XMLUI app at the repo root.
+- `app/` — parent shell (Tauri webview entry, terminal wiring, vendor
+  scripts, and `__shell/helpers.js` that the target app includes).
+- `src-tauri/` — Rust backend (PTY for the terminal, custom `tauri://`
+  URI scheme handler that proxies the target app iframe to the project's
+  HTTP server, filesystem watcher, IPC handlers).
+- `scripts/` — auxiliary scripts.

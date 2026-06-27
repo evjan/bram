@@ -2093,6 +2093,7 @@ window.__bramHistoryDateRangeLine = function (group) {
 };
 
 window.__bramHistoryPhaseLabel = function (phase) {
+  if (phase && phase.kind === "feedback") return "Feedback";
   var summary = ((phase && phase.summary) || "").toLowerCase();
   if (summary.indexOf("committed") >= 0) return "Committed";
   if (summary.indexOf("applied") >= 0) return "Applied";

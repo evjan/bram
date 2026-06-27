@@ -14819,54 +14819,6 @@ fn feedback_ref_map<R: tauri::Runtime>(app: &AppHandle<R>, limit: usize) -> serd
     serde_json::Value::Object(map)
 }
 
-// List recent feedback-history entries for the Feedback tab. Filenames
-// are <unix_ms>-<itemId>.md (per unique_feedback_history_path); a
-// uniqueness suffix `-<n>` may appear before `.md` on the rare collision
-// path. Parse ts as a leading numeric prefix and itemId as the remainder
-// between the first `-` and trailing `.md`. Reverse-chronological by ts.
-fn recent_feedback_history<R: tauri::Runtime>(
-    app: &AppHandle<R>,
-    limit: usize,
-) -> Vec<serde_json::Value> {
-    let Some(dir) = feedback_history_dir(app) else {
-        return Vec::new();
-    };
-    let Ok(read) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
-    let mut rows: Vec<(u64, String, String)> = Vec::new();
-    for entry in read.flatten() {
-        let name = match entry.file_name().into_string() {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let stem = match name.strip_suffix(".md") {
-            Some(s) => s,
-            None => continue,
-        };
-        let (ts_str, item_id) = match stem.split_once('-') {
-            Some(p) => p,
-            None => continue,
-        };
-        let ts: u64 = match ts_str.parse() {
-            Ok(n) => n,
-            Err(_) => continue,
-        };
-        rows.push((ts, item_id.to_string(), name));
-    }
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
-    rows.into_iter()
-        .take(limit)
-        .map(|(ts, item_id, file_name)| {
-            serde_json::json!({
-                "ts": ts,
-                "itemId": item_id,
-                "fileName": file_name,
-            })
-        })
-        .collect()
-}
-
 fn unique_feedback_history_path(history_dir: &Path, file_name: &str) -> PathBuf {
     let initial = history_dir.join(file_name);
     if !initial.exists() {
@@ -19990,6 +19942,9 @@ struct WorklistHistoryPhase {
     changelog: String,
     diff: String,
     commit_url: String,
+    // Markdown body for kind:"feedback" phases (the user's iterate note,
+    // woven in chronologically). Empty for transition/snapshot phases.
+    body: String,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -20282,9 +20237,73 @@ fn worklist_history_item_diff(
     }
 }
 
+// Cap a feedback body so a long iterate note can't bloat the history
+// payload. Truncates on a char boundary (avoids the byte-slice panic).
+fn cap_feedback_body(body: &str) -> String {
+    const CAP: usize = 4000;
+    if body.len() <= CAP {
+        return body.to_string();
+    }
+    let mut end = CAP;
+    while end > 0 && !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    let omitted = body.len() - end;
+    format!(
+        "{}\n\n… feedback truncated: {} bytes omitted",
+        &body[..end],
+        omitted
+    )
+}
+
+// Map item id -> chronological (ts, body) feedback entries from
+// resources/feedback-history/<unix_ms>-<itemId>.md (ts is the leading numeric
+// prefix, itemId the remainder before `.md`). Bodies are capped. Used to weave
+// feedback into worklist-history groups as kind:"feedback" phases. Entries
+// whose itemId has no matching history group are skipped by the caller.
+fn feedback_history_by_item<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> HashMap<String, Vec<(i64, String)>> {
+    let mut by_item: HashMap<String, Vec<(i64, String)>> = HashMap::new();
+    let Some(dir) = feedback_history_dir(app) else {
+        return by_item;
+    };
+    let Ok(read) = std::fs::read_dir(&dir) else {
+        return by_item;
+    };
+    for entry in read.flatten() {
+        let name = match entry.file_name().into_string() {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let stem = match name.strip_suffix(".md") {
+            Some(s) => s,
+            None => continue,
+        };
+        let (ts_str, item_id) = match stem.split_once('-') {
+            Some(p) => p,
+            None => continue,
+        };
+        let ts: i64 = match ts_str.parse() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        let body = cap_feedback_body(&std::fs::read_to_string(entry.path()).unwrap_or_default());
+        by_item
+            .entry(item_id.to_string())
+            .or_default()
+            .push((ts, body));
+    }
+    for entries in by_item.values_mut() {
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+    by_item
+}
+
 fn recent_worklist_history_groups<R: tauri::Runtime>(
     app: &AppHandle<R>,
     limit: usize,
+    resolve_commit_urls: bool,
 ) -> Vec<WorklistHistoryGroup> {
     let Some(dir) = worklist_history_dir(app) else {
         return Vec::new();
@@ -20303,12 +20322,18 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
         }
     }
     let fast_limited = limit > 0 && limit < WORKLIST_HISTORY_DEFAULT_LIMIT;
+    // Per-group commit-visibility checks shell out to `gh api` (one network
+    // round-trip each), so skip them on the fast-limited first page AND
+    // whenever the caller opts out (search, where ~120 gh calls per keystroke
+    // cost ~28s and the result cards/modal don't need a visibility-verified
+    // URL — the raw URL still links).
+    let skip_commit_resolution = fast_limited || !resolve_commit_urls;
     json_files.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut groups: Vec<WorklistHistoryGroup> = Vec::new();
     let mut by_id: HashMap<String, usize> = HashMap::new();
     let mut last_state: HashMap<String, serde_json::Value> = HashMap::new();
-    let repo_slug = if fast_limited {
+    let repo_slug = if skip_commit_resolution {
         None
     } else {
         repo_owner_name(app)
@@ -20321,7 +20346,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
         let changelog = std::fs::read_to_string(&md_path).unwrap_or_default();
         let summary = worklist_history_summary(&changelog);
         let raw_commit_url = worklist_history_commit_url(&changelog);
-        let commit_url = if fast_limited {
+        let commit_url = if skip_commit_resolution {
             raw_commit_url.trim().to_string()
         } else {
             visible_worklist_history_commit_url(app, &raw_commit_url, repo_slug.as_deref())
@@ -20364,6 +20389,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                     changelog: String::new(),
                     diff: cap_history_diff(&diff),
                     commit_url: commit_url.clone(),
+                    body: String::new(),
                 };
                 let group_idx = match by_id.get(&id).copied() {
                     Some(idx) => idx,
@@ -20429,6 +20455,7 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                 changelog: String::new(),
                 diff: String::from("No single item diff is available for this snapshot."),
                 commit_url,
+                body: String::new(),
             };
             groups.push(WorklistHistoryGroup {
                 id: format!("snapshot-{}", ts),
@@ -20449,6 +20476,35 @@ fn recent_worklist_history_groups<R: tauri::Runtime>(
                 commit_context_label: String::new(),
                 commit_sibling_ids: Vec::new(),
                 details_restored_label: String::new(),
+            });
+        }
+    }
+
+    // Weave feedback-history entries into each item's group as chronological
+    // kind:"feedback" phases. by_id only maps real per-item groups (snapshot
+    // groups aren't registered there), so orphan feedback — and feedback that
+    // would attach to a description-only snapshot — is skipped.
+    let feedback_by_item = feedback_history_by_item(app);
+    for (item_id, entries) in &feedback_by_item {
+        let Some(&idx) = by_id.get(item_id) else {
+            continue;
+        };
+        let Some(group) = groups.get_mut(idx) else {
+            continue;
+        };
+        for (ts, body) in entries {
+            let iso = format_iso_utc(*ts);
+            group.phases.push(WorklistHistoryPhase {
+                ts: *ts,
+                iso: iso.clone(),
+                kind: String::from("feedback"),
+                summary: String::from("feedback"),
+                summary_label: format!("{} · feedback", iso.chars().take(16).collect::<String>()),
+                full_changelog: String::new(),
+                changelog: String::new(),
+                diff: String::new(),
+                commit_url: String::new(),
+                body: body.clone(),
             });
         }
     }
@@ -21648,7 +21704,7 @@ fn route_request<R: tauri::Runtime>(
                     .unwrap_or(WORKLIST_HISTORY_DEFAULT_LIMIT);
             }
         }
-        let entries = recent_worklist_history_groups(app, limit);
+        let entries = recent_worklist_history_groups(app, limit, true);
         let body = serde_json::to_vec(&entries).unwrap_or_default();
         return (200, "application/json; charset=utf-8", body);
     }
@@ -21694,7 +21750,7 @@ fn route_request<R: tauri::Runtime>(
             );
         }
         let needle = trimmed.to_lowercase();
-        let groups = recent_worklist_history_groups(app, WORKLIST_HISTORY_DEFAULT_LIMIT);
+        let groups = recent_worklist_history_groups(app, WORKLIST_HISTORY_DEFAULT_LIMIT, false);
         let mut results: Vec<serde_json::Value> = Vec::new();
         for g in &groups {
             let serialized = serde_json::to_string(g).unwrap_or_default();
@@ -21728,6 +21784,14 @@ fn route_request<R: tauri::Runtime>(
                     }
                 }
             }
+            // Woven feedback phases carry the user's iterate notes; include
+            // them so a feedback-text match produces a readable snippet.
+            for phase in &g.phases {
+                if phase.kind == "feedback" && !phase.body.is_empty() {
+                    hit_body.push_str(&phase.body);
+                    hit_body.push('\n');
+                }
+            }
             // Center hitBody on the first match and cap at 4 KB. The
             // iframe modal uses a 500-char window and the card preview
             // uses 160; 4 KB gives both room without blowing up the
@@ -21758,73 +21822,10 @@ fn route_request<R: tauri::Runtime>(
         return (200, "application/json; charset=utf-8", body);
     }
 
-    // /__feedback-history/search?q=<query> — substring-match the .md body
-    // of each entry, return {ts, itemId, fileName, snippet}. Snippet is a
-    // ~200-char window centered on the first match. Case-insensitive.
-    if path == "__feedback-history/search" {
-        let mut q = String::new();
-        for pair in query.split('&') {
-            if let Some(v) = pair.strip_prefix("q=") {
-                q = percent_decode(v);
-                break;
-            }
-        }
-        let trimmed = q.trim();
-        if trimmed.len() < 2 {
-            return (
-                200,
-                "application/json; charset=utf-8",
-                br#"{"results":[]}"#.to_vec(),
-            );
-        }
-        let needle = trimmed.to_lowercase();
-        let entries = recent_feedback_history(app, WORKLIST_HISTORY_DEFAULT_LIMIT);
-        let mut results: Vec<serde_json::Value> = Vec::new();
-        if let Some(dir) = feedback_history_dir(app) {
-            for entry in entries {
-                let Some(file_name) = entry.get("fileName").and_then(|v| v.as_str()) else {
-                    continue;
-                };
-                let p = dir.join(file_name);
-                let body = std::fs::read_to_string(&p).unwrap_or_default();
-                let lower = body.to_lowercase();
-                let Some(pos) = lower.find(&needle) else {
-                    continue;
-                };
-                let start = pos.saturating_sub(80);
-                let end = (pos + needle.len() + 120).min(body.len());
-                let snippet = body.get(start..end).unwrap_or("").replace('\n', " ");
-                let mut row = entry.clone();
-                if let Some(obj) = row.as_object_mut() {
-                    obj.insert("snippet".to_string(), serde_json::Value::String(snippet));
-                    obj.insert("body".to_string(), serde_json::Value::String(body.clone()));
-                }
-                results.push(row);
-            }
-        }
-        let body = serde_json::json!({ "results": results })
-            .to_string()
-            .into_bytes();
-        return (200, "application/json; charset=utf-8", body);
-    }
-
-    // /__feedback-history/list[?limit=N] — reverse-chronological list of
-    // feedback drafts promoted from resources/feedback-drafts/ to
-    // resources/feedback-history/ by promote_feedback_drafts_for_items.
-    // Each entry: { ts, itemId, fileName }. The Feedback tab consumes this.
-    if path == "__feedback-history/list" {
-        let mut limit = WORKLIST_HISTORY_DEFAULT_LIMIT;
-        for pair in query.split('&') {
-            if let Some(v) = pair.strip_prefix("limit=") {
-                limit = percent_decode(v)
-                    .parse::<usize>()
-                    .unwrap_or(WORKLIST_HISTORY_DEFAULT_LIMIT);
-            }
-        }
-        let entries = recent_feedback_history(app, limit);
-        let body = serde_json::to_vec(&entries).unwrap_or_default();
-        return (200, "application/json; charset=utf-8", body);
-    }
+    // (Removed: /__feedback-history/{search,list,content} — the standalone
+    // Feedback tab they backed was retired when feedback was woven into the
+    // History page. /__feedback/content and /__feedback/map below stay; the
+    // iterate flow and Transcript depend on them.)
 
     // /__feedback/content?ref=<feedbackRef> — raw .md body for one feedback
     // entry, checking feedback-drafts/ (live) then feedback-history/ (promoted).
@@ -21858,37 +21859,6 @@ fn route_request<R: tauri::Runtime>(
         let map = feedback_ref_map(app, limit);
         let body = serde_json::to_vec(&map).unwrap_or_default();
         return (200, "application/json; charset=utf-8", body);
-    }
-
-    // /__feedback-history/content?ts=<unix_ms>&itemId=<id> — raw .md body
-    // for one entry. Reconstructs the filename rather than trusting a
-    // client-supplied path (no traversal).
-    if path == "__feedback-history/content" {
-        let mut ts = String::new();
-        let mut item_id = String::new();
-        for pair in query.split('&') {
-            if let Some(v) = pair.strip_prefix("ts=") {
-                ts = percent_decode(v);
-            } else if let Some(v) = pair.strip_prefix("itemId=") {
-                item_id = percent_decode(v);
-            }
-        }
-        if ts.is_empty()
-            || item_id.is_empty()
-            || ts.chars().any(|c| !c.is_ascii_digit())
-            || item_id.contains('/')
-            || item_id.contains('\\')
-        {
-            return (400, "text/plain; charset=utf-8", b"bad params".to_vec());
-        }
-        let Some(dir) = feedback_history_dir(app) else {
-            return (404, "text/plain; charset=utf-8", Vec::new());
-        };
-        let p = dir.join(format!("{}-{}.md", ts, item_id));
-        return match std::fs::read(&p) {
-            Ok(bytes) => (200, "text/markdown; charset=utf-8", bytes),
-            Err(_) => (404, "text/plain; charset=utf-8", Vec::new()),
-        };
     }
 
     // /__worklist-history/snapshot?ts=<unix_ms> — raw .json snapshot

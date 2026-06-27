@@ -106,7 +106,8 @@
             paddingVertical="$space-1"
             borderTop="1px solid $borderColor">
             <Text value="{window.__bramHistoryPhaseLabel($item) + ' · ' + (($item.iso || '').slice(0, 16))}" fontSize="$fontSize-sm" />
-            <Text value="{$item.summary}" color="$textColor-secondary" fontSize="$fontSize-xs" />
+            <Markdown when="{$item.kind === 'feedback'}" content="{$item.body}" />
+            <Text when="{$item.kind !== 'feedback'}" value="{$item.summary}" color="$textColor-secondary" fontSize="$fontSize-xs" />
           </VStack>
         </Items>
       </VStack>

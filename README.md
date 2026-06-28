@@ -21,6 +21,8 @@ Bram has opinions. It thinks versioning and collaboration are well-handled by gi
 
 <a href="https://blog.jonudell.net/2026/06/17/vibe-coding-as-a-team-sport/">Vibe coding as a team sport</a>
 
+<a href="https://blog.jonudell.net/2026/06/28/doctor-it-hurts-when-agents-create-unreviewable-prs-dont-do-that/">“Doctor, it hurts when agents create unreviewable PRs.” “Don’t do that.”</a>
+
 ## How does it work?
 
 ### Terminal (on the left)

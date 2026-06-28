@@ -8777,17 +8777,71 @@ fn git_status_summary<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, 
     .map_err(|e| e.to_string())
 }
 
-// Rebase local commits on top of origin and retry push. Stashes any
-// uncommitted working-tree changes first (rebase requires a clean
-// tree) and pops the stash after, regardless of whether the rebase /
-// push succeeded. If the stash pop has conflicts, the stash is left
-// in place so the user can recover via `git stash list` / `git stash apply`.
-fn auto_rebase_and_push<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let dirty = git_run(app, &["status", "--porcelain"])
+// True when origin/<branch> has no commits that HEAD lacks, so a plain
+// `git push` fast-forwards without a rebase. Call after `git fetch`. Counts
+// commits in origin/<branch> unreachable from HEAD; 0 means fast-forward. An
+// absent/unknown upstream (first push) is treated as fast-forward.
+fn upstream_is_fast_forward<R: tauri::Runtime>(app: &AppHandle<R>, branch: &str) -> bool {
+    let range = format!("HEAD..origin/{}", branch);
+    match git_run(app, &["rev-list", "--count", &range]) {
+        Ok(out) => out.trim().parse::<u64>().map(|n| n == 0).unwrap_or(true),
+        Err(_) => true,
+    }
+}
+
+// Dirty check that ignores exec-bit mode-only changes (100755 <-> 100644).
+// On Windows those filemode flips are a benign git artifact (#208); counting
+// them as dirty forces an unnecessary auto-stash before a rebase.
+fn working_tree_dirty_ignoring_filemode<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    git_run(app, &["-c", "core.fileMode=false", "status", "--porcelain"])
         .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
+        .unwrap_or(false)
+}
+
+// Whether a prior auto-stash with the given label is still on the stash stack.
+// Used to refuse stacking a second debris stash on top of one a previous
+// failed cycle left behind (#208).
+fn has_stash_labeled<R: tauri::Runtime>(app: &AppHandle<R>, label: &str) -> bool {
+    git_run(app, &["stash", "list"])
+        .map(|s| s.lines().any(|line| line.contains(label)))
+        .unwrap_or(false)
+}
+
+// Rebase local commits on top of origin and retry push. Takes a fast-forward
+// fast path when origin has nothing HEAD lacks: a plain `git push`, no stash
+// and no rebase. Only when the branch has genuinely diverged does it stash any
+// uncommitted changes (filemode-insensitive), rebase, push, and pop the stash.
+// If the stash pop has conflicts, the stash is left in place so the user can
+// recover via `git stash list` / `git stash apply`.
+fn auto_rebase_and_push<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let branch =
+        git_run(app, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|s| s.trim().to_string())?;
+    git_run(app, &["fetch", "origin"])?;
+
+    if upstream_is_fast_forward(app, &branch) {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "git-push",
+                &format!("op=push path=fast-forward branch={}", branch),
+            );
+        }
+        return git_run(app, &["push"]).map(|_| ());
+    }
+
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "git-push",
+            &format!("op=push path=rebase branch={}", branch),
+        );
+    }
+    let dirty = working_tree_dirty_ignoring_filemode(app);
     let mut stashed = false;
     if dirty {
+        if has_stash_labeled(app, "bram-auto-rebase") {
+            return Err("a previous bram-auto-rebase stash is still present — resolve it (`git stash list` / `git stash pop` / `git stash drop`) before retrying the push".to_string());
+        }
         git_run(
             app,
             &[
@@ -8803,9 +8857,6 @@ fn auto_rebase_and_push<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), Str
     }
 
     let result: Result<(), String> = (|| {
-        let branch =
-            git_run(app, &["rev-parse", "--abbrev-ref", "HEAD"]).map(|s| s.trim().to_string())?;
-        git_run(app, &["fetch", "origin"])?;
         let upstream = format!("origin/{}", branch);
         match git_run(app, &["rebase", &upstream]) {
             Ok(_) => git_run(app, &["push"]).map(|_| ()),
@@ -8854,11 +8905,37 @@ fn push_focused_commit<R: tauri::Runtime>(
         ));
     }
 
-    let dirty = git_run(app, &["status", "--porcelain"])
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
+    git_run(app, &["fetch", "origin"])?;
+
+    // Fast-forward fast path: origin has nothing HEAD lacks, so push the
+    // focused commit directly — no stash, no rebase. This is the common case
+    // and sidesteps the Windows filemode-stash failure mode (#208).
+    if upstream_is_fast_forward(app, &branch) {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "git-push",
+                &format!("op=focused-close path=fast-forward branch={}", branch),
+            );
+        }
+        let refspec = format!("{}:refs/heads/{}", full_sha, branch);
+        git_run(app, &["push", "origin", &refspec])?;
+        return Ok(full_sha.to_string());
+    }
+
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "git-push",
+            &format!("op=focused-close path=rebase branch={}", branch),
+        );
+    }
+    let dirty = working_tree_dirty_ignoring_filemode(app);
     let mut stashed = false;
     if dirty {
+        if has_stash_labeled(app, "bram-focused-close-push") {
+            return Err("a previous bram-focused-close-push stash is still present — resolve it (`git stash list` / `git stash pop` / `git stash drop`) before retrying the close push".to_string());
+        }
         git_run(
             app,
             &[
@@ -8874,7 +8951,6 @@ fn push_focused_commit<R: tauri::Runtime>(
     }
 
     let result: Result<String, String> = (|| {
-        git_run(app, &["fetch", "origin"])?;
         let upstream = format!("origin/{}", branch);
         if let Err(rebase_err) = git_run(app, &["rebase", &upstream]) {
             let _ = git_run(app, &["rebase", "--abort"]);

@@ -67,7 +67,10 @@ fn extract_app_file<R: tauri::Runtime>(app: &AppHandle<R>, rel: &str) -> Result<
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(&target, file.contents()).map_err(|e| e.to_string())?;
-    if rel == ENHANCE_HOOK_BUNDLE_REL || rel == ENHANCE_CODEX_HOOK_BUNDLE_REL {
+    if rel == ENHANCE_HOOK_BUNDLE_REL
+        || rel == ENHANCE_CODEX_HOOK_BUNDLE_REL
+        || rel == ENHANCE_MENU_HOOK_BUNDLE_REL
+    {
         let is_source_repo = project_root(Some(app))
             .map(|p| p.join(ENHANCE_SOURCE_BUNDLE_REL).exists())
             .unwrap_or(false);
@@ -13601,6 +13604,19 @@ const PTY_INTENT_REL: &str = "resources/.pty-intent.jsonl";
 const ENHANCE_HOOK_COMMAND: &str = "py -3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/worklist-guard.py\"";
 #[cfg(not(windows))]
 const ENHANCE_HOOK_COMMAND: &str = "$CLAUDE_PROJECT_DIR/.claude/hooks/worklist-guard.py";
+// Permission-menu surfacing hook (menus.hookDriven). Installed and registered
+// the same way as the worklist guard: bundle copied to
+// .claude/hooks/permission-menu-hook.py, registered as PermissionRequest +
+// PostToolUse hooks. Observe-only (never blocks); canonical source is
+// app/__shell/permission-menu-hook.py.
+const ENHANCE_MENU_HOOK_SCRIPT_REL: &str = ".claude/hooks/permission-menu-hook.py";
+const ENHANCE_MENU_HOOK_BUNDLE_REL: &str = "__shell/permission-menu-hook.py";
+#[cfg(windows)]
+const ENHANCE_MENU_HOOK_COMMAND: &str =
+    "py -3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/permission-menu-hook.py\"";
+#[cfg(not(windows))]
+const ENHANCE_MENU_HOOK_COMMAND: &str =
+    "$CLAUDE_PROJECT_DIR/.claude/hooks/permission-menu-hook.py";
 // Presence of this file in the project root means the project IS the Bram
 // source repo (it bundles the conventions). enhance_status treats it as a
 // valid sidecar location; run_enhance skips the parts that would otherwise
@@ -13637,6 +13653,45 @@ fn settings_has_worklist_guard_hook(settings_path: &Path) -> bool {
             })
         })
         .unwrap_or(false)
+}
+
+// True iff settings.json registers the permission-menu hook on BOTH the
+// PermissionRequest (surface) and PostToolUse (clear) events. Mirrors
+// settings_has_worklist_guard_hook; requiring both means a half-installed
+// registration is correctly flagged as still needing Setup.
+fn settings_has_permission_menu_hook(settings_path: &Path) -> bool {
+    let content = match std::fs::read_to_string(settings_path) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let value: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let event_has_menu_hook = |event: &str| -> bool {
+        value
+            .get("hooks")
+            .and_then(|h| h.get(event))
+            .and_then(|p| p.as_array())
+            .map(|arr| {
+                arr.iter().any(|entry| {
+                    entry
+                        .get("hooks")
+                        .and_then(|h| h.as_array())
+                        .map(|hs| {
+                            hs.iter().any(|h| {
+                                h.get("command")
+                                    .and_then(|c| c.as_str())
+                                    .map(|s| s.contains("permission-menu-hook.py"))
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    };
+    event_has_menu_hook("PermissionRequest") && event_has_menu_hook("PostToolUse")
 }
 
 // Remove any PreToolUse hook entries whose `command` contains
@@ -13846,6 +13901,116 @@ fn merge_worklist_guard_into_settings(settings_path: &Path) -> Result<bool, Stri
                 "command": ENHANCE_HOOK_COMMAND,
             }]
         }));
+    }
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {}", parent.display(), e))?;
+    }
+    let serialized = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("serialize settings.json: {}", e))?;
+    std::fs::write(settings_path, format!("{}\n", serialized))
+        .map_err(|e| format!("write {}: {}", settings_path.display(), e))?;
+    Ok(true)
+}
+
+// Ensure `hooks_obj[event]` contains an entry whose hooks[].command equals
+// `command` (with `matcher`). Migrates a stale entry that carries `marker` in
+// its command but a different command string (platform move / path rename).
+// Returns true if it changed anything. Shared by the permission-menu-hook
+// registration, which spans two event arrays.
+fn merge_command_hook_into_event(
+    hooks_obj: &mut serde_json::Map<String, serde_json::Value>,
+    event: &str,
+    matcher: &str,
+    command: &str,
+    marker: &str,
+) -> bool {
+    let arr_val = hooks_obj
+        .entry(event.to_string())
+        .or_insert_with(|| serde_json::json!([]));
+    let Some(arr) = arr_val.as_array_mut() else {
+        return false;
+    };
+    let mut migrated = false;
+    arr.retain_mut(|entry| {
+        let Some(hs) = entry.get_mut("hooks").and_then(|h| h.as_array_mut()) else {
+            return true;
+        };
+        let before = hs.len();
+        hs.retain(|h| {
+            let Some(cmd) = h.get("command").and_then(|c| c.as_str()) else {
+                return true;
+            };
+            !(cmd.contains(marker) && cmd != command)
+        });
+        if hs.len() != before {
+            migrated = true;
+        }
+        !hs.is_empty()
+    });
+    let present = arr.iter().any(|entry| {
+        entry
+            .get("hooks")
+            .and_then(|h| h.as_array())
+            .map(|hs| {
+                hs.iter().any(|h| {
+                    h.get("command")
+                        .and_then(|c| c.as_str())
+                        .map(|s| s == command)
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    });
+    if !present {
+        arr.push(serde_json::json!({
+            "matcher": matcher,
+            "hooks": [{ "type": "command", "command": command }]
+        }));
+        return true;
+    }
+    migrated
+}
+
+// Register the permission-menu surfacing hook in settings.json: a
+// PermissionRequest entry (surface the menu) and a PostToolUse entry (clear it
+// when the prompt is answered). Matcher ".*" on both — PermissionRequest only
+// fires when a dialog will show, and a live menu blocks the session so the next
+// PostToolUse is the answer; catching every tool (incl. dynamic mcp__* names)
+// beats missing one and stranding a menu. Idempotent + migration-tolerant,
+// mirroring merge_worklist_guard_into_settings. Ok(true) if anything changed.
+fn merge_permission_menu_hook_into_settings(settings_path: &Path) -> Result<bool, String> {
+    let existing = std::fs::read_to_string(settings_path).unwrap_or_default();
+    let mut value: serde_json::Value = if existing.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&existing)
+            .map_err(|e| format!("parse {}: {}", settings_path.display(), e))?
+    };
+    if !value.is_object() {
+        return Err(format!("{} root is not a JSON object", settings_path.display()));
+    }
+    let root = value.as_object_mut().unwrap();
+    let hooks = root
+        .entry("hooks".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !hooks.is_object() {
+        return Err(format!("{}: hooks is not a JSON object", settings_path.display()));
+    }
+    let hooks_obj = hooks.as_object_mut().unwrap();
+    let marker = "permission-menu-hook.py";
+    let mut changed = false;
+    changed |= merge_command_hook_into_event(
+        hooks_obj,
+        "PermissionRequest",
+        ".*",
+        ENHANCE_MENU_HOOK_COMMAND,
+        marker,
+    );
+    changed |=
+        merge_command_hook_into_event(hooks_obj, "PostToolUse", ".*", ENHANCE_MENU_HOOK_COMMAND, marker);
+    if !changed {
+        return Ok(false);
     }
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent)
@@ -14340,6 +14505,13 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let hook_script_current =
         hook_script_exists && hook_matches_bundle(app, &hook_script, ENHANCE_HOOK_BUNDLE_REL);
     let hook_registered = settings_has_worklist_guard_hook(&settings);
+    // Permission-menu surfacing hook — same currency/registration discipline as
+    // the worklist guard, so Setup prompts (and the Status tab flags drift) when
+    // the menu hook is missing or stale. Compared even in the source repo.
+    let menu_hook_script = proj.join(ENHANCE_MENU_HOOK_SCRIPT_REL);
+    let menu_hook_script_current = menu_hook_script.exists()
+        && hook_matches_bundle(app, &menu_hook_script, ENHANCE_MENU_HOOK_BUNDLE_REL);
+    let menu_hook_registered = settings_has_permission_menu_hook(&settings);
     let codex_agents_has_marker = std::fs::read_to_string(&codex_agents)
         .map(|s| {
             s.contains(ENHANCE_MARKER_START)
@@ -14364,7 +14536,9 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         && sidecar_exists
         && claude_sidecar_current
         && hook_script_current
-        && hook_registered;
+        && hook_registered
+        && menu_hook_script_current
+        && menu_hook_registered;
     let codex_installed = core_installed
         && codex_agents_has_marker
         && codex_agents_current
@@ -14672,6 +14846,41 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
         std::fs::set_permissions(&hook_path, perms).map_err(|e| format!("chmod hook: {}", e))?;
     }
 
+    // Permission-menu surfacing hook — same install discipline as the worklist
+    // guard above (copy bundle, chmod on unix). force||!is_source_repo so bundle
+    // bumps always land outside the source repo (#173).
+    let (menu_hook_bytes, _mime) = serve_app_file(Some(app), ENHANCE_MENU_HOOK_BUNDLE_REL)
+        .ok_or_else(|| "permission-menu-hook.py bundle not found".to_string())?;
+    let menu_hook_path = proj.join(ENHANCE_MENU_HOOK_SCRIPT_REL);
+    if let Some(parent) = menu_hook_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {}", parent.display(), e))?;
+    }
+    #[cfg_attr(not(unix), allow(unused_variables))]
+    let menu_hook_written = write_hook_template_if_safe(
+        app,
+        &menu_hook_path,
+        &menu_hook_bytes,
+        force || !is_source_repo,
+        &mut wrote,
+        &mut skipped,
+        "setup-install",
+        ENHANCE_MENU_HOOK_BUNDLE_REL,
+        is_source_repo,
+        file!(),
+        line!(),
+    )?;
+    #[cfg(unix)]
+    if menu_hook_written {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&menu_hook_path)
+            .map_err(|e| format!("stat menu hook: {}", e))?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&menu_hook_path, perms)
+            .map_err(|e| format!("chmod menu hook: {}", e))?;
+    }
+
     // Pre-rename leftover script (bc3ee31). Idempotent: NotFound is fine.
     let old_hook_path = proj.join(".claude/hooks/proposal-guard.py");
     let _ = std::fs::remove_file(&old_hook_path);
@@ -14683,6 +14892,7 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
     prune_proposal_guard_from_settings(&settings_path)?;
     merge_claude_curl_allowlist_into_settings(&settings_path)?;
     merge_worklist_guard_into_settings(&settings_path)?;
+    merge_permission_menu_hook_into_settings(&settings_path)?;
     wrote.push(settings_path.display().to_string());
 
     // CLAUDE.md marker block — skipped on the source repo.

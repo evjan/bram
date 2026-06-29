@@ -576,13 +576,12 @@ fn apply_bram_menus_hook_driven_from_config(enabled: bool) {
 
 // Hook-primary coordination (menus.hookDriven). When the permission-menu hook
 // sets a menu it takes ownership of the agent-pane slot; the grid detector then
-// defers (no overwrite, no clear) until the hook releases it on its
-// PostToolUse/PermissionDenied clear. Stores the unix-ms the current hook menu
-// was set, or 0 when no hook menu owns the slot. Only ever non-zero while
+// defers (no overwrite, no clear) until the hook releases it on PostToolUse or
+// Bram observes Codex's PTY cancel output. Stores the unix-ms the current hook
+// menu was set, or 0 when no hook menu owns the slot. Only ever non-zero while
 // hookDriven is on (handle_permission_menu no-ops otherwise), so the grid is
 // unaffected when the flag is off.
-static MENU_HOOK_OWNER_MS: std::sync::atomic::AtomicI64 =
-    std::sync::atomic::AtomicI64::new(0);
+static MENU_HOOK_OWNER_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 // Past this many ms without a hook clear the grid may reclaim the slot (the
 // missed-clear backstop). Generous so a legitimately long-lived menu (user
 // deliberating) is never preempted; bounded so a truly stranded menu clears.
@@ -605,6 +604,26 @@ fn menu_hook_owns_slot() -> bool {
         return false;
     }
     true
+}
+
+fn clear_hook_permission_menu<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: &str,
+    tool: &str,
+    reason: &str,
+) {
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "hook-menu",
+            &format!(
+                "op=clear provider={} tool={} reason={}",
+                provider, tool, reason
+            ),
+        );
+    }
+    turn_state_set_menu(app, None, "hook-permission", "dismissed");
+    emit_pty_menu_with_prose(app, &None);
 }
 
 #[allow(dead_code)]
@@ -1427,7 +1446,11 @@ fn menu_prose_probe_record_open<R: tauri::Runtime>(
             "event=menu-open at_ms={} tool={} signature={}",
             now,
             tool,
-            if signature.is_some() { "present" } else { "absent" },
+            if signature.is_some() {
+                "present"
+            } else {
+                "absent"
+            },
         ),
     );
 }
@@ -1453,7 +1476,9 @@ fn menu_prose_probe_record_dismiss<R: tauri::Runtime>(app: &AppHandle<R>, tool: 
             now,
             tool,
             via,
-            since_open.map(|d| d.to_string()).unwrap_or_else(|| "na".into()),
+            since_open
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "na".into()),
         ),
     );
 }
@@ -1683,6 +1708,27 @@ fn grid_menu_is_bash_command_box(
     is_title(grid_header) || grid_above.iter().any(|l| is_title(l))
 }
 
+// True when a Codex grid snapshot is positively a live approval prompt. Codex
+// is hook-primary, so this only gates the fallback build when the hook did not
+// own the slot. The grid reader can report ordinary transcript prose that
+// happens to contain "Yes, proceed" / "tell Codex" option text; without this
+// surrounding-context check, a hook clear can be followed by a stale fake menu.
+fn grid_menu_is_codex_permission_box(grid_above: &[String], grid_header: &str) -> bool {
+    let is_signal = |s: &str| {
+        let lc = s.trim().to_lowercase();
+        lc.contains("would you like to run")
+            || lc.contains("requires approval")
+            || lc.contains("do you want to proceed")
+            || lc.contains("press enter to confirm")
+            || lc.contains("environment:")
+            || lc.starts_with("reason:")
+            || lc.starts_with('$')
+            || lc.starts_with("shell(")
+            || lc.starts_with("shell:")
+    };
+    is_signal(grid_header) || grid_above.iter().any(|l| is_signal(l))
+}
+
 // #182 incident 8 instrumentation. Adjacent trace line to every
 // `pty-menu-changed` emit that previews the parsed `options` array —
 // `tool=<name> count=<n> options=[key="label", key="label", ...]`.
@@ -1723,7 +1769,6 @@ fn trace_pty_menu_options<R: tauri::Runtime>(app: &AppHandle<R>, payload: &Optio
     );
 }
 
-
 // True when `line` looks like the menu footer — "Esc to cancel",
 // "Tab to amend", or "ctrl+e to explain". Whitespace-insensitive so
 // the strip_ansi-collapsed shape ("Esctocancel·Tabtoamend…") matches
@@ -1743,10 +1788,6 @@ fn line_is_menu_footer(line: &str) -> bool {
         || collapsed.contains("tabtoamend")
         || collapsed.contains("ctrl+etoexplain")
 }
-
-
-
-
 
 // PtyMenu equality compares only `tool` — `text` carries surrounding
 // PTY bytes captured by position (`pos1 - 200`..`pos2 + 200`), which
@@ -2079,13 +2120,13 @@ fn emit_pty_menu_with_prose<R: tauri::Runtime>(app: &AppHandle<R>, payload: &Opt
     emit_replayable_payload(app, "pty-menu-changed", value);
 }
 
-// Label one `permission_suggestions` entry. Type-aware (the union spans
-// addRules with/without ruleContent, addDirectories, and setMode — see
-// docs/pty-menu-hook-catalog.md). setMode is handled by the caller (it folds
-// into the terminal's shift+tab affordance and is NOT a numbered row), so it
-// never reaches here; an unrecognized type still gets a generic label so the
-// option count stays aligned with the terminal.
-fn permission_suggestion_label(s: &serde_json::Value) -> String {
+// The grant FRAGMENT for one `permission_suggestions` entry — the noun phrase
+// only (no "Yes, and …" prefix), so the caller can fold several into a single
+// combined "allow all" option. Claude Code always renders a tool call's
+// allow-suggestions as ONE option (see docs/pty-menu-hook-catalog.md). Renders
+// every rule in the suggestion. setMode is filtered out by the caller (it folds
+// into the shift+tab affordance); an unrecognized type yields an empty fragment.
+fn permission_suggestion_fragment(s: &serde_json::Value) -> String {
     match s.get("type").and_then(|t| t.as_str()) {
         Some("addDirectories") => {
             let dir = s
@@ -2094,29 +2135,34 @@ fn permission_suggestion_label(s: &serde_json::Value) -> String {
                 .and_then(|d| d.first())
                 .and_then(|d| d.as_str())
                 .unwrap_or("");
-            let name = dir.rsplit('/').find(|p| !p.is_empty()).unwrap_or("this directory");
-            format!("Yes, and allow access to {}/", name)
+            let name = dir
+                .rsplit('/')
+                .find(|p| !p.is_empty())
+                .unwrap_or("this directory");
+            format!("access to {}/", name)
         }
-        Some("addRules") => {
-            let rule = s
-                .get("rules")
-                .and_then(|r| r.as_array())
-                .and_then(|r| r.first());
-            let content = rule
-                .and_then(|r| r.get("ruleContent").and_then(|c| c.as_str()))
-                .unwrap_or("");
-            let tool_name = rule
-                .and_then(|r| r.get("toolName").and_then(|c| c.as_str()))
-                .unwrap_or("");
-            if !content.is_empty() {
-                format!("Yes, and always allow {}", content)
-            } else if !tool_name.is_empty() {
-                format!("Yes, and always allow {}", tool_name)
-            } else {
-                "Yes, and allow this in future".to_string()
-            }
-        }
-        _ => "Yes, and allow this in future".to_string(),
+        Some("addRules") => s
+            .get("rules")
+            .and_then(|r| r.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|r| {
+                        let content = r.get("ruleContent").and_then(|c| c.as_str()).unwrap_or("");
+                        if !content.is_empty() {
+                            return Some(content.to_string());
+                        }
+                        let tool_name = r.get("toolName").and_then(|c| c.as_str()).unwrap_or("");
+                        if !tool_name.is_empty() {
+                            Some(tool_name.to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" + ")
+            })
+            .unwrap_or_default(),
+        _ => String::new(),
     }
 }
 
@@ -2164,6 +2210,172 @@ fn askuserquestion_to_menu(value: &serde_json::Value, tool: &str) -> Option<PtyM
     })
 }
 
+fn split_shell_words_limited(input: &str, limit: usize) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.chars().peekable();
+    let mut single = false;
+    let mut double = false;
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            '\\' if !single => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            c if c.is_whitespace() && !single && !double => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                    if words.len() >= limit {
+                        break;
+                    }
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if words.len() < limit && !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+fn shell_basename(command: &str) -> &str {
+    command.rsplit('/').next().unwrap_or(command)
+}
+
+fn unwrap_codex_shell_command(command: &str) -> Option<String> {
+    let words = split_shell_words_limited(command, 3);
+    if words.len() < 3 {
+        return None;
+    }
+    let shell = shell_basename(&words[0]);
+    let flag = words[1].as_str();
+    let is_shell = matches!(shell, "bash" | "sh" | "zsh");
+    let is_command_flag = flag.starts_with('-') && flag.contains('c');
+    if is_shell && is_command_flag && !words[2].trim().is_empty() {
+        Some(words[2].trim().to_string())
+    } else {
+        None
+    }
+}
+
+fn codex_command_policy_prefix(command: &str) -> String {
+    let prefix = unwrap_codex_shell_command(command)
+        .unwrap_or_else(|| command.trim().to_string())
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string();
+    if prefix.is_empty() {
+        "this command".to_string()
+    } else {
+        prefix
+    }
+}
+
+// Build a canonical menu from Codex PermissionRequest hook payloads. Codex does
+// not send Claude-style permission_suggestions; the first confirmed payload
+// carries tool_name + tool_input. Use Codex's mostly-static label families from
+// docs/codex-permissions.md and let the grid path remain the fallback for
+// under-specified or newly discovered shapes.
+fn codex_permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu> {
+    let tool_name = value
+        .get("tool_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if tool_name.is_empty() {
+        return None;
+    }
+    let ti = value.get("tool_input");
+    let command = ti
+        .and_then(|t| t.get("command").and_then(|c| c.as_str()))
+        .unwrap_or("");
+    let description = ti
+        .and_then(|t| t.get("description").and_then(|d| d.as_str()))
+        .unwrap_or("");
+    let file_path = ti
+        .and_then(|t| t.get("file_path").and_then(|p| p.as_str()))
+        .or_else(|| ti.and_then(|t| t.get("path").and_then(|p| p.as_str())))
+        .unwrap_or("");
+
+    let visible_tool = if tool_name == "Bash" {
+        "Shell"
+    } else {
+        tool_name
+    };
+    let detail = if !command.is_empty() {
+        command
+    } else if !file_path.is_empty() {
+        file_path
+    } else if !description.is_empty() {
+        description
+    } else {
+        ""
+    };
+    let text = if detail.is_empty() {
+        format!("{} requires approval", visible_tool)
+    } else {
+        format!("{}: {}", visible_tool, detail)
+    };
+
+    let mut options = vec![MenuOption {
+        key: "1".to_string(),
+        label: "Yes, proceed".to_string(),
+    }];
+    match tool_name {
+        "Bash" => {
+            let prefix = codex_command_policy_prefix(command);
+            options.push(MenuOption {
+                key: "2".to_string(),
+                label: format!(
+                    "Yes, and don't ask again for commands that start with {}",
+                    prefix
+                ),
+            });
+            options.push(MenuOption {
+                key: "3".to_string(),
+                label: "No, and tell Codex what to do differently".to_string(),
+            });
+        }
+        "apply_patch" | "Edit" | "Write" => {
+            options.push(MenuOption {
+                key: "2".to_string(),
+                label: "Yes, and don't ask again for these files".to_string(),
+            });
+            options.push(MenuOption {
+                key: "3".to_string(),
+                label: "No, and tell Codex what to do differently".to_string(),
+            });
+        }
+        _ => {
+            options.push(MenuOption {
+                key: "2".to_string(),
+                label: "No, and tell Codex what to do differently".to_string(),
+            });
+        }
+    }
+
+    Some(PtyMenu {
+        tool: visible_tool.to_string(),
+        text,
+        options,
+        tool_call_signature: if detail.is_empty() {
+            None
+        } else {
+            Some(format!("{}({})", visible_tool, detail))
+        },
+        tool_call_diff: None,
+        tool_call_content: None,
+        cache_source: None,
+        at_host_ms: None,
+        signature_source: Some("hook"),
+    })
+}
+
 // Build a canonical permission menu from a Claude Code PermissionRequest
 // payload. The on-screen option LABELS are CLI-rendered (and prone to wrap
 // corruption); we synthesize clean ones from structured fields instead, keying
@@ -2179,6 +2391,9 @@ fn askuserquestion_to_menu(value: &serde_json::Value, tool: &str) -> Option<PtyM
 // => 3-option; Skill's [addRules,addRules] => 4-option. See
 // docs/pty-menu-hook-catalog.md for the full confirmed union.
 fn permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu> {
+    if value.get("provider").and_then(|v| v.as_str()) == Some("codex") {
+        return codex_permission_request_to_menu(value);
+    }
     let tool = value
         .get("tool_name")
         .and_then(|v| v.as_str())
@@ -2215,23 +2430,37 @@ fn permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu> {
         key: "1".to_string(),
         label: "Yes".to_string(),
     }];
-    if let Some(arr) = value
+    // Claude Code folds ALL of a tool call's allow-suggestions into a SINGLE
+    // "allow all" option (validated: Family-A terminal menus are never >3
+    // options). Build one combined option from every non-setMode suggestion so
+    // the pane's count + keystrokes match the terminal — one option per
+    // suggestion over-counts (e.g. a path read + a command: terminal shows 3,
+    // per-suggestion showed 4, which misaligned the keystrokes). setMode folds
+    // into that option's shift+tab affordance and is not its own row.
+    let allow_suggestions: Vec<&serde_json::Value> = value
         .get("permission_suggestions")
         .and_then(|v| v.as_array())
-    {
-        for s in arr {
-            // setMode folds into the terminal's (shift+tab) affordance — it is
-            // NOT a numbered row, so skip it to keep the option count aligned
-            // with the CLI (the count-rule break for the file-edit family).
-            if s.get("type").and_then(|t| t.as_str()) == Some("setMode") {
-                continue;
-            }
-            let key = (options.len() + 1).to_string();
-            options.push(MenuOption {
-                key,
-                label: permission_suggestion_label(s),
-            });
-        }
+        .map(|arr| {
+            arr.iter()
+                .filter(|s| s.get("type").and_then(|t| t.as_str()) != Some("setMode"))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !allow_suggestions.is_empty() {
+        let fragments: Vec<String> = allow_suggestions
+            .iter()
+            .map(|s| permission_suggestion_fragment(s))
+            .filter(|f| !f.is_empty())
+            .collect();
+        let label = if fragments.is_empty() {
+            "Yes, and allow this in future".to_string()
+        } else {
+            format!("Yes, and allow {}", fragments.join(" and "))
+        };
+        options.push(MenuOption {
+            key: "2".to_string(),
+            label,
+        });
     }
     options.push(MenuOption {
         key: (options.len() + 1).to_string(),
@@ -2268,8 +2497,20 @@ fn handle_permission_menu<R: tauri::Runtime>(
         );
     }
     if clear {
-        turn_state_set_menu(app, None, "hook-permission", "dismissed");
-        emit_pty_menu_with_prose(app, &None);
+        let value: serde_json::Value =
+            serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
+        clear_hook_permission_menu(
+            app,
+            value
+                .get("provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?"),
+            value
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?"),
+            "hook-clear",
+        );
         return (
             200,
             "application/json; charset=utf-8",
@@ -2297,7 +2538,15 @@ fn handle_permission_menu<R: tauri::Runtime>(
         append_bram_trace_line(
             app,
             "hook-menu",
-            &format!("op=permission tool={} options={}", menu.tool, menu.options.len()),
+            &format!(
+                "op=permission provider={} tool={} options={}",
+                value
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("claude"),
+                menu.tool,
+                menu.options.len()
+            ),
         );
     }
     let payload = Some(menu);
@@ -2395,6 +2644,38 @@ fn last_banner_user_ts_ms_cell() -> &'static Mutex<i64> {
 
 fn kill_current_claude_turn<R: tauri::Runtime>(app: &AppHandle<R>) {
     kill_current_claude_turn_with_finished(app, None, None);
+}
+
+fn kill_current_codex_turn_from_pty_cancel<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let current_ts = latest_session_path(app, None)
+        .ok()
+        .flatten()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|content| codex_latest_user_message_ts_ms(&content))
+        .or_else(|| {
+            turn_state_cell()
+                .lock()
+                .ok()
+                .and_then(|g| g.turn_stamp.as_deref().and_then(|s| s.parse::<i64>().ok()))
+        })
+        .unwrap_or_else(unix_now_ms);
+    if let Ok(mut g) = last_killed_user_ts_ms_cell().lock() {
+        *g = current_ts;
+    }
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "turn-end-defer",
+            &format!(
+                "op=fire reason=codex-pty-output-user-cancel userTs={}",
+                current_ts
+            ),
+        );
+    }
+    if agent_status_emit_finished(app, "codex", None, None, "pty-output-user-cancel") {
+        trace_emit_signal(app, "agent-turn-killed");
+        let _ = app.emit("agent-turn-killed", ());
+    }
 }
 
 // End the current turn. The row briefly displays a "finished" cue
@@ -2697,10 +2978,7 @@ fn start_claude_turn_stats_poll<R: tauri::Runtime>(app_handle: AppHandle<R>) {
     }
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(300));
-        if !matches!(
-            current_provider(&app_handle),
-            Some(SessionProvider::Claude)
-        ) {
+        if !matches!(current_provider(&app_handle), Some(SessionProvider::Claude)) {
             // Clear cache when Claude isn't active so the row doesn't
             // surface stale data after a provider switch.
             if let Ok(mut guard) = claude_turn_stats_cell().lock() {
@@ -3202,6 +3480,23 @@ fn agent_status_set_codex_jsonl_working<R: tauri::Runtime>(
         return;
     }
     let started_at_ms = turn_started_at_ms.unwrap_or(file_mtime_ms).max(0);
+    let killed_ts = last_killed_user_ts_ms_cell()
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(0);
+    if codex_killed_turn_suppresses_jsonl_working(started_at_ms, killed_ts) {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "agent-status",
+                &format!(
+                    "op=skip-codex-jsonl-working reason=killed-turn userTs={} killedTs={} jsonlReason={}",
+                    started_at_ms, killed_ts, reason
+                ),
+            );
+        }
+        return;
+    }
     let elapsed_ms = unix_now_ms().saturating_sub(started_at_ms);
     let grid_status = latest_fresh_grid_status_for("codex");
     let next = if let Some((verb, elapsed, substate, _)) = grid_status {
@@ -3264,6 +3559,10 @@ fn apply_codex_jsonl_working_turn_state(
     if s.pending_menu.is_none() {
         s.phase = "working".to_string();
     }
+}
+
+fn codex_killed_turn_suppresses_jsonl_working(started_at_ms: i64, killed_ts: i64) -> bool {
+    killed_ts > 0 && started_at_ms <= killed_ts
 }
 
 fn agent_status_set_claude_jsonl_working<R: tauri::Runtime>(
@@ -3341,9 +3640,8 @@ fn pty_agent_turn_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     turn_state_note_pty_activity();
     let now = std::time::Instant::now();
     let has_activity_glyph = pty_chunk_has_turn_activity_glyph(chunk);
-    let has_codex_working_status =
-        matches!(current_provider(app), Some(SessionProvider::Codex))
-            && pty_chunk_has_codex_working_status(chunk);
+    let has_codex_working_status = matches!(current_provider(app), Some(SessionProvider::Codex))
+        && pty_chunk_has_codex_working_status(chunk);
     let has_spinner = has_activity_glyph || has_codex_working_status;
     let mut emit_now = false;
     let mut spinner_started = false;
@@ -3639,8 +3937,7 @@ fn report_grid_status(payload: serde_json::Value) {
 // grid — supplies the finished-cue elapsed at full fidelity, where strip_ansi
 // drops a digit ("1m 22s" -> "1m 2s").
 fn latest_grid_banner_cell() -> &'static Mutex<Option<(String, String, i64)>> {
-    static LATEST_GRID_BANNER: OnceLock<Mutex<Option<(String, String, i64)>>> =
-        OnceLock::new();
+    static LATEST_GRID_BANNER: OnceLock<Mutex<Option<(String, String, i64)>>> = OnceLock::new();
     LATEST_GRID_BANNER.get_or_init(|| Mutex::new(None))
 }
 
@@ -4101,8 +4398,7 @@ fn pty_skip_buffer_looks_menu_bearing(stripped: &[u8]) -> bool {
 fn pty_menu_scan_excerpt(stripped: &[u8]) -> String {
     const CAP: usize = 200;
     let header: &[u8] = b"Do you want";
-    let pos1 =
-        pty_menu_anchor_pos(stripped).or_else(|| pty_any_numbered_menu_anchor_pos(stripped));
+    let pos1 = pty_menu_anchor_pos(stripped).or_else(|| pty_any_numbered_menu_anchor_pos(stripped));
     let header_pos = stripped.windows(header.len()).rposition(|w| w == header);
     let start = match (header_pos, pos1) {
         (Some(h), Some(p)) => h.min(p),
@@ -4116,7 +4412,11 @@ fn pty_menu_scan_excerpt(stripped: &[u8]) -> String {
     // injects between option lines into single spaces; the quote swap
     // keeps the value from breaking the `key='value'` trace grammar.
     let collapsed = region.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed.chars().take(CAP).collect::<String>().replace('\'', "’")
+    collapsed
+        .chars()
+        .take(CAP)
+        .collect::<String>()
+        .replace('\'', "’")
 }
 
 // Diagnostic summary of which menu-detection anchors are present in
@@ -4365,10 +4665,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     // force `detected = None` from the grid, so an uncovered-shape menu the
     // host caught is never clobbered.
     let mut grid_was_fresh = false;
-    let grid_snapshot = latest_grid_menu_cell()
-        .lock()
-        .ok()
-        .and_then(|c| c.clone());
+    let grid_snapshot = latest_grid_menu_cell().lock().ok().and_then(|c| c.clone());
     if let Some(GridMenuSnapshot {
         options: grid_opts,
         header: grid_header,
@@ -4414,51 +4711,78 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                     menu.options = grid_opts;
                 }
                 None => {
-                    if matches!(
-                        current_provider(app),
-                        Some(SessionProvider::Codex)
-                    ) {
-                        // Codex parity: the JSONL/⏺ lookup is Claude-shaped and
-                        // can return a stale Claude signature while a Codex menu
-                        // is visible. For Codex, build straight from the fresh
-                        // grid snapshot. Liveness is already gated by the grid
-                        // reader (the "Yes" option-1 discriminator + the
-                        // (y)/(p)/(esc) Codex signal); the #193 fingerprint
-                        // (option labels) + the 1.5s freshness window guard
-                        // post-dismiss ghosts. Codex renders the command in
-                        // `above`.
-                        let command = grid_menu_command_preview(&grid_above, &grid_header);
-                        let tool = "Shell".to_string();
-                        if bram_trace_enabled() {
-                            // Log the raw `above` so the first real Codex menu
-                            // reveals the exact shape and we can refine the
-                            // command/tool extraction without guessing blind.
+                    if matches!(current_provider(app), Some(SessionProvider::Codex)) {
+                        // Codex hook-primary: while the structured hook owns
+                        // the visible menu, the grid is only fallback evidence.
+                        // Do not rebuild the same menu from xterm on every
+                        // redraw; that reintroduces churn and noisy
+                        // build-codex traces. If the hook is absent/stale or
+                        // failed to post, no hook owner is present and this
+                        // branch remains the fallback.
+                        if menu_hook_owns_slot() {
+                            if bram_trace_enabled() {
+                                append_bram_trace_line(
+                                    app,
+                                    "grid-menu",
+                                    &format!(
+                                        "op=codex-build-deferred reason=hook-owned grid_count={} grid=[{}]",
+                                        grid_opts.len(),
+                                        grid_labels()
+                                    ),
+                                );
+                            }
+                        } else if grid_menu_is_codex_permission_box(&grid_above, &grid_header) {
+                            // Codex parity: the JSONL/⏺ lookup is Claude-shaped
+                            // and can return a stale Claude signature while a
+                            // Codex menu is visible. For Codex fallback, build
+                            // straight from the fresh grid snapshot. Liveness is
+                            // gated by the grid reader and by the positive
+                            // Codex approval-context check above; the #193
+                            // fingerprint (option labels) + the 1.5s freshness
+                            // window guard post-dismiss ghosts. Codex renders
+                            // the command in `above`.
+                            let command = grid_menu_command_preview(&grid_above, &grid_header);
+                            let tool = "Shell".to_string();
+                            if bram_trace_enabled() {
+                                append_bram_trace_line(
+                                    app,
+                                    "grid-menu",
+                                    &format!(
+                                        "op=build-codex tool={} grid_count={} cmd={:?} header={:?} above={:?} grid=[{}]",
+                                        tool,
+                                        grid_opts.len(),
+                                        command,
+                                        grid_header,
+                                        grid_above,
+                                        grid_labels()
+                                    ),
+                                );
+                            }
+                            let signature = format!("{}({})", tool, command);
+                            detected = Some(PtyMenu {
+                                tool,
+                                text: command,
+                                options: grid_opts,
+                                tool_call_signature: Some(signature),
+                                tool_call_diff: None,
+                                tool_call_content: None,
+                                cache_source: None,
+                                at_host_ms: None,
+                                signature_source: Some("grid"),
+                            });
+                        } else if bram_trace_enabled() {
                             append_bram_trace_line(
                                 app,
                                 "grid-menu",
                                 &format!(
-                                    "op=build-codex tool={} grid_count={} cmd={:?} header={:?} above={:?} grid=[{}]",
-                                    tool,
+                                    "op=hold-codex-nosig reason=no-codex-box grid_count={} header={:?} above={:?} grid=[{}]",
                                     grid_opts.len(),
-                                    command,
                                     grid_header,
                                     grid_above,
                                     grid_labels()
                                 ),
                             );
                         }
-                        let signature = format!("{}({})", tool, command);
-                        detected = Some(PtyMenu {
-                            tool,
-                            text: command,
-                            options: grid_opts,
-                            tool_call_signature: Some(signature),
-                            tool_call_diff: None,
-                            tool_call_content: None,
-                            cache_source: None,
-                            at_host_ms: None,
-                            signature_source: Some("grid"),
-                        });
                     } else {
                         // Host missed the menu box. Only build when there's a LIVE
                         // pending tool call (signature present) — that's what makes
@@ -4502,7 +4826,11 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                                 at_host_ms: None,
                                 signature_source: Some("jsonl"),
                             });
-                        } else if grid_menu_is_bash_command_box(&grid_opts, &grid_above, &grid_header) {
+                        } else if grid_menu_is_bash_command_box(
+                            &grid_opts,
+                            &grid_above,
+                            &grid_header,
+                        ) {
                             // No pending tool_use in the JSONL but the grid box is
                             // positively a "Bash command" approval box —
                             // records-stacked behavior, a manual-approval re-prompt,
@@ -4577,8 +4905,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             match detected.as_ref() {
                 None => *tr = None,
                 Some(menu) => {
-                    let is_new =
-                        !matches!(tr.as_ref(), Some((t, _, _)) if *t == menu.tool);
+                    let is_new = !matches!(tr.as_ref(), Some((t, _, _)) if *t == menu.tool);
                     if is_new {
                         *tr = Some((menu.tool.clone(), now, false));
                     }
@@ -4612,8 +4939,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
     if let Some(ref new_menu) = detected {
         if let Ok(suppressed) = pty_menu_suppressed_cell().lock() {
             if let Some(d) = suppressed.as_ref() {
-                if d.tool == new_menu.tool
-                    && d.when.elapsed() < std::time::Duration::from_secs(10)
+                if d.tool == new_menu.tool && d.when.elapsed() < std::time::Duration::from_secs(10)
                 {
                     // Fingerprint gate (#193): suppress only when this is the
                     // *identical* just-dismissed menu (matching signature, or
@@ -5351,7 +5677,10 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
             let fp = menu.as_ref().map(|m| {
                 (
                     m.tool.clone(),
-                    m.options.iter().map(|o| o.label.clone()).collect::<Vec<_>>(),
+                    m.options
+                        .iter()
+                        .map(|o| o.label.clone())
+                        .collect::<Vec<_>>(),
                     m.tool_call_signature.clone(),
                 )
             });
@@ -5391,8 +5720,7 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
                 "pty-menu",
                 &format!(
                     "state=dismissed tool={} reason=user-input grace_elapsed_ms={}",
-                    tool,
-                    0
+                    tool, 0
                 ),
             );
         }
@@ -5477,10 +5805,7 @@ fn schedule_single_esc_soft_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, esca
         std::thread::sleep(std::time::Duration::from_millis(SETTLE_MS));
         let mut waited = SETTLE_MS;
         loop {
-            if !matches!(
-                current_provider(&app_handle),
-                Some(SessionProvider::Claude)
-            ) {
+            if !matches!(current_provider(&app_handle), Some(SessionProvider::Claude)) {
                 return;
             }
             // A later Esc (including the double-tap that hard-kills) supersedes
@@ -7146,6 +7471,20 @@ fn pty_spawn(
                             &app_for_thread,
                             "pty-output-user-cancel",
                         );
+                        if matches!(
+                            current_provider(&app_for_thread),
+                            Some(SessionProvider::Codex)
+                        ) {
+                            if menu_hook_owns_slot() {
+                                clear_hook_permission_menu(
+                                    &app_for_thread,
+                                    "codex",
+                                    "?",
+                                    "pty-output-user-cancel",
+                                );
+                            }
+                            kill_current_codex_turn_from_pty_cancel(&app_for_thread);
+                        }
                     }
                     if on_data.send(buf[..n].to_vec()).is_err() {
                         break;
@@ -7912,7 +8251,12 @@ fn reload_agent_session(
     pty_write_internal(&app, &state, "\x03", "agent-reload-interrupt-2")?;
     trace_agent_pty_step(&app, "reload", provider_key, "interrupt-2");
     std::thread::sleep(std::time::Duration::from_millis(AGENT_RELAUNCH_SETTLE_MS));
-    pty_write_internal(&app, &state, &format!("{}\r", command), "agent-reload-launch")?;
+    pty_write_internal(
+        &app,
+        &state,
+        &format!("{}\r", command),
+        "agent-reload-launch",
+    )?;
     trace_agent_pty_step(&app, "reload", provider_key, "launch");
     // Point the transcript at the resumed session immediately rather than
     // waiting for the agent's first write to make it most-recent (see
@@ -8104,7 +8448,9 @@ fn schedule_agent_first_command<R: tauri::Runtime>(app: AppHandle<R>, source: &'
         return;
     }
     thread::spawn(move || {
-        thread::sleep(std::time::Duration::from_millis(AGENT_FIRST_COMMAND_SETTLE_MS));
+        thread::sleep(std::time::Duration::from_millis(
+            AGENT_FIRST_COMMAND_SETTLE_MS,
+        ));
         let state = app.state::<AppState>();
         let payload = format!("{}\r", command);
         match pty_write_internal(&app, &state, &payload, "agent-first-command") {
@@ -8201,9 +8547,7 @@ fn settings_view_from_config(config: Option<ProjectConfig>) -> serde_json::Value
                     .and_then(|w| w.batch_commit_actions)
                     .unwrap_or(false),
                 // Default OFF — the embedded target app is opt-in.
-                ui.as_ref()
-                    .and_then(|u| u.show_target_app)
-                    .unwrap_or(false),
+                ui.as_ref().and_then(|u| u.show_target_app).unwrap_or(false),
                 // Default OFF — only explicit `true` enables.
                 ui.and_then(|u| u.tools_pane_hot_reload).unwrap_or(false),
                 traces.as_ref().and_then(|t| t.enabled).unwrap_or(false),
@@ -8986,7 +9330,11 @@ fn git_dir_path<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
         return None;
     }
     let path = PathBuf::from(raw);
-    Some(if path.is_absolute() { path } else { root.join(path) })
+    Some(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
 }
 
 fn start_git_head_watch<R: tauri::Runtime>(app_handle: AppHandle<R>) {
@@ -9015,7 +9363,11 @@ fn start_git_head_watch<R: tauri::Runtime>(app_handle: AppHandle<R>) {
             }
         };
         if let Err(e) = watcher.watch(&head_path, RecursiveMode::NonRecursive) {
-            eprintln!("[git-head-watch] watch {} failed: {}", head_path.display(), e);
+            eprintln!(
+                "[git-head-watch] watch {} failed: {}",
+                head_path.display(),
+                e
+            );
             return;
         }
         eprintln!("[git-head-watch] watching {}", head_path.display());
@@ -10459,7 +10811,11 @@ fn search_sessions<R: tauri::Runtime>(
         return Ok(Vec::new());
     }
     let q_lower = q.to_lowercase();
-    let bounded_limit = if limit == usize::MAX { None } else { Some(limit) };
+    let bounded_limit = if limit == usize::MAX {
+        None
+    } else {
+        Some(limit)
+    };
     let (provider, mut sessions) = sessions_for_provider(app, preferred, bounded_limit)?;
     if bounded_limit.is_none() {
         sessions.truncate(limit);
@@ -13642,6 +13998,8 @@ const ENHANCE_HOOK_BUNDLE_REL: &str = "__shell/worklist-guard.py";
 // Bram-managed (presence of resources/.worklist-authorization.json).
 const ENHANCE_CODEX_HOOK_BUNDLE_REL: &str = "shell/worklist-guard-codex.py";
 const ENHANCE_CODEX_HOOK_INSTALL_REL: &str = ".bram/codex-worklist-guard.py";
+const ENHANCE_CODEX_MENU_HOOK_BUNDLE_REL: &str = "shell/codex-permission-menu-hook.py";
+const ENHANCE_CODEX_MENU_HOOK_INSTALL_REL: &str = ".bram/codex-permission-menu-hook.py";
 const ENHANCE_CODEX_CONFIG_REL: &str = ".codex/config.toml";
 const ENHANCE_CODEX_TRUST_ACK_LEGACY_REL: &str = ".bram/codex-trust-ack";
 // TOML-comment markers delimit the Bram block inside codex's
@@ -13724,8 +14082,7 @@ const ENHANCE_MENU_HOOK_BUNDLE_REL: &str = "__shell/permission-menu-hook.py";
 const ENHANCE_MENU_HOOK_COMMAND: &str =
     "py -3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/permission-menu-hook.py\"";
 #[cfg(not(windows))]
-const ENHANCE_MENU_HOOK_COMMAND: &str =
-    "$CLAUDE_PROJECT_DIR/.claude/hooks/permission-menu-hook.py";
+const ENHANCE_MENU_HOOK_COMMAND: &str = "$CLAUDE_PROJECT_DIR/.claude/hooks/permission-menu-hook.py";
 // Presence of this file in the project root means the project IS the Bram
 // source repo (it bundles the conventions). enhance_status treats it as a
 // valid sidecar location; run_enhance skips the parts that would otherwise
@@ -14101,14 +14458,20 @@ fn merge_permission_menu_hook_into_settings(settings_path: &Path) -> Result<bool
             .map_err(|e| format!("parse {}: {}", settings_path.display(), e))?
     };
     if !value.is_object() {
-        return Err(format!("{} root is not a JSON object", settings_path.display()));
+        return Err(format!(
+            "{} root is not a JSON object",
+            settings_path.display()
+        ));
     }
     let root = value.as_object_mut().unwrap();
     let hooks = root
         .entry("hooks".to_string())
         .or_insert_with(|| serde_json::json!({}));
     if !hooks.is_object() {
-        return Err(format!("{}: hooks is not a JSON object", settings_path.display()));
+        return Err(format!(
+            "{}: hooks is not a JSON object",
+            settings_path.display()
+        ));
     }
     let hooks_obj = hooks.as_object_mut().unwrap();
     let marker = "permission-menu-hook.py";
@@ -14120,9 +14483,15 @@ fn merge_permission_menu_hook_into_settings(settings_path: &Path) -> Result<bool
         ENHANCE_MENU_HOOK_COMMAND,
         marker,
     );
-    changed |=
-        merge_command_hook_into_event(hooks_obj, "PostToolUse", ".*", ENHANCE_MENU_HOOK_COMMAND, marker);
-    // No/Esc answers fire PermissionDenied, not PostToolUse — clear on it too.
+    changed |= merge_command_hook_into_event(
+        hooks_obj,
+        "PostToolUse",
+        ".*",
+        ENHANCE_MENU_HOOK_COMMAND,
+        marker,
+    );
+    // Claude Code emits PermissionDenied on No/Esc answers; Codex does not
+    // have this hook event and handles denial clears from PTY cancel output.
     changed |= merge_command_hook_into_event(
         hooks_obj,
         "PermissionDenied",
@@ -14597,6 +14966,151 @@ fn codex_instr_block_current(config_path: &Path) -> bool {
     .unwrap_or(false)
 }
 
+fn codex_hook_toml_block(script_path: &Path, menu_script_path: &Path) -> String {
+    let script_str = script_path.display().to_string();
+    let menu_script_str = menu_script_path.display().to_string();
+    #[cfg(windows)]
+    let command_line = format!("py -3 \"{}\"", script_str.replace('"', "\\\""));
+    #[cfg(not(windows))]
+    let command_line = script_str.clone();
+    #[cfg(windows)]
+    let menu_command_line = format!("py -3 \"{}\"", menu_script_str.replace('"', "\\\""));
+    #[cfg(not(windows))]
+    let menu_command_line = menu_script_str.clone();
+    format!(
+        "{start}\n\
+         [[hooks.PreToolUse]]\n\
+         matcher = \"^(apply_patch|Bash|Write|Edit|mcp__.*)$\"\n\
+         \n\
+         [[hooks.PreToolUse.hooks]]\n\
+         type = \"command\"\n\
+         command = {command_quoted}\n\
+         timeout = 10\n\
+         statusMessage = \"Bram worklist guard\"\n\
+         \n\
+         [[hooks.PermissionRequest]]\n\
+         matcher = \"^(Bash|apply_patch|Write|Edit|mcp__.*)$\"\n\
+         \n\
+         [[hooks.PermissionRequest.hooks]]\n\
+         type = \"command\"\n\
+         command = {menu_command_quoted}\n\
+         timeout = 2\n\
+         statusMessage = \"Bram permission menu\"\n\
+         \n\
+         [[hooks.PostToolUse]]\n\
+         matcher = \"^(Bash|apply_patch|Write|Edit|mcp__.*)$\"\n\
+         \n\
+         [[hooks.PostToolUse.hooks]]\n\
+         type = \"command\"\n\
+         command = {menu_command_quoted}\n\
+         timeout = 2\n\
+         statusMessage = \"Bram permission menu clear\"\n\
+         {end}",
+        start = ENHANCE_CODEX_TOML_MARKER_START,
+        end = ENHANCE_CODEX_TOML_MARKER_END,
+        command_quoted = toml_basic_string(&command_line),
+        menu_command_quoted = toml_basic_string(&menu_command_line),
+    )
+}
+
+fn normalize_codex_hook_block_for_currentness(block: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut skipping_hooks_state = false;
+    for line in block.lines() {
+        let trimmed = line.trim();
+        let is_hooks_state_table =
+            trimmed == "[hooks.state]" || trimmed.starts_with("[hooks.state.");
+        if is_hooks_state_table {
+            while kept.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+                kept.pop();
+            }
+            skipping_hooks_state = true;
+            continue;
+        }
+        if skipping_hooks_state {
+            if trimmed == ENHANCE_CODEX_TOML_MARKER_END {
+                skipping_hooks_state = false;
+            } else if trimmed.starts_with('[') {
+                skipping_hooks_state = false;
+            } else {
+                continue;
+            }
+        }
+        kept.push(line);
+    }
+    kept.join("\n")
+}
+
+fn codex_hook_block_current(
+    config_path: &Path,
+    script_path: &Path,
+    menu_script_path: &Path,
+) -> bool {
+    let expected = codex_hook_toml_block(script_path, menu_script_path);
+    let Ok(disk) = std::fs::read_to_string(config_path) else {
+        return false;
+    };
+    extract_marker_block(
+        &disk,
+        ENHANCE_CODEX_TOML_MARKER_START,
+        ENHANCE_CODEX_TOML_MARKER_END,
+    )
+    .map(|slice| normalize_codex_hook_block_for_currentness(slice) == expected)
+    .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod codex_hook_currentness_tests {
+    use super::*;
+
+    fn write_temp_config(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "bram-codex-hook-currentness-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("config.toml");
+        std::fs::write(&path, body).expect("write temp codex config");
+        path
+    }
+
+    #[test]
+    fn codex_hook_currentness_allows_trusted_hook_state_inside_marker_block() {
+        let script = PathBuf::from("/Users/example/.bram/codex-worklist-guard.py");
+        let menu_script = PathBuf::from("/Users/example/.bram/codex-permission-menu-hook.py");
+        let block = codex_hook_toml_block(&script, &menu_script);
+        let with_state = block.replace(
+            ENHANCE_CODEX_TOML_MARKER_END,
+            "[hooks.state]\n\n[hooks.state.\"/Users/example/.codex/config.toml:pre_tool_use:0:0\"]\ntrusted_hash = \"sha256:pre\"\n\n[hooks.state.\"/Users/example/.codex/config.toml:permission_request:0:0\"]\ntrusted_hash = \"sha256:permission\"\n# bram:end",
+        );
+        let config_path = write_temp_config("trusted-state", &with_state);
+
+        assert!(codex_hook_block_current(
+            &config_path,
+            &script,
+            &menu_script
+        ));
+    }
+
+    #[test]
+    fn codex_hook_currentness_rejects_stale_permission_denied_hook() {
+        let script = PathBuf::from("/Users/example/.bram/codex-worklist-guard.py");
+        let menu_script = PathBuf::from("/Users/example/.bram/codex-permission-menu-hook.py");
+        let block = codex_hook_toml_block(&script, &menu_script).replace(
+            ENHANCE_CODEX_TOML_MARKER_END,
+            "[[hooks.PermissionDenied]]\nmatcher = \"^(Bash|apply_patch|Write|Edit|mcp__.*)$\"\n\n[[hooks.PermissionDenied.hooks]]\ntype = \"command\"\ncommand = \"/Users/example/.bram/codex-permission-menu-hook.py\"\ntimeout = 2\nstatusMessage = \"Bram permission menu clear\"\n# bram:end",
+        );
+        let config_path = write_temp_config("permission-denied", &block);
+
+        assert!(!codex_hook_block_current(
+            &config_path,
+            &script,
+            &menu_script
+        ));
+    }
+}
+
 fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     use serde_json::json;
     let proj = project_root(Some(app)).ok_or("no project root")?;
@@ -14607,6 +15121,7 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
     let settings = proj.join(ENHANCE_SETTINGS_REL);
     let worklist_auth = proj.join(WORKLIST_AUTH_REL);
     let codex_hook_script = home_dir().map(|h| h.join(ENHANCE_CODEX_HOOK_INSTALL_REL));
+    let codex_menu_hook_script = home_dir().map(|h| h.join(ENHANCE_CODEX_MENU_HOOK_INSTALL_REL));
     let active_provider = current_provider(app);
     let is_source_repo = proj.join(ENHANCE_SOURCE_BUNDLE_REL).exists();
     let claude_md_has_marker = std::fs::read_to_string(&claude_md)
@@ -14655,8 +15170,22 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         .as_ref()
         .map(|p| hook_matches_bundle(app, p, ENHANCE_CODEX_HOOK_BUNDLE_REL))
         .unwrap_or(false);
+    let codex_menu_hook_current = codex_menu_hook_script
+        .as_ref()
+        .map(|p| hook_matches_bundle(app, p, ENHANCE_CODEX_MENU_HOOK_BUNDLE_REL))
+        .unwrap_or(false);
     let codex_agents_current = codex_agents_block_current(app, &codex_agents, is_source_repo);
     let codex_config_path = home_dir().map(|h| h.join(ENHANCE_CODEX_CONFIG_REL));
+    let codex_hook_block_current = match (
+        codex_config_path.as_ref(),
+        codex_hook_script.as_ref(),
+        codex_menu_hook_script.as_ref(),
+    ) {
+        (Some(config), Some(hook), Some(menu_hook)) => {
+            codex_hook_block_current(config, hook, menu_hook)
+        }
+        _ => false,
+    };
     let codex_instr_current = codex_config_path
         .as_ref()
         .map(|p| codex_instr_block_current(p))
@@ -14673,10 +15202,16 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         && codex_agents_has_marker
         && codex_agents_current
         && codex_hook_current
+        && codex_menu_hook_current
+        && codex_hook_block_current
         && codex_instr_current;
     let codex_install_stale_only = core_installed
         && codex_agents_has_marker
-        && (!codex_hook_current || !codex_agents_current || !codex_instr_current);
+        && (!codex_hook_current
+            || !codex_menu_hook_current
+            || !codex_hook_block_current
+            || !codex_agents_current
+            || !codex_instr_current);
     let claude_needs_setup = !core_installed || !claude_installed;
     let codex_needs_setup = !core_installed || !codex_installed;
     let provider_needs_setup = match active_provider {
@@ -14710,6 +15245,8 @@ fn enhance_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         "hookScript": hook_script_exists,
         "hookScriptCurrent": hook_script_current,
         "codexHookCurrent": codex_hook_current,
+        "codexMenuHookCurrent": codex_menu_hook_current,
+        "codexHookBlockCurrent": codex_hook_block_current,
         "codexAgentsCurrent": codex_agents_current,
         "codexInstrCurrent": codex_instr_current,
         "hookRegistered": hook_registered,
@@ -15101,12 +15638,15 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
         .map(|p| p.join(ENHANCE_SOURCE_BUNDLE_REL).exists())
         .unwrap_or(false);
     let script_path = home.join(ENHANCE_CODEX_HOOK_INSTALL_REL);
+    let menu_script_path = home.join(ENHANCE_CODEX_MENU_HOOK_INSTALL_REL);
     let config_path = home.join(ENHANCE_CODEX_CONFIG_REL);
     let mut wrote: Vec<String> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
 
     let (script_bytes, _mime) = serve_app_file(Some(app), ENHANCE_CODEX_HOOK_BUNDLE_REL)
         .ok_or_else(|| "worklist-guard-codex.py bundle not found".to_string())?;
+    let (menu_script_bytes, _mime) = serve_app_file(Some(app), ENHANCE_CODEX_MENU_HOOK_BUNDLE_REL)
+        .ok_or_else(|| "codex-permission-menu-hook.py bundle not found".to_string())?;
     if let Some(parent) = script_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create {}: {}", parent.display(), e))?;
@@ -15139,16 +15679,31 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
         std::fs::set_permissions(&script_path, perms)
             .map_err(|e| format!("chmod codex hook: {}", e))?;
     }
+    #[cfg_attr(not(unix), allow(unused_variables))]
+    let codex_menu_hook_written = write_hook_template_if_safe(
+        app,
+        &menu_script_path,
+        &menu_script_bytes,
+        true,
+        &mut wrote,
+        &mut skipped,
+        "setup-install",
+        ENHANCE_CODEX_MENU_HOOK_BUNDLE_REL,
+        is_source_repo,
+        file!(),
+        line!(),
+    )?;
+    #[cfg(unix)]
+    if codex_menu_hook_written {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&menu_script_path)
+            .map_err(|e| format!("stat codex permission-menu hook: {}", e))?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&menu_script_path, perms)
+            .map_err(|e| format!("chmod codex permission-menu hook: {}", e))?;
+    }
 
-    // Build the TOML block. On Windows we invoke through `py -3` for the
-    // same reason as the Claude hook; on Unix we run the script directly via
-    // its shebang. The matcher regex covers codex's canonical apply_patch +
-    // Bash and the Claude-style Write/Edit aliases codex accepts.
-    let script_str = script_path.display().to_string();
-    #[cfg(windows)]
-    let command_line = format!("py -3 \"{}\"", script_str.replace('"', "\\\""));
-    #[cfg(not(windows))]
-    let command_line = script_str.clone();
     // Matcher covers codex's canonical apply_patch + Bash, the Claude-style
     // Write/Edit aliases codex accepts, and any MCP tool (mcp__<server>__<tool>).
     // The MCP surface matters: a user with [mcp_servers.filesystem] configured
@@ -15162,21 +15717,7 @@ fn install_codex_worklist_guard<R: tauri::Runtime>(
     // be rendered in the developer-role context part, higher priority than
     // AGENTS.md (which is user-role). install_codex_developer_instructions
     // writes that field; this function only installs the runtime backstop.
-    let toml_block = format!(
-        "{start}\n\
-         [[hooks.PreToolUse]]\n\
-         matcher = \"^(apply_patch|Bash|Write|Edit|mcp__.*)$\"\n\
-         \n\
-         [[hooks.PreToolUse.hooks]]\n\
-         type = \"command\"\n\
-         command = {command_quoted}\n\
-         timeout = 10\n\
-         statusMessage = \"Bram worklist guard\"\n\
-         {end}",
-        start = ENHANCE_CODEX_TOML_MARKER_START,
-        end = ENHANCE_CODEX_TOML_MARKER_END,
-        command_quoted = toml_basic_string(&command_line),
-    );
+    let toml_block = codex_hook_toml_block(&script_path, &menu_script_path);
 
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
@@ -16069,7 +16610,10 @@ fn claude_jsonl_last_assistant_ts_ms(content: &str) -> Option<i64> {
 // turn and was read during the new turn's think/stream phase before its own
 // assistant record was flushed. Fails open (not stale) when either timestamp
 // is unknown, preserving prior behavior.
-fn claude_jsonl_end_is_stale(last_assistant_ts_ms: Option<i64>, turn_user_ts_ms: Option<i64>) -> bool {
+fn claude_jsonl_end_is_stale(
+    last_assistant_ts_ms: Option<i64>,
+    turn_user_ts_ms: Option<i64>,
+) -> bool {
     matches!((turn_user_ts_ms, last_assistant_ts_ms), (Some(u), Some(a)) if a < u)
 }
 
@@ -17790,6 +18334,48 @@ fn agent_coordination_rows<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<serde_j
             }
         }
     }
+    // --- User-global codex permission-menu hook script ---
+    {
+        let path_opt = home_dir().map(|h| h.join(ENHANCE_CODEX_MENU_HOOK_INSTALL_REL));
+        let signal = "~/.bram/codex-permission-menu-hook.py";
+        match path_opt {
+            None => rows.push(json!({
+                "signal": signal, "level": "warn", "state": "missing",
+                "detail": "HOME unset; cannot locate codex permission-menu hook install path.",
+                "seen": "",
+            })),
+            Some(path) => {
+                let seen = file_modified_iso(&path);
+                if !path.exists() {
+                    rows.push(json!({
+                        "signal": signal,
+                        "level": "warn",
+                        "state": "missing",
+                        "detail": "User-global codex permission-menu hook not installed. Run Setup.",
+                        "seen": seen,
+                    }));
+                } else {
+                    let matches =
+                        hook_matches_bundle(app, &path, ENHANCE_CODEX_MENU_HOOK_BUNDLE_REL);
+                    let disk_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    let bundle_len = serve_app_file(Some(app), ENHANCE_CODEX_MENU_HOOK_BUNDLE_REL)
+                        .map(|(b, _)| b.len() as u64)
+                        .unwrap_or(0);
+                    rows.push(json!({
+                        "signal": signal,
+                        "level": if matches { "ok" } else { "warn" },
+                        "state": if matches { "current" } else { "stale" },
+                        "detail": if matches {
+                            format!("Byte-matches bundle ({} B)", bundle_len)
+                        } else {
+                            format!("Disk {} B, bundle {} B — run Setup to refresh", disk_len, bundle_len)
+                        },
+                        "seen": seen,
+                    }));
+                }
+            }
+        }
+    }
 
     // --- ~/.codex/config.toml hook block ---
     {
@@ -17832,11 +18418,24 @@ fn agent_coordination_rows<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<serde_j
                             "seen": seen,
                         }));
                     } else {
+                        let hook_path = home_dir().map(|h| h.join(ENHANCE_CODEX_HOOK_INSTALL_REL));
+                        let menu_hook_path =
+                            home_dir().map(|h| h.join(ENHANCE_CODEX_MENU_HOOK_INSTALL_REL));
+                        let current = match (hook_path.as_ref(), menu_hook_path.as_ref()) {
+                            (Some(hook), Some(menu_hook)) => {
+                                codex_hook_block_current(&path, hook, menu_hook)
+                            }
+                            _ => false,
+                        };
                         rows.push(json!({
                             "signal": signal,
-                            "level": "ok",
-                            "state": "current",
-                            "detail": "Hook block present with current # bram: markers (content check via worklist-guard-codex.py bundle row)",
+                            "level": if current { "ok" } else { "warn" },
+                            "state": if current { "current" } else { "stale" },
+                            "detail": if current {
+                                "Hook block matches current Bram Codex hook config"
+                            } else {
+                                "Hook block differs from current Bram Codex hook config. Run Setup to refresh."
+                            },
                             "seen": seen,
                         }));
                     }
@@ -18018,12 +18617,16 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
         .as_ref()
         .map_or(false, |p| settings_has_worklist_guard_hook(p));
     let codex_hook = home_dir().map(|p| p.join(ENHANCE_CODEX_HOOK_INSTALL_REL));
+    let codex_menu_hook = home_dir().map(|p| p.join(ENHANCE_CODEX_MENU_HOOK_INSTALL_REL));
     let codex_config = home_dir().map(|p| p.join(".codex/config.toml"));
     let codex_hook_exists = codex_hook.as_ref().map_or(false, |p| p.exists());
+    let codex_menu_hook_exists = codex_menu_hook.as_ref().map_or(false, |p| p.exists());
     let codex_registered = codex_config
         .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map_or(false, |s| s.contains("codex-worklist-guard.py"));
+        .zip(codex_hook.as_ref())
+        .zip(codex_menu_hook.as_ref())
+        .map(|((config, hook), menu_hook)| codex_hook_block_current(config, hook, menu_hook))
+        .unwrap_or(false);
     let hooks_rows = vec![
         serde_json::json!({
             "signal": "Python 3",
@@ -18040,10 +18643,10 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
             "seen": claude_hook.as_ref().map(|p| file_modified_iso(p)).unwrap_or_default(),
         }),
         serde_json::json!({
-            "signal": "Codex hook",
-            "level": if codex_hook_exists && codex_registered { "ok" } else { "warn" },
-            "state": if codex_hook_exists && codex_registered { "registered" } else if codex_hook_exists { "unregistered" } else { "missing" },
-            "detail": if !codex_hook_exists { "Hook file missing" } else if !codex_registered { "Hook file present but not registered in config.toml" } else { "Hook file installed and registered" },
+            "signal": "Codex hooks",
+            "level": if codex_hook_exists && codex_menu_hook_exists && codex_registered { "ok" } else { "warn" },
+            "state": if codex_hook_exists && codex_menu_hook_exists && codex_registered { "registered" } else if codex_hook_exists || codex_menu_hook_exists { "partial" } else { "missing" },
+            "detail": if !codex_hook_exists || !codex_menu_hook_exists { "One or more hook files missing" } else if !codex_registered { "Hook files present but config.toml block is stale" } else { "Hook files installed and registered" },
             "seen": codex_hook.as_ref().map(|p| file_modified_iso(p)).unwrap_or_default(),
         }),
     ];
@@ -18568,12 +19171,12 @@ mod agent_status_tests {
 #[cfg(test)]
 mod pty_menu_tests {
     use super::{
-        extract_pending_tool_call_from_jsonl, format_pending_tool_call,
-        pty_menu_input_clears_inflight, pty_menu_preview_chars, pty_menu_preview_source,
-        pty_menu_same_identity_for_option_carry, pty_output_clears_inflight,
+        codex_command_policy_prefix, extract_pending_tool_call_from_jsonl,
+        format_pending_tool_call, pty_menu_input_clears_inflight, pty_menu_preview_chars,
+        pty_menu_preview_source, pty_menu_same_identity_for_option_carry,
+        pty_output_clears_inflight,
     };
     use serde_json::json;
-
 
     #[test]
     fn strip_ansi_macos_raw_does_not_inject_spurious_newlines() {
@@ -18690,6 +19293,22 @@ mod pty_menu_tests {
         assert_eq!(super::parse_csi_h_row_col(b"5;xyz"), (5, 1));
     }
 
+    #[test]
+    fn codex_bash_policy_prefix_uses_unwrapped_shell_command_segment() {
+        let command = "/bin/bash -lc 'printf codex-burn-in-shell-$(date +%s) > /Users/jonudell/Desktop/codex-burn-in-shell.txt'";
+        assert_eq!(
+            codex_command_policy_prefix(command),
+            "printf codex-burn-in-shell-$(date +%s) > /Users/jonudell/Desktop/codex-burn-in-shell.txt"
+        );
+    }
+
+    #[test]
+    fn codex_bash_policy_prefix_preserves_direct_command_segment() {
+        assert_eq!(
+            codex_command_policy_prefix("touch /Users/jonudell/Desktop/y.z"),
+            "touch /Users/jonudell/Desktop/y.z"
+        );
+    }
 
     #[test]
     fn pending_tool_call_uses_latest_unresolved_tool_use() {
@@ -18777,6 +19396,82 @@ mod pty_menu_tests {
     }
 
     #[test]
+    fn codex_permission_request_builds_shell_menu() {
+        let payload = serde_json::json!({
+            "provider": "codex",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "gh issue list",
+                "description": "List issues"
+            },
+            "permission_mode": "default"
+        });
+
+        let menu = super::permission_request_to_menu(&payload).unwrap();
+        assert_eq!(menu.tool, "Shell");
+        assert_eq!(menu.text, "Shell: gh issue list");
+        assert_eq!(menu.options.len(), 3);
+        assert_eq!(menu.options[0].label, "Yes, proceed");
+        assert_eq!(
+            menu.options[1].label,
+            "Yes, and don't ask again for commands that start with gh issue list"
+        );
+        assert_eq!(
+            menu.options[2].label,
+            "No, and tell Codex what to do differently"
+        );
+    }
+
+    #[test]
+    fn codex_permission_request_builds_file_menu() {
+        let payload = serde_json::json!({
+            "provider": "codex",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "file_path": "src-tauri/src/lib.rs"
+            }
+        });
+
+        let menu = super::permission_request_to_menu(&payload).unwrap();
+        assert_eq!(menu.tool, "apply_patch");
+        assert_eq!(menu.options.len(), 3);
+        assert_eq!(
+            menu.options[1].label,
+            "Yes, and don't ask again for these files"
+        );
+    }
+
+    #[test]
+    fn grid_menu_codex_gate_accepts_real_approval_context() {
+        let above = vec![
+            "Would you like to run the following command?".to_string(),
+            "Environment: local".to_string(),
+            "Reason: inspect release issues".to_string(),
+            "$ gh issue list --limit 3".to_string(),
+        ];
+        assert!(super::grid_menu_is_codex_permission_box(&above, ""));
+
+        let compact_above = vec!["Shell(Environment: local): $ touch /tmp/probe".to_string()];
+        assert!(super::grid_menu_is_codex_permission_box(
+            &compact_above,
+            "Requires approval"
+        ));
+    }
+
+    #[test]
+    fn grid_menu_codex_gate_rejects_transcript_prose_options() {
+        let above = vec![
+            "Menus tested so far:".to_string(),
+            "- Bash direct command: 3 options, including Yes, proceed.".to_string(),
+            "- MCP write: 2 options, including No, and tell Codex what to do differently."
+                .to_string(),
+        ];
+        assert!(!super::grid_menu_is_codex_permission_box(&above, ""));
+    }
+
+    #[test]
     fn grid_menu_bash_box_gate_distinguishes_bash_from_edit() {
         let opt = |key: &str, label: &str| super::MenuOption {
             key: key.to_string(),
@@ -18784,7 +19479,10 @@ mod pty_menu_tests {
         };
         let bash_opts = vec![
             opt("1", "Yes"),
-            opt("2", "Yes, and don't ask again for similar commands in /repo"),
+            opt(
+                "2",
+                "Yes, and don't ask again for similar commands in /repo",
+            ),
             opt("3", "No"),
         ];
         let edit_opts = vec![
@@ -18799,12 +19497,20 @@ mod pty_menu_tests {
             "────".to_string(),
             "$ git status".to_string(),
         ];
-        assert!(super::grid_menu_is_bash_command_box(&bash_opts, &bash_above, "Bash command"));
+        assert!(super::grid_menu_is_bash_command_box(
+            &bash_opts,
+            &bash_above,
+            "Bash command"
+        ));
 
         // TALL Bash box: "Bash command" title scrolled out of grid_above, but
         // the "Do you want to proceed?" header is captured → Bash (the
         // regression this guards against).
-        assert!(super::grid_menu_is_bash_command_box(&bash_opts, &[], "Do you want to proceed?"));
+        assert!(super::grid_menu_is_bash_command_box(
+            &bash_opts,
+            &[],
+            "Do you want to proceed?"
+        ));
 
         // 2-option manual-approval safety prompt (compound command): only
         // "1. Yes / 2. No", no "don't ask again" option, "Bash command" title
@@ -18815,7 +19521,11 @@ mod pty_menu_tests {
             "Compound command contains cd with output redirection — manual approval required"
                 .to_string(),
         ];
-        assert!(super::grid_menu_is_bash_command_box(&safety_opts, &safety_above, "Do you want to proceed?"));
+        assert!(super::grid_menu_is_bash_command_box(
+            &safety_opts,
+            &safety_above,
+            "Do you want to proceed?"
+        ));
 
         // Edit approval box → header "make this edit", option "allow all
         // edits", no "proceed", no "Bash command" title → NOT Bash; hold for
@@ -18824,13 +19534,16 @@ mod pty_menu_tests {
             "Edit file app/tools/Main.xmlui".to_string(),
             "╌╌╌╌╌╌╌╌".to_string(),
         ];
-        assert!(!super::grid_menu_is_bash_command_box(&edit_opts, &edit_above, "Do you want to make this edit to Main.xmlui?"));
+        assert!(!super::grid_menu_is_bash_command_box(
+            &edit_opts,
+            &edit_above,
+            "Do you want to make this edit to Main.xmlui?"
+        ));
 
         // Phantom frame scraped from assistant prose, no recognizable header
         // or options → NOT Bash.
-        let prose_above = vec![
-            "Approved → applying. Adding the light-touch refetch trigger".to_string(),
-        ];
+        let prose_above =
+            vec!["Approved → applying. Adding the light-touch refetch trigger".to_string()];
         assert!(!super::grid_menu_is_bash_command_box(&[], &prose_above, ""));
     }
 
@@ -18987,7 +19700,6 @@ mod pty_menu_tests {
         assert_eq!(state.turn_stamp.as_deref(), Some("1781386705079"));
     }
 
-
     #[test]
     fn esc_clears_inflight() {
         assert!(pty_menu_input_clears_inflight("\x1b"));
@@ -19038,8 +19750,8 @@ mod pty_menu_tests {
 mod turn_completion_tests {
     use super::{
         claude_jsonl_completion_decision, codex_jsonl_completion_decision,
-        codex_latest_user_message_ts_ms, codex_session_has_real_user_activity,
-        jsonl_completion_provider_for_path,
+        codex_killed_turn_suppresses_jsonl_working, codex_latest_user_message_ts_ms,
+        codex_session_has_real_user_activity, jsonl_completion_provider_for_path,
     };
     use std::path::Path;
 
@@ -19059,6 +19771,14 @@ mod turn_completion_tests {
         }
         std::fs::write(&path, text).expect("codex session fixture should be written");
         path
+    }
+
+    #[test]
+    fn codex_killed_turn_suppresses_same_or_older_jsonl_working() {
+        assert!(codex_killed_turn_suppresses_jsonl_working(1000, 1000));
+        assert!(codex_killed_turn_suppresses_jsonl_working(999, 1000));
+        assert!(!codex_killed_turn_suppresses_jsonl_working(1001, 1000));
+        assert!(!codex_killed_turn_suppresses_jsonl_working(1000, 0));
     }
 
     #[test]
@@ -21648,7 +22368,9 @@ fn route_request<R: tauri::Runtime>(
         let mut limit = GH_ISSUE_LIST_LIMIT;
         for pair in query.split('&') {
             if let Some(v) = pair.strip_prefix("limit=") {
-                let parsed = percent_decode(v).parse::<usize>().unwrap_or(GH_ISSUE_LIST_LIMIT);
+                let parsed = percent_decode(v)
+                    .parse::<usize>()
+                    .unwrap_or(GH_ISSUE_LIST_LIMIT);
                 limit = parsed.clamp(1, GH_ISSUE_LIST_LIMIT);
                 break;
             }
@@ -23909,7 +24631,9 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Re
         if method != "POST" {
             (405, "text/plain; charset=utf-8", b"POST only".to_vec())
         } else {
-            handle_permission_menu(app, &[], true)
+            let mut buf = Vec::new();
+            let _ = request.as_reader().read_to_end(&mut buf);
+            handle_permission_menu(app, &buf, true)
         }
     } else if path == "__iterate/begin" {
         if method != "POST" {
@@ -24251,10 +24975,16 @@ pub fn run() {
             apply_bram_trace_from_config(enabled);
         }
         apply_bram_menus_parse_from_config(
-            cfg.menus.as_ref().and_then(|m| m.parse_and_display).unwrap_or(false),
+            cfg.menus
+                .as_ref()
+                .and_then(|m| m.parse_and_display)
+                .unwrap_or(false),
         );
         apply_bram_menus_hook_driven_from_config(
-            cfg.menus.as_ref().and_then(|m| m.hook_driven).unwrap_or(true),
+            cfg.menus
+                .as_ref()
+                .and_then(|m| m.hook_driven)
+                .unwrap_or(true),
         );
     }
     if !initial_proj.join("index.html").exists() {

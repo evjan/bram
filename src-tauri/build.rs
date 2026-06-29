@@ -4,8 +4,12 @@ use std::path::PathBuf;
 // app/__shell/<name> source on every build, so editing the canonical source
 // resyncs the runtime copy (the source repo's installed hook never goes stale).
 fn sync_hook(manifest_dir: &str, name: &str) {
-    let canonical: PathBuf = [manifest_dir, "..", "app", "__shell", name].iter().collect();
-    let installed: PathBuf = [manifest_dir, "..", ".claude", "hooks", name].iter().collect();
+    let canonical: PathBuf = [manifest_dir, "..", "app", "__shell", name]
+        .iter()
+        .collect();
+    let installed: PathBuf = [manifest_dir, "..", ".claude", "hooks", name]
+        .iter()
+        .collect();
     if !canonical.exists() {
         panic!(
             "{} canonical source not found at {}; refusing to sync the installed hook from a stale or missing source",

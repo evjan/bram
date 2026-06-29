@@ -231,3 +231,46 @@ to show). The signature-less gate now **holds** these frames
 no `don't ask again` option, and no `Bash command` title, so it fails
 `grid_menu_is_bash_command_box` and never builds. See *Signature-less
 discrimination*.
+
+## Known edge — option numbers collide with a numbered body (file-edit diffs)
+
+A genuine, fully-anchored file-edit menu can be **suppressed** when the
+diff in its own body carries gutter line-numbers (`1`, `2`, `3`) that the
+scanner mistakes for option anchors. Distinct from *self-reference
+collision* above: there the excerpt is decoy prose and there is no real
+numbered block; **here the excerpt is the real menu** and `menu_bearing=true`,
+yet `numbered=false` still suppresses it.
+
+Confirmed 2026-06-29 (NotebookEdit on `~/Desktop/probe.ipynb`). Every scan
+across the menu's lifetime read:
+
+```
+op=skip  cursor=true  header=true  menu_bearing=true  needle2_after_anchor=true
+         anchor_distance_ok=true  format=vertical  numbered=false
+opt_anchors=1:38..40@0:38 , 2:6701..6703@857:390 , 3:6770..6772@857:459
+excerpt='Do you want to make this edit to probe.ipynb? ❯ 1. Yes
+         2. Yes, allow all edits in Desktop/ during this session (shift+tab) 3. No …'
+```
+
+Every gate is ✓ except `numbered`. The smoking gun is `opt_anchors`:
+options **2 and 3 anchor together** (row 857), but option **1 anchors back
+at row 0** — bound to a spurious early `1` from the diff gutter
+(`1 -print('probe')`, `1 No newline`, `2 +…`, `3 No newline` in that
+screenshot). The three anchors are non-contiguous, so the contiguity check
+yields `numbered=false` and the menu is dropped despite a byte-perfect
+excerpt.
+
+**Signature to recognize it:** a skip with `menu_bearing=true`,
+`header=true`, `cursor=true`, a real menu in `excerpt=`, but `numbered=false`
+**and** an `opt_anchors` option-1 row far from the option-2/3 row.
+
+**Structural, and the strongest case for the hook path.** *Every*
+`Write` / `Edit` / `NotebookEdit` confirmation renders a numbered diff in
+its body, so this collision is a latent miss for the whole file-edit family,
+not just notebooks. It is exactly what the structured-payload path is immune
+to: at the same instant the grid skipped this frame, the
+`PermissionRequest` hook captured it cleanly
+(`tool_name: NotebookEdit`, `suggestions: [setMode(acceptEdits),
+addDirectories(Desktop)]`) — no grid, no numbers to collide, no contiguity
+gate. See [`docs/pty-menu-hook-catalog.md`](./pty-menu-hook-catalog.md) →
+*Grid sees it, drops it; hook catches it*.

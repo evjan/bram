@@ -344,6 +344,11 @@ struct TracesConfig {
 struct MenusConfig {
     #[serde(default, rename = "parseAndDisplay")]
     parse_and_display: Option<bool>,
+    // Gates hook-driven permission-menu surfacing (default OFF). When on, the
+    // PermissionRequest hook's POSTs to /__menu/permission build and emit the
+    // agent-pane menu from structured data, alongside the grid detector.
+    #[serde(default, rename = "hookDriven")]
+    hook_driven: Option<bool>,
 }
 
 fn default_server_path() -> String {
@@ -479,6 +484,11 @@ static BRAM_TRACE_ENABLED: std::sync::atomic::AtomicBool =
 static BRAM_MENUS_PARSE_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+// Gates hook-driven permission-menu surfacing (menus.hookDriven). Default OFF —
+// opt-in while the path coexists with the grid detector for side-by-side proof.
+static BRAM_MENUS_HOOK_DRIVEN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 // Defer tools-pane-reload while a cycle is active (refs #93).
 // Set when the watcher would otherwise emit during sentinel-active.
 // Cleared and flushed once the sentinel is cleared. Single boolean
@@ -548,6 +558,14 @@ fn bram_menus_parse_enabled() -> bool {
 // that touches it, so the toggle takes effect live without a restart.
 fn apply_bram_menus_parse_from_config(enabled: bool) {
     BRAM_MENUS_PARSE_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn bram_menus_hook_driven_enabled() -> bool {
+    BRAM_MENUS_HOOK_DRIVEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn apply_bram_menus_hook_driven_from_config(enabled: bool) {
+    BRAM_MENUS_HOOK_DRIVEN.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[allow(dead_code)]
@@ -2004,6 +2022,180 @@ fn emit_pty_menu_with_prose<R: tauri::Runtime>(app: &AppHandle<R>, payload: &Opt
         }
     }
     emit_replayable_payload(app, "pty-menu-changed", value);
+}
+
+// Label one `permission_suggestions` entry. Type-aware (the union spans
+// addRules with/without ruleContent, addDirectories, and setMode — see
+// docs/pty-menu-hook-catalog.md). setMode is handled by the caller (it folds
+// into the terminal's shift+tab affordance and is NOT a numbered row), so it
+// never reaches here; an unrecognized type still gets a generic label so the
+// option count stays aligned with the terminal.
+fn permission_suggestion_label(s: &serde_json::Value) -> String {
+    match s.get("type").and_then(|t| t.as_str()) {
+        Some("addDirectories") => {
+            let dir = s
+                .get("directories")
+                .and_then(|d| d.as_array())
+                .and_then(|d| d.first())
+                .and_then(|d| d.as_str())
+                .unwrap_or("");
+            let name = dir.rsplit('/').find(|p| !p.is_empty()).unwrap_or("this directory");
+            format!("Yes, and allow access to {}/", name)
+        }
+        Some("addRules") => {
+            let rule = s
+                .get("rules")
+                .and_then(|r| r.as_array())
+                .and_then(|r| r.first());
+            let content = rule
+                .and_then(|r| r.get("ruleContent").and_then(|c| c.as_str()))
+                .unwrap_or("");
+            let tool_name = rule
+                .and_then(|r| r.get("toolName").and_then(|c| c.as_str()))
+                .unwrap_or("");
+            if !content.is_empty() {
+                format!("Yes, and always allow {}", content)
+            } else if !tool_name.is_empty() {
+                format!("Yes, and always allow {}", tool_name)
+            } else {
+                "Yes, and allow this in future".to_string()
+            }
+        }
+        _ => "Yes, and allow this in future".to_string(),
+    }
+}
+
+// Build a canonical permission menu from a Claude Code PermissionRequest
+// payload. The on-screen option LABELS are CLI-rendered (and prone to wrap
+// corruption); we synthesize clean ones from structured fields instead, keying
+// each option to the terminal's numbering so the existing click->keystroke path
+// is unchanged:
+//   - option 1: "Yes"
+//   - one option per permission_suggestions entry, EXCEPT setMode (which the
+//     CLI folds into the option-2 shift+tab affordance, not its own row) —
+//     counted by len(suggestions) regardless of type so the keystroke stays
+//     aligned with the terminal even for an unrecognized type.
+//   - last option: "No".
+// Examples: [] => 2-option Yes/No; [addDirectories] or [setMode,addDirectories]
+// => 3-option; Skill's [addRules,addRules] => 4-option. See
+// docs/pty-menu-hook-catalog.md for the full confirmed union.
+fn permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu> {
+    let tool = value
+        .get("tool_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if tool.is_empty() {
+        return None;
+    }
+    let ti = value.get("tool_input");
+    let detail = ti
+        .and_then(|t| t.get("command").and_then(|c| c.as_str()))
+        .or_else(|| ti.and_then(|t| t.get("file_path").and_then(|c| c.as_str())))
+        .unwrap_or("")
+        .to_string();
+    let text = if detail.is_empty() {
+        format!("Run {}?", tool)
+    } else {
+        format!("{}: {}", tool, detail)
+    };
+    let mut options = vec![MenuOption {
+        key: "1".to_string(),
+        label: "Yes".to_string(),
+    }];
+    if let Some(arr) = value
+        .get("permission_suggestions")
+        .and_then(|v| v.as_array())
+    {
+        for s in arr {
+            // setMode folds into the terminal's (shift+tab) affordance — it is
+            // NOT a numbered row, so skip it to keep the option count aligned
+            // with the CLI (the count-rule break for the file-edit family).
+            if s.get("type").and_then(|t| t.as_str()) == Some("setMode") {
+                continue;
+            }
+            let key = (options.len() + 1).to_string();
+            options.push(MenuOption {
+                key,
+                label: permission_suggestion_label(s),
+            });
+        }
+    }
+    options.push(MenuOption {
+        key: (options.len() + 1).to_string(),
+        label: "No".to_string(),
+    });
+    Some(PtyMenu {
+        tool,
+        text,
+        options,
+        tool_call_signature: None,
+        tool_call_diff: None,
+        tool_call_content: None,
+        cache_source: None,
+        at_host_ms: None,
+        signature_source: None,
+    })
+}
+
+// Hook-driven permission-menu surfacing (menus.hookDriven). The
+// PermissionRequest hook POSTs the structured payload here at pose-time; we
+// build a canonical PtyMenu (no screen scraping) and emit it into the same
+// agent-pane surface the grid detector feeds. /clear (PostToolUse) dismisses
+// it. No-op unless the flag is on, so it coexists with the grid detector.
+fn handle_permission_menu<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    body: &[u8],
+    clear: bool,
+) -> (u16, &'static str, Vec<u8>) {
+    if !bram_menus_hook_driven_enabled() {
+        return (
+            200,
+            "application/json; charset=utf-8",
+            b"{\"ok\":true,\"applied\":false}".to_vec(),
+        );
+    }
+    if clear {
+        turn_state_set_menu(app, None, "hook-permission", "dismissed");
+        emit_pty_menu_with_prose(app, &None);
+        return (
+            200,
+            "application/json; charset=utf-8",
+            b"{\"ok\":true,\"cleared\":true}".to_vec(),
+        );
+    }
+    let value: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                400,
+                "text/plain; charset=utf-8",
+                format!("bad json: {}", e).into_bytes(),
+            )
+        }
+    };
+    let Some(menu) = permission_request_to_menu(&value) else {
+        return (
+            200,
+            "application/json; charset=utf-8",
+            b"{\"ok\":true,\"applied\":false}".to_vec(),
+        );
+    };
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "hook-menu",
+            &format!("op=permission tool={} options={}", menu.tool, menu.options.len()),
+        );
+    }
+    let payload = Some(menu);
+    turn_state_set_menu(app, payload.clone(), "hook-permission", "detected");
+    emit_pty_menu_with_prose(app, &payload);
+    (
+        200,
+        "application/json; charset=utf-8",
+        b"{\"ok\":true,\"applied\":true}".to_vec(),
+    )
 }
 
 const PTY_TURN_FINISHED_VERB_GRACE_MS: u64 = 500;
@@ -9302,6 +9494,13 @@ fn handle_settings_post<R: tauri::Runtime>(
             .as_ref()
             .and_then(|c| c.menus.as_ref())
             .and_then(|m| m.parse_and_display)
+            .unwrap_or(false),
+    );
+    apply_bram_menus_hook_driven_from_config(
+        config
+            .as_ref()
+            .and_then(|c| c.menus.as_ref())
+            .and_then(|m| m.hook_driven)
             .unwrap_or(false),
     );
     let body = settings_view_from_config(config).to_string().into_bytes();
@@ -23358,6 +23557,20 @@ fn handle_http<R: tauri::Runtime>(app: &AppHandle<R>, mut request: tiny_http::Re
             let _ = request.as_reader().read_to_end(&mut buf);
             handle_worklist_commit(app, &buf)
         }
+    } else if path == "__menu/permission" {
+        if method != "POST" {
+            (405, "text/plain; charset=utf-8", b"POST only".to_vec())
+        } else {
+            let mut buf = Vec::new();
+            let _ = request.as_reader().read_to_end(&mut buf);
+            handle_permission_menu(app, &buf, false)
+        }
+    } else if path == "__menu/permission/clear" {
+        if method != "POST" {
+            (405, "text/plain; charset=utf-8", b"POST only".to_vec())
+        } else {
+            handle_permission_menu(app, &[], true)
+        }
     } else if path == "__iterate/begin" {
         if method != "POST" {
             (405, "text/plain; charset=utf-8", b"POST only".to_vec())
@@ -23698,7 +23911,10 @@ pub fn run() {
             apply_bram_trace_from_config(enabled);
         }
         apply_bram_menus_parse_from_config(
-            cfg.menus.and_then(|m| m.parse_and_display).unwrap_or(false),
+            cfg.menus.as_ref().and_then(|m| m.parse_and_display).unwrap_or(false),
+        );
+        apply_bram_menus_hook_driven_from_config(
+            cfg.menus.as_ref().and_then(|m| m.hook_driven).unwrap_or(false),
         );
     }
     if !initial_proj.join("index.html").exists() {

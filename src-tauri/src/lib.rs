@@ -487,8 +487,11 @@ static BRAM_TRACE_ENABLED: std::sync::atomic::AtomicBool =
 static BRAM_MENUS_PARSE_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-// Gates hook-driven permission-menu surfacing (menus.hookDriven). Default OFF —
-// opt-in while the path coexists with the grid detector for side-by-side proof.
+// Gates hook-driven permission-menu surfacing (menus.hookDriven). Hook-primary:
+// the effective default is ON (the config apply sites default an absent key to
+// true), so the hook leads and the grid is the fallback; menus.hookDriven=false
+// is the emergency opt-out. The atomic still inits false — the startup config
+// apply sets the real value before any menu is processed.
 static BRAM_MENUS_HOOK_DRIVEN: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -569,6 +572,39 @@ fn bram_menus_hook_driven_enabled() -> bool {
 
 fn apply_bram_menus_hook_driven_from_config(enabled: bool) {
     BRAM_MENUS_HOOK_DRIVEN.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+// Hook-primary coordination (menus.hookDriven). When the permission-menu hook
+// sets a menu it takes ownership of the agent-pane slot; the grid detector then
+// defers (no overwrite, no clear) until the hook releases it on its
+// PostToolUse/PermissionDenied clear. Stores the unix-ms the current hook menu
+// was set, or 0 when no hook menu owns the slot. Only ever non-zero while
+// hookDriven is on (handle_permission_menu no-ops otherwise), so the grid is
+// unaffected when the flag is off.
+static MENU_HOOK_OWNER_MS: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0);
+// Past this many ms without a hook clear the grid may reclaim the slot (the
+// missed-clear backstop). Generous so a legitimately long-lived menu (user
+// deliberating) is never preempted; bounded so a truly stranded menu clears.
+const MENU_HOOK_OWNER_TIMEOUT_MS: i64 = 300_000;
+
+fn set_menu_hook_owner(now_ms: Option<i64>) {
+    MENU_HOOK_OWNER_MS.store(now_ms.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+}
+
+// True iff a hook menu currently owns the slot and the safety timeout has not
+// elapsed. Past the timeout it clears the stale owner and returns false so the
+// grid can reclaim.
+fn menu_hook_owns_slot() -> bool {
+    let ts = MENU_HOOK_OWNER_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if ts == 0 {
+        return false;
+    }
+    if unix_now_ms() - ts >= MENU_HOOK_OWNER_TIMEOUT_MS {
+        MENU_HOOK_OWNER_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+        return false;
+    }
+    true
 }
 
 #[allow(dead_code)]
@@ -1967,6 +2003,22 @@ fn turn_state_set_menu<R: tauri::Runtime>(
     source: &str,
     reason: &str,
 ) {
+    // Hook-primary coordination. The hook owns the slot while its menu is up;
+    // the grid defers (no overwrite, no clear) until the hook releases on its
+    // own clear, or the safety timeout elapses. A no-op when hookDriven is off
+    // (the hook never takes ownership), so grid behavior is unchanged then.
+    if source == "hook-permission" {
+        set_menu_hook_owner(menu.as_ref().map(|_| unix_now_ms()));
+    } else if menu_hook_owns_slot() {
+        if bram_trace_enabled() {
+            append_bram_trace_line(
+                app,
+                "hook-menu",
+                &format!("op=grid-deferred source={} reason={}", source, reason),
+            );
+        }
+        return;
+    }
     if let Some(m) = menu.as_mut() {
         m.cache_source = Some(
             match reason {
@@ -2068,6 +2120,50 @@ fn permission_suggestion_label(s: &serde_json::Value) -> String {
     }
 }
 
+// Build a Family-B menu from an AskUserQuestion PreToolUse payload. Options are
+// the first question's option labels, keyed by their terminal position so the
+// click->keystroke path lines up; same PtyMenu shape the grid produces for
+// these. Returns None if there are no labelled options.
+fn askuserquestion_to_menu(value: &serde_json::Value, tool: &str) -> Option<PtyMenu> {
+    let q0 = value
+        .get("tool_input")
+        .and_then(|t| t.get("questions"))
+        .and_then(|q| q.as_array())
+        .and_then(|q| q.first())?;
+    let opts = q0.get("options").and_then(|o| o.as_array())?;
+    let mut options = Vec::new();
+    for (i, o) in opts.iter().enumerate() {
+        let label = o.get("label").and_then(|l| l.as_str()).unwrap_or("");
+        if label.is_empty() {
+            continue;
+        }
+        options.push(MenuOption {
+            key: (i + 1).to_string(),
+            label: label.to_string(),
+        });
+    }
+    if options.is_empty() {
+        return None;
+    }
+    let text = q0
+        .get("question")
+        .and_then(|q| q.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Select an option")
+        .to_string();
+    Some(PtyMenu {
+        tool: tool.to_string(),
+        text,
+        options,
+        tool_call_signature: None,
+        tool_call_diff: None,
+        tool_call_content: None,
+        cache_source: None,
+        at_host_ms: None,
+        signature_source: None,
+    })
+}
+
 // Build a canonical permission menu from a Claude Code PermissionRequest
 // payload. The on-screen option LABELS are CLI-rendered (and prone to wrap
 // corruption); we synthesize clean ones from structured fields instead, keying
@@ -2090,6 +2186,19 @@ fn permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu> {
         .to_string();
     if tool.is_empty() {
         return None;
+    }
+    // Carve-out: tools whose full rendered option set isn't in the hook payload
+    // (ExitPlanMode shows 4 options with empty permission_suggestions). Decline
+    // so the grid stays authoritative for them — hook-wins applies only to the
+    // menus the hook can fully specify.
+    const MENU_HOOK_TOOL_DENYLIST: &[&str] = &["ExitPlanMode"];
+    if MENU_HOOK_TOOL_DENYLIST.contains(&tool.as_str()) {
+        return None;
+    }
+    // Family B: AskUserQuestion (arrives via PreToolUse) carries its choices in
+    // tool_input.questions[].options[].label, not permission_suggestions.
+    if tool == "AskUserQuestion" {
+        return askuserquestion_to_menu(value, &tool);
     }
     let ti = value.get("tool_input");
     let detail = ti
@@ -9504,7 +9613,7 @@ fn handle_settings_post<R: tauri::Runtime>(
             .as_ref()
             .and_then(|c| c.menus.as_ref())
             .and_then(|m| m.hook_driven)
-            .unwrap_or(false),
+            .unwrap_or(true),
     );
     let body = settings_view_from_config(config).to_string().into_bytes();
     (200, "application/json; charset=utf-8", body)
@@ -13655,10 +13764,11 @@ fn settings_has_worklist_guard_hook(settings_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-// True iff settings.json registers the permission-menu hook on BOTH the
-// PermissionRequest (surface) and PostToolUse (clear) events. Mirrors
-// settings_has_worklist_guard_hook; requiring both means a half-installed
-// registration is correctly flagged as still needing Setup.
+// True iff settings.json registers the permission-menu hook on all four events
+// it needs: PermissionRequest (surface), PostToolUse + PermissionDenied (clear),
+// and PreToolUse (AskUserQuestion surface). Mirrors
+// settings_has_worklist_guard_hook; requiring the full set means a partial or
+// pre-cutover (2-event) install is correctly flagged as still needing Setup.
 fn settings_has_permission_menu_hook(settings_path: &Path) -> bool {
     let content = match std::fs::read_to_string(settings_path) {
         Ok(s) => s,
@@ -13691,7 +13801,10 @@ fn settings_has_permission_menu_hook(settings_path: &Path) -> bool {
             })
             .unwrap_or(false)
     };
-    event_has_menu_hook("PermissionRequest") && event_has_menu_hook("PostToolUse")
+    event_has_menu_hook("PermissionRequest")
+        && event_has_menu_hook("PostToolUse")
+        && event_has_menu_hook("PermissionDenied")
+        && event_has_menu_hook("PreToolUse")
 }
 
 // Remove any PreToolUse hook entries whose `command` contains
@@ -14009,6 +14122,23 @@ fn merge_permission_menu_hook_into_settings(settings_path: &Path) -> Result<bool
     );
     changed |=
         merge_command_hook_into_event(hooks_obj, "PostToolUse", ".*", ENHANCE_MENU_HOOK_COMMAND, marker);
+    // No/Esc answers fire PermissionDenied, not PostToolUse — clear on it too.
+    changed |= merge_command_hook_into_event(
+        hooks_obj,
+        "PermissionDenied",
+        ".*",
+        ENHANCE_MENU_HOOK_COMMAND,
+        marker,
+    );
+    // Family B: AskUserQuestion arrives via PreToolUse (not PermissionRequest),
+    // matcher scoped to that tool so it doesn't fire on every tool call.
+    changed |= merge_command_hook_into_event(
+        hooks_obj,
+        "PreToolUse",
+        "AskUserQuestion",
+        ENHANCE_MENU_HOOK_COMMAND,
+        marker,
+    );
     if !changed {
         return Ok(false);
     }
@@ -24124,7 +24254,7 @@ pub fn run() {
             cfg.menus.as_ref().and_then(|m| m.parse_and_display).unwrap_or(false),
         );
         apply_bram_menus_hook_driven_from_config(
-            cfg.menus.as_ref().and_then(|m| m.hook_driven).unwrap_or(false),
+            cfg.menus.as_ref().and_then(|m| m.hook_driven).unwrap_or(true),
         );
     }
     if !initial_proj.join("index.html").exists() {

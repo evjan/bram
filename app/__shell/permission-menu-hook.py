@@ -8,8 +8,12 @@
 # - PermissionRequest: a permission dialog is about to show -> POST /__menu/permission
 #   with {tool_name, tool_input, permission_suggestions}. (Fires ONLY when a
 #   dialog will appear, so it is a false-positive-free "a menu is up" signal.)
-# - PostToolUse: the tool ran (i.e. the prompt was answered) -> POST
-#   /__menu/permission/clear so a resolved menu doesn't linger.
+# - PreToolUse (AskUserQuestion only): Family B has no PermissionRequest; its
+#   choices live in tool_input.questions -> POST /__menu/permission the same way
+#   (the host builds the menu from tool_input, not permission_suggestions).
+# - PostToolUse / PermissionDenied: the prompt was answered (tool ran) or
+#   declined (No/Esc) -> POST /__menu/permission/clear so it doesn't linger.
+#   A declined prompt fires PermissionDenied, NOT PostToolUse, so both clear.
 #
 # OBSERVE-ONLY: never returns an allow/deny/ask decision; the user answers in
 # the terminal or via the pane (which injects keystrokes). Fully defensive and
@@ -69,7 +73,18 @@ def main():
             "permission_suggestions": payload.get("permission_suggestions") or [],
             "tool_use_id": payload.get("tool_use_id"),
         })
-    elif event == "PostToolUse":
+    elif event == "PreToolUse" and payload.get("tool_name") == "AskUserQuestion":
+        # Family B: no PermissionRequest fires; choices live in tool_input.
+        # questions. Surface the same way (host builds the menu from tool_input).
+        _post(port, "/__menu/permission", {
+            "tool_name": payload.get("tool_name"),
+            "tool_input": payload.get("tool_input") or {},
+            "permission_suggestions": [],
+            "tool_use_id": payload.get("tool_use_id"),
+        })
+    elif event in ("PostToolUse", "PermissionDenied"):
+        # Answered (PostToolUse) or declined via No/Esc (PermissionDenied) —
+        # either way the prompt is resolved, so clear any surfaced menu.
         _post(port, "/__menu/permission/clear", {
             "tool_use_id": payload.get("tool_use_id"),
         })

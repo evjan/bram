@@ -1,9 +1,13 @@
 {
   "menus": {
+    "hookDriven": true,
     "parseAndDisplay": true
   },
   "shell": {
-    "agent": "agent"
+    "agent": "claude",
+    "args": "",
+    "continueLast": true,
+    "firstCommand": ""
   },
   "traces": {
     "enabled": true,

@@ -339,6 +339,8 @@ struct TracesConfig {
     enabled: Option<bool>,
     #[serde(default, rename = "inspectorTap")]
     inspector_tap: Option<bool>,
+    #[serde(default, rename = "gridScanVerbose")]
+    grid_scan_verbose: Option<bool>,
 }
 
 // Optional menus block. `parseAndDisplay` gates PTY menu detection +
@@ -495,6 +497,14 @@ static BRAM_MENUS_PARSE_ENABLED: std::sync::atomic::AtomicBool =
 static BRAM_MENUS_HOOK_DRIVEN: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+// Gates the high-frequency `[pty-menu-scan] op=skip` trace (traces.gridScanVerbose).
+// Default OFF: with the hook primary the grid is fallback+oracle, and the per-scan
+// "skip" stream is ~5k lines/day of noise that buries the burn-in signal. Detections
+// ("fire") are always traced; only the no-match skips are gated. Flip on to debug a
+// suspected miss. Atomic inits false; the startup config apply sets the real value.
+static BRAM_GRID_SCAN_VERBOSE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 // Defer tools-pane-reload while a cycle is active (refs #93).
 // Set when the watcher would otherwise emit during sentinel-active.
 // Cleared and flushed once the sentinel is cleared. Single boolean
@@ -572,6 +582,17 @@ fn bram_menus_hook_driven_enabled() -> bool {
 
 fn apply_bram_menus_hook_driven_from_config(enabled: bool) {
     BRAM_MENUS_HOOK_DRIVEN.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn grid_scan_verbose_enabled() -> bool {
+    BRAM_GRID_SCAN_VERBOSE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+// Apply the `traces.gridScanVerbose` setting from .bram.json. Called at startup
+// (after project config is loaded) and on the settings POST path, so the toggle
+// takes effect without a code change. Default OFF.
+fn apply_bram_grid_scan_verbose_from_config(enabled: bool) {
+    BRAM_GRID_SCAN_VERBOSE.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 // Hook-primary coordination (menus.hookDriven). When the permission-menu hook
@@ -4599,7 +4620,14 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
             .lock()
             .map(|g| *g)
             .unwrap_or(0);
-        if detected.is_some() || now_ms.saturating_sub(last) >= 200 {
+        // Always trace a detection ("fire"). Gate the throttled no-match
+        // stream ("skip") behind traces.gridScanVerbose — once the hook is
+        // primary the grid is fallback+oracle and the per-scan skips are
+        // ~5k lines/day of noise that buries the burn-in signal. Flip the
+        // flag on to debug a suspected miss.
+        let want_skip =
+            grid_scan_verbose_enabled() && now_ms.saturating_sub(last) >= 200;
+        if detected.is_some() || want_skip {
             if let Ok(mut g) = pty_menu_scan_last_log_cell().lock() {
                 *g = now_ms;
             }
@@ -9966,6 +9994,13 @@ fn handle_settings_post<R: tauri::Runtime>(
             .and_then(|c| c.menus.as_ref())
             .and_then(|m| m.hook_driven)
             .unwrap_or(true),
+    );
+    apply_bram_grid_scan_verbose_from_config(
+        config
+            .as_ref()
+            .and_then(|c| c.traces.as_ref())
+            .and_then(|t| t.grid_scan_verbose)
+            .unwrap_or(false),
     );
     let body = settings_view_from_config(config).to_string().into_bytes();
     (200, "application/json; charset=utf-8", body)
@@ -24971,9 +25006,15 @@ pub fn run() {
     let initial_proj = determine_project_root();
     eprintln!("[bram] project root: {}", initial_proj.display());
     if let Some(cfg) = load_project_config(&initial_proj) {
-        if let Some(enabled) = cfg.traces.and_then(|t| t.enabled) {
+        if let Some(enabled) = cfg.traces.as_ref().and_then(|t| t.enabled) {
             apply_bram_trace_from_config(enabled);
         }
+        apply_bram_grid_scan_verbose_from_config(
+            cfg.traces
+                .as_ref()
+                .and_then(|t| t.grid_scan_verbose)
+                .unwrap_or(false),
+        );
         apply_bram_menus_parse_from_config(
             cfg.menus
                 .as_ref()

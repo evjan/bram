@@ -11,7 +11,8 @@
   },
   "traces": {
     "enabled": true,
-    "inspectorTap": false
+    "inspectorTap": false,
+    "gridScanVerbose": false
   },
   "ui": {
     "showTargetApp": false,

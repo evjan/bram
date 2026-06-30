@@ -1559,10 +1559,14 @@ fn menu_prose_probe_check_assistant<R: tauri::Runtime>(app: &AppHandle<R>, conte
 static LOOPBACK_PORT: OnceLock<u16> = OnceLock::new();
 static LOOPBACK_STARTED_MS: OnceLock<i64> = OnceLock::new();
 
-#[derive(serde::Serialize, Clone, Debug)]
+#[derive(serde::Serialize, Clone, Debug, Default)]
 struct MenuOption {
     key: String,
     label: String,
+    // AskUserQuestion (Family-B) carries a per-option description; permission
+    // menus (Family-A) leave this None and it is omitted from the payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
@@ -2204,9 +2208,16 @@ fn askuserquestion_to_menu(value: &serde_json::Value, tool: &str) -> Option<PtyM
         if label.is_empty() {
             continue;
         }
+        let description = o
+            .get("description")
+            .and_then(|d| d.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
         options.push(MenuOption {
             key: (i + 1).to_string(),
             label: label.to_string(),
+            description,
         });
     }
     if options.is_empty() {
@@ -2346,6 +2357,7 @@ fn codex_permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu
     let mut options = vec![MenuOption {
         key: "1".to_string(),
         label: "Yes, proceed".to_string(),
+        description: None,
     }];
     match tool_name {
         "Bash" => {
@@ -2356,26 +2368,31 @@ fn codex_permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu
                     "Yes, and don't ask again for commands that start with {}",
                     prefix
                 ),
+                description: None,
             });
             options.push(MenuOption {
                 key: "3".to_string(),
                 label: "No, and tell Codex what to do differently".to_string(),
+                description: None,
             });
         }
         "apply_patch" | "Edit" | "Write" => {
             options.push(MenuOption {
                 key: "2".to_string(),
                 label: "Yes, and don't ask again for these files".to_string(),
+                description: None,
             });
             options.push(MenuOption {
                 key: "3".to_string(),
                 label: "No, and tell Codex what to do differently".to_string(),
+                description: None,
             });
         }
         _ => {
             options.push(MenuOption {
                 key: "2".to_string(),
                 label: "No, and tell Codex what to do differently".to_string(),
+                description: None,
             });
         }
     }
@@ -2450,6 +2467,7 @@ fn permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu> {
     let mut options = vec![MenuOption {
         key: "1".to_string(),
         label: "Yes".to_string(),
+        description: None,
     }];
     // Claude Code folds ALL of a tool call's allow-suggestions into a SINGLE
     // "allow all" option (validated: Family-A terminal menus are never >3
@@ -2481,11 +2499,13 @@ fn permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu> {
         options.push(MenuOption {
             key: "2".to_string(),
             label,
+            description: None,
         });
     }
     options.push(MenuOption {
         key: (options.len() + 1).to_string(),
         label: "No".to_string(),
+        description: None,
     });
     Some(PtyMenu {
         tool,
@@ -4012,6 +4032,7 @@ fn report_grid_menu(app: AppHandle, payload: serde_json::Value) {
                             Some(MenuOption {
                                 key: n.to_string(),
                                 label,
+                                description: None,
                             })
                         })
                         .collect()
@@ -4625,8 +4646,7 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
         // primary the grid is fallback+oracle and the per-scan skips are
         // ~5k lines/day of noise that buries the burn-in signal. Flip the
         // flag on to debug a suspected miss.
-        let want_skip =
-            grid_scan_verbose_enabled() && now_ms.saturating_sub(last) >= 200;
+        let want_skip = grid_scan_verbose_enabled() && now_ms.saturating_sub(last) >= 200;
         if detected.is_some() || want_skip {
             if let Ok(mut g) = pty_menu_scan_last_log_cell().lock() {
                 *g = now_ms;
@@ -19373,6 +19393,7 @@ mod pty_menu_tests {
             options: vec![super::MenuOption {
                 key: "1".to_string(),
                 label: "Yes".to_string(),
+                description: None,
             }],
             tool_call_signature: None,
             tool_call_diff: None,
@@ -19511,6 +19532,7 @@ mod pty_menu_tests {
         let opt = |key: &str, label: &str| super::MenuOption {
             key: key.to_string(),
             label: label.to_string(),
+            description: None,
         };
         let bash_opts = vec![
             opt("1", "Yes"),
@@ -19608,6 +19630,7 @@ mod pty_menu_tests {
             options: vec![super::MenuOption {
                 key: "1".to_string(),
                 label: "Yes".to_string(),
+                description: None,
             }],
             tool_call_signature: None,
             tool_call_diff: None,
@@ -19642,10 +19665,12 @@ mod pty_menu_tests {
                 super::MenuOption {
                     key: "1".to_string(),
                     label: "Yes".to_string(),
+                    description: None,
                 },
                 super::MenuOption {
                     key: "2".to_string(),
                     label: "No".to_string(),
+                    description: None,
                 },
             ],
             ..before.clone()
@@ -19664,6 +19689,7 @@ mod pty_menu_tests {
             options: vec![super::MenuOption {
                 key: "1".to_string(),
                 label: "Yes".to_string(),
+                description: None,
             }],
             tool_call_signature: Some("Bash(New-Item foo.bar)".to_string()),
             tool_call_diff: None,
@@ -19702,10 +19728,12 @@ mod pty_menu_tests {
                 super::MenuOption {
                     key: "1".to_string(),
                     label: "Yes, proceed (y)".to_string(),
+                    description: None,
                 },
                 super::MenuOption {
                     key: "2".to_string(),
                     label: "No, and tell Codex what to do differently (esc)".to_string(),
+                    description: None,
                 },
             ],
             tool_call_signature: Some("Bash(gh issue create --title test)".to_string()),

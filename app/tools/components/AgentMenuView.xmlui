@@ -56,7 +56,15 @@
       padding="$space-2"
       borderRadius="$borderRadius"
       backgroundColor="$color-surface-100">
+      <!-- AskUserQuestion's text is a prose question -> body font. Other
+           menus' text can be a command-like preview -> keep monospace. -->
       <Text
+        when="{$props.menu.tool === 'AskUserQuestion'}"
+        value="{$props.menu.text}"
+        fontSize="$fontSize-sm"
+        preserveLinebreaks="true" />
+      <Text
+        when="{$props.menu.tool !== 'AskUserQuestion'}"
         value="{$props.menu.text}"
         fontFamily="$fontFamily-monospace"
         fontSize="$fontSize-xs"
@@ -74,12 +82,20 @@
               variant="outlined"
               size="sm"
               onClick="sendKeys($item.key + '\r')" />
-            <Text
-              width="*"
-              value="{($item.label || '')}"
-              fontSize="$fontSize-sm"
-              overflowMode="flow"
-              breakMode="word" />
+            <VStack width="*" gap="$space-0_5">
+              <Text
+                value="{($item.label || '')}"
+                fontSize="$fontSize-sm"
+                overflowMode="flow"
+                breakMode="word" />
+              <Text
+                when="{$item.description}"
+                value="{$item.description}"
+                fontSize="$fontSize-xs"
+                color="$textColor-secondary"
+                overflowMode="flow"
+                breakMode="word" />
+            </VStack>
           </HStack>
         </Items>
       </Theme>

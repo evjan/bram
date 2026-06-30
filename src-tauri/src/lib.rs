@@ -15669,13 +15669,15 @@ fn run_enhance<R: tauri::Runtime>(app: &AppHandle<R>, force: bool) -> Result<Vec
         );
         let existing_agents = std::fs::read_to_string(&codex_agents_path).unwrap_or_default();
         let new_agents = replace_or_append_managed_block(&existing_agents, &codex_block);
-        // Force when legacy markers are on disk — divergence is the
-        // Setup-managed marker rename, not a user edit. Issue #173.
+        // The Bram marker block is Setup-managed, and enhance_status requires
+        // it to match the bundled instructions exactly. Refresh it on normal
+        // setup so a bundle text change does not leave Codex permanently
+        // marked stale until the user knows to force refresh.
         let migrate = existing_agents.contains(ENHANCE_LEGACY_MARKER_START);
         write_template_if_safe(
             &codex_agents_path,
             new_agents.as_bytes(),
-            force || migrate,
+            force || migrate || existing_agents.contains(ENHANCE_MARKER_START),
             &mut wrote,
             &mut skipped,
         )?;
@@ -23121,6 +23123,7 @@ fn route_request<R: tauri::Runtime>(
                     "[http /__enhance/run] force={} wrote sidecar + updated CLAUDE.md",
                     force
                 );
+                emit_replayable_signal(app, "enhance-status-changed");
                 (200, "application/json; charset=utf-8", bytes)
             }
             Err(e) => {

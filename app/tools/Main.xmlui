@@ -102,7 +102,6 @@
     id="runEnhanceSetup"
     url="/__enhance/run"
     method="get"
-    onSuccess="enhanceStatus.refetch()"
     onError="setupCompleteProvider = ''; enhanceStatus.refetch()" />
   <ChangeListener
     listenTo="{enhanceStatus.value &amp;&amp; enhanceStatus.value.providerNeedsSetup}"

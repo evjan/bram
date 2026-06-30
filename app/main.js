@@ -756,6 +756,7 @@ function __escBeginCapture(kind, source) {
     escId: id,
     source: source || "unknown",
     menuPresent: __gridMenuPresent,
+    firstOutputSeen: __gridFirstOutputSeen(),
     blockTop: at.blockTop,
     meta: at.meta,
     rows: at.rows,
@@ -1008,6 +1009,77 @@ function __gridExtractInflightProse(rows, blockTop) {
   return prose;
 }
 
+// #210 prove-step (observe-only): grid-based "has the agent produced output for
+// the CURRENT turn yet?" Provider-aware — the prove step showed the two TUIs use
+// different glyphs:
+//   user prompt:   ❯ >  (Claude)   ›  (Codex)
+//   agent bullet:  ⏺    (Claude)   •  (Codex) — but Codex reuses • for its
+//                  "• Working (…)" indicator, which is NOT output.
+// Anchor on the submitted user line, then look for a real output bullet below it.
+// The trailing input box / placeholder (e.g. Codex "› Write tests for …") is
+// excluded by requiring the anchored user line to have agent ACTIVITY below it
+// (output, a status bullet, a spinner, or the "esc to interrupt" bar) — the input
+// box is followed only by a status line. FAIL-SILENT (null) on error: this drives
+// NO behavior, it only feeds traces to prove faithfulness before any Esc gate.
+function __gridFirstOutputSeen() {
+  try {
+    const rows = __gridReadLiveRows();
+    if (!rows || rows.length === 0) return null;
+    const isUser = (t) => /^\s*[>❯›]\s+\S/.test(t);
+    // Bullets that are status/working, not real output (Codex "• Working …",
+    // Claude "⏺ Worked …" completion banners, gerund spinners).
+    const isStatusBullet = (t) =>
+      /^\s*[⏺•]\s+(Working|Worked|Vibing|Grooving|Crunch|Spelunk|Thinking)/i.test(t);
+    const isOutput = (t) => /^\s*[⏺•]\s+\S/.test(t) && !isStatusBullet(t);
+    // "Agent is active here" — distinguishes the submitted message (activity
+    // below it) from the trailing input box / placeholder (status line only).
+    const isActive = (t) =>
+      isOutput(t) ||
+      isStatusBullet(t) ||
+      /esc to interrupt|·\s*thinking/i.test(t) ||
+      /^\s*[✶✳✻✽✢✺✷◐◓◑◒]\s/.test(t);
+    let lastUser = -1;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (!isUser(rows[i].text)) continue;
+      let activityBelow = false;
+      for (let j = i + 1; j < rows.length; j++) {
+        if (isActive(rows[j].text)) {
+          activityBelow = true;
+          break;
+        }
+      }
+      if (activityBelow) {
+        lastUser = i;
+        break;
+      }
+    }
+    if (lastUser < 0) return false;
+    for (let i = lastUser + 1; i < rows.length; i++) {
+      if (isOutput(rows[i].text)) return true;
+    }
+    return false;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Trace firstOutputSeen transitions so we can watch it flip false→true at first
+// output and measure the pre-⏺ window. Per render frame, transition-only (quiet).
+let __gridLastFOS = null;
+function __gridTraceFirstOutputTransition() {
+  try {
+    const fos = __gridFirstOutputSeen();
+    if (fos === __gridLastFOS) return;
+    __gridLastFOS = fos;
+    logShellEvent({
+      kind: "iframe-trace",
+      subkind: "first-output-seen",
+      value: fos,
+      at: new Date().toISOString(),
+    });
+  } catch (e) {}
+}
+
 let __gridMenuPresent = false;
 let __gridLastMenu = null;
 let __gridMissKey = null;
@@ -1107,7 +1179,12 @@ function __gridShadowCheck() {
     }).catch(() => {});
   }
 }
-term.onWriteParsed(() => requestAnimationFrame(__gridShadowCheck));
+term.onWriteParsed(() =>
+  requestAnimationFrame(() => {
+    __gridShadowCheck();
+    __gridTraceFirstOutputTransition();
+  }),
+);
 // While a menu is shown the PTY goes quiet, so onWriteParsed stops firing and
 // the host's grid snapshot would age out. Re-report on a timer to keep it
 // fresh (and to re-assert a host-missed menu the host can't see on its own).

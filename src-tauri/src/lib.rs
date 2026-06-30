@@ -3107,6 +3107,29 @@ fn start_claude_turn_stats_poll<R: tauri::Runtime>(app_handle: AppHandle<R>) {
             Err(_) => None,
         };
         if let Ok(mut guard) = claude_turn_stats_cell().lock() {
+            // #212 probe (trace-only): the Claude JSONL boundary -> finished
+            // transition is owned by check_jsonl_for_turn_end, NOT this poll.
+            // Emit a marker the instant this poll observes is_working flip
+            // true -> false (JSONL now shows end_turn). On a stuck-working
+            // recurrence, this line with NO nearby
+            // `[jsonl-turn-end] op=enter provider=claude` proves the finished
+            // scan never ran for the active Claude session. Rides the existing
+            // stats poll -- adds no new polling; the fix direction is host-side
+            // push for the active provider, not a new Claude poll.
+            if bram_trace_enabled()
+                && guard.as_ref().map(|s| s.is_working) == Some(true)
+                && next.as_ref().map(|s| s.is_working) == Some(false)
+            {
+                let turn = next.as_ref().map(|s| s.user_ts_ms).unwrap_or(0);
+                append_bram_trace_line(
+                    &app_handle,
+                    "claude-finished-probe",
+                    &format!(
+                        "op=jsonl-end-observed source=claude-stats-poll turn={} note=expect-claude-jsonl-turn-end-scan",
+                        turn
+                    ),
+                );
+            }
             *guard = next;
         }
     });
@@ -17119,6 +17142,28 @@ fn check_jsonl_for_turn_end<R: tauri::Runtime>(app: &AppHandle<R>, path: &std::p
     };
     let provider_label = provider.label();
     let basename = jsonl_file_basename(path);
+    // #212 probe (trace-only): flag when a turn-end scan runs for a provider
+    // other than the active one -- e.g. the watcher / codex-poll fed a stale
+    // codex rollout while the user is mid-Claude-turn, so the active
+    // provider's finished cue never fires. On a stuck-working recurrence this
+    // pinpoints the missing-scan gap. Trace-only; no behavior change.
+    if bram_trace_enabled() {
+        let active = match current_provider(app) {
+            Some(SessionProvider::Claude) => "claude",
+            Some(SessionProvider::Codex) => "codex",
+            None => "none",
+        };
+        if active != provider_label {
+            append_bram_trace_line(
+                app,
+                "jsonl-turn-end",
+                &format!(
+                    "op=provider-mismatch scan={} active={} path={}",
+                    provider_label, active, basename
+                ),
+            );
+        }
+    }
     if bram_trace_enabled() {
         append_bram_trace_line(
             app,
@@ -25685,6 +25730,35 @@ pub fn run() {
             // immediately instead of waiting on fallback polling.
             let claude_sessions_dir = claude_sessions_dir(&app.handle()).ok();
             let codex_sessions_dir = home_dir().map(|h| h.join(".codex").join("sessions"));
+            // #212 trace: record the session dirs the watcher resolved at
+            // startup. `claude=unresolved` (or a path that doesn't match where
+            // Claude actually writes) is the smoking gun for the intermittent
+            // stuck-working bug -- the watcher never sees the active Claude
+            // session's end_turn writes, so state=finished never fires. Pairs
+            // with the claude-finished-probe / op=provider-mismatch probes.
+            if bram_trace_enabled() {
+                // claude_exists / codex_exists are the dead-watch predicate: a
+                // recursive watch registered on a path that does not exist yet
+                // never fires when the dir is later created (#212 root cause).
+                // Claude's per-project dir can be absent at startup; Codex's
+                // global ~/.codex/sessions effectively always exists -- so
+                // claude_exists=false here is the one-line stuck-working signal.
+                let cl = claude_sessions_dir.as_ref();
+                let cx = codex_sessions_dir.as_ref();
+                append_bram_trace_line(
+                    &app.handle(),
+                    "watcher",
+                    &format!(
+                        "op=session-dirs claude={} claude_exists={} codex={} codex_exists={}",
+                        cl.map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "unresolved".to_string()),
+                        cl.map(|p| p.is_dir()).unwrap_or(false),
+                        cx.map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "unresolved".to_string()),
+                        cx.map(|p| p.is_dir()).unwrap_or(false),
+                    ),
+                );
+            }
             // Current-provider record lives at
             // <app_cache>/current-agent/<encoded-cwd>.json and is written by the
             // host (set_current_provider) on deliberate transitions: autostart,

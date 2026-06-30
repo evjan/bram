@@ -1,0 +1,44 @@
+<Component name="LocalLinkPreview">
+  <External
+    id="localLinkPreviewEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeLocalLinkPreview()}" />
+  <Theme maxWidth-ModalDialog="80vw">
+    <ModalDialog
+      when="{!!localLinkPreviewEvt.value}"
+      title="{window.__bramLocalLinkPreviewTitle(localLinkPreviewEvt.value)}"
+      onClose="window.__bramCloseLocalLinkPreview()">
+      <VStack gap="$space-3" padding="$space-2">
+        <HStack gap="$space-2" verticalAlignment="center">
+          <Text
+            when="{window.__bramLocalLinkPreviewMeta(localLinkPreviewEvt.value)}"
+            fontSize="$fontSize-sm"
+            color="$textColor-secondary"
+            maxLines="2"
+            value="{window.__bramLocalLinkPreviewMeta(localLinkPreviewEvt.value)}" />
+          <SpaceFiller />
+          <Button
+            when="{localLinkPreviewEvt.value &amp;&amp; localLinkPreviewEvt.value.path}"
+            label="Open externally"
+            variant="outlined"
+            onClick="openExternal('file://' + localLinkPreviewEvt.value.path)" />
+        </HStack>
+        <Text
+          when="{localLinkPreviewEvt.value &amp;&amp; localLinkPreviewEvt.value.renderMode === 'loading'}"
+          color="$textColor-secondary"
+          value="Loading..." />
+        <Markdown
+          when="{localLinkPreviewEvt.value &amp;&amp; localLinkPreviewEvt.value.renderMode !== 'loading'}"
+          overflowMode="scroll"
+          content="{window.__bramFormatLocalLinkPreview(localLinkPreviewEvt.value)}" />
+        <HStack gap="$space-2">
+          <SpaceFiller />
+          <Button
+            label="Close"
+            variant="ghost"
+            onClick="window.__bramCloseLocalLinkPreview()" />
+        </HStack>
+      </VStack>
+    </ModalDialog>
+  </Theme>
+</Component>

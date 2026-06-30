@@ -70,6 +70,7 @@
     id="headerSettings"
     url="/__settings"
     onLoaded="(v) => window.__bramInitAgentSwitcher(null, settingsAgent(v), agentSwitching, (next) => agentSwitcherSelected = next)" />
+  <LocalLinkPreview />
   <!-- Live session meta for the footer echo (mirrors Transcript's source):
        /__sessions/list flags the current session; refetch on changes so the
        footer line tracks the growing live file. -->

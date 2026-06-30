@@ -14025,6 +14025,37 @@ fn mime_for(path: &std::path::Path) -> &'static str {
     }
 }
 
+fn local_file_preview_language(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "rs" => "rust",
+        "js" | "xs" => "javascript",
+        "ts" => "typescript",
+        "jsx" => "jsx",
+        "tsx" => "tsx",
+        "py" => "python",
+        "json" => "json",
+        "xml" | "xmlui" => "xml",
+        "html" => "html",
+        "css" => "css",
+        "sh" | "bash" => "bash",
+        "md" => "markdown",
+        "toml" => "toml",
+        "yaml" | "yml" => "yaml",
+        "sql" => "sql",
+        "go" => "go",
+        "c" | "h" => "c",
+        "rb" => "ruby",
+        "java" => "java",
+        _ => "",
+    }
+}
+
 // Markers used to identify the Bram block inside a project's CLAUDE.md and
 // AGENTS.md. The block contains the imported/embedded worklist guidance;
 // future runs of run_enhance replace what's between the markers without
@@ -22171,6 +22202,112 @@ fn route_request<R: tauri::Runtime>(
                 serde_json::json!({ "content": "", "error": e.to_string() })
             }
         };
+        let body = serde_json::to_vec(&result).unwrap_or_default();
+        return (200, "application/json; charset=utf-8", body);
+    }
+
+    if path == "__local-file-preview" {
+        const MAX_PREVIEW_BYTES: u64 = 200_000;
+        let mut file_path = String::new();
+        let mut line: Option<u64> = None;
+        for pair in query.split('&') {
+            if let Some(enc) = pair.strip_prefix("path=") {
+                file_path = percent_decode(enc);
+            } else if let Some(enc) = pair.strip_prefix("line=") {
+                line = percent_decode(enc).parse::<u64>().ok();
+            }
+        }
+        let root = project_root(Some(app)).unwrap_or_else(|| PathBuf::from("."));
+        let expanded = expand_tilde(&file_path);
+        let requested = PathBuf::from(&expanded);
+        let candidate = if requested.is_absolute() {
+            requested
+        } else {
+            root.join(requested)
+        };
+        let candidate = if candidate.exists() {
+            candidate
+        } else if expanded.starts_with('/') {
+            root.join(expanded.trim_start_matches('/'))
+        } else {
+            candidate
+        };
+        let result = (|| -> Result<serde_json::Value, String> {
+            let path = strip_unc_prefix(candidate.canonicalize().map_err(|e| e.to_string())?);
+            // Root containment: the resolved path (canonicalize collapses `..`
+            // and resolves symlinks) must live inside the project root. Blocks
+            // absolute and ~/ escapes (e.g. /etc/passwd, ~/.ssh/id_rsa) and
+            // symlink escapes; preview is scoped to the project directory.
+            let root_canon = strip_unc_prefix(root.canonicalize().unwrap_or_else(|_| root.clone()));
+            if !path.starts_with(&root_canon) {
+                return Err(
+                    "Outside this project — preview is limited to files in the project directory."
+                        .to_string(),
+                );
+            }
+            let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+            if !meta.is_file() {
+                return Err("Not a regular file.".to_string());
+            }
+            let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
+            let mut bytes = Vec::new();
+            let mut limited = (&mut file).take(MAX_PREVIEW_BYTES + 1);
+            limited.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            let truncated = bytes.len() as u64 > MAX_PREVIEW_BYTES;
+            if truncated {
+                bytes.truncate(MAX_PREVIEW_BYTES as usize);
+            }
+            if bytes.iter().any(|b| *b == 0) {
+                return Err(
+                    "Binary files are not previewed in Bram. Open it externally instead."
+                        .to_string(),
+                );
+            }
+            let content = String::from_utf8_lossy(&bytes).into_owned();
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("File")
+                .to_string();
+            let display_path = path.to_string_lossy().into_owned();
+            let repo_path = path
+                .strip_prefix(&root)
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned());
+            let language = local_file_preview_language(&path);
+            let render_mode = if language == "markdown" {
+                "markdown"
+            } else {
+                "code"
+            };
+            Ok(serde_json::json!({
+                "ok": true,
+                "path": path.to_string_lossy(),
+                "displayPath": display_path,
+                "repoPath": repo_path,
+                "name": name,
+                "title": name,
+                "line": line,
+                "language": language,
+                "renderMode": render_mode,
+                "content": content,
+                "truncated": truncated,
+                "size": meta.len()
+            }))
+        })()
+        .unwrap_or_else(|e| {
+            serde_json::json!({
+                "ok": false,
+                "path": candidate.to_string_lossy(),
+                "displayPath": file_path,
+                "title": "File unavailable",
+                "line": line,
+                "language": "",
+                "renderMode": "error",
+                "content": "",
+                "error": e
+            })
+        });
         let body = serde_json::to_vec(&result).unwrap_or_default();
         return (200, "application/json; charset=utf-8", body);
     }

@@ -2721,8 +2721,11 @@ window.__bramSetAgentMenuFromTurnState = function (turnState, surface) {
 window.openExternal = function (url) {
   var invoke = getTauriInvoke();
   if (!invoke) return;
-  invoke("open_url", { url: String(url) }).catch(function (e) {
+  return invoke("open_url", { url: String(url) }).catch(function (e) {
     console.error("openExternal open_url", e);
+    if (typeof window.__bramShowLinkPreviewError === "function") {
+      window.__bramShowLinkPreviewError(String(url), String(e && e.message || e));
+    }
   });
 };
 // Capture an interactive screenshot via the host (macOS: screencapture -i)
@@ -4029,6 +4032,192 @@ window.bramSubscribeRightPaneSize = (function () {
   };
 })();
 
+window.__bramLocalLinkPreview = null;
+window.__bramLocalLinkPreviewSubscribers = new Set();
+window.__bramNotifyLocalLinkPreview = function () {
+  window.__bramLocalLinkPreviewSubscribers.forEach(function (fn) {
+    try { fn(); } catch (e) { console.error("[bramLocalLinkPreview] subscriber threw:", e); }
+  });
+};
+window.bramSubscribeLocalLinkPreview = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    factory = function (emit) {
+      var fire = function () { emit(window.__bramLocalLinkPreview); };
+      window.__bramLocalLinkPreviewSubscribers.add(fire);
+      fire();
+      return function () { window.__bramLocalLinkPreviewSubscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+window.__bramCloseLocalLinkPreview = function () {
+  window.__bramLocalLinkPreview = null;
+  window.__bramNotifyLocalLinkPreview();
+};
+window.__bramSetLocalLinkPreview = function (payload) {
+  window.__bramLocalLinkPreview = payload || null;
+  window.__bramNotifyLocalLinkPreview();
+};
+window.__bramShowLinkPreviewError = function (href, error) {
+  window.__bramSetLocalLinkPreview({
+    ok: false,
+    href: String(href || ""),
+    displayPath: String(href || ""),
+    title: "Link unavailable",
+    error: String(error || "Could not open this link."),
+    content: "",
+    language: "",
+    renderMode: "error",
+    at: Date.now(),
+  });
+};
+window.__bramLocalLinkPreviewTitle = function (preview) {
+  if (!preview) return "File";
+  if (preview.title) return preview.title;
+  return preview.name || preview.displayPath || preview.path || preview.href || "File";
+};
+window.__bramLocalLinkPreviewMeta = function (preview) {
+  if (!preview) return "";
+  if (preview.error) return preview.displayPath || preview.href || "";
+  var bits = [];
+  if (preview.displayPath) bits.push(preview.displayPath);
+  if (preview.line) bits.push("line " + preview.line);
+  if (preview.truncated) bits.push("truncated");
+  return bits.join(" · ");
+};
+window.__bramFormatLocalLinkPreview = function (preview) {
+  if (!preview) return "";
+  if (preview.error) return preview.error;
+  var content = preview.content == null ? "" : String(preview.content);
+  if (preview.renderMode === "markdown") return content;
+  return window.__bramFenceMarkdown(content, preview.language || "");
+};
+window.__bramFenceMarkdown = function (body, lang) {
+  body = body == null ? "" : String(body);
+  var longest = 0, run = 0;
+  for (var i = 0; i < body.length; i++) {
+    if (body.charAt(i) === "`") { run++; if (run > longest) longest = run; }
+    else { run = 0; }
+  }
+  var fence = "";
+  var fenceLen = Math.max(3, longest + 1);
+  for (var j = 0; j < fenceLen; j++) fence += "`";
+  return fence + (lang || "") + "\n" + body + "\n" + fence;
+};
+window.__bramLocalLinkRequestFromHref = function (href) {
+  href = String(href || "").trim();
+  if (!href) return null;
+  // XMLUI/Markdown rewrites many local hrefs into hash routes
+  // (`/Users/me/x.md` -> `#/Users/me/x.md`, `README.md` -> `#README.md`).
+  // Treat hash-prefixed file-like values as local links, but leave ordinary
+  // page anchors (`#section`) alone.
+  if (href.charAt(0) === "#") {
+    var hashPath = href.slice(1);
+    if (
+      !hashPath ||
+      !(/^\/|^~\/|^\.\.?\/|^[A-Za-z]:[\\/]/.test(hashPath) || /\.[A-Za-z0-9]+(?::\d+)?(?:[?#].*)?$/.test(hashPath))
+    ) {
+      return null;
+    }
+    href = hashPath;
+  }
+  if (/^(mailto|tel|javascript):/i.test(href)) {
+    return { skip: true, reason: "scheme", href: href };
+  }
+
+  var raw = href;
+  var m;
+  if ((m = raw.match(/^file:\/\/(?:localhost)?([^?#]*)(?:[?#].*)?$/i))) {
+    raw = decodeURIComponent(m[1] || "");
+  } else if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
+    return { skip: true, reason: "external-scheme", href: href };
+  }
+  raw = raw.replace(/[?#].*$/, "");
+
+  // Bram nav routes render as hash routes (#/transcript, #/worklist). But
+  // XMLUI's Markdown resolves RELATIVE links against the current route, so a
+  // link like `[x](src/foo.rs)` from the transcript arrives as
+  // `#/transcript/src/foo.rs`. Distinguish the two: a bare route (no
+  // remainder) is navigation -> skip; a route followed by a file-like
+  // remainder is a relative file link XMLUI prefixed with the current route
+  // -> strip the route segment and preview the remainder. Absolute links
+  // (/Users, /etc, ...) don't start with a known route and fall through.
+  var routeMatch = raw.match(
+    /^\/(worklist|transcript|issues|commits|history|sessions|settings|status|context)(\/.*)?$/
+  );
+  if (routeMatch) {
+    var rest = routeMatch[2] ? routeMatch[2].slice(1) : "";
+    if (!rest || !/\.[A-Za-z0-9]+(?::\d+)?$/.test(rest)) {
+      return { skip: true, reason: "app-route", href: href, raw: raw };
+    }
+    raw = rest;
+  }
+
+  var line = null;
+  var lineMatch = raw.match(/^(.*):(\d+)$/);
+  if (lineMatch && !/^[A-Za-z]:\\/.test(raw)) {
+    raw = lineMatch[1];
+    line = parseInt(lineMatch[2], 10);
+  }
+  if (!raw) return null;
+  if (raw.indexOf("://") >= 0) return { skip: true, reason: "unknown-url", href: href, raw: raw };
+  return { path: raw, line: line, href: href };
+};
+window.__bramOpenLocalLinkPreview = function (request) {
+  if (!request || !request.path) return;
+  var qs = "path=" + encodeURIComponent(request.path);
+  if (request.line) qs += "&line=" + encodeURIComponent(String(request.line));
+  window.__bramSetLocalLinkPreview({
+    ok: true,
+    href: request.href || request.path,
+    displayPath: request.path,
+    title: "Loading file...",
+    content: "",
+    renderMode: "loading",
+    at: Date.now(),
+  });
+  try {
+    window.__bramIframeTrace("local-link-preview", {
+      stage: "fetch",
+      href: request.href || "",
+      path: request.path || "",
+      line: request.line || null,
+    });
+  } catch (e) {}
+  window.fetch("/__local-file-preview?" + qs, { cache: "no-store" })
+    .then(function (r) { return r.json(); })
+    .then(function (payload) {
+      payload = payload || {};
+      payload.href = request.href || request.path;
+      payload.at = Date.now();
+      try {
+        window.__bramIframeTrace("local-link-preview", {
+          stage: "response",
+          ok: !!payload.ok,
+          href: request.href || "",
+          path: payload.path || request.path || "",
+          displayPath: payload.displayPath || "",
+          renderMode: payload.renderMode || "",
+          error: payload.error || "",
+        });
+      } catch (e) {}
+      window.__bramSetLocalLinkPreview(payload);
+    })
+    .catch(function (e) {
+      try {
+        window.__bramIframeTrace("local-link-preview", {
+          stage: "fetch-error",
+          href: request.href || "",
+          path: request.path || "",
+          error: String(e && e.message || e),
+        });
+      } catch (traceErr) {}
+      window.__bramShowLinkPreviewError(request.href || request.path, String(e && e.message || e));
+    });
+};
+
 // External-driven talk-session-change bridge. Emits an event with
 // the correlation id and host timestamp on each talk-session
 // rotation.
@@ -5024,10 +5213,10 @@ window.savePendingSessionRenames = function (ids) {
     localStorage.setItem("session-pending-renames", JSON.stringify(ids || []));
   } catch (e) {}
 };
-// Route external (http/https/file) anchor clicks through openExternal so
-// Markdown links and any other <a> tags open in the system browser
-// instead of trying to navigate the Tauri WebView (which 404s). Capture
-// phase so we run before XMLUI's Markdown-internal click handlers.
+// Route external anchors through openExternal and local-file anchors through
+// Bram's in-pane preview modal instead of letting the Tauri WebView navigate
+// to dead routes. Capture phase so we run before XMLUI's Markdown-internal
+// click handlers.
 //
 // Also routes relative *.md anchors (the MEMORY.md cross-references like
 // `[foo.md](memory/foo.md)`) to a callback installed via
@@ -5048,12 +5237,15 @@ document.addEventListener("click", function (e) {
   if (!a) return;
   var href = a.getAttribute("href");
   if (!href) return;
-  if (/^(https?|file):/i.test(href)) {
-    e.preventDefault();
-    e.stopPropagation();
-    window.openExternal(href);
-    return;
-  }
+  var linkText = (a.textContent || "").trim().slice(0, 120);
+  try {
+    window.__bramIframeTrace("local-link-click", {
+      stage: "anchor",
+      href: href,
+      text: linkText,
+      tagName: String((e.target && e.target.tagName) || ""),
+    });
+  } catch (traceErr) {}
   if (href.indexOf("://") === -1 && /\.md(?:[?#].*)?$/i.test(href)) {
     if (typeof __contextMemorySelector === "function") {
       e.preventDefault();
@@ -5065,7 +5257,39 @@ document.addEventListener("click", function (e) {
       } catch (err) {
         logToHost({ kind: "memory-link-error", error: String(err && err.message || err) });
       }
+      return;
     }
+  }
+  var localRequest = window.__bramLocalLinkRequestFromHref(href);
+  if (localRequest && !localRequest.skip) {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      window.__bramIframeTrace("local-link-click", {
+        stage: "intercept",
+        href: href,
+        path: localRequest.path || "",
+        line: localRequest.line || null,
+      });
+    } catch (traceErr2) {}
+    window.__bramOpenLocalLinkPreview(localRequest);
+    return;
+  }
+  if (localRequest && localRequest.skip) {
+    try {
+      window.__bramIframeTrace("local-link-click", {
+        stage: "skip",
+        href: href,
+        reason: localRequest.reason || "",
+        raw: localRequest.raw || "",
+      });
+    } catch (traceErr3) {}
+  }
+  if (/^https?:/i.test(href)) {
+    e.preventDefault();
+    e.stopPropagation();
+    window.openExternal(href);
+    return;
   }
 }, true);
 // Click-driven; scan the DOM per call.

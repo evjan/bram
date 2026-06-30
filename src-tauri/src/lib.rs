@@ -7790,6 +7790,14 @@ fn pty_write_internal<R: tauri::Runtime>(
         if data == "\x1b" {
             let _ = app.emit("pty-esc-sent", serde_json::json!({ "source": caller_hint }));
         }
+        // #210 follow-up: a toTurn submit (an agent-pane send) reached the PTY.
+        // Emit so the parent shell can capture whether the message actually
+        // submitted or got stranded in the input ("needed a newline"). Only the
+        // submit-bearing write carries \r (the Windows payload chunk does not),
+        // so this fires once per send on both platforms.
+        if caller_hint.starts_with("pty-intent-toTurn") && data.contains('\r') {
+            let _ = app.emit("pty-send-sent", serde_json::json!({ "source": caller_hint }));
+        }
     }
     let mut guard = state.0.lock().unwrap();
     let pty = guard.as_mut().ok_or("pty not started")?;

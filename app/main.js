@@ -744,14 +744,15 @@ function __escRegionRows() {
   };
 }
 
-function __escBeginCapture(source) {
-  const id = "esc-" + Date.now() + "-" + ++__escCaptureSeq;
+function __escBeginCapture(kind, source) {
+  const subkind = kind + "-capture";
+  const id = kind + "-" + Date.now() + "-" + ++__escCaptureSeq;
   const startedAt = Date.now();
   const at = __escRegionRows();
   logShellEvent({
     kind: "iframe-trace",
-    subkind: "esc-capture",
-    stage: "at-esc",
+    subkind: subkind,
+    stage: "at-" + kind,
     escId: id,
     source: source || "unknown",
     menuPresent: __gridMenuPresent,
@@ -760,14 +761,14 @@ function __escBeginCapture(source) {
     rows: at.rows,
     at: new Date().toISOString(),
   });
-  __escCapture = { id, startedAt, until: startedAt + ESC_CAPTURE_MS, chunks: [] };
+  __escCapture = { id, startedAt, until: startedAt + ESC_CAPTURE_MS, chunks: [], subkind: subkind };
   setTimeout(() => {
     const cap = __escCapture;
     if (!cap || cap.id !== id) return;
     __escCapture = null;
     logShellEvent({
       kind: "iframe-trace",
-      subkind: "esc-capture",
+      subkind: cap.subkind,
       stage: "post-bytes",
       escId: id,
       windowMs: ESC_CAPTURE_MS,
@@ -779,7 +780,7 @@ function __escBeginCapture(source) {
     const settle = __escRegionRows();
     logShellEvent({
       kind: "iframe-trace",
-      subkind: "esc-capture",
+      subkind: cap.subkind,
       stage: "settle",
       escId: id,
       changed: at.rows.join("\n") !== settle.rows.join("\n"),
@@ -1330,11 +1331,29 @@ const { listen } = window.__TAURI__.event;
 listen("pty-esc-sent", (e) => {
   if (__escCapture) return;
   try {
-    __escBeginCapture((e && e.payload && e.payload.source) || "unknown");
+    __escBeginCapture("esc", (e && e.payload && e.payload.source) || "unknown");
   } catch (err) {
     logShellEvent({
       kind: "iframe-trace",
       subkind: "esc-capture",
+      stage: "error",
+      error: String(err),
+      at: new Date().toISOString(),
+    });
+  }
+});
+
+// send-path-strand-instrumentation: capture agent-pane sends (toTurn submit) the
+// same way, to characterize the rare "message stranded in the input as if it
+// needed a newline" case. Same machinery; kind="send" → subkind send-capture.
+listen("pty-send-sent", (e) => {
+  if (__escCapture) return;
+  try {
+    __escBeginCapture("send", (e && e.payload && e.payload.source) || "unknown");
+  } catch (err) {
+    logShellEvent({
+      kind: "iframe-trace",
+      subkind: "send-capture",
       stage: "error",
       error: String(err),
       at: new Date().toISOString(),

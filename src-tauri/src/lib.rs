@@ -7174,6 +7174,74 @@ fn repo_owner_name<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<String> {
     }
 }
 
+fn title_path_with_home(root: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home {
+        if root == home {
+            return "~".to_string();
+        }
+        if let Ok(rest) = root.strip_prefix(home) {
+            if !rest.as_os_str().is_empty() {
+                return format!("~/{}", rest.display());
+            }
+        }
+    }
+    root.display().to_string()
+}
+
+fn shell_window_title_parts(project_root: Option<&Path>, repo_slug: Option<&str>) -> String {
+    let mut parts = vec!["Bram".to_string()];
+    if let Some(root) = project_root {
+        parts.push(title_path_with_home(root, home_dir().as_deref()));
+    }
+    if let Some(slug) = repo_slug {
+        let slug = slug.trim();
+        if !slug.is_empty() {
+            parts.push(format!("github.com/{}", slug));
+        }
+    }
+    parts.join(" · ")
+}
+
+fn shell_window_title<R: tauri::Runtime>(app: &AppHandle<R>) -> String {
+    let root = project_root(Some(app));
+    let repo_slug = repo_owner_name(app);
+    shell_window_title_parts(root.as_deref(), repo_slug.as_deref())
+}
+
+fn set_shell_window_title<R: tauri::Runtime>(app: &AppHandle<R>) {
+    let title = shell_window_title(app);
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(err) = window.set_title(&title) {
+            eprintln!("[bram] failed to set window title: {}", err);
+        }
+    }
+}
+
+#[cfg(test)]
+mod shell_window_title_tests {
+    use super::{shell_window_title_parts, title_path_with_home};
+    use std::path::Path;
+
+    #[test]
+    fn title_path_shortens_home_relative_project() {
+        assert_eq!(
+            title_path_with_home(
+                Path::new("/Users/jonudell/bram"),
+                Some(Path::new("/Users/jonudell"))
+            ),
+            "~/bram"
+        );
+    }
+
+    #[test]
+    fn title_includes_repo_slug_without_scheme() {
+        assert_eq!(
+            shell_window_title_parts(None, Some("judell/bram")),
+            "Bram · github.com/judell/bram"
+        );
+    }
+}
+
 fn gh_issue_closed_event_actor<R: tauri::Runtime>(
     app: &AppHandle<R>,
     repo_slug: &str,
@@ -25496,6 +25564,7 @@ pub fn run() {
             // to ephemeral when the previous port is held by anything
             // else, including a second Bram instance.
             let startup_project_root = project_root(Some(app.handle()));
+            set_shell_window_title(app.handle());
             let previous_port = startup_project_root
                 .as_ref()
                 .and_then(|p| std::fs::read_to_string(p.join("resources/.bram-port")).ok())

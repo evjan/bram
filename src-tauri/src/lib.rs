@@ -25777,8 +25777,28 @@ pub fn run() {
             let mut watch_paths: Vec<std::path::PathBuf> = vec![proj_root_path.clone()];
             watch_paths.extend(tools_pane_paths.iter().cloned());
             if let Some(ref sd) = claude_sessions_dir {
-                if sd.exists() {
-                    watch_paths.push(sd.clone());
+                // #212 fix: watch the STABLE parent (~/.claude/projects/) rather
+                // than the per-project leaf. The leaf may not exist at startup
+                // (first Claude session in a project, or moved aside) and a
+                // recursive watch registered on a non-existent dir never fires
+                // when the dir is later created -- the dead watch that left
+                // Claude's end_turn unscanned and the status stuck "working".
+                // The recursive parent watch sees the leaf's creation and the
+                // JSONL writes inside it; the session-event filter below still
+                // gates dispatch on `p.starts_with(claude_sessions_dir)` (the
+                // leaf), so this does not broaden what gets scanned. Create the
+                // parent if absent (Claude makes it anyway) so the watch is live
+                // from the first turn. Codex is left as-is: its global
+                // ~/.codex/sessions effectively always exists.
+                let watch_target = sd
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| sd.clone());
+                if !watch_target.is_dir() {
+                    let _ = std::fs::create_dir_all(&watch_target);
+                }
+                if watch_target.is_dir() {
+                    watch_paths.push(watch_target);
                 }
             }
             if let Some(ref sd) = codex_sessions_dir {

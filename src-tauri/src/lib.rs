@@ -7780,6 +7780,16 @@ fn pty_write_internal<R: tauri::Runtime>(
             }
         }
         record_worklist_authorization_from_input(app, data);
+        // #210 characterization: a bare Esc reached the PTY from ANY origin — a
+        // key typed into xterm, the agent-pane Esc/number buttons (which arrive
+        // as pty-intent-sendKeys), an agent-switch, etc. Emit so the parent
+        // shell, which owns the xterm grid, can snapshot the terminal and
+        // capture the agent's post-Esc bytes. caller_hint tags the origin — the
+        // discriminator for which Esc path leaves residue. Emitted before the
+        // write so the snapshot has a chance to run ahead of the agent's repaint.
+        if data == "\x1b" {
+            let _ = app.emit("pty-esc-sent", serde_json::json!({ "source": caller_hint }));
+        }
     }
     let mut guard = state.0.lock().unwrap();
     let pty = guard.as_mut().ok_or("pty not started")?;

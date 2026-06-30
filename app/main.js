@@ -684,8 +684,125 @@ const tracePaneReload = (stage, fields = {}) => {
 const ptyChannel = new Channel();
 
 let startupFitDone = false;
+
+// ===== #210 Esc-residue characterization (observe-only) =====
+// When Esc is pressed while a permission menu is live, capture three correlated
+// snapshots so a problematic Esc self-diagnoses: the prompt region AT Esc, the
+// raw PTY bytes the agent emits for the next ESC_CAPTURE_MS, and the same region
+// after it SETTLES. Writes NOTHING to the terminal — it only observes, so the
+// agent's native post-Esc behavior is unperturbed. The post-bytes capture is the
+// decisive signal: bytes that repaint the region mean the residue is the agent's
+// own redraw (not Bram's to clear); no bytes mean it's stale rows Bram rendered.
+// Tunables: the observation window and the rows captured above the menu block.
+const ESC_CAPTURE_MS = 750;
+const ESC_CAPTURE_PAD = 4;
+const ESC_CAPTURE_MAX_CHUNKS = 24;
+let __escCaptureSeq = 0;
+let __escCapture = null; // { id, startedAt, until, chunks } while observing
+
+function __escBytesPreview(u8, max) {
+  let out = "";
+  for (let i = 0; i < u8.length && out.length < max; i++) {
+    const b = u8[i];
+    if (b === 0x1b) out += "\\x1b";
+    else if (b === 0x0d) out += "\\r";
+    else if (b === 0x0a) out += "\\n";
+    else if (b === 0x09) out += "\\t";
+    else if (b >= 0x20 && b < 0x7f) out += String.fromCharCode(b);
+    else out += "\\x" + b.toString(16).padStart(2, "0");
+  }
+  return out.length >= max ? out + "…" : out;
+}
+
+// Snapshot the prompt region (menu block + ESC_CAPTURE_PAD rows above, through
+// the end of the live tail where residue would sit) plus viewport context.
+function __escRegionRows() {
+  const rows = __gridReadLiveRows() || [];
+  const menu = rows.length ? __gridDetectMenu(rows) : null;
+  const buf = term.buffer && term.buffer.active;
+  const blockTop = menu ? menu.blockTop : -1;
+  const top =
+    blockTop >= 0
+      ? Math.max(0, blockTop - ESC_CAPTURE_PAD)
+      : Math.max(0, rows.length - 40);
+  return {
+    rows: rows.slice(top).map((r) => r.text.replace(/\s+$/, "")),
+    blockTop,
+    meta: {
+      liveRows: rows.length,
+      termRows: term.rows || 0,
+      bufLen: buf ? buf.length : 0,
+      baseY: buf ? buf.baseY : 0,
+      header:
+        (__gridLastMenu && __gridLastMenu.header) || (menu && menu.header) || "",
+      optionCount: menu
+        ? menu.options.length
+        : __gridLastMenu
+          ? __gridLastMenu.options.length
+          : 0,
+    },
+  };
+}
+
+function __escBeginCapture(source) {
+  const id = "esc-" + Date.now() + "-" + ++__escCaptureSeq;
+  const startedAt = Date.now();
+  const at = __escRegionRows();
+  logShellEvent({
+    kind: "iframe-trace",
+    subkind: "esc-capture",
+    stage: "at-esc",
+    escId: id,
+    source: source || "unknown",
+    menuPresent: __gridMenuPresent,
+    blockTop: at.blockTop,
+    meta: at.meta,
+    rows: at.rows,
+    at: new Date().toISOString(),
+  });
+  __escCapture = { id, startedAt, until: startedAt + ESC_CAPTURE_MS, chunks: [] };
+  setTimeout(() => {
+    const cap = __escCapture;
+    if (!cap || cap.id !== id) return;
+    __escCapture = null;
+    logShellEvent({
+      kind: "iframe-trace",
+      subkind: "esc-capture",
+      stage: "post-bytes",
+      escId: id,
+      windowMs: ESC_CAPTURE_MS,
+      chunkCount: cap.chunks.length,
+      totalBytes: cap.chunks.reduce((n, c) => n + c.len, 0),
+      chunks: cap.chunks,
+      at: new Date().toISOString(),
+    });
+    const settle = __escRegionRows();
+    logShellEvent({
+      kind: "iframe-trace",
+      subkind: "esc-capture",
+      stage: "settle",
+      escId: id,
+      changed: at.rows.join("\n") !== settle.rows.join("\n"),
+      rows: settle.rows,
+      at: new Date().toISOString(),
+    });
+  }, ESC_CAPTURE_MS);
+}
+
 ptyChannel.onmessage = (chunk) => {
-  term.write(new Uint8Array(chunk));
+  const bytes = new Uint8Array(chunk);
+  if (
+    __escCapture &&
+    Date.now() < __escCapture.until &&
+    __escCapture.chunks.length < ESC_CAPTURE_MAX_CHUNKS
+  ) {
+    __escCapture.chunks.push({
+      dtMs: Date.now() - __escCapture.startedAt,
+      len: bytes.length,
+      text: __escBytesPreview(bytes, 400),
+    });
+  }
+  term.write(bytes);
   if (!startupFitDone) {
     startupFitDone = true;
     // First PTY output means the shell has started and the WebView2 window
@@ -1203,6 +1320,28 @@ const _spawnPty = async () => {
 // over any default; reload happens via re-assigning src with a cache
 // buster.
 const { listen } = window.__TAURI__.event;
+
+// #210: drive captures off the host's universal PTY-write detector
+// (pty-esc-sent) so an Esc from ANY origin is caught — typed into xterm, the
+// agent-pane Esc/number buttons (pty-intent-sendKeys), agent-switch, etc. — not
+// just keys that pass through term.onData. MUST stay below the `const { listen }`
+// above: a top-level listen() call before that line throws at load and aborts
+// the whole shell. The payload's `source` tags origin.
+listen("pty-esc-sent", (e) => {
+  if (__escCapture) return;
+  try {
+    __escBeginCapture((e && e.payload && e.payload.source) || "unknown");
+  } catch (err) {
+    logShellEvent({
+      kind: "iframe-trace",
+      subkind: "esc-capture",
+      stage: "error",
+      error: String(err),
+      at: new Date().toISOString(),
+    });
+  }
+});
+
 (async () => {
   const iframe = document.getElementById("right-pane");
   if (!iframe) return;

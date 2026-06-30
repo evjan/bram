@@ -42,6 +42,13 @@ def _port(root):
 
 def _post(port, path, body):
     try:
+        # Echo the per-session token Bram set in this agent's env so the route
+        # can tell our POSTs from a foreign agent's. Absent (agent not launched
+        # by Bram) -> route rejects, which is the intended behavior.
+        token = os.environ.get("BRAM_MENU_TOKEN")
+        if token:
+            body = dict(body)
+            body["bram_token"] = token
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             "http://127.0.0.1:%d%s" % (port, path),

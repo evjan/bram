@@ -2543,6 +2543,31 @@ fn permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu> {
 // build a canonical PtyMenu (no screen scraping) and emit it into the same
 // agent-pane surface the grid detector feeds. /clear (PostToolUse) dismisses
 // it. No-op unless the flag is on, so it coexists with the grid detector.
+// Per-session token guarding the menu routes. Generated once from /dev/urandom
+// (time+pid fallback on non-unix). Bram puts it in its launched agent's env
+// (BRAM_MENU_TOKEN); the agent's menu hook echoes it back on every
+// /__menu/permission[/clear] POST. An agent running OUTSIDE Bram never sees the
+// env var, so it can't forge the token and its POSTs are rejected (#113).
+static MENU_SESSION_TOKEN: OnceLock<String> = OnceLock::new();
+fn menu_session_token() -> &'static str {
+    MENU_SESSION_TOKEN.get_or_init(|| {
+        let mut bytes = [0u8; 16];
+        let ok = std::fs::File::open("/dev/urandom")
+            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut bytes))
+            .is_ok();
+        if !ok {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let pid = std::process::id() as u128;
+            let mix = nanos ^ (pid << 64) ^ pid.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            bytes.copy_from_slice(&mix.to_le_bytes());
+        }
+        bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    })
+}
+
 fn handle_permission_menu<R: tauri::Runtime>(
     app: &AppHandle<R>,
     body: &[u8],
@@ -2554,6 +2579,38 @@ fn handle_permission_menu<R: tauri::Runtime>(
             "application/json; charset=utf-8",
             b"{\"ok\":true,\"applied\":false}".to_vec(),
         );
+    }
+    // Foreign-agent guard: every POST must carry the per-session BRAM_MENU_TOKEN
+    // (see menu_session_token). An agent running outside Bram can read
+    // .bram-port and POST here, but lacks the env token, so reject mismatches.
+    {
+        let probe: serde_json::Value =
+            serde_json::from_slice(body).unwrap_or(serde_json::Value::Null);
+        let supplied = probe
+            .get("bram_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if supplied != menu_session_token() {
+            if bram_trace_enabled() {
+                append_bram_trace_line(
+                    app,
+                    "hook-menu",
+                    &format!(
+                        "op=reject reason=foreign-token clear={} tool={}",
+                        clear,
+                        probe
+                            .get("tool_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?")
+                    ),
+                );
+            }
+            return (
+                403,
+                "application/json; charset=utf-8",
+                b"{\"ok\":false,\"rejected\":\"foreign-token\"}".to_vec(),
+            );
+        }
     }
     if clear {
         let value: serde_json::Value =
@@ -7424,6 +7481,10 @@ fn pty_spawn(
         command.env("BRAM_PORT", p.to_string());
         command.env("XMLUI_DESKTOP_PORT", p.to_string());
     }
+    // Per-session menu-route token: the launched agent (and the menu hook it
+    // spawns) inherits BRAM_MENU_TOKEN; the /__menu/permission route requires
+    // it, so an agent running OUTSIDE Bram can't POST menus into this pane.
+    command.env("BRAM_MENU_TOKEN", menu_session_token());
     // Propagate trace toggle + log path into the PTY child so hook
     // scripts (worklist-guard.py for Claude, worklist-guard-codex.py
     // for Codex) can write [hook] records into the same trace file as

@@ -56,6 +56,12 @@ def loopback_port(root: Path) -> int | None:
 
 def post(port: int, path: str, body: dict) -> None:
     try:
+        # Echo the per-session token Bram set in this agent's env so the route
+        # can distinguish our POSTs from a foreign agent's. Absent -> rejected.
+        token = os.environ.get("BRAM_MENU_TOKEN")
+        if token:
+            body = dict(body)
+            body["bram_token"] = token
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}{path}",

@@ -608,6 +608,23 @@ function appendVoiceTranscript(component, transcript) {
   return next;
 }
 
+// #210: the toolbar Esc button holds while a message has been sent and no
+// response has been seen yet. window.__bramRestoreWorklistAwaiting() is a
+// 5-minute-bounded flag set on send and cleared on response. Firing Esc in that
+// window interrupts the in-flight turn, and Claude Code restores the just-sent
+// message to the input box, stranding it (the desync #210 is really about). Once
+// a response arrives the flag clears and Esc interrupts normally. Callees are
+// window globals — call them qualified so xs identifier analysis does not abort
+// on a bare name inside this body.
+function escToolbarClick() {
+  if (window.__bramRestoreWorklistAwaiting()) {
+    window.__bramTraceToolbarKey('esc-held');
+    return;
+  }
+  window.__bramTraceToolbarKey('esc');
+  window.sendKeys('\x1b');
+}
+
 // Toolbar PTY keystroke instrumentation for #182 incident 6: tracks
 // the iframe's current view of pendingMenu at the moment the user
 // clicks a toolbar button (1/2/3/Yes/No/Esc), so post-hoc analysis

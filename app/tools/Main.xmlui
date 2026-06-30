@@ -329,7 +329,7 @@
             label="Esc"
             variant="ghost"
             tooltip="Send Esc to interrupt"
-            onClick="window.__bramTraceToolbarKey('esc'); sendKeys('\x1b')" />
+            onClick="escToolbarClick()" />
         </HStack>
       </VStack>
     </property>

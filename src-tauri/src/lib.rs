@@ -5109,6 +5109,28 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                                     ),
                                 );
                             }
+                        } else if d.when.elapsed() > std::time::Duration::from_millis(600) {
+                            // Sustained presence: the grid has re-detected this
+                            // menu continuously well past the window a stale
+                            // buffer re-read survives (~1-2 scans). So it is a
+                            // LIVE menu whose hook ownership was dropped by a
+                            // spurious/foreign clear — show it instead of
+                            // stranding it (the second miss class). The dismiss
+                            // record is left in place; subsequent scans keep
+                            // resurrecting until a genuine new dismiss replaces it.
+                            if bram_trace_enabled() {
+                                append_bram_trace_line(
+                                    app,
+                                    "pty-menu",
+                                    &format!(
+                                        "state=suppress-skipped tool={} reason=sustained-presence elapsed_ms={} new_options=[{}]{}",
+                                        new_menu.tool,
+                                        d.when.elapsed().as_millis(),
+                                        option_summary,
+                                        signature_summary,
+                                    ),
+                                );
+                            }
                         } else {
                             eprintln!(
                                 "[pty-menu] suppressed re-detection of tool={} ({}ms after dismissal)",

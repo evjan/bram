@@ -608,19 +608,13 @@ function appendVoiceTranscript(component, transcript) {
   return next;
 }
 
-// #210: the toolbar Esc button holds while a message has been sent and no
-// response has been seen yet. window.__bramRestoreWorklistAwaiting() is a
-// 5-minute-bounded flag set on send and cleared on response. Firing Esc in that
-// window interrupts the in-flight turn, and Claude Code restores the just-sent
-// message to the input box, stranding it (the desync #210 is really about). Once
-// a response arrives the flag clears and Esc interrupts normally. Callees are
-// window globals — call them qualified so xs identifier analysis does not abort
-// on a bare name inside this body.
+// Toolbar Esc — always interrupts. The #210 hold-gate was reverted: every gating
+// signal we tried (awaitingResponse → held the whole turn; a 1s time-debounce →
+// too short for a 3.4s strand window; a JSONL first-output check → held during
+// tool-use turns because tool_results are role `user`) broke the ability to
+// interrupt, which matters more than the recoverable send-strand it prevented.
+// #210 stays open for a non-Esc-blocking approach (detect + clear the bounce-back).
 function escToolbarClick() {
-  if (window.__bramRestoreWorklistAwaiting()) {
-    window.__bramTraceToolbarKey('esc-held');
-    return;
-  }
   window.__bramTraceToolbarKey('esc');
   window.sendKeys('\x1b');
 }

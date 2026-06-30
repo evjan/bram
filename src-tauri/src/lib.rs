@@ -2469,22 +2469,40 @@ fn permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu> {
         label: "Yes".to_string(),
         description: None,
     }];
-    // Claude Code folds ALL of a tool call's allow-suggestions into a SINGLE
-    // "allow all" option (validated: Family-A terminal menus are never >3
-    // options). Build one combined option from every non-setMode suggestion so
-    // the pane's count + keystrokes match the terminal — one option per
-    // suggestion over-counts (e.g. a path read + a command: terminal shows 3,
-    // per-suggestion showed 4, which misaligned the keystrokes). setMode folds
-    // into that option's shift+tab affordance and is not its own row.
-    let allow_suggestions: Vec<&serde_json::Value> = value
+    // Claude Code renders allow-suggestions by kind. For file-edit tools
+    // (Edit/Write/NotebookEdit/MultiEdit) a `setMode` suggestion is the "allow
+    // all edits during this session" toggle and is its OWN numbered row (also
+    // reachable via shift+tab); for other tools setMode folds into the shift+tab
+    // affordance and is not a row. Non-setMode suggestions fold into a single
+    // combined "allow all" option (validated: Family-A menus stay <=3 — one
+    // option per suggestion over-counted and misaligned keystrokes). Filtering
+    // setMode unconditionally under-counted Edit/Write by one (the
+    // Edit/.gitignore miss: hook built 2, terminal showed 3).
+    let suggestions: Vec<&serde_json::Value> = value
         .get("permission_suggestions")
         .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter(|s| s.get("type").and_then(|t| t.as_str()) != Some("setMode"))
-                .collect()
-        })
+        .map(|arr| arr.iter().collect())
         .unwrap_or_default();
+    let is_file_edit = matches!(
+        tool.as_str(),
+        "Edit" | "Write" | "NotebookEdit" | "MultiEdit"
+    );
+    let has_set_mode = suggestions
+        .iter()
+        .any(|s| s.get("type").and_then(|t| t.as_str()) == Some("setMode"));
+    if is_file_edit && has_set_mode {
+        // setMode renders as its own numbered row for file-edit tools.
+        options.push(MenuOption {
+            key: (options.len() + 1).to_string(),
+            label: "Yes, allow all edits during this session".to_string(),
+            description: None,
+        });
+    }
+    let allow_suggestions: Vec<&serde_json::Value> = suggestions
+        .iter()
+        .copied()
+        .filter(|s| s.get("type").and_then(|t| t.as_str()) != Some("setMode"))
+        .collect();
     if !allow_suggestions.is_empty() {
         let fragments: Vec<String> = allow_suggestions
             .iter()
@@ -2497,7 +2515,7 @@ fn permission_request_to_menu(value: &serde_json::Value) -> Option<PtyMenu> {
             format!("Yes, and allow {}", fragments.join(" and "))
         };
         options.push(MenuOption {
-            key: "2".to_string(),
+            key: (options.len() + 1).to_string(),
             label,
             description: None,
         });
@@ -5014,25 +5032,47 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                         .map(|s| format!(" signature={:?}", s))
                         .unwrap_or_default();
                     if sig_match || labels_match {
-                        eprintln!(
-                            "[pty-menu] suppressed re-detection of tool={} ({}ms after dismissal)",
-                            new_menu.tool,
-                            d.when.elapsed().as_millis()
-                        );
-                        if bram_trace_enabled() {
-                            append_bram_trace_line(
-                                app,
-                                "pty-menu",
-                                &format!(
-                                    "state=suppressed tool={} reason=post-dismiss-redetect elapsed_ms={} new_options=[{}]{}",
-                                    new_menu.tool,
-                                    d.when.elapsed().as_millis(),
-                                    option_summary,
-                                    signature_summary,
-                                ),
+                        if menu_hook_owns_slot() {
+                            // Hook owns the slot: the hook manages show/clear via
+                            // its POSTs, so the grid's post-dismiss suppression must
+                            // NOT discard a live detection and strand the hook's
+                            // menu (the Edit/.gitignore miss — a PTY redraw looked
+                            // like a dismiss, then re-detect, then this guard cleared
+                            // it). Skip suppression; trace so a recurrence is visible.
+                            if bram_trace_enabled() {
+                                append_bram_trace_line(
+                                    app,
+                                    "pty-menu",
+                                    &format!(
+                                        "state=suppress-skipped tool={} reason=hook-owns-slot elapsed_ms={} new_options=[{}]{}",
+                                        new_menu.tool,
+                                        d.when.elapsed().as_millis(),
+                                        option_summary,
+                                        signature_summary,
+                                    ),
+                                );
+                            }
+                        } else {
+                            eprintln!(
+                                "[pty-menu] suppressed re-detection of tool={} ({}ms after dismissal)",
+                                new_menu.tool,
+                                d.when.elapsed().as_millis()
                             );
+                            if bram_trace_enabled() {
+                                append_bram_trace_line(
+                                    app,
+                                    "pty-menu",
+                                    &format!(
+                                        "state=suppressed tool={} reason=post-dismiss-redetect elapsed_ms={} new_options=[{}]{}",
+                                        new_menu.tool,
+                                        d.when.elapsed().as_millis(),
+                                        option_summary,
+                                        signature_summary,
+                                    ),
+                                );
+                            }
+                            detected = None;
                         }
-                        detected = None;
                     } else if bram_trace_enabled() {
                         // Same tool + window, but the fingerprint differs: a
                         // genuinely new menu, not a stale re-read. Let it through

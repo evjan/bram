@@ -1124,7 +1124,7 @@ window.settingsInfoBodies = {
     "[iframe] / [route] line is a no-op regardless of the Inspector " +
     "trace tap below. If BRAM_TRACE is set in the environment at " +
     "launch (e.g. BRAM_TRACE=1 cargo run), it wins and this switch is " +
-    "ignored — so CI / shell wrappers keep behaving the same." +
+    "ignored — so CI and explicit launch environments keep behaving the same." +
     "\n\n## Inspector trace tap\n\n" +
     "Forwards XMLUI Inspector events " +
     "(window._xsLogs) from the agent pane into bram-trace.log as " +

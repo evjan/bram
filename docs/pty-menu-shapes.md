@@ -19,10 +19,15 @@ It turns reactive tuning into a checklist: every cataloged shape must
 surface in the agent pane; a miss becomes "shape X regressed" instead of a
 guess. Refs #197.
 
-**Detection is grid-primary.** Byte detection has been retired
+**Detection is hook-primary where hooks exist, grid fallback otherwise.**
+Permission-menu hooks now surface Claude and Codex approval prompts from
+structured payloads when `menus.hookDriven` is on; Claude AskUserQuestion uses
+the same hook path from `PreToolUse`. The xterm grid remains the fallback and
+the screen-shape diagnostic path. Byte detection has been retired
 (`src-tauri/src/lib.rs`: "the grid is now the sole menu detector"). The
 iframe reads the xterm grid and reports menus to the host, which builds and
-emits the agent-pane menu. The op vocabulary in `bram-trace.log`
+emits the agent-pane menu when no hook payload has already done so. The op
+vocabulary in `bram-trace.log`
 (`[grid-menu] op=…`) is now:
 
 - `op=report` — the iframe reported a fresh grid menu (its options).
@@ -156,22 +161,23 @@ finally settled):
 
 ## Family A — tool-permission prompts (Codex)
 
-Codex prompts go through the `raw_codex_action` path
-(`pty_codex_action_required_pos`, "Action Required" title). Not yet
-cataloged from a CodeExam run — `docs/codex-permissions.md` is empty.
-Follow-up: run CodeExam against `codex` and fill this section.
+Codex prompts are now hook-primary when `menus.hookDriven` is on; the grid
+path remains the fallback for unknown prompt shapes and for diagnostics. The
+human-visible option labels are cataloged in
+[`docs/codex-permissions.md`](./codex-permissions.md).
 
 ## Family B — question prompts (Claude Code AskUserQuestion)
 
 A header question + numbered options + a free-text escape — **not** a
 tool-permission prompt and not in the CodeExam list. No `Do you want`
-header and no permission footer, so the current scanner does not fire on
-these. First specimen:
+header and no permission footer, so the grid scanner does not treat these as
+permission menus. Bram surfaces them through the Claude `PreToolUse` hook
+instead. First specimen:
 `docs/pty-menu-specimens/2026-06-17-claude-askuserquestion.md`.
 
 | Shape | Header fragment | cursor | header | 1./2. pair | footer | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| askuserquestion | (the question text — variable) | ✓ | ✗ | ✓ | ✗ | Tail options like "Type something" / "Chat about this". Detection + agent-pane surfacing is a follow-up, gated on more specimens. |
+| askuserquestion | (the question text — variable) | ✓ | ✗ | ✓ | ✗ | Tail options like "Type something" / "Chat about this". Surfaced through the Claude `PreToolUse` hook; grid specimens remain useful for regression evidence. |
 
 ## Family C — other
 

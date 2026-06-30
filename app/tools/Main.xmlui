@@ -139,8 +139,8 @@
         <Text fontWeight="bold">What setup and refresh do</Text>
         <Text>• Writes the shared `resources/.worklist-authorization.json` record that every adapter consumes.</Text>
         <Text>• Refreshes the conventions sidecar so Claude and Codex use the current Bram workflow after upgrades.</Text>
-        <Text>• Installs the Claude adapter: a `CLAUDE.md` @-import of the conventions sidecar plus `.claude/hooks/worklist-guard.py` (PreToolUse).</Text>
-        <Text>• Installs the Codex adapter: an `AGENTS.md` block teaching Codex the worklist flow plus a `~/.codex/config.toml` PreToolUse hook.</Text>
+        <Text>• Installs the Claude adapter: a `CLAUDE.md` @-import of the conventions sidecar plus worklist-guard and permission-menu hooks.</Text>
+        <Text>• Installs the Codex adapter: an `AGENTS.md` block, top-level `developer_instructions`, and worklist-guard plus permission-menu hooks in `~/.codex/config.toml` / `~/.bram`.</Text>
       </VStack>
       <VStack gap="$space-1">
         <Text fontWeight="bold">After setup runs</Text>

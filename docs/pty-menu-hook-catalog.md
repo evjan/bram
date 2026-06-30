@@ -9,9 +9,10 @@ prompt renders. The hook-driven permission-menu surfacing (`menus.hookDriven`,
 `app/__shell/permission-menu-hook.py`, `/__menu/permission`) builds the
 agent-pane menu from these fields instead of scraping the grid.
 
-**Claude only.** Codex is a parallel follow-up (it exposes the same hook events
-but has no AskUserQuestion, and its payload shapes are uncharacterized) — see
-the stub at the end.
+**Claude and Codex.** Claude contributes permission prompts plus
+AskUserQuestion. Codex contributes approval prompts through
+`PermissionRequest` and clear events through `PostToolUse` /
+`PermissionDenied`; it has no AskUserQuestion equivalent.
 
 ## The identifying fields
 
@@ -142,9 +143,27 @@ normal work accumulates real payloads; periodically we grep the log for new
 *Frontier* into *Confirmed*. Remove the hook (and this section) once the union
 is settled.
 
-## Codex (stub)
+Codex capture is built into `app/shell/codex-permission-menu-hook.py`: every
+`PermissionRequest` appends a compact shape record to
+`resources/codex-permission-hook-capture.jsonl` while also forwarding the menu
+payload to Bram.
 
-Parallel follow-up. Codex exposes the same hook events
-(`PreToolUse` / `PermissionRequest`) but has **no** AskUserQuestion equivalent
-(approvals only — GitHub openai/codex#9926), and its payload / suggestion
-shapes are uncharacterized. Fill from a Codex capture pass.
+## Confirmed shapes (Codex)
+
+Codex is hook-primary for permission menus when `menus.hookDriven` is on. The
+Codex hook forwards `PermissionRequest` payloads to `/__menu/permission` and
+uses `PostToolUse` / `PermissionDenied` as clear signals. The hook records
+compact payload shapes in `resources/codex-permission-hook-capture.jsonl`;
+the human-visible option labels are cataloged in
+[`docs/codex-permissions.md`](./codex-permissions.md).
+
+| Family / shape | event | `tool_name` | rendered opts | evidence |
+| --- | --- | --- | --- | --- |
+| Exec / command approval | `PermissionRequest` | `Bash` | 2+ | direct Bash probes, including denied commands |
+| File change approval | `PermissionRequest` | `apply_patch` / file-edit tools | 3 | Desktop and project file edit probes |
+| MCP tool approval | `PermissionRequest` | `mcp__*` | provider-defined | filesystem MCP probe |
+| Long-tail / quoting approval | `PermissionRequest` | `Bash` | provider-defined | quoted command probe |
+
+The xterm grid path remains as the fallback and as diagnostic coverage for
+unknown prompt shapes. Unlike Claude AskUserQuestion, Codex has no question
+tool payload for Bram to surface as a choice menu.

@@ -172,7 +172,7 @@ Operational impact:
 
 - Renaming `.xmlui-desktop.json` without alias support breaks existing
   project configs immediately.
-- Renaming env vars breaks shell wrappers, the PTY child environment,
+- Renaming env vars breaks the PTY child environment,
   installer overrides, and the worklist resolve/mutate flow unless old
   names continue to be accepted.
 - Renaming localStorage keys resets saved UI state. That is survivable,

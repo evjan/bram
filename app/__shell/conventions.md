@@ -534,7 +534,7 @@ the lifecycle call. Check the Status tab's **Port file** row, which
 cross-checks the running process, `.bram-port`, and the
 `.bram-port.json` sidecar (port + pid + project root + startup
 timestamp). If `.bram-port` is missing entirely (agent launched
-outside the wrapped PTY shell), fall back to
+outside Bram's PTY shell), fall back to
 `lsof -nP -iTCP -sTCP:LISTEN | grep bram`.
 
 #### Codex: filesystem intent/result files

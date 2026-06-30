@@ -132,7 +132,7 @@ The first time you launch `claude` or `codex` in a repo, Bram checks what that p
 <details>
 <summary>Setup internals: hook adapters, guard source-of-truth, and how conventions.md binds each provider</summary>
 
-Once you launch an agent through the wrapped terminal functions (`claude` or `codex`), the agent pane checks what that provider still needs for the current repo and prompts only when setup is missing.
+Once you launch an agent through Bram's terminal, the agent pane checks what that provider still needs for the current repo and prompts only when setup is missing.
 
 Current behavior:
 
@@ -144,8 +144,8 @@ Current behavior:
 When the prompt runs, Bram installs two layers:
 
 - A provider-neutral core: Bram records the latest structured `approved:` / `drop:` payload in `resources/.worklist-authorization.json` and uses that local record when validating worklist removals. The desktop watcher can revert an invalid prune as a defense-in-depth fallback if a hook ever fails to fire.
-- A Claude adapter: `.claude/hooks/worklist-guard.py`, registered in `.claude/settings.json` to fire on `Write|Edit`. The hook denies edits to project files not covered by a proposed/applied worklist item (with explicit opt-out phrases in the last user message as the escape hatch), and validates worklist-prune authorization for changes to `resources/worklist.json` itself.
-- A codex adapter: `~/.bram/codex-worklist-guard.py`, registered in `~/.codex/config.toml` as a `PreToolUse` hook with matcher `^(apply_patch|Bash|Write|Edit|mcp__.*)$`. Same coverage logic as the Claude hook, broadened to catch codex's `apply_patch` tool, mutation-shaped Bash commands, and MCP filesystem write/edit/create/move calls. Setup also writes `developer_instructions` into the codex config so the gate prose lands in the developer-role context part of every session, not just the user-role `AGENTS.md`. Existing `~/.xmlui-desktop/codex-worklist-guard.py` installs remain accepted during migration; rerunning Setup rewrites the config to the Bram path.
+- A Claude adapter: `.claude/hooks/worklist-guard.py`, registered in `.claude/settings.json` to fire on `Write|Edit`. The hook denies edits to project files not covered by a proposed/applied worklist item (with explicit opt-out phrases in the last user message as the escape hatch), and validates worklist-prune authorization for changes to `resources/worklist.json` itself. Setup also installs `.claude/hooks/permission-menu-hook.py`, which surfaces Claude permission and AskUserQuestion menus in the agent pane from structured hook payloads.
+- A Codex adapter: `~/.bram/codex-worklist-guard.py`, registered in `~/.codex/config.toml` as a `PreToolUse` hook with matcher `^(apply_patch|Bash|Write|Edit|mcp__.*)$`. Same coverage logic as the Claude hook, broadened to catch Codex's `apply_patch` tool, mutation-shaped Bash commands, and MCP filesystem write/edit/create/move calls. Setup also writes `developer_instructions` into the Codex config so the gate prose lands in the developer-role context part of every session, not just the user-role `AGENTS.md`, and installs `~/.bram/codex-permission-menu-hook.py` so Codex approval menus can surface from hook payloads with the xterm grid retained as fallback. Existing `~/.xmlui-desktop/codex-worklist-guard.py` installs remain accepted during migration; rerunning Setup rewrites the config to the Bram path.
 
 In the Bram source repo, the Claude guard's source of truth is
 `app/__shell/worklist-guard.py`. The `.claude/hooks/worklist-guard.py`
@@ -158,7 +158,7 @@ is canonical, `~/.bram/codex-worklist-guard.py` is installed.
 
 PreToolUse hooks are the generic extension point — both Claude Code and codex expose them — so the two adapters share the same shape: each runs *before* the agent invokes a tool, receives a JSON payload describing the pending call on stdin, and can exit 0 to allow, return a deny decision to block (stderr/permissionDecisionReason goes back to the agent as a tool error), or fail to launch.
 
-That means first-run setup is provider-aware in when it prompts but provider-symmetric in what it installs: launching either `claude` or `codex` and accepting the prompt sets up the shared core, the codex-side `AGENTS.md` guidance block, the codex `developer_instructions`, and the Claude and codex hook adapters.
+That means first-run setup is provider-aware in when it prompts but provider-symmetric in what it installs: launching either `claude` or `codex` and accepting the prompt sets up the shared core, the Codex-side `AGENTS.md` guidance block, the Codex `developer_instructions`, the worklist guard hooks, and the permission-menu surfacing hooks.
 
 #### How `conventions.md` governs both agents
 
@@ -166,7 +166,7 @@ That means first-run setup is provider-aware in when it prompts but provider-sym
 It governs Claude and Codex in different ways:
 
 - **Claude: direct prompt binding plus enforcement.** Setup copies that file to `.claude/bram-conventions.md`, adds an `@`-import block to `CLAUDE.md`, and installs the `worklist-guard.py` PreToolUse hook. A new Claude session therefore reads the conventions file directly and is also mechanically blocked from unsafe worklist edits. Existing projects with the legacy `.claude/xmlui-desktop-conventions.md` path are migrated to the new name on the next Setup run.
-- **Codex: repo-local AGENTS.md plus native hook enforcement.** Setup writes a marked Bram block into repo-root `AGENTS.md`, installs top-level `developer_instructions` in `~/.codex/config.toml`, and registers the codex worklist guard as a native `PreToolUse` hook. Wrapped `codex` launches also receive the same concise worklist guidance as a startup seed. The app reinforces that with the shared local authorization record in `resources/.worklist-authorization.json` and the watcher-revert fallback as defense in depth.
+- **Codex: repo-local AGENTS.md plus native hook enforcement.** Setup writes a marked Bram block into repo-root `AGENTS.md`, installs top-level `developer_instructions` in `~/.codex/config.toml`, and registers the Codex worklist guard as a native `PreToolUse` hook. Codex launches also receive the same concise worklist guidance as a startup seed. The app reinforces that with the shared local authorization record in `resources/.worklist-authorization.json` and the watcher-revert fallback as defense in depth.
 
 So the practical rule is: both agents are governed by the same worklist
 conventions, with Claude reading the imported conventions file directly

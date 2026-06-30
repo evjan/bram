@@ -155,11 +155,10 @@
             backgroundColor="$color-surface-50"
             padding="$space-2"
             borderRadius="$borderRadius">
-            <Text
-              when="{$item.summary}"
-              fontFamily="$fontFamily-monospace"
-              fontSize="$fontSize-xs"
-              value="{$item.summary}" />
+            <Markdown
+              when="{$item.commandDisplay || $item.summary}"
+              overflowMode="scroll"
+              content="{window.__bramFormatToolCommand($item.commandDisplay || $item.summary)}" />
             <!-- Tool result: typed Markdown code-fence when the formatter
                  helper is live (after a rebuild), else the prior raw Text so a
                  hot-reload never blanks or markdown-mangles the expansion.

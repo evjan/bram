@@ -1642,6 +1642,66 @@ window.__bramToolSummary = function (name, input) {
   return name || "";
 };
 
+window.__bramLineOrientedCommandDisplay = function (command) {
+  var text = String(command || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!text) return "";
+  if (text.indexOf("\n") >= 0) return text;
+
+  var out = "";
+  var quote = "";
+  var escaped = false;
+  for (var i = 0; i < text.length; i++) {
+    var ch = text.charAt(i);
+    var next = text.charAt(i + 1);
+    if (escaped) {
+      out += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      out += ch;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      out += ch;
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "'" || ch === "\"") {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    if (ch === ";" || ch === "|") {
+      if (ch === "|" && next === "|") {
+        out += "||\n";
+        i++;
+      } else {
+        out += ch + "\n";
+      }
+      while (text.charAt(i + 1) === " ") i++;
+      continue;
+    }
+    if (ch === "&" && next === "&") {
+      out += "&&\n";
+      i++;
+      while (text.charAt(i + 1) === " ") i++;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+};
+
+window.__bramToolCommandDisplay = function (name, input) {
+  if (!input || typeof input !== "object") return "";
+  if (name === "Bash" && input.command) {
+    return window.__bramLineOrientedCommandDisplay(input.command);
+  }
+  return "";
+};
+
 window.__bramParseJsonString = function (value) {
   if (typeof value !== "string") return null;
   try {
@@ -1696,6 +1756,37 @@ window.__bramCodexToolSummary = function (payload) {
   }
   if (input && typeof input === "object") return window.__bramToolSummary(payload.name || name, input);
   return name;
+};
+
+window.__bramCodexToolCommandDisplay = function (payload) {
+  if (!payload) return "";
+  var input = window.__bramCodexToolInput(payload);
+  if (payload.name === "exec_command" && input && typeof input === "object" && input.cmd) {
+    return window.__bramLineOrientedCommandDisplay(input.cmd);
+  }
+  if (input && typeof input === "object") {
+    return window.__bramToolCommandDisplay(payload.name || window.__bramCodexToolName(payload), input);
+  }
+  return "";
+};
+
+window.__bramFormatToolCommand = function (command) {
+  if (command == null) return "";
+  var body = String(command);
+  if (!body) return "";
+  var longest = 0, run = 0;
+  for (var i = 0; i < body.length; i++) {
+    if (body.charAt(i) === "`") {
+      run++;
+      if (run > longest) longest = run;
+    } else {
+      run = 0;
+    }
+  }
+  var fenceLen = Math.max(3, longest + 1);
+  var fence = "";
+  for (var j = 0; j < fenceLen; j++) fence += "`";
+  return fence + "bash\n" + body + "\n" + fence;
 };
 
 window.__bramToolInputJsonLines = function (input, maxLines) {
@@ -1838,6 +1929,7 @@ window.__bramParseLinesToTurns = function (lines, toolIndex) {
               id: c.id,
               name: c.name,
               summary: window.__bramToolSummary(c.name, c.input || {}),
+              commandDisplay: window.__bramToolCommandDisplay(c.name, c.input || {}),
             };
             entries.push(entry);
             if (c.id) toolIndex[c.id] = entry;
@@ -1870,6 +1962,7 @@ window.__bramParseLinesToTurns = function (lines, toolIndex) {
           id: p.call_id,
           name: window.__bramCodexToolName(p),
           summary: window.__bramCodexToolSummary(p),
+          commandDisplay: window.__bramCodexToolCommandDisplay(p),
         };
         entries.push(entry2);
         if (p.call_id) toolIndex[p.call_id] = entry2;
@@ -4496,7 +4589,10 @@ window.bramSubscribeLatestJsonl = (function () {
 // One-line summary for a tool card's collapsed state.
 window.__bramTranscriptToolSummary = function (name, input) {
   input = input || {};
-  if (name === "Bash") return input.command || "";
+  if (name === "Bash") {
+    var cmd = String(input.command || "").replace(/\s+/g, " ").trim();
+    return cmd.length > 120 ? cmd.slice(0, 120) + "..." : cmd;
+  }
   if (name === "Read" || name === "Edit" || name === "Write" || name === "NotebookEdit") return input.file_path || "";
   if (name === "Grep" || name === "Glob") return input.pattern || "";
   if (input.description) return input.description;
@@ -4641,6 +4737,7 @@ window.__bramParseTranscript = function (jsonl) {
         var cev = {
           id: "r" + i, kind: "tool", toolId: cid, name: window.__bramCodexToolName(p) || "Tool",
           summary: window.__bramCodexToolSummary(p),
+          commandDisplay: window.__bramCodexToolCommandDisplay(p),
           result: "", isError: false,
         };
         events.push(cev);
@@ -4682,6 +4779,7 @@ window.__bramParseTranscript = function (jsonl) {
           var ev = {
             id: bid, kind: "tool", toolId: b.id, name: b.name || "Tool",
             summary: window.__bramTranscriptToolSummary(b.name, b.input),
+            commandDisplay: window.__bramToolCommandDisplay(b.name, b.input || {}),
             result: "", isError: false,
           };
           events.push(ev);

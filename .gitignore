@@ -63,3 +63,9 @@ __pycache__/
 # Per-developer dev shortcuts.
 /build.sh
 /tb.sh
+
+# Per-session permission-hook capture (observe-only, not shared).
+resources/codex-permission-hook-capture.jsonl
+
+# Local editor/settings backups.
+*.bak

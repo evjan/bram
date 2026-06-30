@@ -160,8 +160,16 @@
               fontFamily="$fontFamily-monospace"
               fontSize="$fontSize-xs"
               value="{$item.summary}" />
+            <!-- Tool result: typed Markdown code-fence when the formatter
+                 helper is live (after a rebuild), else the prior raw Text so a
+                 hot-reload never blanks or markdown-mangles the expansion.
+                 Errors always use the red raw Text. -->
+            <Markdown
+              when="{$item.result &amp;&amp; !$item.isError &amp;&amp; window.__bramFormatToolResult}"
+              overflowMode="scroll"
+              content="{window.__bramFormatToolResult($item.result, $item.name, $item.summary)}" />
             <Text
-              when="{$item.result}"
+              when="{$item.result &amp;&amp; ($item.isError || !window.__bramFormatToolResult)}"
               fontFamily="$fontFamily-monospace"
               fontSize="$fontSize-xs"
               color="{$item.isError ? '$color-danger-600' : '$textColor-secondary'}"

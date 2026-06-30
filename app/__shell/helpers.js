@@ -4514,6 +4514,73 @@ window.__bramParseTranscript = function (jsonl) {
   return events;
 };
 
+// Map a Read/Write/Edit path hint (the tool summary) to a Markdown code-fence
+// language. Used only for file-op tools so a Bash command that merely mentions
+// a ".json" path doesn't mislabel its output.
+window.__bramLangFromHint = function (hint) {
+  if (!hint) return "";
+  var m = String(hint).match(/\.([A-Za-z0-9]+)\b/);
+  if (!m) return "";
+  var map = {
+    rs: "rust", js: "javascript", xs: "javascript", ts: "typescript",
+    jsx: "jsx", tsx: "tsx", py: "python", json: "json", xml: "xml",
+    xmlui: "xml", html: "html", css: "css", sh: "bash", bash: "bash",
+    md: "markdown", toml: "toml", yaml: "yaml", yml: "yaml", sql: "sql",
+    go: "go", c: "c", h: "c", rb: "ruby", java: "java"
+  };
+  return map[m[1].toLowerCase()] || "";
+};
+
+// Format a tool-result string for the Transcript expansion as a Markdown
+// string: detect JSON / diff / file-by-extension and wrap in a fence-safe code
+// block so <Markdown overflowMode="scroll"> renders monospace with preserved
+// structure and horizontal scroll. Pure, no side effects.
+window.__bramFormatToolResult = function (result, toolName, hint) {
+  if (result == null) return "";
+  var text = String(result);
+  if (text.trim() === "") return text;
+  // Strip ANSI escape sequences so raw \x1b[...m bytes don't render literally.
+  text = text.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "");
+
+  var lang = "";
+  var body = text;
+  var trimmed = text.trim();
+
+  // JSON object/array that round-trips -> pretty-print for structure.
+  if (trimmed.charAt(0) === "{" || trimmed.charAt(0) === "[") {
+    try {
+      var parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === "object") {
+        body = JSON.stringify(parsed, null, 2);
+        lang = "json";
+      }
+    } catch (e) { /* not JSON */ }
+  }
+
+  // Unified diff markers (any line).
+  if (lang === "" && /^(diff --git |@@ |\+\+\+ |--- )/m.test(text)) {
+    lang = "diff";
+  }
+
+  // File-op tools: language by extension from the path hint.
+  if (lang === "" && /^(Read|Write|Edit|NotebookEdit)$/.test(String(toolName || ""))) {
+    lang = window.__bramLangFromHint(hint);
+  }
+
+  // Fence-safety: the fence must be longer than the longest backtick run in
+  // the body, or content containing ``` would break the block.
+  var longest = 0, run = 0;
+  for (var i = 0; i < body.length; i++) {
+    if (body.charAt(i) === "`") { run++; if (run > longest) longest = run; }
+    else { run = 0; }
+  }
+  var fence = "";
+  var fenceLen = Math.max(3, longest + 1);
+  for (var j = 0; j < fenceLen; j++) { fence += "`"; }
+
+  return fence + lang + "\n" + body + "\n" + fence;
+};
+
 // Append the live pending agent menu (if any) as the last transcript event.
 // Transcript keeps this interleaved view as the only full menu renderer.
 window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {

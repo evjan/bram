@@ -1202,22 +1202,30 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
          .lastAssistantText.text, bounded with an internal scroller so a long
          response doesn't lengthen the page. -->
     <VStack
-      when="{agentMenuEvt.value || (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text)}"
+      when="{agentMenuEvt.value || (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userImages &amp;&amp; conversationStateDS.value.lastExchange.userImages.length > 0) || (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text)}"
       gap="$space-2"
       width="100%"
       paddingTop="$space-4">
       <AgentMenuView menu="{agentMenuEvt.value}" surface="worklist" />
       <VStack
-        when="{conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText}"
+        when="{conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; (conversationStateDS.value.lastExchange.userText || (conversationStateDS.value.lastExchange.userImages &amp;&amp; conversationStateDS.value.lastExchange.userImages.length > 0))}"
         gap="$space-1"
         width="100%"
-        var.youText="{conversationStateDS.value.lastExchange.userText}">
+        var.youText="{conversationStateDS.value.lastExchange.userText || ''}"
+        var.youImages="{(conversationStateDS.value.lastExchange.userImages &amp;&amp; conversationStateDS.value.lastExchange.userImages.length > 0) ? conversationStateDS.value.lastExchange.userImages : window.__bramExtractImagePaths(conversationStateDS.value.lastExchange.userText || '')}">
         <Text
           fontSize="$fontSize-xs"
           color="$textColor-secondary"
           value="You: last message" />
         <VStack maxHeight="12em" overflowY="auto" width="100%">
-          <Markdown content="{window.__bramFormatUserTurn(youText, feedbackMap.value)}" />
+          <Markdown when="{youText}" content="{window.__bramFormatUserTurn(youText, feedbackMap.value)}" />
+          <VStack when="{youImages.length > 0}" gap="$space-2" paddingVertical="$space-1">
+            <Items data="{youImages}">
+              <Link onClick="fullscreenImage = $item" noIndicator="true">
+                <Image src="{window.imageSrcForPath($item)}" maxHeight="220px" fit="contain" />
+              </Link>
+            </Items>
+          </VStack>
         </VStack>
       </VStack>
       <!-- Dim the agent response while a newer user message has arrived but

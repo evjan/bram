@@ -5123,37 +5123,42 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                         .unwrap_or_default();
                     if sig_match || labels_match {
                         if menu_hook_owns_slot() {
-                            // Hook owns the slot: the hook manages show/clear via
-                            // its POSTs, so the grid's post-dismiss suppression must
-                            // NOT discard a live detection and strand the hook's
-                            // menu (the Edit/.gitignore miss — a PTY redraw looked
-                            // like a dismiss, then re-detect, then this guard cleared
-                            // it). Skip suppression; trace so a recurrence is visible.
-                            //
-                            // Loud `stranded` alarm once the grid has re-detected the
-                            // SAME menu past the stale-reread window (~600ms) while
-                            // the hook still owns the slot. That is the signature of a
-                            // hook that claimed/held the slot but never surfaced the
-                            // menu — e.g. a worklist-covered Edit the guard allowed:
-                            // Claude still shows its native 1/2/3 prompt, but the hook
+                            // Hook owns the slot: normally the grid defers show/clear
+                            // to the hook's POSTs. But once the grid has re-detected the
+                            // SAME menu past the stale-reread window (~600ms) while the
+                            // hook still owns the slot, that is the signature of a hook
+                            // that claimed/held the slot yet never surfaced the menu —
+                            // e.g. a worklist-covered Edit the guard allowed: Claude
+                            // still shows its native 1/2/3 prompt, but the hook
                             // resolved/cleared the slot, so the grid's own
                             // turn_state_set_menu (gated by menu_hook_owns_slot) stays
-                            // deferred and nothing surfaces. This distinct state stops
-                            // the stranded case from hiding in a stream of benign
-                            // suppress-skipped lines. Behavioral reclaim is
-                            // intentionally NOT done here yet — the fix must account
-                            // for grid-cell vs turn-state divergence and needs a
-                            // verified repro first. See
-                            // fix-hook-owns-slot-stranded-permission-menu.
+                            // deferred and nothing surfaces.
+                            //
+                            // Reclaim (release-only): drop the stale hook ownership so
+                            // the grid's downstream turn_state_set_menu is no longer
+                            // deferred and can surface the live menu on its next
+                            // transition. Deliberately NOT a forced re-emit: a hook
+                            // clear does not clear pty_menu_cell (see
+                            // emit_pty_menu_with_prose), so when the grid cell already
+                            // matches the detection there is no transition and the menu
+                            // stays stranded — the same outcome as before (no worse
+                            // off), flagged by the `stranded-reclaim` trace for a
+                            // possible force-surface follow-up. Scoped to the
+                            // post-dismiss branch (recent same-tool dismiss + sustained
+                            // presence) so legit hook-surfaced menus and Codex
+                            // hook-primary steady state are untouched.
+                            let stranded =
+                                d.when.elapsed() > std::time::Duration::from_millis(600);
+                            if stranded {
+                                set_menu_hook_owner(None);
+                            }
                             if bram_trace_enabled() {
-                                let stranded =
-                                    d.when.elapsed() > std::time::Duration::from_millis(600);
                                 append_bram_trace_line(
                                     app,
                                     "pty-menu",
                                     &format!(
                                         "state={} tool={} reason=hook-owns-slot elapsed_ms={} new_options=[{}]{}",
-                                        if stranded { "stranded" } else { "suppress-skipped" },
+                                        if stranded { "stranded-reclaim" } else { "suppress-skipped" },
                                         new_menu.tool,
                                         d.when.elapsed().as_millis(),
                                         option_summary,

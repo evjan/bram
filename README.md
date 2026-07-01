@@ -8,7 +8,7 @@ Bram runs agents mindfully.
 
 ## Who is it for?
 
-Anyone who wants to use AI coding agents in a safe and accountable way.
+Anyone who wants to use AI coding agents in a safe, orderly, and accountable way.
 
 Bram has opinions. It thinks versioning and collaboration are well-handled by git and GitHub, so it guides agents to make best use of them on your behalf, in conversation with you. And it thinks GitHub is great for accountability, so it also guides agents to join you in orderly and well-documented collaboration that leaves an auditable trail.
 

@@ -17,9 +17,35 @@
       borderRadius="$borderRadius"
       overflowX="auto"
       onInit="annotate.execute()">
+      <!-- Compact: plain rows that hug their content — no virtualized
+           fixed-height List and no inner scroller. For small inline previews
+           (e.g. the AgentMenuView menu preview) so a short diff does not
+           reserve 60vh or nest a scroller inside an outer scroller. -->
+      <Items
+        when="{$props.compact}"
+        data="{diffViewRows(annotate.lastResult, $props.text)}">
+        <HStack
+          gap="0"
+          backgroundColor="{$item.bg}"
+          paddingHorizontal="$space-2">
+          <Items data="{$item.segments}">
+            <Text
+              fontFamily="$fontFamily-monospace"
+              fontSize="$fontSize-sm"
+              whiteSpace="pre"
+              backgroundColor="{$item.bg || 'transparent'}"
+              color="{$item.color}"
+              value="{$item.text}" />
+          </Items>
+        </HStack>
+      </Items>
+      <!-- Default: virtualized bounded List for full / potentially large
+           diffs (the modal, the TO COMMIT item diff, the Commits patch view).
+           maxHeight defaults to 60vh so existing callers are unchanged. -->
       <List
+        when="{!$props.compact}"
         data="{diffViewRows(annotate.lastResult, $props.text)}"
-        height="60vh"
+        height="{$props.maxHeight || '60vh'}"
         fixedItemSize="true">
         <HStack
           gap="0"

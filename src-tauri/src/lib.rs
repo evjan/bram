@@ -1858,6 +1858,16 @@ fn pty_tail_cell() -> &'static Mutex<Vec<u8>> {
     PTY_TAIL.get_or_init(|| Mutex::new(Vec::with_capacity(8192)))
 }
 
+// Rolling PTY output byte counter for the activity sparkline
+// (transcript-nav-activity-sparkline). The PTY reader loop fetch_add's each
+// read's length here; a ticker thread swap-resets it every window and
+// converts the byte rate into a 0..1 intensity emitted as `pty-throughput`.
+// Metering only — never gates behavior.
+fn pty_throughput_bytes() -> &'static std::sync::atomic::AtomicUsize {
+    static C: OnceLock<std::sync::atomic::AtomicUsize> = OnceLock::new();
+    C.get_or_init(|| std::sync::atomic::AtomicUsize::new(0))
+}
+
 // Cached snapshot of the Claude PTY's rotating status line ("Meandering…
 // (1m 53s · ↓ 5.8k tokens)"). Surfaced via /__agent-status and the
 // `agent-status-changed` Tauri event so the Worklist tab can render a
@@ -7623,6 +7633,45 @@ fn pty_spawn(
         writer,
     });
 
+    // #transcript-nav-activity-sparkline: emit PTY output throughput as a
+    // 0..1 intensity so the agent pane can animate a live activity row under
+    // the Transcript nav. The reader loop below fetch_add's each read's byte
+    // count into pty_throughput_bytes(); this ticker converts the windowed
+    // rate to a quantized intensity and emits `pty-throughput` on change. A
+    // separate thread (not the reader loop) so idle — when reader.read()
+    // blocks with no output — still decays the sparkline back to one dot.
+    {
+        let app_for_throughput = app.clone();
+        thread::spawn(move || {
+            use std::sync::atomic::Ordering;
+            const TICK_MS: u64 = 300;
+            // Log scale for the activity dots. Measured PTY throughput spans a
+            // ~300x range (idle ~0, light thinking ~0.5 KB/s, output bursts
+            // >100 KB/s), so a linear map pins everything near 1 dot. KNEE_BPS
+            // lifts light activity off the floor; bps >= FULL_SCALE_BPS reads
+            // as full intensity (16 dots). Both tunable from a live turn.
+            const KNEE_BPS: f64 = 512.0;
+            const FULL_SCALE_BPS: f64 = 32768.0;
+            let full_ln = (1.0 + FULL_SCALE_BPS / KNEE_BPS).ln();
+            let mut last_emitted: f64 = -1.0;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(TICK_MS));
+                let bytes = pty_throughput_bytes().swap(0, Ordering::Relaxed);
+                let bps = bytes as f64 * (1000.0 / TICK_MS as f64);
+                let intensity = if bps <= 0.0 {
+                    0.0
+                } else {
+                    ((1.0 + bps / KNEE_BPS).ln() / full_ln).min(1.0)
+                };
+                // Quantize so tiny fluctuations don't spam the event channel.
+                let q = (intensity * 20.0).round() / 20.0;
+                if (q - last_emitted).abs() > 0.0001 {
+                    let _ = app_for_throughput.emit("pty-throughput", q);
+                    last_emitted = q;
+                }
+            }
+        });
+    }
     let app_for_thread = app.clone();
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
@@ -7661,6 +7710,11 @@ fn pty_spawn(
                     break;
                 }
                 Ok(n) => {
+                    // #transcript-nav-activity-sparkline: meter output volume
+                    // for the activity row (unconditional — not gated on
+                    // tracing). The ticker thread converts this to intensity.
+                    pty_throughput_bytes()
+                        .fetch_add(n, std::sync::atomic::Ordering::Relaxed);
                     if bram_trace_enabled() {
                         let data = &buf[..n];
                         if n >= SMALL_THRESHOLD {

@@ -5,6 +5,10 @@
     initial="{null}"
     subscribe="{window.bramSubscribeAgentStatus()}" />
   <External
+    id="ptyThroughputEvt"
+    initial="{0}"
+    subscribe="{window.bramSubscribePtyThroughput()}" />
+  <External
     id="enhanceStatusEvt"
     initial="{0}"
     subscribe="{window.bramSubscribeEnhanceStatusTick()}" />
@@ -344,7 +348,20 @@
       </VStack>
     </property>
     <NavLink label="Worklist" to="/worklist" />
-    <NavLink label="Transcript" to="/transcript" />
+    <NavLink to="/transcript">
+      <VStack gap="$space-0_5" width="100%">
+        <Text value="Transcript" />
+        <HStack gap="2px" width="100%" horizontalAlignment="start"
+          var.dots="{Math.max(1, Math.min(16, Math.round(1 + (ptyThroughputEvt.value || 0) * 15)))}"
+          var.active="{(ptyThroughputEvt.value || 0) > 0}"
+          animation="{active ? 'fadein' : ''}"
+          animationOptions="{{ duration: 1000, reverse: true, loop: true }}">
+          <Items data="{Array.from({length: dots})}">
+            <Text value="●" fontSize="8px" color="$color-primary-500" />
+          </Items>
+        </HStack>
+      </VStack>
+    </NavLink>
     <NavLink label="Issues" to="/issues" />
     <NavLink label="Commits" to="/commits" />
     <NavLink label="Sessions" to="/sessions" />

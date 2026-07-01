@@ -3806,6 +3806,37 @@ window.bramSubscribeAgentStatus = (function () {
   };
 })();
 
+// External-driven PTY-throughput bridge (transcript-nav-activity-sparkline).
+// The host emits `pty-throughput` a few times/sec with a 0..1 intensity
+// derived from the byte rate flowing through the PTY reader loop. Subscribers
+// (the Transcript nav activity row) map it to a dot count + pulse. Mirrors
+// bramSubscribeAgentStatus above.
+window.bramSubscribePtyThroughput = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var lastValue = 0;
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bramSubscribePtyThroughput] subscriber threw:", e); }
+      });
+    };
+    window.subscribeTauriEvent("__bramPtyThroughputExternalUnsub",
+      "pty-throughput", function (e) {
+        lastValue = (e && typeof e.payload === "number") ? e.payload : 0;
+        notify();
+      });
+    factory = function (emit) {
+      var fire = function () { emit(lastValue); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
 // External-driven conversation-state push. Replaces the conversationStateDS
 // DataSource: the host emits `conversation-state-changed` with the full
 // /__conversation-state payload, deduped, so subscribers re-render only on a

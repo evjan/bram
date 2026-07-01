@@ -23,6 +23,8 @@ Bram has opinions. It thinks versioning and collaboration are well-handled by gi
 
 <a href="https://blog.jonudell.net/2026/06/28/doctor-it-hurts-when-agents-create-unreviewable-prs-dont-do-that/">“Doctor, it hurts when agents create unreviewable PRs.” “Don’t do that.”</a>
 
+<a href="https://blog.jonudell.net/2026/07/01/what-is-the-terminal/">"What is the terminal?"</a>
+
 ## How does it work?
 
 ### Terminal (optional)

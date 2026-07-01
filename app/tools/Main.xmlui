@@ -4,10 +4,9 @@
     id="mainAgentStatus"
     initial="{null}"
     subscribe="{window.bramSubscribeAgentStatus()}" />
-  <External
-    id="ptyThroughputEvt"
-    initial="{0}"
-    subscribe="{window.bramSubscribePtyThroughput()}" />
+  <!-- PTY-throughput subscription now lives inside ActivitySparkline so its
+       per-chunk churn is isolated from the footer composer. -->
+
   <External
     id="enhanceStatusEvt"
     initial="{0}"
@@ -430,24 +429,9 @@
     <Theme fontSize-TextArea="$fontSize-lg" fontSize-placeholder-TextArea="$fontSize-lg">
     <VStack width="100%" gap="$space-1">
       <HStack verticalAlignment="center" paddingHorizontal="$space-1" paddingBottom="$space-2" gap="$space-0_5">
-        <!-- Live PTY-throughput activity sparkline, relocated here from under
-             the Transcript nav link. Fixed 100px box (fits the 10-dot max at
-             8px + 2px gaps) so the footer never shifts and the status text
-             stays close; always visible — rests when idle, animates on
-             throughput. -->
-        <HStack
-          width="100px"
-          gap="2px"
-          verticalAlignment="center"
-          horizontalAlignment="start"
-          var.dots="{Math.max(1, Math.min(10, Math.round(1 + (ptyThroughputEvt.value || 0) * 9)))}"
-          var.active="{(ptyThroughputEvt.value || 0) > 0}"
-          animation="{active ? 'fadein' : ''}"
-          animationOptions="{{ duration: 1000, reverse: true, loop: true }}">
-          <Items data="{Array.from({length: dots})}">
-            <Text value="●" fontSize="8px" color="$color-primary-500" />
-          </Items>
-        </HStack>
+        <!-- Isolated in its own component so PTY-throughput churn does not
+             re-render this footer's message composer. -->
+        <ActivitySparkline />
         <Text
           when="{window.shouldShowIdleProvider(mainAgentStatus.value, enhanceStatus.value)}"
           fontSize="$fontSize-lg"

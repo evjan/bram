@@ -1,0 +1,25 @@
+<Component name="ActivitySparkline">
+  <!-- Live PTY-throughput activity dots, isolated in their own component so
+       the per-chunk reactive churn from bramSubscribePtyThroughput stays
+       contained here and does NOT re-render the footer composer / message box.
+       Same per-component subscription isolation as PastedImageStrip.xmlui.
+       Fixed 100px box (10-dot max at 8px + 2px gaps) so the footer never
+       shifts; always visible — rests when idle, animates on throughput. -->
+  <External
+    id="ptyThroughputEvt"
+    initial="{0}"
+    subscribe="{window.bramSubscribePtyThroughput()}" />
+  <HStack
+    width="100px"
+    gap="2px"
+    verticalAlignment="center"
+    horizontalAlignment="start"
+    var.dots="{Math.max(1, Math.min(10, Math.round(1 + (ptyThroughputEvt.value || 0) * 9)))}"
+    var.active="{(ptyThroughputEvt.value || 0) > 0}"
+    animation="{active ? 'fadein' : ''}"
+    animationOptions="{{ duration: 1000, reverse: true, loop: true }}">
+    <Items data="{Array.from({length: dots})}">
+      <Text value="●" fontSize="8px" color="$color-primary-500" />
+    </Items>
+  </HStack>
+</Component>

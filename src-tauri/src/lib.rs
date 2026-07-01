@@ -5129,12 +5129,31 @@ fn pty_menu_update<R: tauri::Runtime>(app: &AppHandle<R>, chunk: &[u8]) {
                             // menu (the Edit/.gitignore miss — a PTY redraw looked
                             // like a dismiss, then re-detect, then this guard cleared
                             // it). Skip suppression; trace so a recurrence is visible.
+                            //
+                            // Loud `stranded` alarm once the grid has re-detected the
+                            // SAME menu past the stale-reread window (~600ms) while
+                            // the hook still owns the slot. That is the signature of a
+                            // hook that claimed/held the slot but never surfaced the
+                            // menu — e.g. a worklist-covered Edit the guard allowed:
+                            // Claude still shows its native 1/2/3 prompt, but the hook
+                            // resolved/cleared the slot, so the grid's own
+                            // turn_state_set_menu (gated by menu_hook_owns_slot) stays
+                            // deferred and nothing surfaces. This distinct state stops
+                            // the stranded case from hiding in a stream of benign
+                            // suppress-skipped lines. Behavioral reclaim is
+                            // intentionally NOT done here yet — the fix must account
+                            // for grid-cell vs turn-state divergence and needs a
+                            // verified repro first. See
+                            // fix-hook-owns-slot-stranded-permission-menu.
                             if bram_trace_enabled() {
+                                let stranded =
+                                    d.when.elapsed() > std::time::Duration::from_millis(600);
                                 append_bram_trace_line(
                                     app,
                                     "pty-menu",
                                     &format!(
-                                        "state=suppress-skipped tool={} reason=hook-owns-slot elapsed_ms={} new_options=[{}]{}",
+                                        "state={} tool={} reason=hook-owns-slot elapsed_ms={} new_options=[{}]{}",
+                                        if stranded { "stranded" } else { "suppress-skipped" },
                                         new_menu.tool,
                                         d.when.elapsed().as_millis(),
                                         option_summary,

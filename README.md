@@ -12,7 +12,7 @@ Anyone who wants to use AI coding agents in a safe and accountable way.
 
 Bram has opinions. It thinks versioning and collaboration are well-handled by git and GitHub, so it guides agents to make best use of them on your behalf, in conversation with you. And it thinks GitHub is great for accountability, so it also guides agents to join you in orderly and well-documented collaboration that leaves an auditable trail.
 
-<img width="1732" height="980" alt="image" src="https://github.com/user-attachments/assets/a95a969f-c07e-4ebe-bf4f-7e9304e594b2" />
+<img width="2414" height="2112" alt="image" src="https://github.com/user-attachments/assets/0fce4634-8912-4a53-9b1e-ddb99edf4e05" />
 
 
 ## Blog
@@ -25,15 +25,15 @@ Bram has opinions. It thinks versioning and collaboration are well-handled by gi
 
 ## How does it work?
 
-### Terminal (on the left)
+### Terminal (optional)
 
-A terminal where you run `claude` or `codex`.
+A terminal where you run `claude` or `codex`. It can be hidden in favor of the agent pane's Worklist and Transcript views 
 
-### Agent pane (on the right)
+### Agent pane
 
 - Header: Switches between agents and adjusts font size.
 
-- Worklist: Guides you through the Bram workflow.
+- Worklist: Guides you through the Bram workflow. Includes a live view of the last conversation turn. 
 
 - Transcript: Shows your terminal session in a more readable form.
 

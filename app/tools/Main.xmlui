@@ -348,20 +348,7 @@
       </VStack>
     </property>
     <NavLink label="Worklist" to="/worklist" />
-    <NavLink to="/transcript">
-      <VStack gap="$space-0_5" width="100%">
-        <Text value="Transcript" />
-        <HStack gap="2px" width="100%" horizontalAlignment="start"
-          var.dots="{Math.max(1, Math.min(16, Math.round(1 + (ptyThroughputEvt.value || 0) * 15)))}"
-          var.active="{(ptyThroughputEvt.value || 0) > 0}"
-          animation="{active ? 'fadein' : ''}"
-          animationOptions="{{ duration: 1000, reverse: true, loop: true }}">
-          <Items data="{Array.from({length: dots})}">
-            <Text value="●" fontSize="8px" color="$color-primary-500" />
-          </Items>
-        </HStack>
-      </VStack>
-    </NavLink>
+    <NavLink label="Transcript" to="/transcript" />
     <NavLink label="Issues" to="/issues" />
     <NavLink label="Commits" to="/commits" />
     <NavLink label="Sessions" to="/sessions" />
@@ -442,7 +429,25 @@
   <Footer>
     <Theme fontSize-TextArea="$fontSize-lg" fontSize-placeholder-TextArea="$fontSize-lg">
     <VStack width="100%" gap="$space-1">
-      <HStack verticalAlignment="center" paddingHorizontal="$space-1" paddingBottom="$space-2" gap="$space-1">
+      <HStack verticalAlignment="center" paddingHorizontal="$space-1" paddingBottom="$space-2" gap="$space-0_5">
+        <!-- Live PTY-throughput activity sparkline, relocated here from under
+             the Transcript nav link. Fixed 100px box (fits the 10-dot max at
+             8px + 2px gaps) so the footer never shifts and the status text
+             stays close; always visible — rests when idle, animates on
+             throughput. -->
+        <HStack
+          width="100px"
+          gap="2px"
+          verticalAlignment="center"
+          horizontalAlignment="start"
+          var.dots="{Math.max(1, Math.min(10, Math.round(1 + (ptyThroughputEvt.value || 0) * 9)))}"
+          var.active="{(ptyThroughputEvt.value || 0) > 0}"
+          animation="{active ? 'fadein' : ''}"
+          animationOptions="{{ duration: 1000, reverse: true, loop: true }}">
+          <Items data="{Array.from({length: dots})}">
+            <Text value="●" fontSize="8px" color="$color-primary-500" />
+          </Items>
+        </HStack>
         <Text
           when="{window.shouldShowIdleProvider(mainAgentStatus.value, enhanceStatus.value)}"
           fontSize="$fontSize-lg"
@@ -454,17 +459,15 @@
           when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'working'}"
           gap="$space-1"
           verticalAlignment="center">
-          <Theme size-Spinner="24px">
-            <Spinner />
-          </Theme>
           <Text
             fontSize="$fontSize-lg"
             fontStyle="italic"
             overflowMode="none"
             value="{window.headerWorkingLabel(mainAgentStatus.value, enhanceStatus.value)}" />
-          <!-- Live elapsed counter intentionally removed: it can't reliably
-               match the TUI's own timer and the mismatch was distracting; the
-               spinner + verb signal "working". See drop-banner-elapsed-time. -->
+          <!-- Spinner removed: the always-on activity sparkline (footer left)
+               now carries the live signal; the working verb labels the state.
+               Live elapsed counter intentionally absent — it can't reliably
+               match the TUI's own timer. See drop-banner-elapsed-time. -->
         </HStack>
         <HStack
           when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'finished'}"

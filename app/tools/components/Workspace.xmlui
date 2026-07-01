@@ -181,6 +181,30 @@
     id="conversationStateDS"
     initial="{null}"
     subscribe="{window.bramSubscribeConversationState()}" />
+  <!-- Pending permission menu, same push the Transcript and NavPanel use, so
+       the Worklist-page dock can answer a menu without switching tabs. -->
+  <External
+    id="agentMenuEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeAgentMenu()}" />
+  <!-- Human-readable rendering of the dock's "You" turn: __bramFormatUserTurn
+       collapses approved:/drop:/iterate: payloads to labels, resolving each
+       feedbackRef via this map. Same wiring as Transcript. -->
+  <DataSource id="feedbackMap" url="/__feedback/map" />
+  <External
+    id="feedbackDraftsChangedEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('feedback-drafts-changed')}" />
+  <External
+    id="feedbackHistoryChangedEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('feedback-history-changed')}" />
+  <ChangeListener
+    listenTo="{feedbackDraftsChangedEvt.value &amp;&amp; feedbackDraftsChangedEvt.value.tick}"
+    onDidChange="() => feedbackMap.refetch()" />
+  <ChangeListener
+    listenTo="{feedbackHistoryChangedEvt.value &amp;&amp; feedbackHistoryChangedEvt.value.tick}"
+    onDidChange="() => feedbackMap.refetch()" />
 
   <!-- Drives the in-flight "Approving./.../..." dot cycle below the
        targeted item. 2 s tick is intentionally slow - action cycles can
@@ -1178,6 +1202,52 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
           }
         }
       }" />
+
+    <!-- Agent dock: pending permission menu + the agent's last response, so
+         you can read output and answer a menu without leaving the Worklist
+         page for the Transcript tab. Menu = the shared bramSubscribeAgentMenu
+         push (AgentMenuView is self-gating on $props.menu and sends the
+         option keys). Last response = conversationStateDS.value
+         .lastAssistantText.text, bounded with an internal scroller so a long
+         response doesn't lengthen the page. -->
+    <VStack
+      when="{agentMenuEvt.value || (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText) || (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text)}"
+      gap="$space-2"
+      width="100%"
+      paddingTop="$space-4">
+      <AgentMenuView menu="{agentMenuEvt.value}" surface="worklist" />
+      <VStack
+        when="{conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText}"
+        gap="$space-1"
+        width="100%"
+        var.youText="{conversationStateDS.value.lastExchange.userText}">
+        <Text
+          fontSize="$fontSize-xs"
+          color="$textColor-secondary"
+          value="You: last message" />
+        <VStack maxHeight="12em" overflowY="auto" width="100%">
+          <Markdown content="{window.__bramFormatUserTurn(youText, feedbackMap.value)}" />
+        </VStack>
+      </VStack>
+      <!-- Dim the agent response while a newer user message has arrived but
+           the agent has not answered it yet (lastExchange has userText but no
+           assistantText). lastAssistantText still holds the prior response, so
+           it shows dimmed until a fresh response replaces it. -->
+      <VStack
+        when="{conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text}"
+        gap="$space-1"
+        width="100%"
+        opacity="{(conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText &amp;&amp; !conversationStateDS.value.lastExchange.assistantText) ? 0.45 : 1}"
+        var.lastResp="{conversationStateDS.value.lastAssistantText.text}">
+        <Text
+          fontSize="$fontSize-xs"
+          color="$textColor-secondary"
+          value="Agent: last response" />
+        <VStack maxHeight="20em" overflowY="auto" width="100%">
+          <Markdown content="{window.__bramStripImagePaths(lastResp)}" />
+        </VStack>
+      </VStack>
+    </VStack>
 
   </VStack>
 </Component>

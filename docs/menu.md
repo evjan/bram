@@ -82,8 +82,6 @@ double-scrolls on either surface (`67bcc80`).
 
 ## Open menu issues
 
-- **#210** — Esc on a denied prompt leaves residual prompt text in the terminal
-  pane (cosmetic; deny-clear itself works).
 - **#192** — provider-neutral guard / deny-clear. The deny-clear is currently
   split (Claude `PermissionDenied` hook vs. Codex PTY-cancel) and could unify on
   the PTY-cancel path.

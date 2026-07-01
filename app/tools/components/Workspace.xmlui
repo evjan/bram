@@ -25,8 +25,6 @@
   var.messageSubmitResult="{null}"
   var.worklistActionResult="{null}"
   var.messageSentAtText="{''}"
-  var.messageInputSent="{!!(window.__bramRestoreWorklistDraft() || '').trim() &amp;&amp; (window.__bramRestoreWorklistDraft() || '').trim() === (window.__bramRestoreWorklistSubmittedMessage() || '').trim()}"
-  var.feedbackInputSentIds="{(() => { try { return JSON.parse(window.localStorage.getItem('bram.worklistFeedbackSentIds') || '[]'); } catch (e) { return []; } })()}"
   var.awaitingResponse="{window.__bramRestoreWorklistAwaiting()}"
   var.awaitingResponseSetAt="{window.__bramRestoreWorklistAwaitingSetAt()}"
   var.agentTurnEndedSinceSubmit="{false}"
@@ -71,11 +69,6 @@
           }
           feedbackDraftsById = nextDrafts;
           window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds, feedbackDraftsById: feedbackDraftsById});
-        }
-        const filteredSent = (feedbackInputSentIds || []).filter(id => existingIds.has(id));
-        if (filteredSent.length !== (feedbackInputSentIds || []).length) {
-          feedbackInputSentIds = filteredSent;
-          window.localStorage.setItem('bram.worklistFeedbackSentIds', JSON.stringify(feedbackInputSentIds || []));
         }
       }
       if (newItemSubmitting && currentSig !== newItemStartSig) {
@@ -148,7 +141,7 @@
       } else if (u.kind === 'clear') {
         window.__bramIframeTrace('inflight-clear', u.trace);
         const completedId = submittedItemId;
-        if (completedId && feedbackDraftsById && feedbackDraftsById[completedId] && !(feedbackInputSentIds || []).includes(completedId)) {
+        if (completedId && feedbackDraftsById && feedbackDraftsById[completedId]) {
           const nextDrafts = Object.assign({}, feedbackDraftsById);
           delete nextDrafts[completedId];
           feedbackDraftsById = nextDrafts;
@@ -222,7 +215,7 @@
     onDidChange="() => { const r = messageSubmitResult || {}; if (!r.submitted) return; pendingPastedImageCount = r.pendingPastedImageCount; pendingPastedImagePaths = r.pendingPastedImagePaths; stagingPastedImageCount = r.stagingPastedImageCount; submittedWorklistImages = r.submittedWorklistImages; submittedWorklistMessage = r.submittedWorklistMessage; submittedTurnsBaseline = r.submittedTurnsBaseline; messageSentAtText = r.messageSentAtText; submittedKind = r.submittedKind; awaitingResponse = r.awaitingResponse; awaitingResponseSetAt = r.awaitingResponseSetAt; }" />
   <ChangeListener
     listenTo="{worklistActionResult &amp;&amp; worklistActionResult.seq}"
-    onDidChange="() => { const r = worklistActionResult || {}; if (!r.submittedKind) return; submittedWorklistImages = r.submittedWorklistImages; submittedWorklistMessage = r.submittedWorklistMessage; submittedTurnsBaseline = r.submittedTurnsBaseline; messageSentAtText = r.messageSentAtText; awaitingResponse = r.awaitingResponse; awaitingResponseSetAt = r.awaitingResponseSetAt; pendingPastedImageCount = r.pendingPastedImageCount; pendingPastedImagePaths = r.pendingPastedImagePaths; stagingPastedImageCount = r.stagingPastedImageCount; submittedItemId = r.submittedItemId; submittedKind = r.submittedKind; submitting = r.submitting; actionProgressScope = r.actionProgressScope || 'item'; actionProgressKind = r.actionProgressKind; actionProgressTick = r.actionProgressTick; const nextDrafts = Object.assign({}, r.feedbackDraftsById || {}); if (r.submittedItemId &amp;&amp; (feedbackInputSentIds || []).includes(r.submittedItemId) &amp;&amp; feedbackDraftsById &amp;&amp; feedbackDraftsById[r.submittedItemId]) nextDrafts[r.submittedItemId] = feedbackDraftsById[r.submittedItemId]; feedbackDraftsById = nextDrafts; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); window.localStorage.setItem('bram.worklistFeedbackSentIds', JSON.stringify(feedbackInputSentIds || [])); }" />
+    onDidChange="() => { const r = worklistActionResult || {}; if (!r.submittedKind) return; submittedWorklistImages = r.submittedWorklistImages; submittedWorklistMessage = r.submittedWorklistMessage; submittedTurnsBaseline = r.submittedTurnsBaseline; messageSentAtText = r.messageSentAtText; awaitingResponse = r.awaitingResponse; awaitingResponseSetAt = r.awaitingResponseSetAt; pendingPastedImageCount = r.pendingPastedImageCount; pendingPastedImagePaths = r.pendingPastedImagePaths; stagingPastedImageCount = r.stagingPastedImageCount; submittedItemId = r.submittedItemId; submittedKind = r.submittedKind; submitting = r.submitting; actionProgressScope = r.actionProgressScope || 'item'; actionProgressKind = r.actionProgressKind; actionProgressTick = r.actionProgressTick; const nextDrafts = Object.assign({}, r.feedbackDraftsById || {}); feedbackDraftsById = nextDrafts; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); }" />
   <DataSource
     id="worklistToolDetailDS"
     url="/__tool-detail?id={openToolId || ''}"
@@ -394,8 +387,8 @@
         <Form
           width="90%"
           data="{{ message: window.__bramRestoreWorklistDraft() }}"
-          onWillSubmit="(data) => { if (messageInputSent || !worklistInputBox || !worklistInputBox.value || !worklistInputBox.value.trim()) return false; }"
-          onSubmit="const r = window.__bramPrepareWorklistMessageSubmission({text: (worklistInputBox &amp;&amp; worklistInputBox.value) || '', voiceTarget: worklistVoiceTarget || 'message-agent'}); messageSubmitResult = r; if (r.submitted) { messageInputSent = true; window.__bramClearWorklistDraft(); }">
+          onWillSubmit="(data) => { if (!worklistInputBox || !worklistInputBox.value || !worklistInputBox.value.trim()) return false; }"
+          onSubmit="const r = window.__bramPrepareWorklistMessageSubmission({text: (worklistInputBox &amp;&amp; worklistInputBox.value) || '', voiceTarget: worklistVoiceTarget || 'message-agent'}); messageSubmitResult = r; if (r.submitted) { if (worklistInputBox) worklistInputBox.setValue(''); window.__bramClearWorklistDraft(); }">
           <property name="buttonRowTemplate"><Fragment/></property>
           <HStack gap="$space-2" verticalAlignment="center" width="100%">
             <Button
@@ -414,10 +407,9 @@
               autoCorrect="{false}"
               spellCheck="{false}"
               autoCapitalize="off"
-              onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId(''); if (messageInputSent &amp;&amp; worklistInputBox) { worklistInputBox.setValue(''); messageInputSent = false; window.__bramClearWorklistDraft(); } window.__bramIframeTrace('paste-image-target', {stage: 'message-focus', target: 'message-agent'})"
-              onDidChange="(v) => { if (!messageInputSent) window.__bramPersistWorklistDraft(v); }"
+              onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId(''); window.__bramIframeTrace('paste-image-target', {stage: 'message-focus', target: 'message-agent'})"
+              onDidChange="(v) => { window.__bramPersistWorklistDraft(v); }"
               enabled="{!(submitting || awaitingResponse)}"
-              opacity="{messageInputSent ? 0.55 : 1}"
               placeholder="Message agent: Enter sends, Shift+Enter newline, Ctrl-V/Cmd-V paste screenshot."
               autoSize="true"
               minRows="1"
@@ -429,15 +421,15 @@
                 variant="ghost"
                 size="xs"
                 tooltip="Send this message to the agent (Enter also sends)."
-                enabled="{!messageInputSent &amp;&amp; !(submitting || awaitingResponse) &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
-                onClick="const msg = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (msg) { const r = window.__bramPrepareWorklistMessageSubmission({text: msg, voiceTarget: worklistVoiceTarget || 'message-agent'}); messageSubmitResult = r; if (r.submitted) { messageInputSent = true; window.__bramClearWorklistDraft(); } }" />
+                enabled="{!(submitting || awaitingResponse) &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
+                onClick="const msg = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (msg) { const r = window.__bramPrepareWorklistMessageSubmission({text: msg, voiceTarget: worklistVoiceTarget || 'message-agent'}); messageSubmitResult = r; if (r.submitted) { if (worklistInputBox) worklistInputBox.setValue(''); window.__bramClearWorklistDraft(); } }" />
               <Button
                 label="skip worklist"
                 variant="ghost"
                 size="xs"
                 tooltip="Send and bypass propose-first for this turn — edit files directly. Use when you want a direct edit."
-                enabled="{!messageInputSent &amp;&amp; !(submitting || awaitingResponse) &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
-                onClick="const raw = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (raw) { const r = window.__bramPrepareWorklistMessageSubmission({text: raw, mode: 'skip-worklist', voiceTarget: worklistVoiceTarget || 'message-agent'}); messageSubmitResult = r; if (r.submitted) { messageInputSent = true; window.__bramClearWorklistDraft(); } }" />
+                enabled="{!(submitting || awaitingResponse) &amp;&amp; ((worklistInputBox &amp;&amp; worklistInputBox.value || '').trim().length > 0)}"
+                onClick="const raw = (worklistInputBox &amp;&amp; worklistInputBox.value || '').trim(); if (raw) { const r = window.__bramPrepareWorklistMessageSubmission({text: raw, mode: 'skip-worklist', voiceTarget: worklistVoiceTarget || 'message-agent'}); messageSubmitResult = r; if (r.submitted) { if (worklistInputBox) worklistInputBox.setValue(''); window.__bramClearWorklistDraft(); } }" />
             </VStack>
             <Theme size-Spinner="14px">
               <Spinner when="{isWorklistVoiceProcessingTarget('message-agent')}" />
@@ -611,7 +603,7 @@
                     variant="ghost"
                     size="xs"
                     tooltip="Voice feedback"
-                    enabled="{!(feedbackInputSentIds || []).includes($item.id) &amp;&amp; !submitting &amp;&amp; !isWorklistVoiceProcessingTarget('feedback') &amp;&amp; (!feedbackVoiceRecording || (feedbackVoiceRecordingItemId === $item.id &amp;&amp; worklistVoiceRecordingActive))}"
+                    enabled="{!submitting &amp;&amp; !isWorklistVoiceProcessingTarget('feedback') &amp;&amp; (!feedbackVoiceRecording || (feedbackVoiceRecordingItemId === $item.id &amp;&amp; worklistVoiceRecordingActive))}"
                     onClick="setWorklistVoiceTarget('feedback:' + $item.id); if (!feedbackVoiceRecording) feedbackVoiceRecordingItemId = $item.id; feedbackVoiceRecording = toggleVoiceForCurrentTarget(feedbackVoiceRecording)" />
                   <TextArea
                     id="feedbackBox"
@@ -621,21 +613,20 @@
                     autoCorrect="{false}"
                     spellCheck="{false}"
                     autoCapitalize="off"
-                    onGotFocus="setWorklistVoiceTarget('feedback'); setFocusedFeedbackItemId($item.id); if ((feedbackInputSentIds || []).includes($item.id) &amp;&amp; feedbackBox) { feedbackBox.setValue(''); feedbackInputSentIds = (feedbackInputSentIds || []).filter(id => id !== $item.id); window.localStorage.setItem('bram.worklistFeedbackSentIds', JSON.stringify(feedbackInputSentIds || [])); const next = Object.assign({}, feedbackDraftsById || {}); delete next[$item.id]; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } window.__bramIframeTrace('paste-image-target', {stage: 'feedback-focus', target: 'feedback:' + $item.id, item: $item.id})"
-                    onLostFocus="() => { if ((feedbackInputSentIds || []).includes($item.id)) return; const next = Object.assign({}, feedbackDraftsById || {}); next[$item.id] = feedbackBox.value || ''; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); }"
+                    onGotFocus="setWorklistVoiceTarget('feedback'); setFocusedFeedbackItemId($item.id); window.__bramIframeTrace('paste-image-target', {stage: 'feedback-focus', target: 'feedback:' + $item.id, item: $item.id})"
+                    onLostFocus="() => { const next = Object.assign({}, feedbackDraftsById || {}); next[$item.id] = feedbackBox.value || ''; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); }"
                     resize="vertical"
                     minRows="2"
                     maxRows="16"
                     width="*"
                     fontSize="$fontSize-sm"
-                    opacity="{(feedbackInputSentIds || []).includes($item.id) ? 0.55 : 1}"
                     enabled="{!(submitting &amp;&amp; submittedItemId === $item.id)}" />
                   <ChangeListener
                     listenTo="{voiceArrival.value &amp;&amp; voiceArrival.value.at}"
                     onDidChange="() => { const ev = voiceArrival.value || null; const t = (ev &amp;&amp; ev.transcript) || ''; const target = (ev &amp;&amp; ev.meta &amp;&amp; ev.meta.target) || ''; if (target === ('feedback:' + $item.id)) { if (t) { const newValue = window.__bramAppendVoiceToBox(feedbackBox, t); if (newValue !== false) { const draftsNext = Object.assign({}, feedbackDraftsById || {}); draftsNext[$item.id] = newValue; feedbackDraftsById = draftsNext; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } } feedbackVoiceRecording = false; feedbackVoiceRecordingItemId = ''; worklistVoiceRecordingActive = false; } }" />
                   <ChangeListener
                     listenTo="{awaitingResponse}"
-                    onDidChange="(c) => { if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedItemId === $item.id &amp;&amp; !(feedbackInputSentIds || []).includes($item.id)) { const next = Object.assign({}, feedbackDraftsById || {}); delete next[$item.id]; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } }" />
+                    onDidChange="(c) => { if (!c.newValue &amp;&amp; c.prevValue &amp;&amp; submittedItemId === $item.id) { const next = Object.assign({}, feedbackDraftsById || {}); delete next[$item.id]; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); } }" />
                   <Theme size-Spinner="14px">
                     <Spinner when="{isWorklistVoiceProcessingTarget('feedback:' + $item.id)}" />
                   </Theme>
@@ -654,8 +645,8 @@
                     <Button
                       label="Approve"
                       size="xs"
-                      enabled="{!(feedbackInputSentIds || []).includes($item.id) && !submitting && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed')}"
-                      onClick="(() => { window.__bramIframeTrace('click', {target: 'approve', item: $item.id}); if ($item.status === 'applied' &amp;&amp; $item.closesIssues &amp;&amp; $item.closesIssues.length > 0) { closeIssuesItemRef = $item; closeIssuesState = initCloseIssueState($item.closesIssues); closeIssuesDialog = $item.id; return; } const sentText = (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || ''; const r = window.__bramPrepareWorklistActionSubmission({kind: 'approved', items: worklist.value.items, selectedId: $item.id, rawFeedback: sentText, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'approve'}); const next = Object.assign({}, r.feedbackDraftsById || {}); if (sentText) next[$item.id] = sentText; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); if (r.submittedKind) { feedbackInputSentIds = (feedbackInputSentIds || []).includes($item.id) ? feedbackInputSentIds : (feedbackInputSentIds || []).concat([$item.id]); window.localStorage.setItem('bram.worklistFeedbackSentIds', JSON.stringify(feedbackInputSentIds || [])); } worklistActionResult = r; toTurn(r.turnText); })()" />
+                      enabled="{!submitting && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed')}"
+                      onClick="(() => { window.__bramIframeTrace('click', {target: 'approve', item: $item.id}); if ($item.status === 'applied' &amp;&amp; $item.closesIssues &amp;&amp; $item.closesIssues.length > 0) { closeIssuesItemRef = $item; closeIssuesState = initCloseIssueState($item.closesIssues); closeIssuesDialog = $item.id; return; } const sentText = (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || ''; const r = window.__bramPrepareWorklistActionSubmission({kind: 'approved', items: worklist.value.items, selectedId: $item.id, rawFeedback: sentText, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'approve'}); const next = Object.assign({}, r.feedbackDraftsById || {}); feedbackDraftsById = next; if (feedbackBox) feedbackBox.setValue(''); window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); worklistActionResult = r; toTurn(r.turnText); })()" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -669,8 +660,8 @@
                     <Button
                       label="Iterate"
                       size="xs"
-                      enabled="{!(feedbackInputSentIds || []).includes($item.id) && !submitting && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed') && (((feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || '').trim().length > 0 || (window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot('feedback:' + $item.id).count : pendingPastedImageCount) > 0)}"
-                      onClick="window.__bramIframeTrace('click', {target: 'iterate', item: $item.id, pasteTarget: 'feedback:' + $item.id}); const sentText = (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || ''; const r = window.__bramPrepareWorklistActionSubmission({kind: 'iterate', items: worklist.value.items, selectedId: $item.id, rawFeedback: sentText, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'iterate'}); const next = Object.assign({}, r.feedbackDraftsById || {}); if (sentText) next[$item.id] = sentText; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); if (r.submittedKind) { feedbackInputSentIds = (feedbackInputSentIds || []).includes($item.id) ? feedbackInputSentIds : (feedbackInputSentIds || []).concat([$item.id]); window.localStorage.setItem('bram.worklistFeedbackSentIds', JSON.stringify(feedbackInputSentIds || [])); } worklistActionResult = r; sendIterateWithFeedbackDraft(worklist.value.items, $item.id, r.feedback)" />
+                      enabled="{!submitting && (($item.status || 'proposed') === 'applied' || ($item.status || 'proposed') === 'proposed') && (((feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || '').trim().length > 0 || (window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot('feedback:' + $item.id).count : pendingPastedImageCount) > 0)}"
+                      onClick="window.__bramIframeTrace('click', {target: 'iterate', item: $item.id, pasteTarget: 'feedback:' + $item.id}); const sentText = (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || ''; const r = window.__bramPrepareWorklistActionSubmission({kind: 'iterate', items: worklist.value.items, selectedId: $item.id, rawFeedback: sentText, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'iterate'}); const next = Object.assign({}, r.feedbackDraftsById || {}); feedbackDraftsById = next; if (feedbackBox) feedbackBox.setValue(''); window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); worklistActionResult = r; sendIterateWithFeedbackDraft(worklist.value.items, $item.id, r.feedback)" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -684,8 +675,8 @@
                     <Button
                       label="Drop"
                       size="xs"
-                      enabled="{!(feedbackInputSentIds || []).includes($item.id) &amp;&amp; !submitting}"
-                      onClick="window.__bramIframeTrace('click', {target: 'drop', item: $item.id}); const sentText = (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || ''; const r = window.__bramPrepareWorklistActionSubmission({kind: 'drop', items: worklist.value.items, selectedId: $item.id, rawFeedback: sentText, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'drop'}); const next = Object.assign({}, r.feedbackDraftsById || {}); if (sentText) next[$item.id] = sentText; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); if (r.submittedKind) { feedbackInputSentIds = (feedbackInputSentIds || []).includes($item.id) ? feedbackInputSentIds : (feedbackInputSentIds || []).concat([$item.id]); window.localStorage.setItem('bram.worklistFeedbackSentIds', JSON.stringify(feedbackInputSentIds || [])); } worklistActionResult = r; toTurn(r.turnText)" />
+                      enabled="{!submitting}"
+                      onClick="window.__bramIframeTrace('click', {target: 'drop', item: $item.id}); const sentText = (feedbackBox &amp;&amp; feedbackBox.value) || (feedbackDraftsById || {})[$item.id] || ''; const r = window.__bramPrepareWorklistActionSubmission({kind: 'drop', items: worklist.value.items, selectedId: $item.id, rawFeedback: sentText, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent', inflightTarget: 'drop'}); const next = Object.assign({}, r.feedbackDraftsById || {}); feedbackDraftsById = next; if (feedbackBox) feedbackBox.setValue(''); window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); worklistActionResult = r; toTurn(r.turnText)" />
                     <Theme paddingHorizontal-Button-xs="$space-0_5">
                       <Button
                         label="ⓘ"
@@ -906,11 +897,11 @@
           <Button
             label="Confirm"
             tooltip="Commit, push this commit through the verified close helper, then close"
-            onClick="const sentId = closeIssuesItemRef &amp;&amp; closeIssuesItemRef.id; const sentText = sentId ? ((feedbackDraftsById || {})[sentId] || '') : ''; const r = window.__bramPrepareCloseIssueWorklistActionSubmission({item: closeIssuesItemRef, closeIssuesState: closeIssuesState, closeIssues: true, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent'}); const next = Object.assign({}, r.feedbackDraftsById || {}); if (sentId &amp;&amp; sentText) next[sentId] = sentText; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); if (r.submittedKind &amp;&amp; sentId) { feedbackInputSentIds = (feedbackInputSentIds || []).includes(sentId) ? feedbackInputSentIds : (feedbackInputSentIds || []).concat([sentId]); window.localStorage.setItem('bram.worklistFeedbackSentIds', JSON.stringify(feedbackInputSentIds || [])); } worklistActionResult = r; toTurn(r.turnText); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="const sentId = closeIssuesItemRef &amp;&amp; closeIssuesItemRef.id; const sentText = sentId ? ((feedbackDraftsById || {})[sentId] || '') : ''; const r = window.__bramPrepareCloseIssueWorklistActionSubmission({item: closeIssuesItemRef, closeIssuesState: closeIssuesState, closeIssues: true, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent'}); const next = Object.assign({}, r.feedbackDraftsById || {}); feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); worklistActionResult = r; toTurn(r.turnText); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Approve without closing"
             variant="outlined"
-            onClick="const sentId = closeIssuesItemRef &amp;&amp; closeIssuesItemRef.id; const sentText = sentId ? ((feedbackDraftsById || {})[sentId] || '') : ''; const r = window.__bramPrepareCloseIssueWorklistActionSubmission({item: closeIssuesItemRef, closeIssues: false, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent'}); const next = Object.assign({}, r.feedbackDraftsById || {}); if (sentId &amp;&amp; sentText) next[sentId] = sentText; feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); if (r.submittedKind &amp;&amp; sentId) { feedbackInputSentIds = (feedbackInputSentIds || []).includes(sentId) ? feedbackInputSentIds : (feedbackInputSentIds || []).concat([sentId]); window.localStorage.setItem('bram.worklistFeedbackSentIds', JSON.stringify(feedbackInputSentIds || [])); } worklistActionResult = r; toTurn(r.turnText); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
+            onClick="const sentId = closeIssuesItemRef &amp;&amp; closeIssuesItemRef.id; const sentText = sentId ? ((feedbackDraftsById || {})[sentId] || '') : ''; const r = window.__bramPrepareCloseIssueWorklistActionSubmission({item: closeIssuesItemRef, closeIssues: false, feedbackDraftsById: feedbackDraftsById || {}, expandedItemIds: expandedItemIds || [], voiceTarget: worklistVoiceTarget || 'message-agent'}); const next = Object.assign({}, r.feedbackDraftsById || {}); feedbackDraftsById = next; window.__bramPersistWorklistUiState({expandedItemIds: expandedItemIds || [], feedbackDraftsById: feedbackDraftsById}); worklistActionResult = r; toTurn(r.turnText); closeIssuesDialog = null; closeIssuesItemRef = null; closeIssuesState = null" />
           <Button
             label="Cancel"
             variant="ghost"

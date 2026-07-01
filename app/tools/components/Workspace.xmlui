@@ -37,7 +37,9 @@
   var.stagingPastedImageCount="{window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot().staging : 0}"
   var.submittedWorklistMessage="{window.__bramRestoreWorklistSubmittedMessage()}"
   var.submittedTurnsBaseline="{window.__bramRestoreWorklistSubmittedBaseline()}"
-  var.submittedKind="{window.__bramRestoreWorklistSubmittedKind()}">
+  var.submittedKind="{window.__bramRestoreWorklistSubmittedKind()}"
+  var.agentDockLaunchResponseDim="{true}"
+  var.agentDockLaunchResponseText="{''}">
   <DataSource
     id="worklist"
     url="/__worklist"
@@ -174,6 +176,9 @@
     id="conversationStateDS"
     initial="{null}"
     subscribe="{window.bramSubscribeConversationState()}" />
+  <ChangeListener
+    listenTo="{conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text}"
+    onDidChange="(c) => { const t = c.newValue || ''; if (!t) return; if (!agentDockLaunchResponseText) agentDockLaunchResponseText = t; if (c.prevValue &amp;&amp; t !== c.prevValue) { agentDockLaunchResponseDim = false; agentDockLaunchResponseText = t; } }" />
   <!-- Pending permission menu, same push the Transcript and NavPanel use, so
        the Worklist-page dock can answer a menu without switching tabs. -->
   <External
@@ -1228,15 +1233,14 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
           </VStack>
         </VStack>
       </VStack>
-      <!-- Dim the agent response while a newer user message has arrived but
-           the agent has not answered it yet (lastExchange has userText but no
-           assistantText). lastAssistantText still holds the prior response, so
-           it shows dimmed until a fresh response replaces it. -->
+      <!-- Dim the agent response on Workspace launch, or while a newer user
+           message has arrived but the agent has not answered it yet. The launch
+           dim clears only when the assistant response text actually changes. -->
       <VStack
         when="{conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text}"
         gap="$space-1"
         width="100%"
-        opacity="{(conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText &amp;&amp; !conversationStateDS.value.lastExchange.assistantText) ? 0.45 : 1}"
+        opacity="{(agentDockLaunchResponseDim || (conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText &amp;&amp; !conversationStateDS.value.lastExchange.assistantText)) ? 0.45 : 1}"
         var.lastResp="{conversationStateDS.value.lastAssistantText.text}">
         <Text
           fontSize="$fontSize-xs"

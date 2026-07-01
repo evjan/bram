@@ -144,14 +144,6 @@
           onDidChange="(v) => saveSettings.execute({ traces: { inspectorTap: v } })" />
       </VStack>
 
-      <VStack gap="$space-2">
-        <Heading level="h3">Menus</Heading>
-        <Switch
-          label="Parse and display menus"
-          initialValue="{!!(settingsConfig.value &amp;&amp; settingsConfig.value.menus &amp;&amp; settingsConfig.value.menus.parseAndDisplay)}"
-          onDidChange="(v) => saveSettings.execute({ menus: { parseAndDisplay: v } })" />
-      </VStack>
-
     </VStack>
 
     <Text

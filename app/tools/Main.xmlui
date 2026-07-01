@@ -27,13 +27,6 @@
     id="voiceBusyNotice"
     initial="{null}"
     subscribe="{window.bramSubscribeVoiceBusy()}" />
-  <!-- Pending terminal permission menu (same source the Transcript uses):
-       value is the menu object when a menu is waiting, null otherwise. Drives
-       the subtle pulse on the NavPanel's Terminal menu footer. -->
-  <External
-    id="navMenuPendingEvt"
-    initial="{null}"
-    subscribe="{window.bramSubscribeAgentMenu()}" />
   <ChangeListener
     listenTo="{whisperNotice.value &amp;&amp; whisperNotice.value.at}"
     onDidChange="(c) => { if (c.newValue) { toast.error('Whisper server is not running and could not be started automatically. Start it manually — see the README Voice input section: https://github.com/judell/bram#voice-input'); } }" />
@@ -315,36 +308,7 @@
       <Fragment/>
     </property>
     <property name="footerTemplate">
-      <VStack gap="$space-1" paddingHorizontal="$space-2"
-        animation="{navMenuPendingEvt.value ? 'fadein' : ''}"
-        animationOptions="{{ duration: 1400, reverse: true, loop: true }}">
-        <Text
-          fontSize="$fontSize-xs"
-          color="$textColor-secondary"
-          value="Terminal menu" />
-        <HStack gap="$space-1">
-          <Button
-            label="1"
-            variant="ghost"
-            tooltip="Permission menu: send keystroke 1"
-            onClick="window.__bramTraceToolbarKey('1'); sendKeys('1\r')" />
-          <Button
-            label="2"
-            variant="ghost"
-            tooltip="Permission menu: send keystroke 2"
-            onClick="window.__bramTraceToolbarKey('2'); sendKeys('2\r')" />
-          <Button
-            label="3"
-            variant="ghost"
-            tooltip="Permission menu: send keystroke 3"
-            onClick="window.__bramTraceToolbarKey('3'); sendKeys('3\r')" />
-          <Button
-            label="Esc"
-            variant="ghost"
-            tooltip="Send Esc to interrupt"
-            onClick="escToolbarClick()" />
-        </HStack>
-      </VStack>
+      <Fragment/>
     </property>
     <NavLink label="Worklist" to="/worklist" />
     <NavLink label="Transcript" to="/transcript" />
@@ -491,16 +455,26 @@
             maxRows="4"
             width="*"
             onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId('')" />
-          <Button
-            label="send"
-            variant="ghost"
-            size="xs"
-            onClick="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }" />
-          <Button
-            label="skip worklist"
-            variant="ghost"
-            size="xs"
-            onClick="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, mode: 'skip-worklist', voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }" />
+          <VStack width="8rem" horizontalAlignment="start" itemWidth="fit-content" gap="$space-1">
+            <Button
+              label="send"
+              variant="ghost"
+              size="xs"
+              tooltip="Send message to agent"
+              onClick="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }" />
+            <Button
+              label="skip worklist"
+              variant="ghost"
+              size="xs"
+              tooltip="Send message prefixed with skip-worklist:"
+              onClick="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, mode: 'skip-worklist', voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }" />
+            <Button
+              label="esc"
+              variant="ghost"
+              size="xs"
+              tooltip="Send the Escape key"
+              onClick="escToolbarClick()" />
+          </VStack>
         </HStack>
       </Form>
       <PastedImageStrip target="message-agent" />

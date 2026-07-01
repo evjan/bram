@@ -866,6 +866,25 @@ function __bramWriteLS(key, value) {
   } catch (e) {}
 }
 
+function __bramReadSS(key, fallback) {
+  try {
+    if (!window.sessionStorage) return fallback;
+    var v = sessionStorage.getItem(key);
+    return v === null ? fallback : v;
+  } catch (e) { return fallback; }
+}
+
+function __bramWriteSS(key, value) {
+  try {
+    if (!window.sessionStorage) return;
+    if (value === undefined || value === null || value === "") {
+      sessionStorage.removeItem(key);
+    } else {
+      sessionStorage.setItem(key, String(value));
+    }
+  } catch (e) {}
+}
+
 // Worklist "message agent" persistence + lifecycle shims. Counterparts
 // for the xs delegators in Globals.xs (audit step 3, 2026-06-14).
 // Each is invoked through bare-name `restoreWorklistDraft(...)` from
@@ -1017,6 +1036,18 @@ window.__bramMarkAwaitingStarted = function () {
 
 window.__bramRestoreWorklistSubmittedMessage = function () {
   return __bramReadLS("bram.worklistSubmittedMessage", "");
+};
+
+window.__bramRestoreWorklistSessionSubmittedMessage = function () {
+  return __bramReadSS("bram.worklistSessionSubmittedMessage", "");
+};
+
+window.__bramShouldDimAgentDockOnMount = function () {
+  var key = "bram.agentDockLaunchDimConsumed";
+  var consumed = __bramReadSS(key, "");
+  if (consumed === "1") return false;
+  __bramWriteSS(key, "1");
+  return true;
 };
 
 window.__bramRestoreWorklistSubmittedKind = function () {
@@ -1276,6 +1307,7 @@ window.__bramSubmitWorklistMessageFast = function (text, voiceTarget) {
   var baseline = 0;
   __bramWriteLS("bram.worklistMessageDraft", "");
   __bramWriteLS("bram.worklistSubmittedMessage", userTyped);
+  __bramWriteSS("bram.worklistSessionSubmittedMessage", userTyped);
   __bramWriteLS("bram.worklistSubmittedBaseline", String(baseline || 0));
   window.__bramSetWorklistSubmittedKind("message");
   return { message: userTyped, images: __bramExtractImagePaths(toSend), baseline: baseline, sentAtText: new Date().toLocaleTimeString() };
@@ -2295,6 +2327,7 @@ window.__bramRecordWorklistFeedbackConversation = function (text) {
   var message = text.trim();
   var baseline = 0;
   __bramWriteLS("bram.worklistSubmittedMessage", message);
+  __bramWriteSS("bram.worklistSessionSubmittedMessage", message);
   __bramWriteLS("bram.worklistSubmittedBaseline", String(baseline));
   window.__bramSetWorklistSubmittedKind("action");
   return { message: message, images: __bramExtractImagePaths(message), baseline: baseline, sentAtText: new Date().toLocaleTimeString() };

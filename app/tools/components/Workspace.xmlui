@@ -36,10 +36,12 @@
   var.pendingPastedImagePaths="{window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot().paths : []}"
   var.stagingPastedImageCount="{window.__bramPasteStateSnapshot ? window.__bramPasteStateSnapshot().staging : 0}"
   var.submittedWorklistMessage="{window.__bramRestoreWorklistSubmittedMessage()}"
+  var.sessionSubmittedWorklistMessage="{window.__bramRestoreWorklistSessionSubmittedMessage ? window.__bramRestoreWorklistSessionSubmittedMessage() : ''}"
   var.submittedTurnsBaseline="{window.__bramRestoreWorklistSubmittedBaseline()}"
   var.submittedKind="{window.__bramRestoreWorklistSubmittedKind()}"
-  var.agentDockLaunchResponseDim="{true}"
-  var.agentDockLaunchResponseText="{''}">
+  var.agentDockLaunchResponseDim="{window.__bramShouldDimAgentDockOnMount ? window.__bramShouldDimAgentDockOnMount() : true}"
+  var.agentDockLaunchResponseText="{''}"
+  var.agentDockLaunchUserText="{''}">
   <DataSource
     id="worklist"
     url="/__worklist"
@@ -177,8 +179,31 @@
     initial="{null}"
     subscribe="{window.bramSubscribeConversationState()}" />
   <ChangeListener
-    listenTo="{conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text}"
-    onDidChange="(c) => { const t = c.newValue || ''; if (!t) return; if (!agentDockLaunchResponseText) agentDockLaunchResponseText = t; if (c.prevValue &amp;&amp; t !== c.prevValue) { agentDockLaunchResponseDim = false; agentDockLaunchResponseText = t; } }" />
+    listenToSources="{{
+      assistantText: conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text,
+      exchangeUserText: conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.userText,
+      exchangeAssistantText: conversationStateDS.value &amp;&amp; conversationStateDS.value.lastExchange &amp;&amp; conversationStateDS.value.lastExchange.assistantText
+    }}"
+    onDidChange="(c) => {
+      const v = c.newValue || {};
+      const t = v.assistantText || '';
+      if (!t) return;
+      const userText = v.exchangeUserText || '';
+      const exchangeAnswered = !!v.exchangeAssistantText;
+      const answeredThisSessionSubmission = !!(exchangeAnswered &amp;&amp; userText &amp;&amp; sessionSubmittedWorklistMessage &amp;&amp; userText === sessionSubmittedWorklistMessage);
+      if (!agentDockLaunchResponseText) {
+        agentDockLaunchResponseText = t;
+        agentDockLaunchUserText = userText;
+        if (answeredThisSessionSubmission) {
+          agentDockLaunchResponseDim = false;
+        }
+        return;
+      }
+      if (t !== agentDockLaunchResponseText || answeredThisSessionSubmission || (exchangeAnswered &amp;&amp; userText &amp;&amp; userText !== agentDockLaunchUserText)) {
+        agentDockLaunchResponseDim = false;
+        agentDockLaunchResponseText = t;
+      }
+    }" />
   <!-- Pending permission menu, same push the Transcript and NavPanel use, so
        the Worklist-page dock can answer a menu without switching tabs. -->
   <External
@@ -1235,7 +1260,10 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
       </VStack>
       <!-- Dim the agent response on Workspace launch, or while a newer user
            message has arrived but the agent has not answered it yet. The launch
-           dim clears only when the assistant response text actually changes. -->
+           dim clears when a newer assistant response arrives, the newer
+           exchange has an assistant answer, or a remounted page recognizes
+           the answered exchange as a Worklist submission from this app
+           session. -->
       <VStack
         when="{conversationStateDS.value &amp;&amp; conversationStateDS.value.lastAssistantText &amp;&amp; conversationStateDS.value.lastAssistantText.text}"
         gap="$space-1"

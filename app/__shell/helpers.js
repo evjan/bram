@@ -3821,17 +3821,31 @@ window.subscribeTauriEvent("__bramNativeToolbarPtyMenuUnsub",
 // External-driven agent-status bridge. Emits the agent-status-changed
 // event payload; also performs the agent-header-status-loaded trace
 // emit that used to live in Main.xmlui's onInit arrow body.
-window.bramSubscribeAgentStatus = (function () {
-  var factory;
-  return function () {
-    if (factory) return factory;
-    var subscribers = new Set();
-    var lastValue = null;
-    var notify = function () {
-      subscribers.forEach(function (fn) {
-        try { fn(); } catch (e) { console.error("[bramSubscribeAgentStatus] subscriber threw:", e); }
-      });
-    };
+// One tauri subscription, two fan-outs:
+//  - bramSubscribeAgentStatus (deduped): notifies only when a meaningful field
+//    (state/verb/provider/substate/source) changes. The many app-wide consumers
+//    use this, so the ~1/sec elapsedText tick no longer re-renders the whole
+//    agent-status surface every second.
+//  - bramSubscribeAgentStatusRaw: notifies on every push, including the elapsed
+//    tick, for the single isolated component that shows the running timer
+//    (FooterAgentStatus). See decouple-elapsed-from-agent-status-broadcast.
+(function () {
+  var rawSubs = new Set();
+  var dedupSubs = new Set();
+  var lastValue = null;
+  var lastSig = null;
+  var sigOf = function (v) {
+    return v ? [v.state, v.verb, v.provider, v.substate, v.source].join("|") : "";
+  };
+  var notify = function (set) {
+    set.forEach(function (fn) {
+      try { fn(); } catch (e) { console.error("[bramSubscribeAgentStatus] subscriber threw:", e); }
+    });
+  };
+  var subscribed = false;
+  var ensureSubscribed = function () {
+    if (subscribed) return;
+    subscribed = true;
     window.subscribeTauriEvent("__bramAgentStatusExternalUnsub",
       "agent-status-changed", function (e) {
         lastValue = (e && e.payload) || null;
@@ -3844,16 +3858,30 @@ window.bramSubscribeAgentStatus = (function () {
             elapsed: (lastValue && lastValue.elapsedText) || ""
           });
         }
-        notify();
+        notify(rawSubs);
+        var sig = sigOf(lastValue);
+        if (sig !== lastSig) {
+          lastSig = sig;
+          notify(dedupSubs);
+        }
       });
-    factory = function (emit) {
-      var fire = function () { emit(lastValue); };
-      subscribers.add(fire);
-      fire();
-      return function () { subscribers.delete(fire); };
-    };
-    return factory;
   };
+  var makeFactory = function (set) {
+    var factory;
+    return function () {
+      if (factory) return factory;
+      ensureSubscribed();
+      factory = function (emit) {
+        var fire = function () { emit(lastValue); };
+        set.add(fire);
+        fire();
+        return function () { set.delete(fire); };
+      };
+      return factory;
+    };
+  };
+  window.bramSubscribeAgentStatus = makeFactory(dedupSubs);
+  window.bramSubscribeAgentStatusRaw = makeFactory(rawSubs);
 })();
 
 // External-driven PTY-throughput bridge (transcript-nav-activity-sparkline).

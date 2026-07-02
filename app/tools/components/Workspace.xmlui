@@ -1211,8 +1211,12 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
       id="workspaceAgentStatusEvt"
       initial="{null}"
       subscribe="{window.bramSubscribeTauriEvent('agent-status-changed')}" />
+    <!-- Key on payload.state (transitions), not .tick (every push): the handler
+         only acts on a working->finished transition, so waking it on every
+         ~1/sec elapsed tick was pure churn. See
+         decouple-elapsed-from-agent-status-broadcast. -->
     <ChangeListener
-      listenTo="{workspaceAgentStatusEvt.value &amp;&amp; workspaceAgentStatusEvt.value.tick}"
+      listenTo="{workspaceAgentStatusEvt.value &amp;&amp; workspaceAgentStatusEvt.value.payload &amp;&amp; workspaceAgentStatusEvt.value.payload.state}"
       onDidChange="() => {
         const p = (workspaceAgentStatusEvt.value &amp;&amp; workspaceAgentStatusEvt.value.payload) || null;
         if (awaitingResponse &amp;&amp; p &amp;&amp; p.state !== 'working') {

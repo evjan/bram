@@ -10,10 +10,14 @@
     gap="$space-0_5"
     verticalAlignment="center"
     var.lastSeenVerb="{''}">
+    <!-- Raw (un-deduped) channel: this component shows the running elapsed
+         timer in the working/finished label, so it needs every ~1/sec push.
+         It re-renders per tick, but that is contained here (isolated
+         component) and no longer reaches the composer / header / worklist. -->
     <PushSource
       id="agentStatus"
       initial="{null}"
-      subscribe="{window.bramSubscribeAgentStatus()}" />
+      subscribe="{window.bramSubscribeAgentStatusRaw()}" />
     <!-- Remember the last non-empty verb so the finished label can name it even
          after the status push clears verb. Mirrors the former App-scope
          lastSeenAgentVerb listener, now local to the isolated component. -->

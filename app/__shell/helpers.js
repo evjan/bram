@@ -219,13 +219,14 @@ window._xsLogs = window._xsLogs || [];
   var DRIFT_THRESHOLD_MS =
     (window.appGlobals && Number(window.appGlobals.heartbeatDriftThresholdMs)) || 500;
   var last = performance.now();
-  var batch = { fires: 0, sumDrift: 0, maxDrift: 0, spikes: 0, sinceMs: 0 };
+  var batch = { fires: 0, sumDrift: 0, maxDrift: 0, spikes: 0, sinceMs: 0, bgFires: 0 };
   // Batch summary every 50 fires (~10s nominal). Emits aggregate
   // drift stats so we can see overall main-thread health independent
   // of individual spike records.
-  function batchTick(drift) {
+  function batchTick(drift, bg) {
     if (batch.fires === 0) batch.sinceMs = Date.now();
     batch.fires += 1;
+    if (bg) batch.bgFires += 1;
     batch.sumDrift += drift;
     if (drift > batch.maxDrift) batch.maxDrift = drift;
     if (drift >= DRIFT_THRESHOLD_MS) batch.spikes += 1;
@@ -245,6 +246,7 @@ window._xsLogs = window._xsLogs || [];
             avgDriftMs: Math.round(batch.sumDrift / batch.fires),
             maxDriftMs: Math.round(batch.maxDrift),
             spikes: batch.spikes,
+            bgFires: batch.bgFires,
             at: new Date().toISOString(),
           });
         } catch (e) {}
@@ -256,13 +258,28 @@ window._xsLogs = window._xsLogs || [];
     var now = performance.now();
     var drift = now - last - TICK_MS;
     last = now;
-    batchTick(drift);
+    // Focus/visibility at this tick. Browsers throttle setInterval to ~1s
+    // when the window is hidden/unfocused, so drift then reads ~800ms
+    // (1000 - TICK_MS) even though the main thread is idle — a throttle
+    // artifact, not lag. Stamp each record with hidden/focused so a
+    // backgrounded window is distinguishable from real saturation, and
+    // count backgrounded fires per batch (bgFires): a high maxDrift with
+    // bgFires≈fires is throttling; with bgFires≈0 it is genuine.
+    var hidden = typeof document !== "undefined" && document.hidden === true;
+    var focused =
+      typeof document === "undefined" || typeof document.hasFocus !== "function"
+        ? true
+        : document.hasFocus();
+    var bg = hidden || !focused;
+    batchTick(drift, bg);
     if (drift >= DRIFT_THRESHOLD_MS && !window.__bramMenuPending) {
       try {
         window.logToHost({
           kind: "iframe-trace",
           subkind: "heartbeat-drift",
           drift_ms: Math.round(drift),
+          hidden: hidden,
+          focused: focused,
           at: new Date().toISOString(),
         });
       } catch (e) {}

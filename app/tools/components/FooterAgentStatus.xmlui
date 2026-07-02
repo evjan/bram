@@ -1,0 +1,52 @@
+<Component name="FooterAgentStatus">
+  <!-- Isolated agent-status labels: this component owns its OWN agent-status
+       subscription, so the frequent status pushes (verb/elapsed/state, ~1-2x
+       per second while the agent works) re-render only this component and NOT
+       the message composer that sits beside it in the footer. Same
+       per-component subscription isolation as ActivitySparkline /
+       PastedImageStrip. enhanceStatus changes rarely (provider setup), so it
+       is passed in as a prop rather than subscribed here. -->
+  <HStack
+    gap="$space-0_5"
+    verticalAlignment="center"
+    var.lastSeenVerb="{''}">
+    <PushSource
+      id="agentStatus"
+      initial="{null}"
+      subscribe="{window.bramSubscribeAgentStatus()}" />
+    <!-- Remember the last non-empty verb so the finished label can name it even
+         after the status push clears verb. Mirrors the former App-scope
+         lastSeenAgentVerb listener, now local to the isolated component. -->
+    <ChangeListener
+      listenTo="{agentStatus.value &amp;&amp; agentStatus.value.verb}"
+      onDidChange="(c) => { if (c.newValue) { lastSeenVerb = c.newValue; } }" />
+    <Text
+      when="{window.shouldShowIdleProvider(agentStatus.value, $props.enhanceStatus)}"
+      fontSize="$fontSize-lg"
+      fontStyle="italic"
+      color="$textColor-secondary"
+      overflowMode="none"
+      value="{window.providerDisplayName(agentStatus.value, $props.enhanceStatus)}" />
+    <HStack
+      when="{agentStatus.value &amp;&amp; agentStatus.value.state === 'working'}"
+      gap="$space-1"
+      verticalAlignment="center">
+      <Text
+        fontSize="$fontSize-lg"
+        fontStyle="italic"
+        overflowMode="none"
+        value="{window.headerWorkingLabel(agentStatus.value, $props.enhanceStatus)}" />
+    </HStack>
+    <HStack
+      when="{agentStatus.value &amp;&amp; agentStatus.value.state === 'finished'}"
+      gap="$space-1"
+      verticalAlignment="center">
+      <Text
+        fontSize="$fontSize-lg"
+        fontStyle="italic"
+        color="$textColor-secondary"
+        overflowMode="none"
+        value="{window.headerFinishedLabel(agentStatus.value, $props.enhanceStatus, lastSeenVerb)}" />
+    </HStack>
+  </HStack>
+</Component>

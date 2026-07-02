@@ -406,38 +406,12 @@
         <!-- Isolated in its own component so PTY-throughput churn does not
              re-render this footer's message composer. -->
         <ActivitySparkline />
-        <Text
-          when="{window.shouldShowIdleProvider(mainAgentStatus.value, enhanceStatus.value)}"
-          fontSize="$fontSize-lg"
-          fontStyle="italic"
-          color="$textColor-secondary"
-          overflowMode="none"
-          value="{window.providerDisplayName(mainAgentStatus.value, enhanceStatus.value)}" />
-        <HStack
-          when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'working'}"
-          gap="$space-1"
-          verticalAlignment="center">
-          <Text
-            fontSize="$fontSize-lg"
-            fontStyle="italic"
-            overflowMode="none"
-            value="{window.headerWorkingLabel(mainAgentStatus.value, enhanceStatus.value)}" />
-          <!-- Spinner removed: the always-on activity sparkline (footer left)
-               now carries the live signal; the working verb labels the state.
-               Live elapsed counter intentionally absent — it can't reliably
-               match the TUI's own timer. See drop-banner-elapsed-time. -->
-        </HStack>
-        <HStack
-          when="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state === 'finished'}"
-          gap="$space-1"
-          verticalAlignment="center">
-          <Text
-            fontSize="$fontSize-lg"
-            fontStyle="italic"
-            color="$textColor-secondary"
-            overflowMode="none"
-            value="{window.headerFinishedLabel(mainAgentStatus.value, enhanceStatus.value, lastSeenAgentVerb)}" />
-        </HStack>
+        <!-- Agent-status labels isolated into their own component (own
+             agent-status subscription) so the frequent status pushes no longer
+             re-render this footer's message composer. The working-verb/spinner
+             rationale now lives in FooterAgentStatus.xmlui. Measured by the
+             footer-churn / heartbeat-batch instrument. -->
+        <FooterAgentStatus enhanceStatus="{enhanceStatus.value}" />
       </HStack>
       <!-- Form exists only for Enter-to-send: TextArea enterSubmits prompts
            the parent Form to submit, and TextArea exposes no standalone Enter

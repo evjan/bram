@@ -8339,6 +8339,43 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
     state: &State<'_, AppState>,
     data: &str,
 ) -> Result<(), String> {
+    // Consolidated per-send diagnostic. One `[turn-send]` line captures the
+    // whole payload Bram is about to hand the PTY for a single user send, so a
+    // truncation report (esp. the Windows raw-injection path, which sends `data`
+    // with no bracketed-paste framing) is localizable: compare `payload_bytes`
+    // here against the actually-received turn — full length here + short turn
+    // means the loss is downstream in ConPTY/Ink, not in Bram. `head`+`tail`
+    // make trailing truncation in the handed-off payload visible; `sig` is a
+    // stable fingerprint for cross-stage correlation. Gated like the rest of
+    // the trace pipe (append_bram_trace_line self-gates on bram_trace_enabled);
+    // capture requires BRAM_TRACE=1, as the reporter instructions specify.
+    if bram_trace_enabled() {
+        // Label by send *mechanism*, not platform: the Windows branch injects
+        // `data` raw (no bracketed-paste framing) while every other platform
+        // wraps it in bracketed paste. Which branch ran is the diagnostic axis.
+        let send_path = if cfg!(windows) {
+            "windows-raw"
+        } else {
+            "bracketed-paste"
+        };
+        let tail_str: String = {
+            let chars: Vec<char> = data.chars().collect();
+            let start = chars.len().saturating_sub(60);
+            chars[start..].iter().collect()
+        };
+        append_bram_trace_line(
+            app,
+            "turn-send",
+            &format!(
+                "path={} payload_bytes={} sig={} head={} tail={}",
+                send_path,
+                data.len(),
+                bytes_fingerprint(data.as_bytes()),
+                bram_trace_preview(data, 60),
+                bram_trace_preview(&tail_str, 60),
+            ),
+        );
+    }
     record_codex_direct_edit_authorization(app, data);
     record_iterate_inflight_sentinel(app, data);
     record_approved_inflight_sentinel(app, data);

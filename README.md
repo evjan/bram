@@ -54,9 +54,9 @@ A terminal where you run `claude` or `codex`. It can be hidden in favor of the a
 
 ### Workflow
 
-Bram encourages an issue-first workflow as the foundation for a worklist item. It is optional, not required. If you want to use it, ask an agent to file an issue first, then use that issue as the basis for a proposed worklist item.
+On the *Worklist* tab, create worklist items directly ("Hey agent, let's do x") or via the New Item button. Either way Bram proposes an item to be planned, built, iterated on, validated, committed, or maybe dropped along the way.
 
-On the *Issues* tab, use `+ New issue` to ask Bram to file a GitHub issue. On the *Worklist* tab, use `+ New item` to ask Bram to propose a worklist item, with an optional picklist of open issues so a proposal can be anchored to an existing issue.
+On the *Issues* tab, use `+ New issue` to ask Bram to file a GitHub issue. 
 
 An item on the worklist lives in one of three phases: *proposed* → *applied* → *committed*. The arrows between the phases are approval gates where you can dwell and iterate with your agent to:
 
@@ -68,7 +68,7 @@ An item on the worklist lives in one of three phases: *proposed* → *applied* �
 
 - organize commits
 
-By default every change request flows through the worklist. That's overkill for small things so, when messaging the agent from Bram's footer, you can use the *skip worklist* button instead of *send*. And when messaging the agent from a worklist item, prefix your message with *skip-worklist:* or end it with "just do it".
+By default every change request flows through the worklist. That's overkill for small things so, when messaging the agent from Bram's footer, you can use the *skip worklist* button instead of *send*. When messaging the agent from a worklist item, you can prefix your message with *skip-worklist:* or end it with "just do it".
 
 
 ### Workflow conventions

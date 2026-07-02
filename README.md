@@ -37,7 +37,7 @@ Bram has opinions. It thinks versioning and collaboration are well-handled by gi
 
 ### Elsewhere
 
-<a href="Technical or not, human or AI – could Bram be the missing link?">Technical or not, human or AI – could Bram be the missing link?</a>
+<a href="https://waltzweb.wordpress.com/2026/07/02/github-for-todays-hybrid-teams/">Technical or not, human or AI – could Bram be the missing link?</a>
 
 ## How does it work?
 

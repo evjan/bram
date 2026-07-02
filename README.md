@@ -35,6 +35,10 @@ Bram has opinions. It thinks versioning and collaboration are well-handled by gi
 
 <a href="https://blog.jonudell.net/2026/07/01/what-is-the-terminal/">"What is the terminal?"</a>
 
+### Elsewhere
+
+<a href="Technical or not, human or AI – could Bram be the missing link?">Technical or not, human or AI – could Bram be the missing link?</a>
+
 ## How does it work?
 
 ### Terminal (optional)

@@ -1,4 +1,4 @@
-<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.messageBounced="{false}" var.lastSeenAgentVerb="{''}" var.footerVoiceRecording="{false}" var.headerInflightTick="{0}" var.agentSwitcherSelected="{'claude'}" var.agentSwitching="{false}"
+<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.messageBounced="{false}" var.lastSeenAgentVerb="{''}" var.footerVoiceRecording="{false}" var.headerInflightTick="{0}" var.agentSwitcherSelected="{'claude'}" var.agentSwitching="{false}" var.composerFocused="{false}"
   onInit="updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); startBramLatestJsonlPush(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
   <PushSource
     id="mainAgentStatus"
@@ -99,6 +99,16 @@
   <ChangeListener
     listenTo="{mainAgentStatus.value &amp;&amp; mainAgentStatus.value.state}"
     onDidChange="() => footerSessions.refetch()" />
+  <!-- Footer perf instrument (instrument-footer-composer-rerender): count how
+       often the shared footer scope's sources change while the message composer
+       is focused, to correlate with heartbeat-batch drift during a typing
+       burst. Relocated/removed by the isolate-footer-composer fix. -->
+  <ChangeListener
+    listenTo="{mainAgentStatus.value}"
+    onDidChange="() => __bramTraceFooterChurn('agent-status', composerFocused)" />
+  <ChangeListener
+    listenTo="{footerSessions.value}"
+    onDidChange="() => __bramTraceFooterChurn('session', composerFocused)" />
   <APICall
     id="restartServer"
     url="/__restart-server"
@@ -454,7 +464,8 @@
             minRows="2"
             maxRows="4"
             width="*"
-            onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId('')" />
+            onGotFocus="setWorklistVoiceTarget('message-agent'); setFocusedFeedbackItemId(''); composerFocused = true"
+            onLostFocus="composerFocused = false" />
           <VStack width="8rem" horizontalAlignment="start" itemWidth="fit-content" gap="$space-1">
             <Button
               label="send"

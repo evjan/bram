@@ -480,6 +480,16 @@ function bumpWorklistVoiceSeq() {
   window.__bramIframeTrace('voice-trace', { stage: 'bumpSeq', before: before, after: worklistVoiceSeq });
 }
 
+// Footer perf instrument (instrument-footer-composer-rerender): log each time
+// the footer's agent-status or session-meta source changes, stamped with
+// whether the message composer is focused. A typing-burst window in
+// bram-trace.log then shows how often the shared footer scope churns while the
+// user is actually typing; correlate with heartbeat-batch drift over the same
+// window to quantify the cost the isolate-footer-composer fix removes.
+function __bramTraceFooterChurn(source, composerFocused) {
+  window.__bramIframeTrace('footer-churn', { source: source || '', composerFocused: !!composerFocused });
+}
+
 var bramFocusedFeedbackItemId = '';
 function setFocusedFeedbackItemId(id) {
   bramFocusedFeedbackItemId = id || '';

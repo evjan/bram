@@ -2,7 +2,7 @@
   <VStack
     gap="0"
     var.fullscreenImage="{null}">
-    <External
+    <PushSource
       id="pasteState"
       initial="{{count: 0, paths: [], staging: 0}}"
       subscribe="{window.bramSubscribePasteState($props.target)}" />

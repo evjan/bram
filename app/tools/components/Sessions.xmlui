@@ -130,7 +130,7 @@
     </VStack>
   </ModalDialog>
 
-  <External
+  <PushSource
     id="sessionsListChangedEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeTauriEvent('sessions-list-changed')}" />

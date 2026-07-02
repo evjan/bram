@@ -1,29 +1,29 @@
 <App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.messageBounced="{false}" var.lastSeenAgentVerb="{''}" var.footerVoiceRecording="{false}" var.headerInflightTick="{0}" var.agentSwitcherSelected="{'claude'}" var.agentSwitching="{false}"
   onInit="updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); startBramLatestJsonlPush(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
-  <External
+  <PushSource
     id="mainAgentStatus"
     initial="{null}"
     subscribe="{window.bramSubscribeAgentStatus()}" />
   <!-- PTY-throughput subscription now lives inside ActivitySparkline so its
        per-chunk churn is isolated from the footer composer. -->
 
-  <External
+  <PushSource
     id="enhanceStatusEvt"
     initial="{0}"
     subscribe="{window.bramSubscribeEnhanceStatusTick()}" />
-  <External
+  <PushSource
     id="rightPaneSizeEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeRightPaneSize()}" />
-  <External
+  <PushSource
     id="footerVoiceArrival"
     initial="{null}"
     subscribe="{window.bramSubscribeVoiceArrival()}" />
-  <External
+  <PushSource
     id="whisperNotice"
     initial="{null}"
     subscribe="{window.bramSubscribeWhisperUnavailable()}" />
-  <External
+  <PushSource
     id="voiceBusyNotice"
     initial="{null}"
     subscribe="{window.bramSubscribeVoiceBusy()}" />
@@ -47,7 +47,7 @@
   <!-- App-scope read of the inflight worklist claim, so the header can show
        "Approving/Iterating/Dropping <item>" even when you've left the Worklist tab. -->
   <DataSource id="headerInflightClaim" url="/__inflight?t={headerInflightTick}" />
-  <External
+  <PushSource
     id="headerInflightEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeTauriEvent('inflight-claim-changed')}" />
@@ -74,7 +74,7 @@
     id="footerSessions"
     url="/__sessions/list"
     queryParams="{{ limit: 20 }}" />
-  <External
+  <PushSource
     id="footerSessionsChangedEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeTauriEvent('sessions-list-changed')}" />
@@ -84,7 +84,7 @@
   <!-- #210 bounce-back: the host emits message-bounced when an agent-pane Esc
        interrupted a just-sent message before the agent committed it (strand).
        Surface a resend banner so a terminal-blind user can recover. -->
-  <External
+  <PushSource
     id="bounceEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeTauriEvent('message-bounced')}" />

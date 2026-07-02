@@ -22,7 +22,7 @@
   <VStack
     padding="$space-6"
     gap="$space-5">
-    <External
+    <PushSource
       id="settingsChangedEvt"
       initial="{null}"
       subscribe="{window.bramSubscribeTauriEvent('settings-changed')}" />

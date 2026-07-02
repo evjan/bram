@@ -169,7 +169,7 @@
     id="searchHitModalRef"
     query="{query}" />
 
-  <External
+  <PushSource
     id="issuesAgentTurnEndEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeTauriEvent('agent-turn-end')}" />

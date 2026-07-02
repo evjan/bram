@@ -14,11 +14,11 @@
        parked at the bottom. The event fires only for user-driven scrolls
        (the List's own scrollToBottom is guarded), so following never fights
        reading. -->
-  <External
+  <PushSource
     id="jsonlEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeLatestJsonl()}" />
-  <External
+  <PushSource
     id="agentMenuEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeAgentMenu()}" />
@@ -30,7 +30,7 @@
     id="transcriptSessions"
     url="/__sessions/list"
     queryParams="{{ limit: 20 }}" />
-  <External
+  <PushSource
     id="transcriptSessionsChangedEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeTauriEvent('sessions-list-changed')}" />
@@ -41,11 +41,11 @@
        feedbackRef, not inline) can show their feedback. Refetched when a draft
        is written or promoted to history. -->
   <DataSource id="feedbackMap" url="/__feedback/map" />
-  <External
+  <PushSource
     id="feedbackDraftsChangedEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeTauriEvent('feedback-drafts-changed')}" />
-  <External
+  <PushSource
     id="feedbackHistoryChangedEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeTauriEvent('feedback-history-changed')}" />

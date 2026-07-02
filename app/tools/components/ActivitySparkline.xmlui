@@ -5,7 +5,7 @@
        Same per-component subscription isolation as PastedImageStrip.xmlui.
        Fixed 100px box (10-dot max at 8px + 2px gaps) so the footer never
        shifts; always visible — rests when idle, animates on throughput. -->
-  <External
+  <PushSource
     id="ptyThroughputEvt"
     initial="{0}"
     subscribe="{window.bramSubscribePtyThroughput()}" />

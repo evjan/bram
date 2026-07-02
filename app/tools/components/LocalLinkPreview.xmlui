@@ -1,5 +1,5 @@
 <Component name="LocalLinkPreview">
-  <External
+  <PushSource
     id="localLinkPreviewEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeLocalLinkPreview()}" />

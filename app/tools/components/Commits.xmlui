@@ -42,7 +42,7 @@
     id="searchHitModalRef"
     query="{query}" />
 
-  <External
+  <PushSource
     id="gitStatusEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeTauriEvent('git-status-changed')}" />

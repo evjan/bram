@@ -1163,13 +1163,12 @@ Drop is the clean rejection path; Iterate is what you want if the item just need
             window.__bramClearWorklistAwaiting(false);
           }
         }
-        if (window.bramConsumePastedImagePaths) {
-          window.bramConsumePastedImagePaths();
-          pendingPastedImageCount = 0;
-          pendingPastedImagePaths = [];
-          stagingPastedImageCount = 0;
-        }
       }" />
+    <!-- The listener above used to drain ALL staged pasted images on every
+         agent turn end, with no target. That silently ate images the user
+         staged while the agent was still responding: the 2026-07-03
+         skip-worklist image drop. Staged images now persist until a submit
+         consumes them or the user removes them from the strip. -->
     <PushSource
       id="agentTurnKilledEvt"
       initial="{null}"

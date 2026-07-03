@@ -89,10 +89,3 @@ writes at the same time.
    frames.
 7. Remove client raw-JSONL parsing from primary UI paths.
 
-## Before building anything new
-
-Confirm the **strand regression is gone** on `v0.2.17`. The strand went
-"rare → common" once `3021d7c` made the message send asynchronous
-(`queueOutboundTurn(...).then(toTurn)`); `v0.2.17` sends synchronously, so a
-rebuild + relaunch should return it to rare. Verify that first so the rebuild
-proceeds calm, not while bleeding.

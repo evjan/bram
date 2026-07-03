@@ -447,7 +447,11 @@ window.toTurn = function (text) {
       at: new Date().toISOString(),
     });
   } catch (e) {}
-  var normalized = s.replace(/\s+/g, " ").trim();
+  // Send the text RAW. Per-transport normalization is the host's job now
+  // (docs/turn-transport-redesign.md step 6): the host collapses whitespace
+  // only for small inline sends, while substantial/image-bearing sends ride
+  // a filesystem envelope with full fidelity — multiline text survives.
+  var normalized = s;
   var invoke = getTauriInvoke();
   if (!invoke) return;
   invoke("log_from_right_pane", {

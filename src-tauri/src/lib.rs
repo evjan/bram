@@ -8339,6 +8339,21 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
     state: &State<'_, AppState>,
     data: &str,
 ) -> Result<(), String> {
+    // Prefix records run on the ORIGINAL raw text, before any framing —
+    // the lifecycle detectors see exactly what the user submitted.
+    record_codex_direct_edit_authorization(app, data);
+    record_iterate_inflight_sentinel(app, data);
+    record_approved_inflight_sentinel(app, data);
+    record_skip_worklist_authorization(app, data);
+    // Envelope switch (docs/turn-transport-redesign.md step 6): substantial
+    // or image-bearing sends are persisted as an outbound-turn envelope and
+    // the PTY carries only a compact frame. Inline sends get the whitespace
+    // collapse toTurn used to apply client-side.
+    let payload = match frame_outbound_turn(app, data) {
+        Some(frame) => frame,
+        None => st_collapse_whitespace(data),
+    };
+    let data = payload.as_str();
     // Consolidated per-send diagnostic. One `[turn-send]` line captures the
     // whole payload Bram is about to hand the PTY for a single user send, so a
     // truncation report (esp. the Windows raw-injection path, which sends `data`
@@ -8376,10 +8391,6 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
             ),
         );
     }
-    record_codex_direct_edit_authorization(app, data);
-    record_iterate_inflight_sentinel(app, data);
-    record_approved_inflight_sentinel(app, data);
-    record_skip_worklist_authorization(app, data);
     if cfg!(windows) {
         pty_write_internal(app, state, "\x15", "pty-intent-toTurn-windows-clear")?;
         pty_write_internal(app, state, data, "pty-intent-toTurn-windows-payload")?;
@@ -14581,6 +14592,12 @@ fn outbound_turn_path(dir: &Path, turn_id: &str) -> Option<PathBuf> {
 
 fn outbound_turn_id_from_frame(text: &str) -> Option<String> {
     let t = text.trim_start();
+    // A skip-worklist send keeps its prefix inline on the frame (the agent
+    // reads the prefix as a directive); tolerate it when resolving.
+    let t = t
+        .strip_prefix("skip-worklist:")
+        .map(|rest| rest.trim_start())
+        .unwrap_or(t);
     if !t.starts_with(OUTBOUND_TURN_FRAME_PREFIX) {
         return None;
     }
@@ -14655,6 +14672,106 @@ fn outbound_turn_display_source(turn: &serde_json::Value) -> String {
         return format!("skip-worklist: {}", text);
     }
     text
+}
+
+// ---- Write side (transport contract, doc step 6) ----
+
+// Equivalent of the whitespace collapse toTurn used to apply client-side
+// (\s+ → " " + trim). Applied host-side to INLINE sends only; envelope
+// text keeps full fidelity.
+fn st_collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+// Sends longer than this ride an envelope; short button/selector payloads
+// stay inline so their behavior (and the agent's view of them) is
+// unchanged. Long inline pastes are the Windows ConPTY truncation risk.
+const OUTBOUND_TURN_INLINE_MAX_CHARS: usize = 700;
+
+// The write half of the envelope contract. Given the raw toTurn text,
+// decide whether this send rides an envelope; if so, write
+// resources/outbound-turns/<id>.json and return the compact PTY frame to
+// inject instead. None ⇒ send inline (small text-only sends, worklist
+// lifecycle payloads, or any envelope-write failure — inline is always the
+// safe fallback; nothing is lost, only fidelity).
+fn frame_outbound_turn<R: tauri::Runtime>(app: &AppHandle<R>, data: &str) -> Option<String> {
+    let trimmed = data.trim_start();
+    // Worklist lifecycle stays frozen (doc invariant 5): approved:/drop:/
+    // iterate:/talk: payloads ride inline exactly as today. They are small
+    // (ids + refs) and the agent contract reads their prefixes.
+    for verb in ["approved:", "drop:", "iterate:", "talk:"] {
+        if trimmed.starts_with(verb) {
+            return None;
+        }
+    }
+    let (mode, body) = match trimmed.strip_prefix("skip-worklist:") {
+        Some(rest) => ("skip-worklist", rest.trim_start()),
+        None => ("", trimmed),
+    };
+    let images = st_extract_image_paths(body);
+    let text = st_strip_image_paths(body);
+    if images.is_empty() && data.chars().count() <= OUTBOUND_TURN_INLINE_MAX_CHARS {
+        return None;
+    }
+    let dir = outbound_turns_dir(app)?;
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("[outbound-turn] create dir failed, sending inline: {}", e);
+        return None;
+    }
+    let now_ms = unix_now_ms();
+    let id = format!("{}-turn", now_ms);
+    let path = outbound_turn_path(&dir, &id)?;
+    let envelope = serde_json::json!({
+        "schema": 1,
+        "id": id,
+        "createdAtMs": now_ms,
+        "kind": "message",
+        "mode": mode,
+        "text": text,
+        "images": images,
+    });
+    let body_bytes = serde_json::to_vec_pretty(&envelope).ok()?;
+    if let Err(e) = std::fs::write(&path, &body_bytes) {
+        eprintln!("[outbound-turn] write failed, sending inline: {}", e);
+        return None;
+    }
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "outbound-turn",
+            &format!(
+                "op=write turn_id={} bytes={} images={} mode={}",
+                id,
+                body_bytes.len(),
+                images.len(),
+                mode
+            ),
+        );
+    }
+    // The frame the agent sees. @-mentions attach files natively in both
+    // agent CLIs: the envelope JSON carries the authoritative text/mode,
+    // and each image is @-mentioned so the agent still sees the pixels
+    // without an extra read step. A skip-worklist send keeps its prefix
+    // inline as the agent-facing directive (mirrored by the tolerant
+    // prefix handling in outbound_turn_id_from_frame).
+    let mut frame = String::new();
+    if mode == "skip-worklist" {
+        frame.push_str("skip-worklist: ");
+    }
+    frame.push_str(OUTBOUND_TURN_FRAME_PREFIX);
+    frame.push_str(&format!("resources/outbound-turns/{}.json", id));
+    for img in &images {
+        frame.push_str(&format!(" @{}", img));
+    }
+    // The frame must NOT end on an @-mention: Claude Code's file-mention
+    // autocomplete stays open at end-of-paste and swallows the trailing
+    // carriage return, stranding the send in the input (observed
+    // 2026-07-03). The old image preamble avoided this by always following
+    // its @path with marker text; this suffix plays that role. Cosmetic
+    // only for display — the projection replaces frame text with the
+    // envelope's.
+    frame.push_str(" (end of Bram turn)");
+    Some(frame)
 }
 
 // Legacy message-draft frame ("Here is my message: @<path>", from the
@@ -21296,6 +21413,30 @@ mod session_turn_tests {
         let text = "prose [Image: source: not-a-path] tail\n[Image: source: E:\\x.png]";
         let stripped = st_strip_image_paths(text);
         assert_eq!(stripped, "prose [Image: source: not-a-path] tail");
+    }
+
+    #[test]
+    fn collapse_whitespace_matches_client_totrn_normalization() {
+        assert_eq!(
+            super::st_collapse_whitespace("  a\n\nb\t c  "),
+            "a b c".to_string()
+        );
+        assert_eq!(super::st_collapse_whitespace("\n \t"), "".to_string());
+    }
+
+    #[test]
+    fn outbound_frame_id_resolves_with_skip_prefix_and_image_mentions() {
+        let frame = "skip-worklist: Read and follow this Bram turn: @resources/outbound-turns/123-turn.json @/tmp/a.png (end of Bram turn)";
+        assert_eq!(
+            super::outbound_turn_id_from_frame(frame),
+            Some("123-turn".to_string())
+        );
+        let plain = "Read and follow this Bram turn: @resources/outbound-turns/456-turn.json";
+        assert_eq!(
+            super::outbound_turn_id_from_frame(plain),
+            Some("456-turn".to_string())
+        );
+        assert_eq!(super::outbound_turn_id_from_frame("hello"), None);
     }
 
     #[test]

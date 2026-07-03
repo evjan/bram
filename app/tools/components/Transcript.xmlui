@@ -167,7 +167,7 @@
         <!-- provisional in-flight prose (grid-sourced), shown above the pending
              menu until the real assistant record lands in the JSONL. Rendered
              identically to a settled assistant message so the swap is seamless;
-             the content-presence guard in __bramTranscriptEventsWithMenu drops
+             the content-presence guard in __bramAppendMenuEvents drops
              it once the real record renders. -->
         <Markdown
           when="{$item.kind === 'menu-prose'}"

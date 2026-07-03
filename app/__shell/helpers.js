@@ -1296,9 +1296,9 @@ window.imageSrcForPath = function (path) {
   return "/__file?path=" + encodeURIComponent(cleaned);
 };
 
-// extractImagePaths — promoted from local to window in step 9 so other
-// window.__bram* helpers (sessionTurns / _parseLinesToTurns chain) can
-// share the same regex compile.
+// extractImagePaths — extracts [Image: source: <path>] marker paths.
+// Used by the submit path (staged-image bookkeeping); turn display
+// resolution lives in the host projection.
 window.__bramExtractImagePaths = function (text) {
   if (!text) return [];
   var paths = [];
@@ -1443,22 +1443,6 @@ function __bramAppMark(label) {
   } catch (e) {}
 }
 
-window.__bramFormatUserTurnForTranscript = function (text) {
-  if (!text) return "";
-  var stripped = text.replace(/^(voice|talk):\s*/, "");
-  if (stripped !== text) return stripped;
-  var m = text.match(/^(approved|drop|iterate):\s*([\s\S]*)$/);
-  if (m) {
-    try {
-      var data = JSON.parse(m[2]);
-      return window.__bramWorklistActionDisplay(m[1], data.items || data.ids || []);
-    } catch (e) {
-      return text;
-    }
-  }
-  return text;
-};
-
 window.__bramWorklistActionStatusLabel = function (item) {
   var status = (item && item.status) || "proposed";
   if (status === "applied") return "To Commit";
@@ -1589,17 +1573,12 @@ window.__bramPrepareBatchWorklistActionSubmission = function (opts) {
   };
 };
 
-// Step 9 — sessionTurns bundle. Image / markdown / tool parsers +
-// JSONL → turns parser + sessionTurns with its function-property memo.
-// All pure data transforms; internal calls dispatch to window.__bram*
-// directly so the whole chain stays in plain JS.
-
-window.__bramRewriteXmluiDocUrls = function (text) {
-  if (!text) return text;
-  return text
-    .replace(/https:\/\/docs\.xmlui\.org\/components\//g, "https://www.xmlui.org/docs/reference/components/")
-    .replace(/https:\/\/docs\.xmlui\.org\//g, "https://www.xmlui.org/docs/");
-};
+// Image-marker strip kept as a presentation helper (grid-sourced
+// menu-prose and dock text are not projection output). The raw-JSONL →
+// turns parser chain that used to live here (sessionTurns,
+// _parseLinesToTurns, tool/codex satellites) was deleted after the host
+// projection (/__turns) became the single turn source — see
+// docs/turn-transport-redesign.md step 7.
 
 window.__bramStripImagePaths = function (text) {
   if (!text) return text;
@@ -1608,42 +1587,6 @@ window.__bramStripImagePaths = function (text) {
     .replace(new RegExp("\\n*\\[Image: source: " + imagePath + "\\]", "gi"), "")
     .replace(/^(\s*Read this screenshot: @\S+\s*)+/, "")
     .trim();
-};
-
-// Render the structured control turns the Worklist buttons emit
-// (approved: / drop: / iterate: {json}) as "verb: id [— feedback]" instead of
-// dumping raw JSON into the Transcript. Everything else (skip-worklist:, talk:,
-// voice:, plain prose) falls through to image-path stripping unchanged. Lives
-// here (real JS) rather than Globals.xs because the xs engine silently no-ops
-// on JSON.parse / .match / .map (two xs cuts rendered blank). Called from
-// Transcript.xmlui's user-message Markdown as window.__bramFormatUserTurn.
-// `feedbackMap` (optional) is the { feedbackRef: text } object from
-// /__feedback/map; approve/drop carry feedback inline, but iterate carries only
-// a feedbackRef, so its feedback is resolved through the map when present.
-window.__bramFormatUserTurn = function (text, feedbackMap) {
-  if (!text || typeof text !== "string") return window.__bramStripImagePaths(text || "");
-  var verbs = ["approved", "drop", "iterate"];
-  for (var i = 0; i < verbs.length; i++) {
-    var prefix = verbs[i] + ": ";
-    if (text.indexOf(prefix) !== 0) continue;
-    var labels = [];
-    try {
-      var payload = JSON.parse(text.slice(prefix.length).trim());
-      var items = (payload && payload.items) || [];
-      for (var j = 0; j < items.length; j++) {
-        var it = items[j] || {};
-        var label = it.id || "";
-        var fb = it.feedback;
-        if (!fb && it.feedbackRef && feedbackMap) fb = feedbackMap[it.feedbackRef];
-        if (fb) label += " — " + String(fb).replace(/\s+/g, " ").trim();
-        if (label) labels.push(label);
-      }
-    } catch (e) {
-      labels = [];
-    }
-    return labels.length ? verbs[i] + ": " + labels.join(", ") : verbs[i] + ":";
-  }
-  return window.__bramStripImagePaths(text);
 };
 
 window.__bramExtractMarkdownImages = function (text) {
@@ -1662,165 +1605,6 @@ window.__bramStripMarkdownImages = function (text) {
   return text
     .replace(/\n*!\[[^\]]*\]\([^)\s]+(?:\s+"[^"]*")?\)/g, "")
     .replace(/\n*<img\b[^>]*\bsrc=["'][^"']+["'][^>]*>/gi, "");
-};
-
-window.__bramToolSummary = function (name, input) {
-  if (!input || typeof input !== "object") return name || "";
-  if (name === "Edit" || name === "MultiEdit") {
-    return (input.file_path || "") + " edited";
-  }
-  if (name === "Write") {
-    var lines = (input.content || "").split("\n").length;
-    return (input.file_path || "") + " — wrote " + lines + " line" + (lines === 1 ? "" : "s");
-  }
-  if (name === "Bash") {
-    var cmd = input.command || "";
-    return cmd.length > 80 ? cmd.slice(0, 80) + "…" : cmd;
-  }
-  if (name === "Read") {
-    var s = input.file_path || "";
-    if (input.offset || input.limit) {
-      var start = input.offset || 1;
-      s += ":" + start;
-      if (input.limit) s += "-" + (start + input.limit - 1);
-    }
-    return s;
-  }
-  if (name === "Grep" || name === "Glob") {
-    return (input.pattern || "") + (input.path ? " in " + input.path : "");
-  }
-  if (name === "Task" || name === "Agent") {
-    return (input.subagent_type || "") + (input.description ? " — " + input.description : "");
-  }
-  return name || "";
-};
-
-window.__bramLineOrientedCommandDisplay = function (command) {
-  var text = String(command || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-  if (!text) return "";
-  if (text.indexOf("\n") >= 0) return text;
-
-  var out = "";
-  var quote = "";
-  var escaped = false;
-  for (var i = 0; i < text.length; i++) {
-    var ch = text.charAt(i);
-    var next = text.charAt(i + 1);
-    if (escaped) {
-      out += ch;
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      out += ch;
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      out += ch;
-      if (ch === quote) quote = "";
-      continue;
-    }
-    if (ch === "'" || ch === "\"") {
-      quote = ch;
-      out += ch;
-      continue;
-    }
-    if (ch === ";" || ch === "|") {
-      if (ch === "|" && next === "|") {
-        out += "||\n";
-        i++;
-      } else {
-        out += ch + "\n";
-      }
-      while (text.charAt(i + 1) === " ") i++;
-      continue;
-    }
-    if (ch === "&" && next === "&") {
-      out += "&&\n";
-      i++;
-      while (text.charAt(i + 1) === " ") i++;
-      continue;
-    }
-    out += ch;
-  }
-  return out;
-};
-
-window.__bramToolCommandDisplay = function (name, input) {
-  if (!input || typeof input !== "object") return "";
-  if (name === "Bash" && input.command) {
-    return window.__bramLineOrientedCommandDisplay(input.command);
-  }
-  return "";
-};
-
-window.__bramParseJsonString = function (value) {
-  if (typeof value !== "string") return null;
-  try {
-    return JSON.parse(value);
-  } catch (e) {
-    return null;
-  }
-};
-
-window.__bramCodexToolName = function (payload) {
-  if (!payload) return "";
-  if (payload.namespace) return payload.namespace.replace(/^mcp__/, "") + "." + (payload.name || "");
-  return payload.name || "";
-};
-
-window.__bramCodexToolInput = function (payload) {
-  if (!payload) return {};
-  if (payload.type === "function_call") {
-    var parsed = window.__bramParseJsonString(payload.arguments);
-    return parsed !== null ? parsed : (payload.arguments || {});
-  }
-  if (payload.type === "custom_tool_call") {
-    var parsed2 = window.__bramParseJsonString(payload.input);
-    return parsed2 !== null ? parsed2 : (payload.input || "");
-  }
-  return {};
-};
-
-window.__bramCodexToolSummary = function (payload) {
-  if (!payload) return "";
-  var name = window.__bramCodexToolName(payload);
-  var input = window.__bramCodexToolInput(payload);
-  if (payload.name === "exec_command" && input && typeof input === "object" && input.cmd) {
-    return input.cmd.length > 80 ? input.cmd.slice(0, 80) + "…" : input.cmd;
-  }
-  if (payload.name === "write_stdin" && input && typeof input === "object") {
-    var chars = input.chars || "";
-    var session = input.session_id ? ("session " + input.session_id) : "stdin";
-    if (!chars) return session;
-    var label = chars === "" ? "Esc" : chars.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-    return session + " ← " + (label.length > 40 ? label.slice(0, 40) + "…" : label);
-  }
-  if (payload.name === "apply_patch" && typeof input === "string") {
-    var m = input.match(/\*\*\* (?:Add|Update|Delete) File: ([^\n]+)/);
-    return m ? (m[1] + " patch") : "patch";
-  }
-  if (name.indexOf("filesystem.") === 0 && input && typeof input === "object" && input.path) {
-    return input.path;
-  }
-  if (name.indexOf("xmlui.") === 0 && input && typeof input === "object") {
-    return input.path || input.component || input.query || name;
-  }
-  if (input && typeof input === "object") return window.__bramToolSummary(payload.name || name, input);
-  return name;
-};
-
-window.__bramCodexToolCommandDisplay = function (payload) {
-  if (!payload) return "";
-  var input = window.__bramCodexToolInput(payload);
-  if (payload.name === "exec_command" && input && typeof input === "object" && input.cmd) {
-    return window.__bramLineOrientedCommandDisplay(input.cmd);
-  }
-  if (input && typeof input === "object") {
-    return window.__bramToolCommandDisplay(payload.name || window.__bramCodexToolName(payload), input);
-  }
-  return "";
 };
 
 window.__bramFormatToolCommand = function (command) {
@@ -1857,277 +1641,6 @@ window.__bramToolInputJsonLines = function (input, maxLines) {
   }
   var all = json.split("\n");
   return { lines: all.slice(0, cap), remaining: Math.max(0, all.length - cap) };
-};
-
-window.__bramToolResultText = function (content) {
-  if (!content) return "";
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter(function (c) { return c && c.type === "text"; })
-      .map(function (c) { return c.text || ""; })
-      .join("\n");
-  }
-  return "";
-};
-
-window.__bramIsErrorResult = function (block) {
-  if (!block) return false;
-  if (block.is_error) return true;
-  var text = window.__bramToolResultText(block.content);
-  return text.indexOf("Error:") === 0 || text.indexOf("<tool_use_error>") === 0;
-};
-
-window.__bramCodexToolOutput = function (payload) {
-  if (!payload || (payload.type !== "function_call_output" && payload.type !== "custom_tool_call_output")) {
-    return null;
-  }
-  var raw = payload.output;
-  if (typeof raw !== "string") return { text: "", errored: false };
-  var parsed = window.__bramParseJsonString(raw);
-  if (parsed && typeof parsed === "object") {
-    var text = typeof parsed.output === "string"
-      ? parsed.output
-      : typeof parsed.stderr === "string"
-        ? parsed.stderr
-        : raw;
-    var exitCode = parsed.metadata && typeof parsed.metadata.exit_code === "number"
-      ? parsed.metadata.exit_code
-      : null;
-    return { text: text, errored: exitCode !== null && exitCode !== 0 };
-  }
-  var exitMatch = raw.match(/Process exited with code (\d+)/);
-  var ec = exitMatch ? parseInt(exitMatch[1], 10) : 0;
-  return { text: raw, errored: !!exitMatch && ec !== 0 };
-};
-
-window.__bramTurnsLooselyEqual = function (a, b) {
-  if (!a || !b) return false;
-  if (a.role !== b.role) return false;
-  if (a.text !== b.text) return false;
-  var ae = a.entries || [], be = b.entries || [];
-  if (ae.length !== be.length) return false;
-  for (var i = 0; i < ae.length; i++) {
-    var x = ae[i], y = be[i];
-    if (!x || !y) return false;
-    if (x.kind !== y.kind) return false;
-    if (x.kind === "text") {
-      if (x.text !== y.text) return false;
-    } else {
-      if (x.id !== y.id) return false;
-      if (!!x.errored !== !!y.errored) return false;
-    }
-  }
-  var ai = a.images || [], bi = b.images || [];
-  if (ai.length !== bi.length) return false;
-  return true;
-};
-
-window.__bramIsSyntheticCodexMessage = function (text) {
-  text = String(text || "").trim();
-  if (!text) return false;
-  if (text.indexOf("<turn_aborted>") === 0) return true;
-  if (/^<[^>\s]*(instructions|context)[^>\s]*>/i.test(text)) return true;
-  if (/^#\s+AGENTS\.md instructions for /i.test(text)) return true;
-  if (text.indexOf("Understood. I") === 0 && text.indexOf("worklist gate") >= 0) return true;
-  var compact = text.replace(/\s+/g, " ");
-  var markers = [
-    "This repo is driven through Bram. The canonical worklist gate",
-    "bram worklist gate. Use the worklist for material file/code changes",
-    "Filesystem sandboxing defines which files can be read or written",
-    "Use the worklist for material file/code changes unless the user explicitly opts out",
-    "request_user_input availability",
-    "Apps (Connectors) can be explicitly triggered in user messages",
-    "An app is equivalent to a set of MCP tools",
-    "A skill is a set of instructions provided through a SKILL.md source",
-    "Below is the list of skills that can be used",
-    "Each entry includes a name, description, and source locator",
-    "Collaboration Mode:",
-    "You are Codex, a coding agent",
-    "Knowledge cutoff:"
-  ];
-  var hits = 0;
-  for (var i = 0; i < markers.length; i++) {
-    if (compact.indexOf(markers[i]) >= 0) hits++;
-  }
-  return hits >= 2 || (hits >= 1 && compact.length > 700);
-};
-
-window.__bramParseLinesToTurns = function (lines, toolIndex) {
-  toolIndex = toolIndex || {};
-  var turns = [];
-  for (var li = 0; li < lines.length; li++) {
-    var line = lines[li];
-    if (!line) continue;
-    var r;
-    try { r = JSON.parse(line); } catch (e) { continue; }
-    var role = null;
-    var entries = [];
-    var inlineImages = [];
-    if (r.type === "user" || r.type === "assistant") {
-      if (!r.message || !r.message.content) continue;
-      role = r.type;
-      var content = r.message.content;
-      if (typeof content === "string") {
-        if (content) entries.push({ kind: "text", text: content });
-      } else if (Array.isArray(content)) {
-        for (var ci = 0; ci < content.length; ci++) {
-          var c = content[ci];
-          if (!c) continue;
-          if (c.type === "text" && c.text) {
-            entries.push({ kind: "text", text: c.text });
-          } else if (c.type === "tool_use") {
-            var entry = {
-              kind: "tool",
-              id: c.id,
-              name: c.name,
-              summary: window.__bramToolSummary(c.name, c.input || {}),
-              commandDisplay: window.__bramToolCommandDisplay(c.name, c.input || {}),
-            };
-            entries.push(entry);
-            if (c.id) toolIndex[c.id] = entry;
-          } else if (c.type === "tool_result") {
-            var matching = c.tool_use_id && toolIndex[c.tool_use_id];
-            if (matching) {
-              matching.errored = window.__bramIsErrorResult(c);
-              if (matching.errored) {
-                var txt = window.__bramToolResultText(c.content);
-                matching.errorText = txt.split("\n")[0].slice(0, 200);
-              }
-            }
-          } else if (c.type === "image" && c.source && c.source.type === "base64" && c.source.data) {
-            var mt = c.source.media_type || "image/png";
-            inlineImages.push("data:" + mt + ";base64," + c.source.data);
-          }
-        }
-      }
-    } else if (r.type === "event_msg" && r.payload) {
-      if (r.payload.type === "user_message") role = "user";
-      if (r.payload.type === "agent_message") role = "assistant";
-      var t = r.payload.message || "";
-      if (t) entries.push({ kind: "text", text: t });
-    } else if (r.type === "response_item" && r.payload) {
-      var p = r.payload;
-      if (p.type === "function_call" || p.type === "custom_tool_call") {
-        role = "assistant";
-        var entry2 = {
-          kind: "tool",
-          id: p.call_id,
-          name: window.__bramCodexToolName(p),
-          summary: window.__bramCodexToolSummary(p),
-          commandDisplay: window.__bramCodexToolCommandDisplay(p),
-        };
-        entries.push(entry2);
-        if (p.call_id) toolIndex[p.call_id] = entry2;
-      } else if (p.type === "function_call_output" || p.type === "custom_tool_call_output") {
-        var matching2 = p.call_id && toolIndex[p.call_id];
-        if (matching2) {
-          var output = window.__bramCodexToolOutput(p);
-          matching2.errored = !!(output && output.errored);
-          if (output && output.text) {
-            var firstLine = output.text.split("\n")[0].slice(0, 200);
-            if (matching2.errored) matching2.errorText = firstLine;
-          }
-        }
-      }
-    }
-    if (!role) continue;
-    if (entries.length === 0 && inlineImages.length === 0) continue;
-    var originalJoined = entries.filter(function (e) { return e.kind === "text"; })
-      .map(function (e) { return e.text; }).join("\n\n");
-    if (entries.every(function (e) { return e.kind === "text"; })
-        && window.__bramIsSyntheticCodexMessage(originalJoined)) continue;
-    var pathsFromText = window.__bramExtractImagePaths(originalJoined);
-    for (var ei = 0; ei < entries.length; ei++) {
-      var e2 = entries[ei];
-      if (e2.kind === "text") {
-        e2.text = window.__bramStripImagePaths(window.__bramRewriteXmluiDocUrls(e2.text));
-      }
-    }
-    var textJoined = entries.filter(function (e) { return e.kind === "text"; })
-      .map(function (e) { return e.text; }).join("\n\n");
-    if (role === "user" && inlineImages.length === 0 && entries.every(function (e) { return e.kind === "text"; })
-        && /^(\[Image: source: [^\]]+\]\s*)+$/.test(originalJoined.trim())) continue;
-    if (entries.length === 0 && inlineImages.length === 0) continue;
-    turns.push({
-      role: role,
-      text: textJoined,
-      entries: entries,
-      images: inlineImages.length > 0 ? inlineImages : pathsFromText,
-    });
-  }
-  return turns;
-};
-
-// sessionTurns with function-property memoization. Cache lives on the
-// window.__bramSessionTurns function object itself (._cacheKey /
-// ._cacheValue / ._parseCount), same shape as the xs original. Polled
-// JSONL identity check + incremental parse via prefix-extension are
-// preserved exactly.
-window.__bramSessionTurns = function (jsonlText) {
-  var fn = window.__bramSessionTurns;
-  if (!jsonlText) return fn._cacheValue || [];
-  if (fn._cacheKey === jsonlText && fn._cacheValue) {
-    return fn._cacheValue;
-  }
-  var prevKey = fn._cacheKey;
-  var prevValue = fn._cacheValue;
-  var now0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-  if (prevKey && prevValue && jsonlText.length > prevKey.length &&
-      jsonlText.substring(0, prevKey.length) === prevKey) {
-    var suffix = jsonlText.substring(prevKey.length);
-    var toolIndex = {};
-    for (var ti = 0; ti < prevValue.length; ti++) {
-      var t = prevValue[ti];
-      var es = t.entries || [];
-      for (var ei = 0; ei < es.length; ei++) {
-        var e = es[ei];
-        if (e && e.kind === "tool" && e.id) toolIndex[e.id] = e;
-      }
-    }
-    var newTurns = window.__bramParseLinesToTurns(suffix.split("\n"), toolIndex);
-    fn._cacheKey = jsonlText;
-    fn._cacheValue = newTurns.length > 0 ? prevValue.concat(newTurns) : prevValue;
-    fn._parseCount = (fn._parseCount || 0) + 1;
-    var now1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-    var elapsed = now1 - now0;
-    if (elapsed > 2 || newTurns.length > 0) {
-      window.__bramIframeTrace("sessionTurns-parse", {
-        ms: Math.round(elapsed),
-        len: jsonlText.length,
-        suffixLen: suffix.length,
-        turns: fn._cacheValue.length,
-        newTurns: newTurns.length,
-        n: fn._parseCount,
-        path: "incremental",
-      });
-    }
-    return fn._cacheValue;
-  }
-  fn._parseCount = (fn._parseCount || 0) + 1;
-  var turns = window.__bramParseLinesToTurns(jsonlText.split("\n"));
-  var prev = fn._cacheValue || [];
-  for (var i = 0; i < turns.length && i < prev.length; i++) {
-    if (window.__bramTurnsLooselyEqual(turns[i], prev[i])) {
-      turns[i] = prev[i];
-    } else {
-      break;
-    }
-  }
-  fn._cacheKey = jsonlText;
-  fn._cacheValue = turns;
-  var now2 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-  var elapsed2 = now2 - now0;
-  if (elapsed2 > 2) {
-    window.__bramIframeTrace("sessionTurns-parse", {
-      ms: Math.round(elapsed2),
-      len: jsonlText.length,
-      turns: turns.length,
-      n: fn._parseCount,
-      path: "full",
-    });
-  }
-  return turns;
 };
 
 // History helpers (audit step 8). All pure. Internal calls go through
@@ -4720,9 +4233,9 @@ window.onProjectedTurnsChange = function (fn) {
   };
 };
 
-// Loose per-turn equality for reference preservation. Unlike
-// __bramTurnsLooselyEqual this includes result length + isError, because
-// tool results stream onto entries that otherwise look unchanged.
+// Loose per-turn equality for reference preservation. Includes result
+// length + isError because tool results stream onto entries that
+// otherwise look unchanged.
 window.__bramProjectedTurnEqual = function (a, b) {
   if (!a || !b) return false;
   if (a.role !== b.role || a.text !== b.text) return false;
@@ -4817,221 +4330,6 @@ window.bramSubscribeProjectedTurns = (function () {
   };
 })();
 
-// One-line summary for a tool card's collapsed state.
-window.__bramTranscriptToolSummary = function (name, input) {
-  input = input || {};
-  if (name === "Bash") {
-    var cmd = String(input.command || "").replace(/\s+/g, " ").trim();
-    return cmd.length > 120 ? cmd.slice(0, 120) + "..." : cmd;
-  }
-  if (name === "Read" || name === "Edit" || name === "Write" || name === "NotebookEdit") return input.file_path || "";
-  if (name === "Grep" || name === "Glob") return input.pattern || "";
-  if (input.description) return input.description;
-  var keys = Object.keys(input);
-  for (var k = 0; k < keys.length; k++) {
-    if (typeof input[keys[k]] === "string") return input[keys[k]].slice(0, 200);
-  }
-  return "";
-};
-
-// Flatten a tool_result content (string | array-of-blocks) to text.
-window.__bramTranscriptResultText = function (content) {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content.map(function (b) {
-      return (b && b.type === "text") ? (b.text || "") : "";
-    }).join("");
-  }
-  return "";
-};
-
-window.__bramTranscriptImageValue = function (value) {
-  if (!value) return "";
-  if (typeof value === "string") return value;
-  if (typeof value !== "object") return "";
-  if (typeof value.image_url === "string") return value.image_url;
-  if (value.image_url && typeof value.image_url.url === "string") return value.image_url.url;
-  if (typeof value.url === "string") return value.url;
-  if (typeof value.image === "string") return value.image;
-  if (typeof value.file_path === "string") return value.file_path;
-  if (typeof value.path === "string") return value.path;
-  if (value.source && typeof value.source === "object") {
-    var data = value.source.data || value.source.base64 || "";
-    if (data && (value.source.type === "base64" || value.source.media_type || value.source.mime_type)) {
-      var mime = value.source.media_type || value.source.mime_type || "image/png";
-      return "data:" + mime + ";base64," + data;
-    }
-  }
-  return "";
-};
-
-window.__bramTranscriptContentImage = function (block) {
-  if (!block || typeof block !== "object") return "";
-  var type = block.type || "";
-  if (type !== "input_image" && type !== "output_image" && type !== "image") return "";
-  return window.__bramTranscriptImageValue(block);
-};
-
-window.__bramTranscriptPayloadImages = function (payload) {
-  var images = [];
-  var add = function (value) {
-    var image = window.__bramTranscriptImageValue(value);
-    if (image && images.indexOf(image) < 0) images.push(image);
-  };
-  ["images", "local_images"].forEach(function (key) {
-    var arr = payload && payload[key];
-    if (!Array.isArray(arr)) return;
-    arr.forEach(add);
-  });
-  return images;
-};
-
-// Parse session JSONL into an ordered event stream:
-//   { id, kind: 'user'|'text'|'thinking'|'tool', text?, name?, summary?,
-//     input?, result?, isError? }
-// The JSONL is already chronological (one content block per line), so this
-// preserves the real play-by-play. tool_result lines are merged back into
-// their originating tool event by tool_use_id.
-window.__bramParseTranscript = function (jsonl) {
-  if (!jsonl) return [];
-  var lines = jsonl.split("\n");
-  var events = [];
-  var toolById = {};
-  var pushImages = function (id, role, images) {
-    images = (images || []).filter(Boolean);
-    if (!images.length) return;
-    var signature = role + "\n" + JSON.stringify(images);
-    for (var pi = Math.max(0, events.length - 8); pi < events.length; pi++) {
-      var prev = events[pi];
-      if (!prev || prev.kind !== "images") continue;
-      if ((prev.role || "") + "\n" + JSON.stringify(prev.images || []) === signature) return;
-    }
-    events.push({ id: id, kind: "images", role: role || "", images: images });
-  };
-  var pushText = function (id, role, text) {
-    if (!text || !String(text).trim()) return;
-    if (window.__bramIsSyntheticCodexMessage(text)) return;
-    var kind = role === "user" ? "user" : "text";
-    // Codex currently records many visible messages twice: once as
-    // event_msg and once as response_item. Collapse near duplicates so
-    // the transcript tracks the UI conversation, not the storage fanout.
-    for (var pi = Math.max(0, events.length - 8); pi < events.length; pi++) {
-      var prev = events[pi];
-      if (prev && prev.kind === kind && prev.text === text) return;
-    }
-    events.push({ id: id, kind: kind, text: text });
-  };
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i];
-    if (!line) continue;
-    var o;
-    try { o = JSON.parse(line); } catch (e) { continue; }
-    if (o.type === "event_msg" && o.payload) {
-      var ep = o.payload;
-      if (ep.type === "user_message" || ep.type === "agent_message") {
-        var epRole = ep.type === "user_message" ? "user" : "assistant";
-        var epMessage = ep.message || "";
-        pushText("e" + i, epRole, epMessage);
-        pushImages(
-          "e" + i + "_images",
-          epRole,
-          window.__bramExtractImagePaths(epMessage).concat(window.__bramTranscriptPayloadImages(ep))
-        );
-      }
-      continue;
-    }
-    if (o.type === "response_item" && o.payload) {
-      var p = o.payload;
-      if (p.type === "message") {
-        var pRole = p.role;
-        var pContent = p.content;
-        if (typeof pContent === "string") {
-          pushText("r" + i, pRole, pContent);
-          pushImages("r" + i + "_images", pRole, window.__bramExtractImagePaths(pContent));
-        } else if (Array.isArray(pContent)) {
-          var pImages = [];
-          for (var pc = 0; pc < pContent.length; pc++) {
-            var cb = pContent[pc];
-            if (!cb || typeof cb !== "object") continue;
-            if (cb.type === "input_text" || cb.type === "output_text" || cb.type === "text") {
-              pushText("r" + i + "_" + pc, pRole, cb.text || "");
-              pImages = pImages.concat(window.__bramExtractImagePaths(cb.text || ""));
-            } else {
-              var pImage = window.__bramTranscriptContentImage(cb);
-              if (pImage) pImages.push(pImage);
-            }
-          }
-          pushImages("r" + i + "_images", pRole, pImages);
-        }
-      } else if (p.type === "function_call" || p.type === "custom_tool_call") {
-        var cid = p.call_id || p.id || "";
-        var cev = {
-          id: "r" + i, kind: "tool", toolId: cid, name: window.__bramCodexToolName(p) || "Tool",
-          summary: window.__bramCodexToolSummary(p),
-          commandDisplay: window.__bramCodexToolCommandDisplay(p),
-          result: "", isError: false,
-        };
-        events.push(cev);
-        if (cid) toolById[cid] = cev;
-      } else if (p.type === "function_call_output" || p.type === "custom_tool_call_output") {
-        var outId = p.call_id || p.id || "";
-        if (outId && toolById[outId]) {
-          var out = window.__bramCodexToolOutput(p);
-          if (out) {
-            toolById[outId].result = (out.text || "").slice(0, 4000);
-            toolById[outId].isError = !!out.errored;
-          }
-        }
-      }
-      continue;
-    }
-    if (o.type === "assistant" || o.type === "user") {
-      var msg = o.message || {};
-      var role = msg.role || o.type;
-      var content = msg.content;
-      if (typeof content === "string") {
-        pushText("s" + i, role, content);
-        pushImages("s" + i + "_images", role, window.__bramExtractImagePaths(content));
-        continue;
-      }
-      if (!Array.isArray(content)) continue;
-      var msgImages = [];
-      for (var j = 0; j < content.length; j++) {
-        var b = content[j];
-        if (!b || typeof b !== "object") continue;
-        var bid = i + "_" + j;
-        if (b.type === "text") {
-          pushText(bid, role, b.text || "");
-          msgImages = msgImages.concat(window.__bramExtractImagePaths(b.text || ""));
-        } else if (b.type === "thinking") {
-          var th = b.thinking || b.text || "";
-          if (th.trim()) events.push({ id: bid, kind: "thinking", text: th });
-        } else if (b.type === "tool_use") {
-          var ev = {
-            id: bid, kind: "tool", toolId: b.id, name: b.name || "Tool",
-            summary: window.__bramTranscriptToolSummary(b.name, b.input),
-            commandDisplay: window.__bramToolCommandDisplay(b.name, b.input || {}),
-            result: "", isError: false,
-          };
-          events.push(ev);
-          if (b.id) toolById[b.id] = ev;
-        } else if (b.type === "tool_result") {
-          var tu = b.tool_use_id;
-          if (tu && toolById[tu]) {
-            toolById[tu].result = window.__bramTranscriptResultText(b.content).slice(0, 4000);
-            toolById[tu].isError = !!b.is_error;
-          }
-        } else {
-          var msgImage = window.__bramTranscriptContentImage(b);
-          if (msgImage) msgImages.push(msgImage);
-        }
-      }
-      pushImages("s" + i + "_images", role, msgImages);
-    }
-  }
-  return events;
-};
-
 // Map a Read/Write/Edit path hint (the tool summary) to a Markdown code-fence
 // language. Used only for file-op tools so a Bash command that merely mentions
 // a ".json" path doesn't mislabel its output.
@@ -5100,8 +4398,7 @@ window.__bramFormatToolResult = function (result, toolName, hint) {
 };
 
 // Append the live pending agent menu (if any) as the last transcript event.
-// Shared by the legacy raw-JSONL adapter (__bramTranscriptEventsWithMenu)
-// and the projected-turns adapter (__bramTranscriptEventsFromTurns).
+// Called by the projected-turns adapter (__bramTranscriptEventsFromTurns).
 window.__bramAppendMenuEvents = function (events, menu) {
   // menu-stack-pty-inflight-prose: while a permission menu is up, Claude hasn't
   // written the turn's assistant record to its JSONL yet, so the explanatory
@@ -5146,14 +4443,6 @@ window.__bramAppendMenuEvents = function (events, menu) {
     events.push({ id: "menu-pending-" + window.__bramMenuIdentity(menu), kind: "menu", menu: menu });
   }
   return events;
-};
-
-// Legacy raw-JSONL adapter. Superseded on the Transcript by
-// __bramTranscriptEventsFromTurns (projected turns); kept until the
-// remaining raw-JSONL consumers are migrated (redesign doc step 7).
-window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {
-  var events = window.__bramParseTranscript(jsonl);
-  return window.__bramAppendMenuEvents(events, menu);
 };
 
 // Presentation adapter: flatten projected turns (host shape: { role, text,
@@ -5478,8 +4767,8 @@ window.subscribeLatestJsonl = function (key, fn) {
 // Append a delta chunk to the shared cache (diff-based latest-tail path,
 // issue #100). Caps the cache at __latestJsonlMaxBytes by head-trimming
 // at the next newline boundary — keeps the buffer always-valid JSONL so
-// downstream parsers (sessionTurns, isWaitingForAssistant, ...) walk
-// line-by-line safely. The cap is the missing bound that caused the
+// downstream consumers (isWaitingForAssistant and the other status
+// detectors) walk line-by-line safely. The cap is the missing bound that caused the
 // 4138070 revert: without it, every reset:false append grew the buffer
 // forever.
 var __latestJsonlMaxBytes = 1500000; // ~1.5 MB

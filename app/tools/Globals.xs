@@ -97,37 +97,6 @@ function statusSignalDescription(signal) {
 // ea9480e).
 
 
-// Clean a user turn for transcript display: strip protocol prefixes
-// (`voice: `, `talk: `) so spoken / typed content reads as plain text;
-// summarize structured Worklist lifecycle payloads to a one-line
-// action + item label instead of dumping JSON. Anything else passes through.
-
-
-
-// Pretty-print arbitrary tool input as JSON, truncated to N lines.
-
-// Concatenate the text content of a tool_result block (handles both
-// string and array-of-blocks shapes).
-
-// True if a tool_result block carries an error (either flagged via
-// is_error or detected by an Error:/<tool_use_error> prefix). Used to
-// tint the inline result banner red.
-
-
-// Shallow turn equality: enough to tell "unchanged turn" from
-// "changed/new" without doing a full JSON.stringify. Used by sessionTurns
-// to preserve object refs for stable turns so XMLUI's Items doesn't
-// re-mount the whole list on every poll.
-
-// Parse a slice of JSONL lines into the turn-list shape sessionTurns
-// returns. `toolIndex` (optional) lets the caller pre-populate the
-// tool_use_id → entry map so cross-boundary tool_results in an
-// incremental parse can still find their originating tool. Returns
-// only the turns generated from `lines` (no structural-share — that's
-// the caller's responsibility). Extracted from sessionTurns so the
-// full-parse and incremental paths share it (issue #100).
-
-
 // Worklist close-issue dialog state helpers. The dialog opens when a TO COMMIT
 // item carries closesIssues: [N, ...]. State shape is { <issueNumber>: { close,
 // comment } } so per-issue checkbox + comment edits update one branch without

@@ -69,24 +69,46 @@ match for framed sends, normalized-text match for inline sends. `stranded`
 is `injected` + agent settled + never landed. No Esc anchoring, no grid
 heuristics in the decision; the grid signal may remain as a fast hint only.
 
-### 3. Recovery from the envelope, never from the terminal
+### 3. Recovery from the envelope, never from the terminal — and no Resend button
 
-- **Resend** re-injects from the ledger (the frame for enveloped sends, the
-  recorded text for inline sends). It must work when the input is empty.
-- **Esc-restore**: when the input is left holding a frame, replace it with
-  the envelope's original text (mode prefix included) so the user edits
-  their words; resubmit re-envelopes.
+A Resend button is an admission of uncertainty; the ledger removes the
+uncertainty, so the button goes away entirely (user direction,
+2026-07-03: "needing a resend button is a smell we should make go
+away"). Recovery is a taxonomy, not an affordance:
+
+- **Mechanical strand** (no user interrupt in the send's window: paste
+  raced the TUI, submit CR didn't take, ConPTY truncation):
+  **auto-resend** from the ledger/envelope — silent, traced
+  (`[send-ledger] op=auto-resend`), bounded to one retry per send id.
+  Safe by construction: landing detection proved non-delivery, and the
+  envelope preserves fidelity.
+- **User-caused strand** (an Esc falls between injection and strand
+  detection): never auto-resend — Esc-then-strand can be intentional
+  cancellation. Restore the user's words to the composer as an editable
+  draft (and clear any frame left in the terminal input; mode prefix
+  restored). Sending again is the ordinary send action, not a recovery
+  ritual.
+- **Landed-then-aborted** (soak discovery, 2026-07-03, reproduced on
+  both providers): the send DELIVERED as a user turn, then Esc aborted
+  the agent's response, and the agent CLI itself restored the text for
+  re-editing. The ledger correctly reports `landed`; Bram must do
+  nothing here — above all, not claim "not delivered". Transport
+  outcome and turn outcome are separate facts and the affordance must
+  never conflate them.
 
 ### 4. Esc stays non-blocking
 
 Every Esc interrupts, always. The #210 hold-gate was reverted for good
 reason; the redo must not reintroduce input gating as a detection aid.
 
-### 5. One affordance, ledger-driven
+### 5. One affordance, ledger-driven — and passive
 
 A single banner state machine driven by ledger events (injected / landed /
 stranded), replacing the cause-specific `message-bounced` wiring and the
-four-listener localStorage clearing dance.
+four-listener localStorage clearing dance. With recovery automatic
+(invariant 3), the banner carries **no action buttons**: at most a passive
+status note ("your message was restored to the composer" /
+"a lost send was redelivered"), and silence for landed-then-aborted.
 
 ## What gets deleted when the rebuild completes
 
@@ -105,7 +127,13 @@ The redo must end net-simpler, as the transport redesign did.
    trace lines + a Status-tab row, no UI behavior change.
 2. Soak against real usage (both providers); tune until zero false
    strands / false landings.
-3. Switch the banner + Resend + Esc-restore to ledger events.
+3. Switch the affordance to ledger events: the passive banner, the
+   composer-restore for user-caused strands, and auto-resend for
+   mechanical strands. The Resend button is deleted, not rewired.
+   **Trust gate:** auto-resend ships OFF and turns on only after the
+   phase-2 soak shows zero false strands — a false strand plus
+   auto-resend would create a duplicate send, the one harm the old
+   button never had.
 4. Delete the superseded layers.
 
 Never span old and new detection across the affordance at the same time.
@@ -121,9 +149,17 @@ phase items.
 ## Open questions for phase 1
 
 - Envelope-for-all-sends: should tiny inline sends also write envelopes so
-  the ledger has one recovery shape? (Cost is trivial; decide at phase 1.)
-- Codex parity: landing detection reads Codex JSONL through the same
-  projection; verify the id/text match holds for Codex record shapes.
-- Interplay with Claude Code's own queue (queued_command attachments):
-  a queued frame popped back by Esc is the case that motivated this redo —
-  phase 1 must ledger queued sends distinctly enough to recognize it.
+  the ledger has one recovery shape? (Cost is trivial; decide when
+  auto-resend lands — inline sends currently recover from ledger text.)
+- ~~Codex parity~~ — RESOLVED 2026-07-03: the delivery-semantics matcher
+  covers Codex record shapes (`event_msg` user_message, `response_item`
+  user-role message) with unit coverage, and the live Codex sweep passed
+  the full send matrix including the esc test.
+- ~~Queued-send interplay~~ — RESOLVED 2026-07-03: delivery requires a
+  `user` record or `queued_command` attachment; `queue-operation`
+  bookkeeping never lands a send, so enqueued-then-killed sends strand
+  correctly. The landed-then-aborted case (invariant 3) came out of the
+  same soak.
+- Typed-directly-in-terminal strands (text never sent through Bram) stay
+  out of scope: nothing was injected, so there is nothing to ledger. The
+  old detect-stranded draft reached the same conclusion.

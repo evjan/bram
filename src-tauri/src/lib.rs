@@ -8354,6 +8354,10 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
         None => st_collapse_whitespace(data),
     };
     let data = payload.as_str();
+    // Outbound-send ledger (observe-only): record the exact PTY payload so
+    // landing can later be confirmed by outcome. Runs after framing so the
+    // ledger sees what the session JSONL will actually contain.
+    record_outbound_send(app, data);
     // Consolidated per-send diagnostic. One `[turn-send]` line captures the
     // whole payload Bram is about to hand the PTY for a single user send, so a
     // truncation report (esp. the Windows raw-injection path, which sends `data`
@@ -14774,6 +14778,293 @@ fn frame_outbound_turn<R: tauri::Runtime>(app: &AppHandle<R>, data: &str) -> Opt
     Some(frame)
 }
 
+// =====================================================================
+// Outbound-send ledger (docs/esc-resend-redesign.md, phase 1 —
+// OBSERVE-ONLY). Every toTurn send gets a ledger entry at injection
+// time; landing is confirmed by outcome (the send appearing in the
+// session JSONL after the injection offset), strand by grace timeout.
+// Nothing in the UI acts on this yet: traces + a Status-tab section
+// only, so the soak (plan step 2) can prove the detector before the
+// affordance switches to it (plan step 3).
+// =====================================================================
+
+#[derive(Clone)]
+struct SendLedgerEntry {
+    id: String,
+    kind: &'static str, // "framed" | "inline"
+    // Inline sends match by escaped-text containment; framed sends match
+    // by envelope id, so match_text is empty for them.
+    match_text: String,
+    preview: String,
+    mode: String,
+    injected_at_ms: i64,
+    // Session JSONL size at injection: landing is only sought AFTER this
+    // offset, so an identical earlier send in history can't false-land a
+    // new entry.
+    jsonl_offset_at_inject: u64,
+    state: &'static str, // "injected" | "landed" | "stranded"
+    resolved_at_ms: i64,
+    via_queue: bool,
+}
+
+const SEND_LEDGER_CAP: usize = 50;
+// Grace before an unlanded send is called stranded. Deliberately generous
+// for the observe-only soak; tightening is a phase-2 tuning decision.
+const SEND_LEDGER_STRAND_GRACE_MS: i64 = 120_000;
+
+fn send_ledger_cell() -> &'static Mutex<Vec<SendLedgerEntry>> {
+    static CELL: OnceLock<Mutex<Vec<SendLedgerEntry>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+// Largest char-boundary index <= offset, so a byte offset captured from
+// file metadata can safely slice the UTF-8 session text.
+fn char_floor(text: &str, offset: usize) -> usize {
+    let mut i = offset.min(text.len());
+    while i > 0 && !text.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+// The needle whose appearance in the session JSONL confirms landing.
+// Framed sends: the frame's envelope reference (carried verbatim into the
+// recorded user turn). Inline sends: the collapsed text as it appears
+// inside a JSON string (serde-escaped, quotes stripped).
+fn send_ledger_needle(entry: &SendLedgerEntry) -> String {
+    if entry.kind == "framed" {
+        return format!("outbound-turns/{}.json", entry.id);
+    }
+    let escaped = serde_json::Value::String(entry.match_text.clone()).to_string();
+    escaped[1..escaped.len() - 1].to_string()
+}
+
+// Does this JSONL record constitute DELIVERY of a send whose needle it
+// contains? Returns Some(via_queue) when it does. Claude `user` records
+// and `queued_command` attachments are delivery; Codex user records
+// (event_msg user_message / response_item message role=user) likewise.
+// queue-operation records are bookkeeping written at enqueue time (the
+// send may still be killed before delivery), and assistant records can
+// quote a send's text back — neither is delivery.
+fn send_ledger_line_delivers(line: &str) -> Option<bool> {
+    let Ok(r) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+        return None;
+    };
+    match r.get("type").and_then(|v| v.as_str()) {
+        Some("user") => Some(false),
+        Some("attachment") => {
+            let att = r.get("attachment")?;
+            if att.get("type").and_then(|v| v.as_str()) == Some("queued_command") {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        Some("event_msg") => {
+            let p = r.get("payload")?;
+            if p.get("type").and_then(|v| v.as_str()) == Some("user_message") {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        Some("response_item") => {
+            let p = r.get("payload")?;
+            if p.get("type").and_then(|v| v.as_str()) == Some("message")
+                && p.get("role").and_then(|v| v.as_str()) == Some("user")
+            {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+// Record a send at injection time (called from write_pty_turn_intent with
+// the exact PTY payload).
+fn record_outbound_send<R: tauri::Runtime>(app: &AppHandle<R>, payload: &str) {
+    let now = unix_now_ms();
+    let jsonl_offset = freshest_session_path(app)
+        .ok()
+        .flatten()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let trimmed = payload.trim_start();
+    let (mode, body) = match trimmed.strip_prefix("skip-worklist:") {
+        Some(rest) => ("skip-worklist", rest.trim_start()),
+        None => ("", trimmed),
+    };
+    let entry = match outbound_turn_id_from_frame(payload) {
+        Some(id) => SendLedgerEntry {
+            id,
+            kind: "framed",
+            match_text: String::new(),
+            preview: body.chars().take(60).collect(),
+            mode: mode.to_string(),
+            injected_at_ms: now,
+            jsonl_offset_at_inject: jsonl_offset,
+            state: "injected",
+            resolved_at_ms: 0,
+            via_queue: false,
+        },
+        None => SendLedgerEntry {
+            id: format!("{}-inline", now),
+            kind: "inline",
+            match_text: payload.to_string(),
+            preview: body.chars().take(60).collect(),
+            mode: mode.to_string(),
+            injected_at_ms: now,
+            jsonl_offset_at_inject: jsonl_offset,
+            state: "injected",
+            resolved_at_ms: 0,
+            via_queue: false,
+        },
+    };
+    if bram_trace_enabled() {
+        append_bram_trace_line(
+            app,
+            "send-ledger",
+            &format!(
+                "op=inject id={} kind={} mode={} bytes={} jsonl_offset={}",
+                entry.id,
+                entry.kind,
+                entry.mode,
+                payload.len(),
+                jsonl_offset,
+            ),
+        );
+    }
+    if let Ok(mut ledger) = send_ledger_cell().lock() {
+        ledger.push(entry);
+        if ledger.len() > SEND_LEDGER_CAP {
+            let drop_n = ledger.len() - SEND_LEDGER_CAP;
+            ledger.drain(0..drop_n);
+        }
+    }
+    emit_replayable_signal(app, "send-ledger-changed");
+}
+
+// Advance ledger states against the live session text. Called from the
+// projection's cache-miss parse (live session only — a by-id fetch of an
+// old session must not resolve entries). Landing is sought only in the
+// suffix past each entry's injection offset; queued delivery is flagged
+// when the matching line is a queue/attachment record.
+fn update_send_ledger<R: tauri::Runtime>(app: &AppHandle<R>, session_text: &str) {
+    let now = unix_now_ms();
+    let mut transitions: Vec<String> = Vec::new();
+    if let Ok(mut ledger) = send_ledger_cell().lock() {
+        for entry in ledger.iter_mut() {
+            if entry.state != "injected" {
+                continue;
+            }
+            let start = char_floor(session_text, entry.jsonl_offset_at_inject as usize);
+            let suffix = &session_text[start..];
+            let needle = send_ledger_needle(entry);
+            // Walk every needle occurrence and accept only a line whose
+            // record SEMANTICS constitute delivery. Text presence alone is
+            // not delivery: queue-operation records carry the text at
+            // enqueue time (before — or without — delivery), and assistant
+            // records can quote it back.
+            let mut delivered: Option<bool> = None;
+            let mut search_from = 0usize;
+            while let Some(rel) = suffix[search_from..].find(&needle) {
+                let pos = search_from + rel;
+                let line_start = suffix[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                let line_end = suffix[pos..]
+                    .find('\n')
+                    .map(|i| pos + i)
+                    .unwrap_or(suffix.len());
+                if let Some(via_queue) = send_ledger_line_delivers(&suffix[line_start..line_end]) {
+                    delivered = Some(via_queue);
+                    break;
+                }
+                search_from = line_end.min(suffix.len());
+                if search_from >= suffix.len() {
+                    break;
+                }
+            }
+            if let Some(via_queue) = delivered {
+                entry.state = "landed";
+                entry.resolved_at_ms = now;
+                entry.via_queue = via_queue;
+                transitions.push(format!(
+                    "op=transition id={} state=landed via_queue={} elapsed_ms={}",
+                    entry.id,
+                    entry.via_queue,
+                    now - entry.injected_at_ms,
+                ));
+            } else if now - entry.injected_at_ms > SEND_LEDGER_STRAND_GRACE_MS {
+                entry.state = "stranded";
+                entry.resolved_at_ms = now;
+                transitions.push(format!(
+                    "op=transition id={} state=stranded elapsed_ms={}",
+                    entry.id,
+                    now - entry.injected_at_ms,
+                ));
+            }
+        }
+    }
+    if !transitions.is_empty() {
+        if bram_trace_enabled() {
+            for t in &transitions {
+                append_bram_trace_line(app, "send-ledger", t);
+            }
+        }
+        emit_replayable_signal(app, "send-ledger-changed");
+    }
+}
+
+// Status-tab section: a summary row plus the most recent entries, so the
+// observe-only soak is inspectable without grepping traces.
+fn send_ledger_status_rows() -> Vec<serde_json::Value> {
+    let mut rows = Vec::new();
+    let Ok(ledger) = send_ledger_cell().lock() else {
+        return rows;
+    };
+    let now = unix_now_ms();
+    let injected = ledger.iter().filter(|e| e.state == "injected").count();
+    let landed = ledger.iter().filter(|e| e.state == "landed").count();
+    let stranded = ledger.iter().filter(|e| e.state == "stranded").count();
+    rows.push(serde_json::json!({
+        "signal": "Send ledger",
+        "level": if stranded > 0 { "warn" } else if landed > 0 { "ok" } else { "neutral" },
+        "state": format!("{} landed / {} in flight / {} stranded", landed, injected, stranded),
+        "detail": format!(
+            "observe-only (docs/esc-resend-redesign.md phase 1); {} entries tracked this run",
+            ledger.len()
+        ),
+        "seen": format_iso_utc_ms(now),
+    }));
+    for entry in ledger.iter().rev().take(5) {
+        let age_s = (now - entry.injected_at_ms) / 1000;
+        rows.push(serde_json::json!({
+            "signal": format!("Send {}", entry.id),
+            "level": match entry.state {
+                "landed" => "ok",
+                "stranded" => "warn",
+                _ => "neutral",
+            },
+            "state": if entry.via_queue {
+                format!("{} (via queue)", entry.state)
+            } else {
+                entry.state.to_string()
+            },
+            "detail": format!(
+                "{}{} — {} · injected {}s ago",
+                entry.kind,
+                if entry.mode.is_empty() { String::new() } else { format!(" · {}", entry.mode) },
+                entry.preview,
+                age_s
+            ),
+            "seen": format_iso_utc_ms(entry.injected_at_ms),
+        }));
+    }
+    rows
+}
+
 // Legacy message-draft frame ("Here is my message: @<path>", from the
 // archived attempt's first transport iteration). The path is reduced to
 // its basename and re-joined under resources/message-drafts/, so a crafted
@@ -14982,6 +15273,11 @@ fn read_projected_turns<R: tauri::Runtime>(
     }
     let started = std::time::Instant::now();
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    // Send-ledger check piggybacks on the live-session parse (plan step 1).
+    // By-id fetches of other sessions must not resolve ledger entries.
+    if id.is_empty() {
+        update_send_ledger(app, &text);
+    }
     let mut turns = st_parse_lines_to_turns(&text);
     project_user_turns(app, &mut turns);
     let turn_count = turns.len();
@@ -20130,6 +20426,10 @@ fn coordination_status<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>,
                 ]
             },
             {
+                "title": "Send Ledger",
+                "rows": send_ledger_status_rows()
+            },
+            {
                 "title": "Startup Run",
                 "rows": [
                     {
@@ -21413,6 +21713,81 @@ mod session_turn_tests {
         let text = "prose [Image: source: not-a-path] tail\n[Image: source: E:\\x.png]";
         let stripped = st_strip_image_paths(text);
         assert_eq!(stripped, "prose [Image: source: not-a-path] tail");
+    }
+
+    #[test]
+    fn send_ledger_delivery_semantics() {
+        // Claude user record delivers.
+        assert_eq!(
+            super::send_ledger_line_delivers(
+                r#"{"type":"user","message":{"content":"hello there"}}"#
+            ),
+            Some(false)
+        );
+        // Queued-command attachment delivers, flagged via queue.
+        assert_eq!(
+            super::send_ledger_line_delivers(
+                r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"hello there"}}"#
+            ),
+            Some(true)
+        );
+        // Codex user records deliver.
+        assert_eq!(
+            super::send_ledger_line_delivers(
+                r#"{"type":"event_msg","payload":{"type":"user_message","message":"hello"}}"#
+            ),
+            Some(false)
+        );
+        // Queue bookkeeping does NOT deliver — an enqueued send can still
+        // be killed before delivery.
+        assert_eq!(
+            super::send_ledger_line_delivers(
+                r#"{"type":"queue-operation","operation":"enqueue","content":"hello there"}"#
+            ),
+            None
+        );
+        // Assistant records quoting the text do NOT deliver.
+        assert_eq!(
+            super::send_ledger_line_delivers(
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"you said: hello there"}]}}"#
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn send_ledger_needle_shapes() {
+        let framed = super::SendLedgerEntry {
+            id: "123-turn".to_string(),
+            kind: "framed",
+            match_text: String::new(),
+            preview: String::new(),
+            mode: String::new(),
+            injected_at_ms: 0,
+            jsonl_offset_at_inject: 0,
+            state: "injected",
+            resolved_at_ms: 0,
+            via_queue: false,
+        };
+        assert_eq!(
+            super::send_ledger_needle(&framed),
+            "outbound-turns/123-turn.json"
+        );
+        let inline = super::SendLedgerEntry {
+            match_text: "say \"hi\" \\ there".to_string(),
+            kind: "inline",
+            ..framed
+        };
+        // Needle must be JSON-escaped so it matches inside a JSONL string.
+        assert_eq!(super::send_ledger_needle(&inline), "say \\\"hi\\\" \\\\ there");
+    }
+
+    #[test]
+    fn char_floor_respects_utf8_boundaries() {
+        let s = "ab—cd"; // em-dash is 3 bytes starting at index 2
+        assert_eq!(super::char_floor(s, 3), 2);
+        assert_eq!(super::char_floor(s, 2), 2);
+        assert_eq!(super::char_floor(s, 99), s.len());
     }
 
     #[test]

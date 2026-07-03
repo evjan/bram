@@ -44,9 +44,12 @@
     queryParams="{{ provider: currentProvider }}"
     when="{sessionsExpanded &amp;&amp; !!currentProvider}" />
 
+  <!-- Projected turns for the expanded session from the single host
+       projection (/__turns); this pane is a pure consumer — no client-side
+       JSONL parsing (docs/turn-transport-redesign.md). -->
   <DataSource
     id="sessionContent"
-    url="/__sessions/content"
+    url="/__turns"
     queryParams="{{ id: expandedId, provider: expandedProvider }}"
     when="{!!expandedId &amp;&amp; !!expandedProvider}" />
 
@@ -287,7 +290,7 @@
       <Text when="{sessionContent.inProgress &amp;&amp; !sessionContent.loaded}">Loading…</Text>
       <Items
         when="{sessionContent.value}"
-        data="{(selectedSnippet &amp;&amp; query &amp;&amp; query.trim().length >= 2) ? window.__bramSessionTurns(sessionContent.value).filter(t => (t.text || '').toLowerCase().includes(query.trim().toLowerCase())) : window.__bramSessionTurns(sessionContent.value)}">
+        data="{(selectedSnippet &amp;&amp; query &amp;&amp; query.trim().length >= 2) ? window.__bramProjectedSessionTurns(sessionContent.value).filter(t => (t.text || '').toLowerCase().includes(query.trim().toLowerCase())) : window.__bramProjectedSessionTurns(sessionContent.value)}">
         <VStack
           gap="$space-1"
           paddingVertical="$space-2"

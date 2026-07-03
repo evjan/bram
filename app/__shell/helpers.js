@@ -4695,6 +4695,124 @@ window.bramSubscribeLatestJsonl = (function () {
   };
 })();
 
+// --- Projected turns (single host projection; docs/turn-transport-redesign.md)
+// Turn-display surfaces bound to the LIVE session consume /__turns through
+// this pipeline instead of parsing raw JSONL. The latest-tail push above
+// stays the CHANGE SIGNAL: each applied envelope coalesces into one
+// projection refetch. Turn objects are reference-preserved across fetches
+// so XMLUI lists don't re-mount unchanged rows.
+var __projectedTurnsValue = null; // { sid, provider, turns } | null
+var __projectedTurnsSubscribers = [];
+var __projectedTurnsTimer = null;
+var __projectedTurnsSeq = 0;
+
+window.getProjectedTurns = function () { return __projectedTurnsValue; };
+window.onProjectedTurnsChange = function (fn) {
+  if (typeof fn !== "function") return function () {};
+  __projectedTurnsSubscribers.push(fn);
+  return function () {
+    var idx = __projectedTurnsSubscribers.indexOf(fn);
+    if (idx >= 0) __projectedTurnsSubscribers.splice(idx, 1);
+  };
+};
+
+// Loose per-turn equality for reference preservation. Unlike
+// __bramTurnsLooselyEqual this includes result length + isError, because
+// tool results stream onto entries that otherwise look unchanged.
+window.__bramProjectedTurnEqual = function (a, b) {
+  if (!a || !b) return false;
+  if (a.role !== b.role || a.text !== b.text) return false;
+  var ae = a.entries || [], be = b.entries || [];
+  if (ae.length !== be.length) return false;
+  var ai = a.images || [], bi = b.images || [];
+  if (ai.length !== bi.length) return false;
+  for (var i = 0; i < ae.length; i++) {
+    var x = ae[i] || {}, y = be[i] || {};
+    if (x.kind !== y.kind) return false;
+    if (x.kind === "tool") {
+      if (x.id !== y.id || !!x.isError !== !!y.isError) return false;
+      if (((x.result || "").length) !== ((y.result || "").length)) return false;
+    } else if (x.text !== y.text) {
+      return false;
+    }
+  }
+  return true;
+};
+
+window.__bramBroadcastProjectedTurns = function (payload) {
+  var prev = __projectedTurnsValue;
+  if (payload && prev && prev.sid === payload.sid) {
+    var prevTurns = prev.turns || [];
+    var nextTurns = payload.turns || [];
+    var limit = Math.min(prevTurns.length, nextTurns.length);
+    for (var i = 0; i < limit; i++) {
+      if (window.__bramProjectedTurnEqual(prevTurns[i], nextTurns[i])) {
+        nextTurns[i] = prevTurns[i];
+      }
+    }
+  }
+  __projectedTurnsValue = payload;
+  var n = __projectedTurnsSubscribers.length;
+  for (var j = 0; j < n; j++) {
+    try { __projectedTurnsSubscribers[j](payload); } catch (e) {}
+  }
+};
+
+window.__bramRefetchProjectedTurns = function (reason) {
+  if (typeof window.fetch !== "function") return;
+  if (__projectedTurnsTimer) return; // trailing-edge coalesce
+  __projectedTurnsTimer = window.setTimeout(function () {
+    __projectedTurnsTimer = null;
+    var seq = ++__projectedTurnsSeq;
+    var startedMs = Date.now();
+    window.fetch("/__turns", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (payload) {
+        if (seq !== __projectedTurnsSeq) return; // superseded by a later fetch
+        window.__bramBroadcastProjectedTurns(payload);
+        try {
+          if (window.logToHost && !window.__bramMenuPending) {
+            window.logToHost({
+              kind: "iframe-trace",
+              subkind: "projected-turns",
+              at: new Date().toISOString(),
+              reason: reason || "",
+              sid: (payload && payload.sid) || "",
+              turns: (payload && payload.turns && payload.turns.length) || 0,
+              ms: Date.now() - startedMs,
+            });
+          }
+        } catch (e) {}
+      })
+      .catch(function () {});
+  }, 250);
+};
+
+// External subscribe factory for projected turns. Same memoized-singleton
+// shape as bramSubscribeLatestJsonl above.
+window.bramSubscribeProjectedTurns = (function () {
+  var factory;
+  return function () {
+    if (factory) return factory;
+    var subscribers = new Set();
+    var lastValue = window.getProjectedTurns();
+    var notify = function () {
+      subscribers.forEach(function (fn) {
+        try { fn(); } catch (e) { console.error("[bramSubscribeProjectedTurns] subscriber threw:", e); }
+      });
+    };
+    window.onProjectedTurnsChange(function (v) { lastValue = v; notify(); });
+    if (lastValue == null) window.__bramRefetchProjectedTurns("first-subscribe");
+    factory = function (emit) {
+      var fire = function () { emit(lastValue); };
+      subscribers.add(fire);
+      fire();
+      return function () { subscribers.delete(fire); };
+    };
+    return factory;
+  };
+})();
+
 // One-line summary for a tool card's collapsed state.
 window.__bramTranscriptToolSummary = function (name, input) {
   input = input || {};
@@ -4978,9 +5096,9 @@ window.__bramFormatToolResult = function (result, toolName, hint) {
 };
 
 // Append the live pending agent menu (if any) as the last transcript event.
-// Transcript keeps this interleaved view as the only full menu renderer.
-window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {
-  var events = window.__bramParseTranscript(jsonl);
+// Shared by the legacy raw-JSONL adapter (__bramTranscriptEventsWithMenu)
+// and the projected-turns adapter (__bramTranscriptEventsFromTurns).
+window.__bramAppendMenuEvents = function (events, menu) {
   // menu-stack-pty-inflight-prose: while a permission menu is up, Claude hasn't
   // written the turn's assistant record to its JSONL yet, so the explanatory
   // prose is missing from the transcript. Show the grid-sourced prose
@@ -5024,6 +5142,75 @@ window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {
     events.push({ id: "menu-pending-" + window.__bramMenuIdentity(menu), kind: "menu", menu: menu });
   }
   return events;
+};
+
+// Legacy raw-JSONL adapter. Superseded on the Transcript by
+// __bramTranscriptEventsFromTurns (projected turns); kept until the
+// remaining raw-JSONL consumers are migrated (redesign doc step 7).
+window.__bramTranscriptEventsWithMenu = function (jsonl, menu) {
+  var events = window.__bramParseTranscript(jsonl);
+  return window.__bramAppendMenuEvents(events, menu);
+};
+
+// Presentation adapter: flatten projected turns (host shape: { role, text,
+// entries[], images[] }) into the Transcript's flat event stream. No JSONL
+// parsing and no resolution rules here — that is the host projection's job
+// (docs/turn-transport-redesign.md). Per-turn event slices are cached by
+// turn object identity: the broadcast preserves unchanged turn refs, so
+// unchanged rows keep identical event objects and the List doesn't
+// re-mount them.
+window.__bramProjectedEventCache = (typeof WeakMap === "function") ? new WeakMap() : null;
+window.__bramTranscriptEventsFromTurns = function (payload, menu) {
+  var turns = (payload && payload.turns) || [];
+  var events = [];
+  for (var ti = 0; ti < turns.length; ti++) {
+    var t = turns[ti] || {};
+    var slice = window.__bramProjectedEventCache && window.__bramProjectedEventCache.get(t);
+    if (!slice) {
+      slice = [];
+      var baseId = "pt" + ti;
+      if (t.role === "user") {
+        if (t.text && String(t.text).trim()) {
+          slice.push({ id: baseId + "-u", kind: "user", text: t.text });
+        }
+      } else {
+        var entries = t.entries || [];
+        for (var ei = 0; ei < entries.length; ei++) {
+          var e = entries[ei] || {};
+          var eid = baseId + "-" + ei;
+          if (e.kind === "text") {
+            if (e.text && String(e.text).trim()) {
+              slice.push({ id: eid, kind: "text", text: e.text });
+            }
+          } else if (e.kind === "thinking") {
+            slice.push({ id: eid, kind: "thinking", text: e.text || "" });
+          } else if (e.kind === "tool") {
+            slice.push({
+              id: e.id || eid,
+              kind: "tool",
+              toolId: e.id || "",
+              name: e.name || "Tool",
+              summary: e.summary || "",
+              commandDisplay: e.commandDisplay || "",
+              result: e.result || "",
+              isError: !!e.isError,
+            });
+          }
+        }
+      }
+      if (t.images && t.images.length) {
+        slice.push({ id: baseId + "-images", kind: "images", role: t.role || "", images: t.images });
+      }
+      if (window.__bramProjectedEventCache) window.__bramProjectedEventCache.set(t, slice);
+    }
+    for (var si = 0; si < slice.length; si++) events.push(slice[si]);
+  }
+  return window.__bramAppendMenuEvents(events, menu);
+};
+
+// Pure consumer shim for the Sessions tab: unwrap the /__turns envelope.
+window.__bramProjectedSessionTurns = function (payload) {
+  return (payload && payload.turns) || [];
 };
 
 // Stable identity key for the Transcript's pending-menu row: present /
@@ -5096,8 +5283,10 @@ window.__bramApplyLatestJsonlEnvelope = function (env, source) {
   } catch (e) {}
   if (env.reset) {
     window.setLatestJsonl(content);
+    window.__bramRefetchProjectedTurns("jsonl-reset");
   } else if (content) {
     window.appendLatestJsonl(content);
+    window.__bramRefetchProjectedTurns("jsonl-append");
   }
 };
 

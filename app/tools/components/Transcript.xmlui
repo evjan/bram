@@ -14,10 +14,13 @@
        parked at the bottom. The event fires only for user-driven scrolls
        (the List's own scrollToBottom is guarded), so following never fights
        reading. -->
+  <!-- Projected turns from the single host projection (/__turns). The
+       Transcript is a pure consumer: no raw-JSONL parsing, no draft/feedback
+       resolution client-side (docs/turn-transport-redesign.md). -->
   <PushSource
-    id="jsonlEvt"
+    id="turnsEvt"
     initial="{null}"
-    subscribe="{window.bramSubscribeLatestJsonl()}" />
+    subscribe="{window.bramSubscribeProjectedTurns()}" />
   <PushSource
     id="agentMenuEvt"
     initial="{null}"
@@ -37,24 +40,8 @@
   <ChangeListener
     listenTo="{transcriptSessionsChangedEvt.value &amp;&amp; transcriptSessionsChangedEvt.value.tick}"
     onDidChange="() => transcriptSessions.refetch()" />
-  <!-- { feedbackRef: text } map so iterate turns (whose feedback rides a
-       feedbackRef, not inline) can show their feedback. Refetched when a draft
-       is written or promoted to history. -->
-  <DataSource id="feedbackMap" url="/__feedback/map" />
-  <PushSource
-    id="feedbackDraftsChangedEvt"
-    initial="{null}"
-    subscribe="{window.bramSubscribeTauriEvent('feedback-drafts-changed')}" />
-  <PushSource
-    id="feedbackHistoryChangedEvt"
-    initial="{null}"
-    subscribe="{window.bramSubscribeTauriEvent('feedback-history-changed')}" />
-  <ChangeListener
-    listenTo="{feedbackDraftsChangedEvt.value &amp;&amp; feedbackDraftsChangedEvt.value.tick}"
-    onDidChange="() => feedbackMap.refetch()" />
-  <ChangeListener
-    listenTo="{feedbackHistoryChangedEvt.value &amp;&amp; feedbackHistoryChangedEvt.value.tick}"
-    onDidChange="() => feedbackMap.refetch()" />
+  <!-- Feedback refs (iterate turns) are resolved inside the host
+       projection; no client-side feedback map is needed. -->
   <Theme maxWidth-ModalDialog="95vw">
     <ModalDialog
       when="{!!fullscreenImage}"
@@ -72,7 +59,7 @@
     gap="$space-2"
     onInit="window.__bramSetTranscriptMounted(true)"
     onCleanup="window.__bramSetTranscriptMounted(false)"
-    var.events="{window.__bramTranscriptEventsWithMenu(jsonlEvt.value, agentMenuEvt.value)}"
+    var.events="{window.__bramTranscriptEventsFromTurns(turnsEvt.value, agentMenuEvt.value)}"
     var.expanded="{[]}"
     var.atBottom="{true}"
     var.currentSession="{((transcriptSessions.value || []).find(s => s.current)) || ((transcriptSessions.value || [])[0])}">
@@ -104,12 +91,14 @@
           borderRadius="$borderRadius"
           gap="$space-1">
           <Text value="You" fontWeight="bold" color="$color-primary-600" fontSize="$fontSize-sm" />
-          <Markdown content="{window.__bramFormatUserTurn($item.text, feedbackMap.value)}" />
+          <!-- Worklist payloads, feedback refs, and image markers are already
+               resolved by the host projection; render the text as-is. -->
+          <Markdown content="{$item.text}" />
         </VStack>
         <!-- assistant text -->
         <Markdown
           when="{$item.kind === 'text'}"
-          content="{window.__bramStripImagePaths($item.text)}" />
+          content="{$item.text}" />
         <!-- image strip -->
         <VStack
           when="{$item.kind === 'images'}"

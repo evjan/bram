@@ -12691,6 +12691,19 @@ fn build_conversation_cache_entry<R: tauri::Runtime>(
             }
         }
     }
+    // Resolve the dock's "You" turn through the same projection rules as
+    // /__turns (docs/turn-transport-redesign.md): outbound-turn frames,
+    // legacy message-draft frames, worklist payload feedback refs. Runs
+    // after the raw-text iterate_feedback derivation above, which needs
+    // the unresolved payload.
+    if let Some((display, images)) = project_user_text(app, &user_text) {
+        user_text = display;
+        if let Some(imgs) = images {
+            if !imgs.is_empty() {
+                user_images = imgs;
+            }
+        }
+    }
     let last_exchange_value = serde_json::json!({
         "userText": user_text,
         "assistantText": assistant_text,
@@ -13317,7 +13330,26 @@ fn image_marker_path_recognized(path_bytes: &[u8]) -> bool {
     false
 }
 
-fn st_strip_image_paths(text: &str) -> String {
+// Strip a leading run of "Read this screenshot: @<path>" frames (the PTY
+// image-attachment preamble). Mirrors the client regex
+// ^(\s*Read this screenshot: @\S+\s*)+ in __bramStripImagePaths.
+fn st_strip_read_screenshot_prefix(text: &str) -> &str {
+    let mut rest = text;
+    loop {
+        let trimmed = rest.trim_start();
+        let Some(after) = trimmed.strip_prefix("Read this screenshot: @") else {
+            return rest;
+        };
+        let path_end = after.find(char::is_whitespace).unwrap_or(after.len());
+        rest = &after[path_end..];
+    }
+}
+
+// Marker-only strip (no screenshot-preamble removal, no trim). The
+// image-bookkeeping turn check below needs this narrower form: it must
+// still SEE the preamble text so preamble-only turns keep their images
+// instead of being dropped as bookkeeping.
+fn st_strip_image_markers(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     loop {
@@ -13366,6 +13398,14 @@ fn st_strip_image_paths(text: &str) -> String {
         rest = &rest[start + close + 1..];
     }
     out
+}
+
+// Full display strip: image markers, then the "Read this screenshot: @…"
+// preamble, then trim. Byte-for-byte mirror of __bramStripImagePaths in
+// app/__shell/helpers.js.
+fn st_strip_image_paths(text: &str) -> String {
+    let stripped = st_strip_image_markers(text);
+    st_strip_read_screenshot_prefix(&stripped).trim().to_string()
 }
 
 fn st_extract_image_paths(text: &str) -> Vec<String> {
@@ -13767,6 +13807,174 @@ fn st_codex_tool_output(payload: &serde_json::Value) -> Option<(String, bool)> {
     Some((raw.to_string(), errored))
 }
 
+// Cap a string at `cap` characters (not bytes) for inline tool results.
+fn st_cap_chars(s: &str, cap: usize) -> String {
+    if s.chars().count() <= cap {
+        return s.to_string();
+    }
+    s.chars().take(cap).collect()
+}
+
+// Break a single-line shell command at top-level `;` `|` `||` `&&`
+// separators (quote- and escape-aware) so the Transcript expansion shows
+// one operation per line. Mirrors __bramLineOrientedCommandDisplay in
+// app/__shell/helpers.js.
+fn st_line_oriented_command_display(command: &str) -> String {
+    let text = command.replace("\r\n", "\n").replace('\r', "\n");
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    if text.contains('\n') {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut i = 0usize;
+    while i < chars.len() {
+        let ch = chars[i];
+        let next = chars.get(i + 1).copied().unwrap_or('\0');
+        if escaped {
+            out.push(ch);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if ch == '\\' {
+            out.push(ch);
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if let Some(q) = quote {
+            out.push(ch);
+            if ch == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            out.push(ch);
+            i += 1;
+            continue;
+        }
+        if ch == ';' || ch == '|' {
+            if ch == '|' && next == '|' {
+                out.push_str("||\n");
+                i += 1;
+            } else {
+                out.push(ch);
+                out.push('\n');
+            }
+            while chars.get(i + 1).copied() == Some(' ') {
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        if ch == '&' && next == '&' {
+            out.push_str("&&\n");
+            i += 1;
+            while chars.get(i + 1).copied() == Some(' ') {
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        out.push(ch);
+        i += 1;
+    }
+    out
+}
+
+// Full command text for the Transcript's tool expansion (vs. the truncated
+// summary). Only Bash-style tools have one. Mirrors __bramToolCommandDisplay.
+fn st_tool_command_display(name: &str, input: &serde_json::Value) -> String {
+    if name == "Bash" {
+        if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
+            return st_line_oriented_command_display(cmd);
+        }
+    }
+    String::new()
+}
+
+// Codex variant: exec_command carries the command in input.cmd. Mirrors
+// __bramCodexToolCommandDisplay.
+fn st_codex_tool_command_display(payload: &serde_json::Value) -> String {
+    let input = st_codex_tool_input(payload);
+    let name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    if name == "exec_command" {
+        if let Some(cmd) = input.get("cmd").and_then(|v| v.as_str()) {
+            return st_line_oriented_command_display(cmd);
+        }
+    }
+    if input.is_object() {
+        let display_name = if name.is_empty() {
+            st_codex_tool_name(payload)
+        } else {
+            name.to_string()
+        };
+        return st_tool_command_display(&display_name, &input);
+    }
+    String::new()
+}
+
+// Codex records synthetic context/instruction blocks (AGENTS.md payloads,
+// sandbox boilerplate, turn-abort markers) as ordinary user messages.
+// Suppress them in the projection so every display surface skips them the
+// same way. Mirrors __bramIsSyntheticCodexMessage in helpers.js.
+fn st_is_synthetic_codex_message(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+    if text.starts_with("<turn_aborted>") {
+        return true;
+    }
+    if text.starts_with('<') {
+        if let Some(end) = text.find('>') {
+            let tag = &text[1..end];
+            if !tag.contains(char::is_whitespace)
+                && (tag.to_lowercase().contains("instructions")
+                    || tag.to_lowercase().contains("context"))
+            {
+                return true;
+            }
+        }
+    }
+    {
+        let lower = text.to_lowercase();
+        if lower.starts_with("# agents.md instructions for ") {
+            return true;
+        }
+    }
+    if text.starts_with("Understood. I") && text.contains("worklist gate") {
+        return true;
+    }
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MARKERS: [&str; 13] = [
+        "This repo is driven through Bram. The canonical worklist gate",
+        "bram worklist gate. Use the worklist for material file/code changes",
+        "Filesystem sandboxing defines which files can be read or written",
+        "Use the worklist for material file/code changes unless the user explicitly opts out",
+        "request_user_input availability",
+        "Apps (Connectors) can be explicitly triggered in user messages",
+        "An app is equivalent to a set of MCP tools",
+        "A skill is a set of instructions provided through a SKILL.md source",
+        "Below is the list of skills that can be used",
+        "Each entry includes a name, description, and source locator",
+        "Collaboration Mode:",
+        "You are Codex, a coding agent",
+        "Knowledge cutoff:",
+    ];
+    let hits = MARKERS.iter().filter(|m| compact.contains(*m)).count();
+    hits >= 2 || (hits >= 1 && compact.chars().count() > 700)
+}
+
 // Walk JSONL lines and build the structured turn array. Mirrors
 // `_parseLinesToTurns` in Globals.xs.
 fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
@@ -13818,6 +14026,7 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                             "id": id,
                             "name": name,
                             "summary": summary,
+                            "commandDisplay": st_tool_command_display(name, input),
                         });
                         let entry_idx = entries.len();
                         entries.push(entry);
@@ -13833,27 +14042,36 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                         if let Some((turn_idx, entry_idx)) =
                             tool_entry_locations.get(tool_use_id).copied()
                         {
-                            if st_is_error_result(c) {
-                                let txt = st_tool_result_text(
-                                    c.get("content").unwrap_or(&serde_json::Value::Null),
-                                );
-                                let first_line = txt
-                                    .split('\n')
-                                    .next()
-                                    .unwrap_or("")
-                                    .chars()
-                                    .take(200)
-                                    .collect::<String>();
-                                if let Some(turn_obj) =
-                                    turns.get_mut(turn_idx).and_then(|t| t.as_object_mut())
+                            let txt = st_tool_result_text(
+                                c.get("content").unwrap_or(&serde_json::Value::Null),
+                            );
+                            let errored = st_is_error_result(c);
+                            let first_line = txt
+                                .split('\n')
+                                .next()
+                                .unwrap_or("")
+                                .chars()
+                                .take(200)
+                                .collect::<String>();
+                            if let Some(turn_obj) =
+                                turns.get_mut(turn_idx).and_then(|t| t.as_object_mut())
+                            {
+                                if let Some(entries_arr) =
+                                    turn_obj.get_mut("entries").and_then(|e| e.as_array_mut())
                                 {
-                                    if let Some(entries_arr) =
-                                        turn_obj.get_mut("entries").and_then(|e| e.as_array_mut())
+                                    if let Some(entry_obj) = entries_arr
+                                        .get_mut(entry_idx)
+                                        .and_then(|e| e.as_object_mut())
                                     {
-                                        if let Some(entry_obj) = entries_arr
-                                            .get_mut(entry_idx)
-                                            .and_then(|e| e.as_object_mut())
-                                        {
+                                        entry_obj.insert(
+                                            "result".to_string(),
+                                            serde_json::Value::String(st_cap_chars(&txt, 4000)),
+                                        );
+                                        entry_obj.insert(
+                                            "isError".to_string(),
+                                            serde_json::Value::Bool(errored),
+                                        );
+                                        if errored {
                                             entry_obj.insert(
                                                 "errored".to_string(),
                                                 serde_json::Value::Bool(true),
@@ -13866,6 +14084,15 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                                     }
                                 }
                             }
+                        }
+                    } else if c_typ == "thinking" {
+                        let th = c_obj
+                            .get("thinking")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| c_obj.get("text").and_then(|v| v.as_str()))
+                            .unwrap_or("");
+                        if !th.trim().is_empty() {
+                            entries.push(serde_json::json!({ "kind": "thinking", "text": th }));
                         }
                     } else if c_typ == "image" {
                         if let Some(source) = c_obj.get("source").and_then(|v| v.as_object()) {
@@ -13882,6 +14109,24 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                     }
                 }
             }
+        } else if typ == "attachment" {
+            // A user message sent while the assistant was mid-turn is
+            // recorded as a queue-operation plus a queued_command
+            // attachment — never as a normal `user` record. Synthesize the
+            // user turn from the attachment (the actual delivery record,
+            // at its chronological position) so interrupting messages
+            // appear in every display surface. Refs #reads-first iterate
+            // test: "did not see my iteration as a You: last message".
+            if let Some(att) = r.get("attachment") {
+                if att.get("type").and_then(|v| v.as_str()) == Some("queued_command") {
+                    if let Some(prompt) = att.get("prompt").and_then(|v| v.as_str()) {
+                        if !prompt.trim().is_empty() {
+                            role = Some("user");
+                            entries.push(serde_json::json!({ "kind": "text", "text": prompt }));
+                        }
+                    }
+                }
+            }
         } else if typ == "event_msg" {
             if let Some(p) = r.get("payload") {
                 let p_typ = p.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -13891,7 +14136,7 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                     role = Some("assistant");
                 }
                 if let Some(msg) = p.get("message").and_then(|v| v.as_str()) {
-                    if !msg.is_empty() {
+                    if !msg.is_empty() && !st_is_synthetic_codex_message(msg) {
                         entries.push(serde_json::json!({ "kind": "text", "text": msg }));
                     }
                 }
@@ -13916,7 +14161,7 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                             let c_typ = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
                             if c_typ == "input_text" || c_typ == "output_text" || c_typ == "text" {
                                 if let Some(t) = c.get("text").and_then(|v| v.as_str()) {
-                                    if !t.is_empty() {
+                                    if !t.is_empty() && !st_is_synthetic_codex_message(t) {
                                         entries
                                             .push(serde_json::json!({ "kind": "text", "text": t }));
                                     }
@@ -13936,6 +14181,7 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                         "id": id,
                         "name": name,
                         "summary": summary,
+                        "commandDisplay": st_codex_tool_command_display(p),
                     });
                     let entry_idx = entries.len();
                     entries.push(entry);
@@ -13946,24 +14192,32 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
                     let id = p.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                     if let Some((turn_idx, entry_idx)) = tool_entry_locations.get(id).copied() {
                         if let Some((text, errored)) = st_codex_tool_output(p) {
-                            if errored {
-                                let first_line = text
-                                    .split('\n')
-                                    .next()
-                                    .unwrap_or("")
-                                    .chars()
-                                    .take(200)
-                                    .collect::<String>();
-                                if let Some(turn_obj) =
-                                    turns.get_mut(turn_idx).and_then(|t| t.as_object_mut())
+                            let first_line = text
+                                .split('\n')
+                                .next()
+                                .unwrap_or("")
+                                .chars()
+                                .take(200)
+                                .collect::<String>();
+                            if let Some(turn_obj) =
+                                turns.get_mut(turn_idx).and_then(|t| t.as_object_mut())
+                            {
+                                if let Some(entries_arr) =
+                                    turn_obj.get_mut("entries").and_then(|e| e.as_array_mut())
                                 {
-                                    if let Some(entries_arr) =
-                                        turn_obj.get_mut("entries").and_then(|e| e.as_array_mut())
+                                    if let Some(entry_obj) = entries_arr
+                                        .get_mut(entry_idx)
+                                        .and_then(|e| e.as_object_mut())
                                     {
-                                        if let Some(entry_obj) = entries_arr
-                                            .get_mut(entry_idx)
-                                            .and_then(|e| e.as_object_mut())
-                                        {
+                                        entry_obj.insert(
+                                            "result".to_string(),
+                                            serde_json::Value::String(st_cap_chars(&text, 4000)),
+                                        );
+                                        entry_obj.insert(
+                                            "isError".to_string(),
+                                            serde_json::Value::Bool(errored),
+                                        );
+                                        if errored {
                                             entry_obj.insert(
                                                 "errored".to_string(),
                                                 serde_json::Value::Bool(true),
@@ -14029,7 +14283,9 @@ fn st_parse_lines_to_turns(jsonl_text: &str) -> Vec<serde_json::Value> {
             }
             // The iframe's regex is more permissive about whitespace; replicate by
             // checking that what remains after stripping image markers is empty.
-            let stripped_check = st_strip_image_paths(original_trimmed);
+            // Marker-only strip: a "Read this screenshot: @…" preamble counts as
+            // content here, so preamble+marker turns survive as image turns.
+            let stripped_check = st_strip_image_markers(original_trimmed);
             if all_text
                 && (is_image_only || stripped_check.trim().is_empty())
                 && !paths_from_text.is_empty()
@@ -14268,6 +14524,374 @@ fn read_session_turns<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, 
     let turns = st_parse_lines_to_turns(&text);
     let bytes = serde_json::to_vec(&turns).map_err(|e| e.to_string())?;
     if let Ok(mut guard) = SESSION_TURNS_CACHE.lock() {
+        *guard = Some((path, mtime, bytes.clone()));
+    }
+    Ok(bytes)
+}
+
+// =====================================================================
+// Turn projection (docs/turn-transport-redesign.md).
+//
+// /__turns is the single host projection of a session's conversation:
+// normalized turns from session JSONL plus outbound-turn envelopes. All
+// legacy resolution happens HERE — message-draft refs, feedback refs,
+// outbound-turn frames, image markers, Codex storage-fanout dedupe — and
+// never leaks into XMLUI clients, which are pure consumers of this route.
+// =====================================================================
+
+// Outbound turn envelope — the persistence contract (schema v1). One JSON
+// file per Bram-authored user turn under resources/outbound-turns/. The
+// send path starts WRITING these in a later phase (doc step 6); the
+// projection resolves them now so history authored by the archived
+// 2026-07-02 attempt renders correctly and the write switch needs no
+// reader changes.
+//
+//   {
+//     "schema": 1,
+//     "id": "<unix-ms>-turn",             // stable id, also the filename stem
+//     "createdAtMs": 1783040688310,
+//     "kind": "message" | "worklist-action",
+//     "mode": "" | "skip-worklist",       // message kind only
+//     "text": "<full user-authored text>",
+//     "images": ["/abs/path.png", ...],
+//     // worklist-action kind only:
+//     "verb": "approved" | "drop" | "iterate",
+//     "items": [{ "id": "...", "feedback"?: "...", "feedbackRef"?: "..." }]
+//   }
+
+fn message_drafts_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_resource_path(app, "message-drafts")
+}
+
+fn outbound_turns_dir<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    project_resource_path(app, "outbound-turns")
+}
+
+// The agent-facing frame the send path injects instead of the full text
+// (transport contract). Matches the frames already present in session
+// history from the archived attempt.
+const OUTBOUND_TURN_FRAME_PREFIX: &str = "Read and follow this Bram turn: @";
+
+fn outbound_turn_path(dir: &Path, turn_id: &str) -> Option<PathBuf> {
+    if turn_id.is_empty() || turn_id.contains('/') || turn_id.contains('\\') {
+        return None;
+    }
+    Some(dir.join(format!("{}.json", turn_id)))
+}
+
+fn outbound_turn_id_from_frame(text: &str) -> Option<String> {
+    let t = text.trim_start();
+    if !t.starts_with(OUTBOUND_TURN_FRAME_PREFIX) {
+        return None;
+    }
+    let after_at = &t[t.find('@')? + 1..];
+    let path_str = after_at.split_whitespace().next()?;
+    let file_name = std::path::Path::new(path_str).file_name()?.to_string_lossy();
+    let stem = file_name.strip_suffix(".json").unwrap_or(&file_name);
+    if stem.is_empty() || stem.contains('/') || stem.contains('\\') {
+        return None;
+    }
+    Some(stem.to_string())
+}
+
+fn read_outbound_turn_by_id<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    turn_id: &str,
+) -> Option<serde_json::Value> {
+    let dir = outbound_turns_dir(app)?;
+    let path = outbound_turn_path(&dir, turn_id)?;
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+}
+
+fn read_outbound_turn_frame<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    text: &str,
+) -> Option<serde_json::Value> {
+    let turn_id = outbound_turn_id_from_frame(text)?;
+    read_outbound_turn_by_id(app, &turn_id)
+}
+
+fn outbound_turn_text(turn: &serde_json::Value) -> String {
+    turn.get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn outbound_turn_images(turn: &serde_json::Value) -> Vec<String> {
+    turn.get("images")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default()
+}
+
+// The text the AGENT was shown for this envelope (mode prefix applied,
+// worklist-action serialized). Display formatting below builds on this so
+// worklist-action envelopes flow through the same payload formatter as
+// inline approved:/drop:/iterate: turns.
+fn outbound_turn_display_source(turn: &serde_json::Value) -> String {
+    let kind = turn.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    if kind == "worklist-action" {
+        let verb = turn.get("verb").and_then(|v| v.as_str()).unwrap_or("");
+        if matches!(verb, "approved" | "drop" | "iterate") {
+            let items = turn
+                .get("items")
+                .cloned()
+                .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+            let payload = serde_json::json!({ "items": items });
+            return format!("{}: {}", verb, payload);
+        }
+        return String::new();
+    }
+    let text = outbound_turn_text(turn);
+    let mode = turn.get("mode").and_then(|v| v.as_str()).unwrap_or("");
+    if mode == "skip-worklist" {
+        return format!("skip-worklist: {}", text);
+    }
+    text
+}
+
+// Legacy message-draft frame ("Here is my message: @<path>", from the
+// archived attempt's first transport iteration). The path is reduced to
+// its basename and re-joined under resources/message-drafts/, so a crafted
+// path can't escape the dir. None for non-frame turns.
+fn resolve_message_frame<R: tauri::Runtime>(app: &AppHandle<R>, text: &str) -> Option<String> {
+    let t = text.trim_start();
+    if !t.starts_with("Here is my message: @") {
+        return None;
+    }
+    let after_at = &t[t.find('@')? + 1..];
+    let path_str = after_at.split_whitespace().next()?;
+    let dir = message_drafts_dir(app)?;
+    let file_name = std::path::Path::new(path_str).file_name()?;
+    std::fs::read_to_string(dir.join(file_name)).ok()
+}
+
+// Format an approved:/drop:/iterate: worklist payload for display,
+// resolving each item's feedbackRef to its draft/history body. Returns the
+// display text plus any image paths carried inside the feedback (staged
+// [Image: source: …] markers), which are stripped from the label and
+// surfaced as turn images instead. Mirrors the client __bramFormatUserTurn
+// + /__feedback/map pair, moved to the host boundary so no display surface
+// needs its own feedback resolution.
+fn format_worklist_payload_text<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    text: &str,
+) -> Option<(String, Vec<String>)> {
+    let t = text.trim_start();
+    for verb in ["approved", "drop", "iterate"] {
+        let prefix = format!("{}: ", verb);
+        let Some(rest) = t.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let mut labels: Vec<String> = Vec::new();
+        let mut fb_images: Vec<String> = Vec::new();
+        if let Ok(payload) = serde_json::from_str::<serde_json::Value>(rest.trim()) {
+            let empty: Vec<serde_json::Value> = Vec::new();
+            let items = payload
+                .get("items")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&empty);
+            for it in items {
+                let mut label = it
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let mut fb = it
+                    .get("feedback")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if fb.is_empty() {
+                    if let Some(fref) = it.get("feedbackRef").and_then(|v| v.as_str()) {
+                        fb = feedback_content_by_ref(app, fref).unwrap_or_default();
+                    }
+                }
+                fb_images.extend(st_extract_image_paths(&fb));
+                let fb_clean = st_strip_image_paths(&fb);
+                let fb_compact = fb_clean.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !fb_compact.is_empty() {
+                    label = format!("{} — {}", label, fb_compact);
+                }
+                if !label.is_empty() {
+                    labels.push(label);
+                }
+            }
+        }
+        if labels.is_empty() {
+            return Some((format!("{}:", verb), fb_images));
+        }
+        return Some((format!("{}: {}", verb, labels.join(", ")), fb_images));
+    }
+    None
+}
+
+// Rewrite one projected turn's text/entries (and optionally images) after
+// legacy/envelope resolution.
+fn set_projected_turn_text(turn: &mut serde_json::Value, text: &str, images: Vec<String>) {
+    if let Some(obj) = turn.as_object_mut() {
+        obj.insert(
+            "text".to_string(),
+            serde_json::Value::String(text.to_string()),
+        );
+        obj.insert(
+            "entries".to_string(),
+            serde_json::Value::Array(vec![serde_json::json!({
+                "kind": "text",
+                "text": text,
+            })]),
+        );
+        if !images.is_empty() {
+            obj.insert(
+                "images".to_string(),
+                serde_json::Value::Array(
+                    images.into_iter().map(serde_json::Value::String).collect(),
+                ),
+            );
+        }
+    }
+}
+
+// Resolve one user-turn text through the projection rules: outbound-turn
+// envelope frame → legacy message-draft frame → inline worklist payload.
+// Returns (display text, Some(images)) when resolution supplied images,
+// (display text, None) when only text changed, or None when the text needs
+// no resolution. Shared by the /__turns projection and the
+// conversation-state dock payload so every surface shows the same turn.
+fn project_user_text<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    text: &str,
+) -> Option<(String, Option<Vec<String>>)> {
+    // 1) Outbound turn envelope frame (canonical, schema v1).
+    if let Some(envelope) = read_outbound_turn_frame(app, text) {
+        let source = outbound_turn_display_source(&envelope);
+        let mut images = outbound_turn_images(&envelope);
+        let display = match format_worklist_payload_text(app, &source) {
+            Some((formatted, fb_images)) => {
+                images.extend(fb_images);
+                formatted
+            }
+            None => source,
+        };
+        return Some((display, Some(images)));
+    }
+    // 2) Legacy message-draft frame. The draft body may carry staged
+    //    [Image: source: …] markers; extract + strip like inline turns.
+    if let Some(body) = resolve_message_frame(app, text) {
+        let images = st_extract_image_paths(&body);
+        let stripped = st_strip_image_paths(&body);
+        return Some((
+            stripped,
+            if images.is_empty() { None } else { Some(images) },
+        ));
+    }
+    // 3) Inline worklist payload (current send path).
+    format_worklist_payload_text(app, text).map(|(display, fb_images)| {
+        (
+            display,
+            if fb_images.is_empty() {
+                None
+            } else {
+                Some(fb_images)
+            },
+        )
+    })
+}
+
+// The projection's user-turn pass. Assistant turns pass through untouched.
+fn project_user_turns<R: tauri::Runtime>(app: &AppHandle<R>, turns: &mut [serde_json::Value]) {
+    for turn in turns.iter_mut() {
+        if turn.get("role").and_then(|v| v.as_str()) != Some("user") {
+            continue;
+        }
+        let text = turn
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if let Some((display, images)) = project_user_text(app, &text) {
+            set_projected_turn_text(turn, &display, images.unwrap_or_default());
+        }
+    }
+}
+
+// Single-entry (path, mtime) cache, same rationale as SESSION_TURNS_CACHE:
+// steady-state refetches between JSONL appends hit the cache; each append
+// re-parses once. Envelope/draft/feedback files are write-once, so keying
+// on the JSONL alone is sound.
+static PROJECTED_TURNS_CACHE: std::sync::Mutex<
+    Option<(std::path::PathBuf, std::time::SystemTime, Vec<u8>)>,
+> = std::sync::Mutex::new(None);
+
+// /__turns[?provider=claude|codex][&id=<session-id>] — the projection
+// route. No id: freshest session (provider-scoped when given). With id:
+// that session, resolved the same way /__sessions/content resolves it.
+fn read_projected_turns<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    provider: Option<SessionProvider>,
+) -> Result<Vec<u8>, String> {
+    let path_opt = if id.is_empty() {
+        match provider {
+            Some(p) => latest_session_path_for_provider(app, p)?,
+            None => freshest_session_path(app)?,
+        }
+    } else {
+        if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err("invalid session id".to_string());
+        }
+        let (_, sessions) = sessions_for_provider(app, provider, None)?;
+        sessions.into_iter().find(|s| s.id == id).map(|s| s.path)
+    };
+    let Some(path) = path_opt else {
+        return Ok(br#"{"sid":"","provider":"","turns":[]}"#.to_vec());
+    };
+    let mtime = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+    if let Ok(guard) = PROJECTED_TURNS_CACHE.lock() {
+        if let Some((cached_path, cached_mtime, cached_bytes)) = guard.as_ref() {
+            if cached_path == &path && cached_mtime == &mtime {
+                return Ok(cached_bytes.clone());
+            }
+        }
+    }
+    let started = std::time::Instant::now();
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut turns = st_parse_lines_to_turns(&text);
+    project_user_turns(app, &mut turns);
+    let turn_count = turns.len();
+    let sid = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let provider_label = if path.components().any(|c| c.as_os_str() == ".codex") {
+        "codex"
+    } else {
+        "claude"
+    };
+    let body = serde_json::json!({
+        "sid": sid,
+        "provider": provider_label,
+        "turns": turns,
+    });
+    let bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
+    eprintln!(
+        "[turns-projection] sid={} provider={} turns={} bytes={} ms={}",
+        sid,
+        provider_label,
+        turn_count,
+        bytes.len(),
+        started.elapsed().as_millis(),
+    );
+    if let Ok(mut guard) = PROJECTED_TURNS_CACHE.lock() {
         *guard = Some((path, mtime, bytes.clone()));
     }
     Ok(bytes)
@@ -20675,6 +21299,18 @@ mod session_turn_tests {
     }
 
     #[test]
+    fn queued_command_attachment_becomes_user_turn() {
+        // A message sent while the assistant is mid-turn is recorded as a
+        // queued_command attachment, never as a `user` record; the
+        // projection must synthesize the user turn from it.
+        let content = r#"{"type":"attachment","attachment":{"type":"queued_command","prompt":"iterate: {\"items\":[]}","commandMode":"prompt","origin":{"kind":"human"}}}"#;
+        let turns = st_parse_lines_to_turns(content);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0]["role"], "user");
+        assert!(turns[0]["text"].as_str().unwrap().starts_with("iterate:"));
+    }
+
+    #[test]
     fn paste_image_rejects_empty_body() {
         let (status, content_type, body) = handle_paste_image("type=image%2Fpng", &[]);
         assert_eq!(status, 400);
@@ -23227,6 +23863,29 @@ fn route_request<R: tauri::Runtime>(
     // Host-derived turn timeline. Mirrors the iframe sessionTurns(jsonlText)
     // helper that walked the full JSONL on every fanout. Returns the same
     // [{role, text, entries[], images[]}] shape Transcript renders against.
+    // Single host turn projection (docs/turn-transport-redesign.md):
+    // normalized turns from session JSONL + outbound-turn envelopes, all
+    // legacy resolution done host-side. Transcript, Sessions, and any
+    // future turn-display surface consume THIS route, never raw JSONL.
+    if path == "__turns" {
+        let mut provider: Option<SessionProvider> = None;
+        let mut session_id = String::new();
+        for pair in query.split('&') {
+            if let Some(v) = pair.strip_prefix("provider=") {
+                provider = SessionProvider::from_str(&percent_decode(v));
+            } else if let Some(v) = pair.strip_prefix("id=") {
+                session_id = percent_decode(v);
+            }
+        }
+        return match read_projected_turns(app, &session_id, provider) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => {
+                eprintln!("[http /__turns] {}", e);
+                (500, "text/plain; charset=utf-8", e.into_bytes())
+            }
+        };
+    }
+
     if path == "__session-turns" {
         return match read_session_turns(app) {
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),

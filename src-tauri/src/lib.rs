@@ -12550,6 +12550,23 @@ fn freshest_session_path<R: tauri::Runtime>(
     Ok(best.map(|(p, _)| p))
 }
 
+// The ACTIVE agent's latest session, falling back to freshest-across-
+// providers only when no provider hint exists. Every reader of "the
+// live session" must use this rather than freshest_session_path:
+// after an agent switch the OTHER provider's file is often the
+// freshest, which locked the Transcript (and the send ledger's
+// landing checks) onto the wrong provider's session (2026-07-03).
+fn active_session_path<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<std::path::PathBuf>, String> {
+    if let Some(provider) = current_provider(app) {
+        if let Some(path) = latest_session_path_for_provider(app, provider)? {
+            return Ok(Some(path));
+        }
+    }
+    freshest_session_path(app)
+}
+
 // Shared cache for the conversation-derived routes. Worklist still reads
 // /__conversation-state for currentTurnEdits while Transcript owns the chat
 // surface; legacy last-assistant / last-exchange routes remain available for
@@ -12842,7 +12859,7 @@ fn read_last_exchange<R: tauri::Runtime>(
 // tab's "agent is thinking" spinner and the TextArea `enabled` binding.
 fn read_waiting_for_assistant<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     use std::io::{Read, Seek, SeekFrom};
-    let Some(path) = freshest_session_path(app)? else {
+    let Some(path) = active_session_path(app)? else {
         return Ok(br#"{"waiting":false}"#.to_vec());
     };
     let mut file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
@@ -14410,7 +14427,7 @@ fn format_bytes_human(bytes: u64) -> String {
 }
 
 fn read_session_size<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
-    let Some(path) = freshest_session_path(app)? else {
+    let Some(path) = active_session_path(app)? else {
         return Ok(b"{}".to_vec());
     };
     let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -14521,7 +14538,7 @@ fn session_size_status_row<R: tauri::Runtime>(app: &AppHandle<R>) -> serde_json:
 }
 
 fn read_session_turns<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
-    let Some(path) = freshest_session_path(app)? else {
+    let Some(path) = active_session_path(app)? else {
         return Ok(b"[]".to_vec());
     };
     let mtime = std::fs::metadata(&path)
@@ -14886,7 +14903,7 @@ fn send_ledger_line_delivers(line: &str) -> Option<bool> {
 // the exact PTY payload).
 fn record_outbound_send<R: tauri::Runtime>(app: &AppHandle<R>, payload: &str) {
     let now = unix_now_ms();
-    let jsonl_offset = freshest_session_path(app)
+    let jsonl_offset = active_session_path(app)
         .ok()
         .flatten()
         .and_then(|p| std::fs::metadata(p).ok())
@@ -15249,7 +15266,7 @@ fn read_projected_turns<R: tauri::Runtime>(
     let path_opt = if id.is_empty() {
         match provider {
             Some(p) => latest_session_path_for_provider(app, p)?,
-            None => freshest_session_path(app)?,
+            None => active_session_path(app)?,
         }
     } else {
         if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
@@ -15320,7 +15337,7 @@ fn read_tool_detail<R: tauri::Runtime>(
     if tool_id.is_empty() {
         return Ok(b"null".to_vec());
     }
-    let Some(path) = freshest_session_path(app)? else {
+    let Some(path) = active_session_path(app)? else {
         return Ok(b"null".to_vec());
     };
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;

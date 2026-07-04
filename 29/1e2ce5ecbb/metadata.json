@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.7.8",
+  "checkpoint_version": "branch-v1",
+  "checkpoint_id": "291e2ce5ecbb",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "src-tauri/src/lib.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/29/1e2ce5ecbb/0/metadata.json",
+      "transcript": "/29/1e2ce5ecbb/0/full.jsonl",
+      "compact_transcript": "/29/1e2ce5ecbb/0/transcript.jsonl",
+      "content_hash": "/29/1e2ce5ecbb/0/content_hash.txt",
+      "prompt": "/29/1e2ce5ecbb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1026,
+    "cache_creation_tokens": 371280,
+    "cache_read_tokens": 10867257,
+    "output_tokens": 48344,
+    "api_call_count": 35
+  }
+}

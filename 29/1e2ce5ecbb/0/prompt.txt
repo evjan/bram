@@ -1,0 +1,13 @@
+1
+
+---
+
+"Worth a Phase-2 refinement: derive the session label from the first user prompt (via --transcript/session info) rather than the earliest checkpoint's message, so titles stay stable across condensation. Want me to propose that as a worklist item?” Yes
+
+---
+
+approved: {"items":[{"id":"session-label-from-first-user-prompt","feedback":""}]}
+
+---
+
+restarted looks good

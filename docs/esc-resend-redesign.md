@@ -1,5 +1,14 @@
 # Esc / strand / resend redesign — plan of record
 
+## Current status
+
+Implemented through phase 3 for v0.2.17: Bram now records every
+agent-pane send in the host-side ledger, confirms delivery from the
+session JSONL, restores user-caused or retracted sends into the composer,
+and removes the old Resend button from the recovery path. Mechanical
+auto-resend remains trust-gated off by default until more soak time proves
+zero false strands.
+
 ## Why this document exists
 
 On 2026-07-03, while testing the turn-transport redesign, an Esc during an
@@ -121,20 +130,21 @@ status note ("your message was restored to the composer" /
 
 The redo must end net-simpler, as the transport redesign did.
 
-## Sequencing (non-negotiable order)
+## Sequencing
 
-1. Implement the ledger + landing detection host-side, **observe-only**:
+1. DONE: Implement the ledger + landing detection host-side, initially
+   observe-only:
    trace lines + a Status-tab row, no UI behavior change.
-2. Soak against real usage (both providers); tune until zero false
+2. DONE: Soak against real usage (both providers); tune until zero false
    strands / false landings.
-3. Switch the affordance to ledger events: the passive banner, the
+3. DONE: Switch the affordance to ledger events: the passive banner, the
    composer-restore for user-caused strands, and auto-resend for
    mechanical strands. The Resend button is deleted, not rewired.
    **Trust gate:** auto-resend ships OFF and turns on only after the
    phase-2 soak shows zero false strands — a false strand plus
    auto-resend would create a duplicate send, the one harm the old
    button never had.
-4. Delete the superseded layers.
+4. TODO: Delete the superseded layers.
 
 Never span old and new detection across the affordance at the same time.
 
@@ -142,11 +152,11 @@ Never span old and new detection across the affordance at the same time.
 
 `detect-stranded-unsent-message` (including the 2026-07-03 folded-in
 restore scope) is **subsumed by this plan** — its detector is this plan's
-phase 1, its banner is phase 3. When this plan lands, rescope that item to
-"phase 1: outbound-send ledger, observe-only" or drop it in favor of fresh
-phase items.
+host-side ledger, and its banner is the ledger-driven passive affordance.
+Follow-up work should focus on deleting superseded layers rather than
+reviving the old cause-specific detector.
 
-## Open questions for phase 1
+## Remaining questions
 
 - Envelope-for-all-sends: should tiny inline sends also write envelopes so
   the ledger has one recovery shape? (Cost is trivial; decide when

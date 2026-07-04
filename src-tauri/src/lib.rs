@@ -8358,9 +8358,9 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
         None => st_collapse_whitespace(data),
     };
     let data = payload.as_str();
-    // Outbound-send ledger (observe-only): record the exact PTY payload so
-    // landing can later be confirmed by outcome. Runs after framing so the
-    // ledger sees what the session JSONL will actually contain.
+    // Outbound-send ledger: record the exact PTY payload so landing can be
+    // confirmed by outcome. Runs after framing so the ledger sees what the
+    // session JSONL will actually contain.
     record_outbound_send(app, data);
     // Consolidated per-send diagnostic. One `[turn-send]` line captures the
     // whole payload Bram is about to hand the PTY for a single user send, so a
@@ -14810,13 +14810,12 @@ fn frame_outbound_turn<R: tauri::Runtime>(app: &AppHandle<R>, data: &str) -> Opt
 }
 
 // =====================================================================
-// Outbound-send ledger (docs/esc-resend-redesign.md, phase 1 —
-// OBSERVE-ONLY). Every toTurn send gets a ledger entry at injection
-// time; landing is confirmed by outcome (the send appearing in the
-// session JSONL after the injection offset), strand by grace timeout.
-// Nothing in the UI acts on this yet: traces + a Status-tab section
-// only, so the soak (plan step 2) can prove the detector before the
-// affordance switches to it (plan step 3).
+// Outbound-send ledger (docs/esc-resend-redesign.md). Every toTurn send
+// gets a ledger entry at injection time; landing is confirmed by outcome
+// (the send appearing in the session JSONL after the injection offset),
+// strand by grace timeout or post-Esc sweep. The ledger drives composer
+// restore for user-caused/retracted sends; mechanical auto-resend remains
+// trust-gated off by default.
 // =====================================================================
 
 #[derive(Clone)]
@@ -14847,7 +14846,8 @@ struct SendLedgerEntry {
 
 const SEND_LEDGER_CAP: usize = 50;
 // Grace before an unlanded send is called stranded. Deliberately generous
-// for the observe-only soak; tightening is a phase-2 tuning decision.
+// while the ledger continues to soak; tighten only after false-strand risk
+// is better characterized.
 const SEND_LEDGER_STRAND_GRACE_MS: i64 = 120_000;
 
 fn send_ledger_cell() -> &'static Mutex<Vec<SendLedgerEntry>> {
@@ -15396,7 +15396,7 @@ fn send_ledger_restore_text<R: tauri::Runtime>(app: &AppHandle<R>, entry: &SendL
 }
 
 // Status-tab section: a summary row plus the most recent entries, so the
-// observe-only soak is inspectable without grepping traces.
+// send ledger is inspectable without grepping traces.
 fn send_ledger_status_rows() -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
     let Ok(ledger) = send_ledger_cell().lock() else {
@@ -15411,7 +15411,7 @@ fn send_ledger_status_rows() -> Vec<serde_json::Value> {
         "level": if stranded > 0 { "warn" } else if landed > 0 { "ok" } else { "neutral" },
         "state": format!("{} landed / {} in flight / {} stranded", landed, injected, stranded),
         "detail": format!(
-            "observe-only (docs/esc-resend-redesign.md phase 1); {} entries tracked this run",
+            "ledger-driven Esc recovery; auto-resend trust-gated off by default; {} entries tracked this run",
             ledger.len()
         ),
         "seen": format_iso_utc_ms(now),

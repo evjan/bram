@@ -1873,6 +1873,15 @@ window.__bramPrepareWorklistMessageSubmission = function (opts) {
   var skipWorklist = opts.mode === "skip-worklist";
   window.__bramWorklistMessageSubmissionSeq = (window.__bramWorklistMessageSubmissionSeq || 0) + 1;
   var seq = window.__bramWorklistMessageSubmissionSeq;
+  // Every submit attempt traces BEFORE any gating/empty checks, so a send that silently goes nowhere is visible in bram-trace (2026-07-03: "message 2 resent got eaten" left zero traces).
+  try {
+    window.__bramIframeTrace("message-agent-submit", {
+      stage: "attempt",
+      seq: seq,
+      chars: rawText.length,
+      skipWorklist: skipWorklist,
+    });
+  } catch (e) {}
   if (skipWorklist && !rawText.trim()) return { submitted: false, seq: seq };
   var text = skipWorklist ? ("skip-worklist: " + rawText.trim()) : rawText;
   if (!text.trim()) return { submitted: false, seq: seq };
@@ -3316,6 +3325,20 @@ window.subscribeTauriEvent = function (key, eventName, fn) {
 window.subscribeTauriEvent("__bramNativePtyMenuUnsub", "pty-menu-changed", function (e) {
   window.__bramSetAgentMenuFromEvent(e, "agent-menu");
 });
+// Diagnostic tap for the send-restore chain (2026-07-03): the host emit
+// reaches the iframe (event-received traces) but the markup applier has
+// never traced. This native subscriber proves whether payloads survive
+// the bridge; the actual restore logic stays in __bramApplySendRestore.
+window.subscribeTauriEvent("__bramNativeSendRestoreUnsub", "send-restore", function (e) {
+  try {
+    var p = (e && e.payload) || null;
+    window.__bramIframeTrace("send-restore", {
+      stage: "native",
+      hasPayload: !!p,
+      chars: (p && p.text && p.text.length) || 0,
+    });
+  } catch (err) {}
+});
 window.subscribeTauriEvent("__bramNativeTurnStateUnsub", "turn-state-changed", function (e) {
   window.__bramSetAgentMenuFromTurnState((e && e.payload) || {}, "agent-menu");
 });
@@ -4504,6 +4527,104 @@ window.__bramTranscriptEventsFromTurns = function (payload, menu) {
 // Pure consumer shim for the Sessions tab: unwrap the /__turns envelope.
 window.__bramProjectedSessionTurns = function (payload) {
   return (payload && payload.turns) || [];
+};
+
+// Passive send-ledger notice (esc/resend redesign phase 3). Returns the
+// status-note text for the most recent RESOLVED ledger entry within the
+// last 10 minutes, or "" for silence. No action buttons by design:
+// recovery is automatic (restore / trust-gated auto-resend), and
+// landed-then-aborted gets silence.
+window.__bramSendLedgerNotice = function (payload) {
+  var entries = (payload && payload.entries) || [];
+  var nowMs = (payload && payload.nowMs) || Date.now();
+  var latest = null;
+  for (var i = 0; i < entries.length; i++) {
+    var e = entries[i];
+    if (!e || !e.resolvedAtMs) continue;
+    if (!latest || e.resolvedAtMs > latest.resolvedAtMs) latest = e;
+  }
+  if (!latest) return "";
+  if (nowMs - latest.resolvedAtMs > 2 * 60 * 1000) return "";
+  // The user moving on dismisses the note: any send injected after this
+  // entry resolved means they have re-engaged (2026-07-03: "too sticky").
+  for (var j = 0; j < entries.length; j++) {
+    var n = entries[j];
+    if (n && n.injectedAtMs > latest.resolvedAtMs) return "";
+  }
+  var label = "";
+  try {
+    var pv = String(latest.preview || "").replace(/\s+/g, " ").trim();
+    if (pv.length > 40) pv = pv.slice(0, 40) + "…";
+    if (pv) label = " “" + pv + "”";
+  } catch (e) { label = ""; }
+  if (latest.state === "stranded" && latest.cause === "user") {
+    return "Your message" + label + " didn’t go through — it’s back in the composer, edit and send when ready.";
+  }
+  if (latest.state === "landed" && latest.cause === "retracted") {
+    return "Your message" + label + " was interrupted before the agent took it — it's back in the composer.";
+  }
+  if (latest.state === "landed" && latest.cause === "aborted") {
+    return "Response interrupted — your message" + label + " was delivered.";
+  }
+  if (latest.state === "landed" && latest.retried) {
+    return "A lost send" + label + " was redelivered automatically.";
+  }
+  if (latest.state === "stranded" && latest.cause === "mechanical") {
+    return "A send" + label + " did not reach the agent; its text is kept in the send ledger (Status tab).";
+  }
+  return "";
+};
+
+// Apply a host `send-restore` event: the restored text goes into the
+// composer box and the persisted draft, so the restore survives remounts.
+// Aborted restores (p.aborted === true) skip when the composer already holds
+// a non-empty draft that differs from the restored text — an already-delivered
+// message must not clutter a new draft (2026-07-03 acid test). Strand restores
+// (p.aborted falsy) always apply: the text was never delivered and must be
+// preserved. When a restore does apply and the composer is non-empty, the
+// restored text is appended below a blank line rather than overwriting.
+// Called from Main.xmlui / Workspace.xmlui ChangeListeners with their
+// respective composer refs.
+window.__bramApplySendRestore = function (snapshot, box) {
+  try {
+    window.__bramIframeTrace("send-restore", {
+      stage: "enter",
+      hasSnapshot: !!snapshot,
+      hasText: !!(snapshot && snapshot.payload && snapshot.payload.text),
+      hasBox: !!box,
+    });
+  } catch (e) {}
+  var p = snapshot && snapshot.payload;
+  var text = p && p.text;
+  if (!text) return;
+  var existing = "";
+  try {
+    if (box && typeof box.value === "string") {
+      existing = box.value;
+    } else if (box && box.value != null) {
+      existing = String(box.value);
+    }
+  } catch (e) { existing = ""; }
+  var aborted = !!(p && p.aborted);
+  if (aborted && existing.trim() !== "" && existing !== text) {
+    try {
+      window.__bramIframeTrace("send-restore", { chars: text.length, skipped: true });
+    } catch (e) {}
+    return;
+  }
+  var merged;
+  if (existing.trim() === "" || existing === text) {
+    merged = text;
+  } else {
+    merged = existing + "\n\n" + text;
+  }
+  try { window.localStorage.setItem("bram.worklistMessageDraft", merged); } catch (e) {}
+  if (box && typeof box.setValue === "function") {
+    try { box.setValue(merged); } catch (e) {}
+  }
+  try {
+    window.__bramIframeTrace("send-restore", { chars: text.length, merged: existing.trim().length > 0 });
+  } catch (e) {}
 };
 
 // Stable identity key for the Transcript's pending-menu row: present /

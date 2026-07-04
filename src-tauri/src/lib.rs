@@ -5988,6 +5988,10 @@ fn pty_menu_clear<R: tauri::Runtime>(app: &AppHandle<R>, input: &str) {
             // soft turn-end check to catch that case
             // (claude-single-esc-banner-stuck).
             schedule_single_esc_soft_turn_end(app, now);
+            // Esc is also the user-caused strand signal: sweep the send
+            // ledger after a short settle so an unlanded send is restored
+            // to the composer within seconds, not the 120 s grace.
+            schedule_send_ledger_escape_sweep(app, now);
         }
     }
 }
@@ -8395,6 +8399,16 @@ fn write_pty_turn_intent<R: tauri::Runtime>(
             ),
         );
     }
+    inject_turn_payload(app, state, data)
+}
+
+// The raw PTY injection for a turn payload. Shared by the normal send
+// path above and the ledger's trust-gated auto-resend.
+fn inject_turn_payload<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, AppState>,
+    data: &str,
+) -> Result<(), String> {
     if cfg!(windows) {
         pty_write_internal(app, state, "\x15", "pty-intent-toTurn-windows-clear")?;
         pty_write_internal(app, state, data, "pty-intent-toTurn-windows-payload")?;
@@ -14822,6 +14836,13 @@ struct SendLedgerEntry {
     state: &'static str, // "injected" | "landed" | "stranded"
     resolved_at_ms: i64,
     via_queue: bool,
+    // Phase 3: strand classification ("user" when an Esc fell inside the
+    // send's window, "mechanical" otherwise; "" until stranded), the
+    // exact PTY payload (recovery source for auto-resend), and the
+    // one-retry latch.
+    cause: &'static str,
+    payload: String,
+    retried: bool,
 }
 
 const SEND_LEDGER_CAP: usize = 50;
@@ -14856,6 +14877,51 @@ fn send_ledger_needle(entry: &SendLedgerEntry) -> String {
     escaped[1..escaped.len() - 1].to_string()
 }
 
+// Extract the plain text of a user-shaped record for the synthetic
+// filter. Claude user records carry string content or an array of
+// text blocks; Codex carries payload.message or payload.content
+// input_text blocks.
+fn send_ledger_record_text(r: &serde_json::Value) -> String {
+    if let Some(c) = r.get("message").and_then(|m| m.get("content")) {
+        if let Some(s) = c.as_str() {
+            return s.to_string();
+        }
+        if let Some(arr) = c.as_array() {
+            return arr
+                .iter()
+                .filter_map(|b| {
+                    if b.get("type").and_then(|v| v.as_str()) == Some("text") {
+                        b.get("text").and_then(|v| v.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+    }
+    if let Some(p) = r.get("payload") {
+        if let Some(s) = p.get("message").and_then(|v| v.as_str()) {
+            return s.to_string();
+        }
+        if let Some(arr) = p.get("content").and_then(|v| v.as_array()) {
+            return arr
+                .iter()
+                .filter_map(|b| {
+                    let t = b.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if t == "input_text" || t == "text" {
+                        b.get("text").and_then(|v| v.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+    }
+    String::new()
+}
+
 // Does this JSONL record constitute DELIVERY of a send whose needle it
 // contains? Returns Some(via_queue) when it does. Claude `user` records
 // and `queued_command` attachments are delivery; Codex user records
@@ -14863,12 +14929,25 @@ fn send_ledger_needle(entry: &SendLedgerEntry) -> String {
 // queue-operation records are bookkeeping written at enqueue time (the
 // send may still be killed before delivery), and assistant records can
 // quote a send's text back — neither is delivery.
+// Synthetic user-shaped bookkeeping (Codex steer/abort notes filtered via
+// st_is_synthetic_codex_message, Claude "[Request interrupted" markers)
+// never counts as delivery — 2026-07-03 Codex acid test: the steer record
+// shadowed the real last user turn and blocked the aborted-latch.
 fn send_ledger_line_delivers(line: &str) -> Option<bool> {
     let Ok(r) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
         return None;
     };
+    let is_synthetic = |r: &serde_json::Value| -> bool {
+        let text = send_ledger_record_text(r);
+        st_is_synthetic_codex_message(&text) || text.trim_start().starts_with("[Request interrupted")
+    };
     match r.get("type").and_then(|v| v.as_str()) {
-        Some("user") => Some(false),
+        Some("user") => {
+            if is_synthetic(&r) {
+                return None;
+            }
+            Some(false)
+        }
         Some("attachment") => {
             let att = r.get("attachment")?;
             if att.get("type").and_then(|v| v.as_str()) == Some("queued_command") {
@@ -14880,6 +14959,9 @@ fn send_ledger_line_delivers(line: &str) -> Option<bool> {
         Some("event_msg") => {
             let p = r.get("payload")?;
             if p.get("type").and_then(|v| v.as_str()) == Some("user_message") {
+                if is_synthetic(&r) {
+                    return None;
+                }
                 Some(false)
             } else {
                 None
@@ -14890,6 +14972,9 @@ fn send_ledger_line_delivers(line: &str) -> Option<bool> {
             if p.get("type").and_then(|v| v.as_str()) == Some("message")
                 && p.get("role").and_then(|v| v.as_str()) == Some("user")
             {
+                if is_synthetic(&r) {
+                    return None;
+                }
                 Some(false)
             } else {
                 None
@@ -14926,6 +15011,9 @@ fn record_outbound_send<R: tauri::Runtime>(app: &AppHandle<R>, payload: &str) {
             state: "injected",
             resolved_at_ms: 0,
             via_queue: false,
+            cause: "",
+            payload: payload.to_string(),
+            retried: false,
         },
         None => SendLedgerEntry {
             id: format!("{}-inline", now),
@@ -14938,6 +15026,9 @@ fn record_outbound_send<R: tauri::Runtime>(app: &AppHandle<R>, payload: &str) {
             state: "injected",
             resolved_at_ms: 0,
             via_queue: false,
+            cause: "",
+            payload: payload.to_string(),
+            retried: false,
         },
     };
     if bram_trace_enabled() {
@@ -14969,9 +15060,61 @@ fn record_outbound_send<R: tauri::Runtime>(app: &AppHandle<R>, payload: &str) {
 // old session must not resolve entries). Landing is sought only in the
 // suffix past each entry's injection offset; queued delivery is flagged
 // when the matching line is a queue/attachment record.
-fn update_send_ledger<R: tauri::Runtime>(app: &AppHandle<R>, session_text: &str) {
+// Trust gate for auto-resend (docs/esc-resend-redesign.md): ships OFF;
+// enable via `{"sendLedger": {"autoResend": true}}` in .bram.json once
+// the soak shows zero false strands. Read per strand event (rare).
+fn send_ledger_auto_resend_enabled<R: tauri::Runtime>(app: &AppHandle<R>) -> bool {
+    let Some(root) = project_root(Some(app)) else {
+        return false;
+    };
+    let path = settings_target_path(&root);
+    let Ok(bytes) = std::fs::read(&path) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    v.get("sendLedger")
+        .and_then(|s| s.get("autoResend"))
+        .and_then(|b| b.as_bool())
+        .unwrap_or(false)
+}
+
+// Recovery actions decided under the ledger lock, executed after it is
+// released (they touch the PTY / emit events / read envelope files).
+enum SendLedgerAction {
+    // Restore the user's words to the composer and clear whatever was
+    // left in the terminal input. `aborted: false` = user-caused strand
+    // (message never delivered); `aborted: true` = landed-then-aborted
+    // (message delivered, response interrupted — CC restored the text
+    // into the terminal input, which is a concatenation trap for
+    // agent-pane users; relocate that affordance to the composer).
+    Restore {
+        id: String,
+        text: String,
+        aborted: bool,
+    },
+    // Re-inject a mechanically-stranded send's exact payload (trust-gated).
+    AutoResend { id: String, payload: String },
+}
+
+// `force_user_strand_before_ms`: the escape-sweep path passes the Esc
+// timestamp so any send still unlanded after the post-Esc settle is
+// stranded (cause=user) IMMEDIATELY instead of waiting out the grace —
+// the Esc is the signal, and a short strand window keeps leftover text
+// out of the terminal input (2026-07-03 acid test: leftover text
+// concatenated with the next send). The projection path passes None.
+fn update_send_ledger<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    session_text: &str,
+    force_user_strand_before_ms: Option<i64>,
+) {
     let now = unix_now_ms();
+    let auto_resend = send_ledger_auto_resend_enabled(app);
+    let last_esc_ms = last_pty_escape_ms_cell().lock().map(|g| *g).unwrap_or(0);
+    let mut actions: Vec<SendLedgerAction> = Vec::new();
     let mut transitions: Vec<String> = Vec::new();
+    let mut user_strand_hit = false;
     if let Ok(mut ledger) = send_ledger_cell().lock() {
         for entry in ledger.iter_mut() {
             if entry.state != "injected" {
@@ -15013,25 +15156,243 @@ fn update_send_ledger<R: tauri::Runtime>(app: &AppHandle<R>, session_text: &str)
                     entry.via_queue,
                     now - entry.injected_at_ms,
                 ));
-            } else if now - entry.injected_at_ms > SEND_LEDGER_STRAND_GRACE_MS {
+            } else if now - entry.injected_at_ms > SEND_LEDGER_STRAND_GRACE_MS
+                || matches!(force_user_strand_before_ms, Some(esc_ms) if entry.injected_at_ms <= esc_ms)
+            {
+                // Classification (plan invariant 3): an Esc inside the
+                // send's window means the user may have cancelled on
+                // purpose — restore their words, never auto-resend.
+                let user_caused = last_esc_ms >= entry.injected_at_ms
+                    || force_user_strand_before_ms.is_some();
+                entry.cause = if user_caused { "user" } else { "mechanical" };
                 entry.state = "stranded";
                 entry.resolved_at_ms = now;
                 transitions.push(format!(
-                    "op=transition id={} state=stranded elapsed_ms={}",
+                    "op=transition id={} state=stranded cause={} elapsed_ms={}",
                     entry.id,
+                    entry.cause,
                     now - entry.injected_at_ms,
                 ));
+                if user_caused {
+                    user_strand_hit = true;
+                    actions.push(SendLedgerAction::Restore {
+                        id: entry.id.clone(),
+                        text: send_ledger_restore_text(app, entry),
+                        aborted: false,
+                    });
+                } else if auto_resend && !entry.retried {
+                    // One bounded retry: back to injected against the
+                    // current end of file so the retry's landing is
+                    // tracked like a fresh send.
+                    entry.retried = true;
+                    entry.state = "injected";
+                    entry.resolved_at_ms = 0;
+                    entry.injected_at_ms = now;
+                    entry.jsonl_offset_at_inject = session_text.len() as u64;
+                    actions.push(SendLedgerAction::AutoResend {
+                        id: entry.id.clone(),
+                        payload: entry.payload.clone(),
+                    });
+                }
+            }
+        }
+        // Escape-sweep only: the DOMINANT live Esc case (2026-07-03 acid
+        // test) is landed-then-aborted — landing takes ~1.3 s, so any
+        // human Esc usually interrupts a send that already delivered.
+        // CC restores the text into the terminal input; relocate that
+        // affordance to the composer and clear the input, with an honest
+        // "delivered, response interrupted" note. Most recent qualifying
+        // entry only, once (cause latches to "aborted").
+        // One Esc, one subject: if this sweep already stranded a
+        // user-caused send, that send IS what the Esc was about — do not
+        // also latch an earlier landed entry as aborted.
+        if let (Some(esc_ms), false) = (force_user_strand_before_ms, user_strand_hit) {
+            // The Esc must be ABOUT our entry: only latch when the last
+            // delivered user turn in the session is the entry itself.
+            // Otherwise (e.g. the user escaped a terminal-typed message
+            // the ledger never carried) stay silent — a banner about a
+            // stale send is true-but-misleading (2026-07-03 acid test).
+            // A queued send lands AFTER the Esc that delivered it: CC's
+            // interrupt writes the queued message as a user record ~1 s
+            // post-Esc (2026-07-03 acid test, "message 2" race). Landings
+            // up to 10 s after the Esc therefore still qualify; the
+            // last-user-turn check decides which entry the Esc was about.
+            let last_delivery_line = session_text
+                .lines()
+                .rev()
+                .find(|l| send_ledger_line_delivers(l).is_some());
+            if let Some(entry) = ledger
+                .iter_mut()
+                .filter(|e| {
+                    e.state == "landed"
+                        && e.cause.is_empty()
+                        && e.injected_at_ms <= esc_ms
+                        && esc_ms - e.resolved_at_ms <= 60_000
+                        && e.resolved_at_ms - esc_ms <= 10_000
+                })
+                .max_by_key(|e| e.resolved_at_ms)
+            {
+                let is_last_turn = last_delivery_line
+                    .map(|line| line.contains(&send_ledger_needle(entry)))
+                    .unwrap_or(false);
+                if is_last_turn {
+                    let post_esc = entry.resolved_at_ms > esc_ms;
+                    let codex = matches!(current_provider(app), Some(SessionProvider::Codex));
+                    if post_esc && codex {
+                        // Codex STEER semantics: an interrupt SUBMITS the
+                        // queued message as steering for the continuing
+                        // turn ("Model interrupted to submit steer
+                        // instructions") — the agent HAS the message and
+                        // is acting on it. No retraction, no restore (a
+                        // composer copy would invite a double send), no
+                        // banner. Latch cause so later sweeps skip it.
+                        // 2026-07-03 Codex acid test: banner claimed "not
+                        // taken" while Codex visibly worked on the text.
+                        entry.cause = "steer";
+                        transitions.push(format!(
+                            "op=aborted-skip id={} reason=codex-steer-delivery",
+                            entry.id,
+                        ));
+                    } else {
+                        // A landing recorded AFTER the Esc is Claude
+                        // Code's interrupt bookkeeping for a queued send:
+                        // the user record exists in the JSONL, but CC
+                        // retracted the message from the conversation and
+                        // restored it for editing — no agent will act on
+                        // it. Transport-landed, conversationally
+                        // undelivered.
+                        let retracted = post_esc;
+                        entry.cause = if retracted { "retracted" } else { "aborted" };
+                        transitions.push(format!(
+                            "op=transition id={} state=landed cause={} esc_ms={}",
+                            entry.id, entry.cause, esc_ms,
+                        ));
+                        actions.push(SendLedgerAction::Restore {
+                            id: entry.id.clone(),
+                            text: send_ledger_restore_text(app, entry),
+                            // Retracted content must always be preserved
+                            // (the agent never took it): strand-style
+                            // restore that merges below an existing draft
+                            // instead of the aborted draft-skip.
+                            aborted: !retracted,
+                        });
+                    }
+                } else {
+                    transitions.push(format!(
+                        "op=aborted-skip id={} reason=not-last-user-turn",
+                        entry.id,
+                    ));
+                }
             }
         }
     }
-    if !transitions.is_empty() {
+    if !transitions.is_empty() || !actions.is_empty() {
         if bram_trace_enabled() {
             for t in &transitions {
                 append_bram_trace_line(app, "send-ledger", t);
             }
         }
+        for action in actions {
+            match action {
+                SendLedgerAction::Restore { id, text, aborted } => {
+                    if bram_trace_enabled() {
+                        append_bram_trace_line(
+                            app,
+                            "send-ledger",
+                            &format!(
+                                "op=restore id={} aborted={} chars={}",
+                                id,
+                                aborted,
+                                text.chars().count()
+                            ),
+                        );
+                    }
+                    let _ = app.emit(
+                        "send-restore",
+                        serde_json::json!({ "id": id, "text": text, "aborted": aborted }),
+                    );
+                    // Provider-aware input clear: Ctrl-C empties Claude
+                    // Code's Ink input (verified live 2026-07-03) but not
+                    // Codex's readline-style composer, which honors
+                    // Ctrl-U (Codex round left the restored text in its
+                    // input). Both are harmless on an empty input.
+                    let clear = match current_provider(app) {
+                        Some(SessionProvider::Codex) => "\x15",
+                        _ => "\x03",
+                    };
+                    let state = app.state::<AppState>();
+                    let _ = pty_write_internal(app, &state, clear, "send-ledger-restore-clear");
+                }
+                SendLedgerAction::AutoResend { id, payload } => {
+                    if bram_trace_enabled() {
+                        append_bram_trace_line(
+                            app,
+                            "send-ledger",
+                            &format!("op=auto-resend id={} bytes={}", id, payload.len()),
+                        );
+                    }
+                    let state = app.state::<AppState>();
+                    let _ = inject_turn_payload(app, &state, &payload);
+                }
+            }
+        }
         emit_replayable_signal(app, "send-ledger-changed");
     }
+}
+
+// After a PTY Esc, give landing a short settle (observed landing lag is
+// 1.2–3.6 s), then sweep: any send still unlanded from before the Esc is
+// a user-caused strand NOW — restore + clear immediately rather than
+// leaving the popped text in the terminal input for the 120 s grace.
+// Mirrors the schedule_single_esc_soft_turn_end thread pattern.
+fn schedule_send_ledger_escape_sweep<R: tauri::Runtime>(app: &AppHandle<R>, escape_ts_ms: i64) {
+    // Sweep when a send is still in flight OR one landed recently — the
+    // landed-then-aborted case has NO injected entries at Esc time (the
+    // send landed ~1.3 s after injection, faster than any human Esc), so
+    // gating on injected-only silently skipped the dominant case
+    // (2026-07-03 acid test regression).
+    let relevant = send_ledger_cell()
+        .lock()
+        .map(|l| {
+            l.iter().any(|e| {
+                e.state == "injected"
+                    || (e.state == "landed"
+                        && e.cause.is_empty()
+                        && escape_ts_ms - e.resolved_at_ms <= 60_000)
+            })
+        })
+        .unwrap_or(false);
+    if !relevant {
+        return;
+    }
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(5000));
+        let Ok(Some(path)) = active_session_path(&app_handle) else {
+            return;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return;
+        };
+        update_send_ledger(&app_handle, &text, Some(escape_ts_ms));
+    });
+}
+
+// The text a Restore puts back in the composer: the envelope's full text
+// for framed sends (mode prefix reattached so a resubmit keeps its
+// semantics), the recorded payload for inline sends.
+fn send_ledger_restore_text<R: tauri::Runtime>(app: &AppHandle<R>, entry: &SendLedgerEntry) -> String {
+    if entry.kind == "framed" {
+        if let Some(envelope) = read_outbound_turn_by_id(app, &entry.id) {
+            let text = outbound_turn_text(&envelope);
+            let mode = envelope.get("mode").and_then(|v| v.as_str()).unwrap_or("");
+            if mode == "skip-worklist" {
+                return format!("skip-worklist: {}", text);
+            }
+            return text;
+        }
+    }
+    entry.payload.clone()
 }
 
 // Status-tab section: a summary row plus the most recent entries, so the
@@ -15057,6 +15418,16 @@ fn send_ledger_status_rows() -> Vec<serde_json::Value> {
     }));
     for entry in ledger.iter().rev().take(5) {
         let age_s = (now - entry.injected_at_ms) / 1000;
+        let mut state_label = entry.state.to_string();
+        if entry.state == "stranded" && !entry.cause.is_empty() {
+            state_label = format!("{} ({})", state_label, entry.cause);
+        }
+        if entry.via_queue {
+            state_label.push_str(" (via queue)");
+        }
+        if entry.retried {
+            state_label.push_str(" (retried)");
+        }
         rows.push(serde_json::json!({
             "signal": format!("Send {}", entry.id),
             "level": match entry.state {
@@ -15064,11 +15435,7 @@ fn send_ledger_status_rows() -> Vec<serde_json::Value> {
                 "stranded" => "warn",
                 _ => "neutral",
             },
-            "state": if entry.via_queue {
-                format!("{} (via queue)", entry.state)
-            } else {
-                entry.state.to_string()
-            },
+            "state": state_label,
             "detail": format!(
                 "{}{} — {} · injected {}s ago",
                 entry.kind,
@@ -15293,7 +15660,7 @@ fn read_projected_turns<R: tauri::Runtime>(
     // Send-ledger check piggybacks on the live-session parse (plan step 1).
     // By-id fetches of other sessions must not resolve ledger entries.
     if id.is_empty() {
-        update_send_ledger(app, &text);
+        update_send_ledger(app, &text, None);
     }
     let mut turns = st_parse_lines_to_turns(&text);
     project_user_turns(app, &mut turns);
@@ -21770,6 +22137,19 @@ mod session_turn_tests {
             ),
             None
         );
+        // Synthetic user-shaped bookkeeping never delivers.
+        assert_eq!(
+            super::send_ledger_line_delivers(
+                r#"{"type":"user","message":{"content":"[Request interrupted by user]"}}"#
+            ),
+            None
+        );
+        assert_eq!(
+            super::send_ledger_line_delivers(
+                r#"{"type":"event_msg","payload":{"type":"user_message","message":"<turn_aborted>"}}"#
+            ),
+            None
+        );
     }
 
     #[test]
@@ -21785,6 +22165,9 @@ mod session_turn_tests {
             state: "injected",
             resolved_at_ms: 0,
             via_queue: false,
+            cause: "",
+            payload: String::new(),
+            retried: false,
         };
         assert_eq!(
             super::send_ledger_needle(&framed),
@@ -24396,6 +24779,38 @@ fn route_request<R: tauri::Runtime>(
     // Host-derived turn timeline. Mirrors the iframe sessionTurns(jsonlText)
     // helper that walked the full JSONL on every fanout. Returns the same
     // [{role, text, entries[], images[]}] shape Transcript renders against.
+    // Send-ledger snapshot (esc/resend redesign phase 3): drives the
+    // passive banner. Pure read; no state transitions happen here.
+    if path == "__send-ledger" {
+        let entries: Vec<serde_json::Value> = send_ledger_cell()
+            .lock()
+            .map(|ledger| {
+                ledger
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "id": e.id,
+                            "kind": e.kind,
+                            "state": e.state,
+                            "cause": e.cause,
+                            "viaQueue": e.via_queue,
+                            "mode": e.mode,
+                            "preview": e.preview,
+                            "injectedAtMs": e.injected_at_ms,
+                            "resolvedAtMs": e.resolved_at_ms,
+                            "retried": e.retried,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let body = serde_json::json!({ "entries": entries, "nowMs": unix_now_ms() });
+        return match serde_json::to_vec(&body) {
+            Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
+            Err(e) => (500, "text/plain; charset=utf-8", e.to_string().into_bytes()),
+        };
+    }
+
     // Single host turn projection (docs/turn-transport-redesign.md):
     // normalized turns from session JSONL + outbound-turn envelopes, all
     // legacy resolution done host-side. Transcript, Sessions, and any

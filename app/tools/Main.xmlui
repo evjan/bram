@@ -1,4 +1,4 @@
-<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.messageBounced="{false}" var.lastSeenAgentVerb="{''}" var.footerVoiceRecording="{false}" var.headerInflightTick="{0}" var.agentSwitcherSelected="{'claude'}" var.agentSwitching="{false}" var.composerFocused="{false}"
+<App layout="vertical-sticky" var.rightPaneSize="(measuring…)" var.updateBannerDismissedVersion="{''}" var.setupCompleteProvider="{''}" var.lastSeenAgentVerb="{''}" var.footerVoiceRecording="{false}" var.headerInflightTick="{0}" var.agentSwitcherSelected="{'claude'}" var.agentSwitching="{false}" var.composerFocused="{false}"
   onInit="updateBannerDismissedVersion = readLocalStorage('bram.updateBannerDismissedVersion', ''); startBramLatestJsonlPush(() => (enhanceStatus.value &amp;&amp; enhanceStatus.value.activeProvider) || '')">
   <PushSource
     id="mainAgentStatus"
@@ -81,16 +81,26 @@
   <ChangeListener
     listenTo="{footerSessionsChangedEvt.value &amp;&amp; footerSessionsChangedEvt.value.tick}"
     onDidChange="() => footerSessions.refetch()" />
-  <!-- #210 bounce-back: the host emits message-bounced when an agent-pane Esc
-       interrupted a just-sent message before the agent committed it (strand).
-       Surface a resend banner so a terminal-blind user can recover. -->
+  <!-- Send-ledger affordance (esc/resend redesign phase 3): the host's
+       outbound-send ledger drives a PASSIVE status note (no buttons) and
+       a composer restore for user-caused strands. The old message-bounced
+       event still fires host-side but nothing listens; it is deleted in
+       plan step 4. -->
   <PushSource
-    id="bounceEvt"
+    id="sendLedgerEvt"
     initial="{null}"
-    subscribe="{window.bramSubscribeTauriEvent('message-bounced')}" />
+    subscribe="{window.bramSubscribeTauriEvent('send-ledger-changed')}" />
+  <DataSource id="sendLedgerDs" url="/__send-ledger" />
   <ChangeListener
-    listenTo="{bounceEvt.value &amp;&amp; bounceEvt.value.tick}"
-    onDidChange="(c) => { if (c.newValue) { messageBounced = true; } }" />
+    listenTo="{sendLedgerEvt.value &amp;&amp; sendLedgerEvt.value.tick}"
+    onDidChange="() => sendLedgerDs.refetch()" />
+  <PushSource
+    id="sendRestoreEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('send-restore')}" />
+  <ChangeListener
+    listenTo="{sendRestoreEvt.value &amp;&amp; sendRestoreEvt.value.tick}"
+    onDidChange="() => window.__bramApplySendRestore(sendRestoreEvt.value, footerComposerBox)" />
   <!-- Light-touch backstop: the always-mounted footer never re-mounts, so its
        session meta can stay frozen at launch values. Refetch on agent
        turn-state transitions (the App-scope status push already driving the
@@ -419,7 +429,7 @@
            Enter and the Send button each run the submit block directly. -->
       <Form
         width="100%"
-        onSubmit="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { messageBounced = false; window.__bramPrepareWorklistMessageSubmission({text: m, voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }">
+        onSubmit="const m = (footerComposerBox &amp;&amp; footerComposerBox.value || '').trim(); if (m) { window.__bramPrepareWorklistMessageSubmission({text: m, voiceTarget: 'message-agent'}); footerComposerBox.setValue(''); }">
         <property name="buttonRowTemplate"><Fragment/></property>
         <HStack width="100%" gap="$space-2" verticalAlignment="center">
           <Button
@@ -470,22 +480,18 @@
         maxLines="1"
         paddingHorizontal="$space-1"
         value="{window.__bramSessionMetaLine(window.__bramCurrentSessionOf(footerSessions.value))}" />
-      <!-- #210 bounce-back resend affordance — in the sticky footer so it's
-           always visible. messageBounced is set by the message-bounced event. -->
+      <!-- Passive send-ledger note — in the sticky footer so it's always
+           visible. Text comes from the host ledger's resolved outcomes;
+           recovery is automatic, so there are no action buttons. -->
       <VStack
-        when="{messageBounced}"
+        when="{window.__bramSendLedgerNotice(sendLedgerDs.value)}"
         padding="$space-2"
         gap="$space-1"
         backgroundColor="$color-info-50"
         borderTop="1px solid $color-info-200">
-        <Text fontWeight="bold" fontSize="$fontSize-sm">Last message interrupted before it sent — not delivered.</Text>
-        <HStack gap="$space-2" verticalAlignment="center">
-          <Button
-            label="Resend"
-            size="xs"
-            tooltip="Submit the message still sitting in the agent's input"
-            onClick="messageBounced = false; window.sendKeys('\r')" />
-        </HStack>
+        <Text
+          fontSize="$fontSize-sm"
+          value="{window.__bramSendLedgerNotice(sendLedgerDs.value)}" />
       </VStack>
     </VStack>
     </Theme>

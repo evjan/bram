@@ -210,6 +210,15 @@
     id="agentMenuEvt"
     initial="{null}"
     subscribe="{window.bramSubscribeAgentMenu()}" />
+  <!-- Send-ledger restore (esc/resend redesign phase 3): a user-caused
+       strand puts the user's words back into this page's message box. -->
+  <PushSource
+    id="sendRestoreEvt"
+    initial="{null}"
+    subscribe="{window.bramSubscribeTauriEvent('send-restore')}" />
+  <ChangeListener
+    listenTo="{sendRestoreEvt.value &amp;&amp; sendRestoreEvt.value.tick}"
+    onDidChange="() => window.__bramApplySendRestore(sendRestoreEvt.value, worklistInputBox)" />
   <!-- The dock's "You" turn arrives fully resolved from the host: the
        conversation-state payload runs the same projection pass as /__turns
        (worklist payloads, feedback refs, turn frames), so no client-side

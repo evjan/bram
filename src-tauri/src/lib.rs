@@ -11352,6 +11352,277 @@ fn search_sessions<R: tauri::Runtime>(
     Ok(results)
 }
 
+// ── Entire-sourced session list (Phase 1 of the sessions/checkpoints
+// migration) ─────────────────────────────────────────────────────────
+// The Sessions tab list is sourced from Entire checkpoints instead of a
+// direct provider-JSONL scan. `entire checkpoint explain --json` returns a
+// repo + current-branch scoped array of {checkpoint_id, session_id, date,
+// message}; grouped by session_id it reproduces Entire's own web Sessions
+// view: one row per session, labeled by the first checkpoint's message (the
+// opening prompt), with a checkpoint count. `entire session list --json`
+// (global across worktrees) is joined on session_id purely for the extras
+// checkpoints don't carry (agent, model, tokens, status).
+//
+// Scope caveats (see resources/worklist-drafts/entire-sessions-checkpoints-
+// migration.md): current-branch only — `entire checkpoint explain` has no
+// branch flag, so a per-branch selector is deferred. On any `entire`
+// failure this degrades to an empty list (friendly empty state), matching
+// the old gh/JSONL helpers' quiet-degrade contract.
+#[derive(serde::Serialize)]
+struct CheckpointSessionEntry {
+    id: String,
+    title: Option<String>,
+    provider: SessionProvider,
+    current: bool,
+    // ISO-8601 timestamp of the latest checkpoint (the frontend parses it
+    // with `new Date(...)`, falling back to `mtime` for JSONL search rows).
+    date: String,
+    checkpoints: usize,
+    model: Option<String>,
+    tokens: Option<u64>,
+    status: Option<String>,
+}
+
+fn provider_from_agent(agent: &str) -> Option<SessionProvider> {
+    let a = agent.to_lowercase();
+    if a.contains("codex") {
+        Some(SessionProvider::Codex)
+    } else if a.contains("claude") {
+        Some(SessionProvider::Claude)
+    } else {
+        None
+    }
+}
+
+// Pure grouping/join logic, factored out for unit testing.
+fn build_checkpoint_session_entries(
+    checkpoints: &[serde_json::Value],
+    sessions_meta: &[serde_json::Value],
+    live_id: Option<&str>,
+    provider_filter: Option<SessionProvider>,
+) -> Vec<CheckpointSessionEntry> {
+    struct Agg {
+        earliest_date: String,
+        title: String,
+        latest_date: String,
+        count: usize,
+    }
+    let mut grouped: std::collections::HashMap<String, Agg> = std::collections::HashMap::new();
+    for cp in checkpoints {
+        let sid = cp.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+        if sid.is_empty() {
+            continue;
+        }
+        let date = cp
+            .get("date")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let msg = cp
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let entry = grouped.entry(sid.to_string()).or_insert_with(|| Agg {
+            earliest_date: date.clone(),
+            title: msg.clone(),
+            latest_date: date.clone(),
+            count: 0,
+        });
+        entry.count += 1;
+        // Earliest checkpoint's message is the session's opening prompt.
+        if date < entry.earliest_date {
+            entry.earliest_date = date.clone();
+            entry.title = msg.clone();
+        }
+        if date > entry.latest_date {
+            entry.latest_date = date.clone();
+        }
+    }
+
+    let mut meta: std::collections::HashMap<&str, &serde_json::Value> =
+        std::collections::HashMap::new();
+    for session in sessions_meta {
+        if let Some(sid) = session.get("session_id").and_then(|v| v.as_str()) {
+            meta.insert(sid, session);
+        }
+    }
+
+    let mut entries: Vec<CheckpointSessionEntry> = grouped
+        .into_iter()
+        .filter_map(|(sid, agg)| {
+            let session = meta.get(sid.as_str());
+            let agent = session
+                .and_then(|v| v.get("agent"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let provider = provider_from_agent(agent)
+                .or(provider_filter)
+                .unwrap_or(SessionProvider::Claude);
+            if let Some(want) = provider_filter {
+                if provider != want {
+                    return None;
+                }
+            }
+            Some(CheckpointSessionEntry {
+                current: live_id == Some(sid.as_str()),
+                id: sid,
+                title: if agg.title.trim().is_empty() {
+                    None
+                } else {
+                    Some(agg.title)
+                },
+                provider,
+                date: agg.latest_date,
+                checkpoints: agg.count,
+                model: session
+                    .and_then(|v| v.get("model"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                tokens: session
+                    .and_then(|v| v.get("tokens"))
+                    .and_then(|v| v.get("total"))
+                    .and_then(|v| v.as_u64()),
+                status: session
+                    .and_then(|v| v.get("status"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            })
+        })
+        .collect();
+    // Most-recently-active first (ISO-8601 sorts lexically for same offset).
+    entries.sort_by(|a, b| b.date.cmp(&a.date));
+    entries
+}
+
+// Run `entire <args>` in the project root and parse stdout as a JSON array.
+// Quiet-degrades to an empty vec on any failure.
+fn entire_json_array<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    args: &[&str],
+    ctx: &str,
+) -> Vec<serde_json::Value> {
+    let Some(root) = project_root(Some(app)) else {
+        return vec![];
+    };
+    match std::process::Command::new("entire")
+        .current_dir(&root)
+        .args(args)
+        .output()
+    {
+        Ok(out) if out.status.success() => serde_json::from_slice::<Vec<serde_json::Value>>(
+            &out.stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("[{}] parse: {}", ctx, e);
+            vec![]
+        }),
+        Ok(out) => {
+            eprintln!(
+                "[{}] non-zero exit: {}",
+                ctx,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            vec![]
+        }
+        Err(e) => {
+            eprintln!("[{}] failed to spawn: {}", ctx, e);
+            vec![]
+        }
+    }
+}
+
+fn list_sessions_via_entire<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    provider: Option<SessionProvider>,
+    limit: Option<usize>,
+) -> Result<Vec<CheckpointSessionEntry>, String> {
+    let checkpoints = entire_json_array(
+        app,
+        &["checkpoint", "explain", "--json"],
+        "entire checkpoint explain",
+    );
+    let sessions_meta = entire_json_array(app, &["session", "list", "--json"], "entire session list");
+    let live = provider.and_then(|p| live_session_id(app, p));
+    let mut entries =
+        build_checkpoint_session_entries(&checkpoints, &sessions_meta, live.as_deref(), provider);
+    if let Some(n) = limit {
+        entries.truncate(n);
+    }
+    append_bram_trace_line(
+        app,
+        "sessions",
+        &format!(
+            "op=list-entire provider={} visible={} checkpoints={} current_id={}",
+            provider.map(session_provider_label).unwrap_or("none"),
+            entries.len(),
+            checkpoints.len(),
+            live.as_deref().unwrap_or(""),
+        ),
+    );
+    Ok(entries)
+}
+
+#[cfg(test)]
+mod checkpoint_session_tests {
+    use super::{build_checkpoint_session_entries, SessionProvider};
+    use serde_json::json;
+
+    #[test]
+    fn groups_checkpoints_by_session_with_first_prompt_label() {
+        let checkpoints = vec![
+            json!({ "checkpoint_id": "c3", "session_id": "s1", "date": "2026-07-04T22:30:00+02:00", "message": "third" }),
+            json!({ "checkpoint_id": "c1", "session_id": "s1", "date": "2026-07-04T22:10:00+02:00", "message": "FIRST prompt" }),
+            json!({ "checkpoint_id": "c2", "session_id": "s1", "date": "2026-07-04T22:20:00+02:00", "message": "second" }),
+            json!({ "checkpoint_id": "d1", "session_id": "s2", "date": "2026-07-03T09:00:00+02:00", "message": "other session" }),
+        ];
+        let meta = vec![
+            json!({ "session_id": "s1", "agent": "Claude Code", "model": "opus", "status": "active", "tokens": { "total": 42 } }),
+            json!({ "session_id": "s2", "agent": "Codex", "status": "ended" }),
+        ];
+        let entries = build_checkpoint_session_entries(&checkpoints, &meta, Some("s1"), None);
+
+        // Most-recently-active session (s1) first.
+        assert_eq!(entries[0].id, "s1");
+        // Label is the EARLIEST checkpoint's message (opening prompt), not latest.
+        assert_eq!(entries[0].title.as_deref(), Some("FIRST prompt"));
+        assert_eq!(entries[0].checkpoints, 3);
+        assert!(entries[0].current);
+        assert!(entries[0].provider == SessionProvider::Claude);
+        assert_eq!(entries[0].tokens, Some(42));
+        // Latest checkpoint date drives the "modified" column.
+        assert_eq!(entries[0].date, "2026-07-04T22:30:00+02:00");
+
+        assert_eq!(entries[1].id, "s2");
+        assert!(!entries[1].current);
+        assert!(entries[1].provider == SessionProvider::Codex);
+    }
+
+    #[test]
+    fn provider_filter_drops_other_providers() {
+        let checkpoints = vec![
+            json!({ "checkpoint_id": "c1", "session_id": "s1", "date": "2026-07-04T22:10:00+02:00", "message": "claude" }),
+            json!({ "checkpoint_id": "d1", "session_id": "s2", "date": "2026-07-03T09:00:00+02:00", "message": "codex" }),
+        ];
+        let meta = vec![
+            json!({ "session_id": "s1", "agent": "Claude Code" }),
+            json!({ "session_id": "s2", "agent": "Codex" }),
+        ];
+        let entries = build_checkpoint_session_entries(
+            &checkpoints,
+            &meta,
+            None,
+            Some(SessionProvider::Claude),
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "s1");
+    }
+}
+
+// Pre-migration provider-JSONL session list. Retained for reference /
+// rollback while the Entire-sourced list (list_sessions_via_entire) is the
+// active `/__sessions/list` implementation.
+#[allow(dead_code)]
 fn list_sessions<R: tauri::Runtime>(
     app: &AppHandle<R>,
     preferred: Option<SessionProvider>,
@@ -24896,7 +25167,7 @@ fn route_request<R: tauri::Runtime>(
         } else if rest == "list" {
             (
                 "application/json; charset=utf-8",
-                list_sessions(app, provider, limit)
+                list_sessions_via_entire(app, provider, limit)
                     .and_then(|entries| serde_json::to_vec(&entries).map_err(|e| e.to_string())),
             )
         } else if rest == "latest" {

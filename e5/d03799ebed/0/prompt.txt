@@ -1,0 +1,57 @@
+Propose a worklist item to switch from using the `gh` CLI to use `entire` CLI instead and use trails instead of issues etc. No more github to be used by this app
+
+---
+
+1. Up to you, if slices or separate items comes more naturally with the Bram model whatever is fine. This is also me learning how to use Bram 2. No —json flag, ok? Why is that a problem. As for it using the `gh` cli under the hood: that’s fine
+
+---
+
+Sounds good
+
+---
+
+approved: {"items":[{"id":"migrate-github-gh-to-entire-trails","feedback":""}]}
+
+---
+
+approved: {"items":[{"id":"entire-sessions-checkpoints-migration","feedback":"First figure out if it's feasible to replace stuff in here with entire sessions and checkpoints or if they're different conceptually "}]}
+
+---
+
+Isn’t the `entire checkpoint` exactly the raw turn content that the Transcript is for Bram today?
+
+---
+
+Plain replace, I only just started using Bram and Entire was enabled from the get go so I shouldn’t lose anything right? Try to invalidate that assumption
+
+---
+
+Read and follow this Bram turn: @resources/outbound-turns/1783197517915-turn.json @/Users/peterevjan/.cache/bram/paste/1783197516640-574218e5.png (end of Bram turn)
+
+---
+
+2. Project scope. entire session list is global across all worktrees/projects. Bram's tab is scoped to this repo. "Plain replace" as literally stated would show sessions from every project you use Entire in — so it needs a worktree_path filter bolted on, not a straight swap. As for the above - surely that’s not true? Surely we can scope sessions by repo? 3. Non-claude agents: good call. We should have something in Bram that warns us if we switch to an agent that we haven’t added in entire for the repo 4. That’s fine
+
+---
+
+"On #3 (warn when switching to an agent not entire agent add-ed for the repo): agreed, good idea — but it's a distinct feature from the session-list swap. I'd file it as its own worklist item (Bram checks entire agent list against the active agent and surfaces a banner). Want me to propose that item too?” Yes please
+
+---
+
+approved: {"items":[{"id":"entire-sessions-checkpoints-migration","feedback":""}]}
+
+---
+
+"To see it in the app: lib.rs isn't hot-reloadable. I've already run cargo build (debug), so the ./bram symlink target is fresh — you just need to relaunch ./bram.” - I don’t understand this part, where do i run it and how?
+
+---
+
+ln -s instead?
+
+---
+
+Ok I’m back and running our new version
+
+---
+
+Read and follow this Bram turn: @resources/outbound-turns/1783199499158-turn.json @/Users/peterevjan/.cache/bram/paste/1783199498473-150e7c1a.png (end of Bram turn)

@@ -11381,6 +11381,10 @@ struct CheckpointSessionEntry {
     model: Option<String>,
     tokens: Option<u64>,
     status: Option<String>,
+    // Earliest checkpoint id for the session; used server-side to fetch the
+    // stable opening-prompt label (Phase 2). Not sent to the frontend.
+    #[serde(skip_serializing)]
+    earliest_checkpoint_id: String,
 }
 
 fn provider_from_agent(agent: &str) -> Option<SessionProvider> {
@@ -11404,6 +11408,7 @@ fn build_checkpoint_session_entries(
     struct Agg {
         earliest_date: String,
         title: String,
+        earliest_checkpoint_id: String,
         latest_date: String,
         count: usize,
     }
@@ -11423,17 +11428,26 @@ fn build_checkpoint_session_entries(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let cid = cp
+            .get("checkpoint_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let entry = grouped.entry(sid.to_string()).or_insert_with(|| Agg {
             earliest_date: date.clone(),
             title: msg.clone(),
+            earliest_checkpoint_id: cid.clone(),
             latest_date: date.clone(),
             count: 0,
         });
         entry.count += 1;
-        // Earliest checkpoint's message is the session's opening prompt.
+        // Earliest checkpoint's message is the fallback opening-prompt label;
+        // list_sessions_via_entire upgrades it to the transcript's first user
+        // turn (stable across condensation).
         if date < entry.earliest_date {
             entry.earliest_date = date.clone();
             entry.title = msg.clone();
+            entry.earliest_checkpoint_id = cid.clone();
         }
         if date > entry.latest_date {
             entry.latest_date = date.clone();
@@ -11487,6 +11501,7 @@ fn build_checkpoint_session_entries(
                     .and_then(|v| v.get("status"))
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string()),
+                earliest_checkpoint_id: agg.earliest_checkpoint_id,
             })
         })
         .collect();
@@ -11532,6 +11547,69 @@ fn entire_json_array<R: tauri::Runtime>(
     }
 }
 
+// Cache of session_id -> resolved opening-prompt label. The first user
+// prompt is immutable, so each session's transcript is fetched at most once
+// (the list route polls every 30s; without this we'd re-shell `entire`
+// per row per poll).
+static SESSION_LABEL_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, String>>,
+> = std::sync::OnceLock::new();
+
+fn session_label_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    SESSION_LABEL_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+// Pull display text from a Claude Code `user` transcript record, whose
+// `message.content` is either a plain string or an array of content blocks.
+fn claude_user_record_text(rec: &serde_json::Value) -> String {
+    match rec.get("message").and_then(|m| m.get("content")) {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => String::new(),
+    }
+}
+
+// First genuine user prompt from a checkpoint's raw transcript (provider
+// JSONL). Skips Bram transport frames. None if `entire` fails or no usable
+// user turn is found (callers fall back to the checkpoint message). Claude
+// Code transcript shape; other providers fall through to None.
+fn first_user_prompt_from_checkpoint<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    checkpoint_id: &str,
+) -> Option<String> {
+    let root = project_root(Some(app))?;
+    let out = std::process::Command::new("entire")
+        .current_dir(&root)
+        .args(["checkpoint", "explain", checkpoint_id, "--raw-transcript"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    for line in out.stdout.split(|b| *b == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(rec) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        if rec.get("type").and_then(|v| v.as_str()) != Some("user") {
+            continue;
+        }
+        let text = claude_user_record_text(&rec);
+        let trimmed = text.trim();
+        if trimmed.is_empty() || trimmed.starts_with(OUTBOUND_TURN_FRAME_PREFIX) {
+            continue;
+        }
+        return Some(trimmed.to_string());
+    }
+    None
+}
+
 fn list_sessions_via_entire<R: tauri::Runtime>(
     app: &AppHandle<R>,
     provider: Option<SessionProvider>,
@@ -11548,6 +11626,34 @@ fn list_sessions_via_entire<R: tauri::Runtime>(
         build_checkpoint_session_entries(&checkpoints, &sessions_meta, live.as_deref(), provider);
     if let Some(n) = limit {
         entries.truncate(n);
+    }
+    // Phase 2: prefer the transcript's first user turn as the label. A
+    // checkpoint's `message` becomes the commit subject once Entire condenses
+    // the session, so build_checkpoint_session_entries' message-derived title
+    // is only a fallback. Resolve per visible row, cached (immutable label).
+    for entry in entries.iter_mut() {
+        if entry.earliest_checkpoint_id.is_empty() {
+            continue;
+        }
+        let cached = session_label_cache()
+            .lock()
+            .ok()
+            .and_then(|c| c.get(&entry.id).cloned());
+        let resolved = match cached {
+            Some(label) => Some(label),
+            None => {
+                let fetched = first_user_prompt_from_checkpoint(app, &entry.earliest_checkpoint_id);
+                if let Some(ref label) = fetched {
+                    if let Ok(mut c) = session_label_cache().lock() {
+                        c.insert(entry.id.clone(), label.clone());
+                    }
+                }
+                fetched
+            }
+        };
+        if let Some(label) = resolved {
+            entry.title = Some(label);
+        }
     }
     append_bram_trace_line(
         app,
@@ -11587,6 +11693,8 @@ mod checkpoint_session_tests {
         // Label is the EARLIEST checkpoint's message (opening prompt), not latest.
         assert_eq!(entries[0].title.as_deref(), Some("FIRST prompt"));
         assert_eq!(entries[0].checkpoints, 3);
+        // Earliest checkpoint id is tracked for the Phase-2 transcript label.
+        assert_eq!(entries[0].earliest_checkpoint_id, "c1");
         assert!(entries[0].current);
         assert!(entries[0].provider == SessionProvider::Claude);
         assert_eq!(entries[0].tokens, Some(42));

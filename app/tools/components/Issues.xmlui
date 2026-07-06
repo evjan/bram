@@ -183,10 +183,10 @@
 
     <VStack padding="$space-4" gap="$space-4" overflowY="auto">
       <HStack gap="$space-3" verticalAlignment="center">
-        <Heading level="h2">Issues</Heading>
+        <Heading level="h2">Trails</Heading>
         <Button
           when="{repoOrigin.value &amp;&amp; repoOrigin.value.issuesNewUrl}"
-          label="+ New issue"
+          label="+ New trail"
           size="xs"
           enabled="{!newIssueSubmitting}"
           onClick="showNewIssueHint = true" />
@@ -195,7 +195,7 @@
         </Theme>
         <SpaceFiller />
         <SearchBox
-          placeholder="Search title, body, comments, authors…"
+          placeholder="Search title, body, author…"
           inProgress="{searchResults.inProgress}"
           onQueryChange="(q) => query = q"
           onClear="expandedNumber = null; selectedHitLine = null; searchHitModalRef.close()" />
@@ -210,7 +210,7 @@
       <Text
         when="{(!query || query.trim().length &lt; 2) &amp;&amp; repoOrigin.value &amp;&amp; repoOrigin.value.htmlBase &amp;&amp; issuesFirstPage.loaded &amp;&amp; !issuesFirstPage.inProgress &amp;&amp; (!issuesSource || issuesSource.length === 0)}"
         color="$textColor-secondary">
-        No issues found. (Either the repo has none, or `gh` is not installed / authenticated.)
+        No trails found.
       </Text>
 
       <Text
@@ -393,7 +393,7 @@
         when="{selectedHitLine &amp;&amp; query &amp;&amp; query.trim().length >= 2}"
         onClick="selectedHitLine = null"
         noIndicator>
-        <Text value="↥ Show full issue" fontSize="$fontSize-xs" />
+        <Text value="↥ Show full trail" fontSize="$fontSize-xs" />
       </Link>
       <Text when="{issueDetail.inProgress &amp;&amp; !issueDetail.loaded}">Loading…</Text>
       <Markdown
@@ -449,7 +449,7 @@
         <Text
           fontSize="$fontSize-sm"
           color="$textColor-secondary"
-          value="Mentioned in {issueDetail.value.crossReferences.length} {issueDetail.value.crossReferences.length === 1 ? 'issue' : 'issues'}" />
+          value="Mentioned in {issueDetail.value.crossReferences.length} {issueDetail.value.crossReferences.length === 1 ? 'trail' : 'trails'}" />
         <Items data="{issueDetail.value.crossReferences}">
           <Link
             onClick="expandedNumber = $item.number; selectedHitLine = null; query = ''"

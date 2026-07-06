@@ -332,7 +332,7 @@
     </property>
     <NavLink label="Worklist" to="/worklist" />
     <NavLink label="Transcript" to="/transcript" />
-    <NavLink label="Issues" to="/issues" />
+    <NavLink label="Trails" to="/issues" />
     <NavLink label="Commits" to="/commits" />
     <NavLink label="Sessions" to="/sessions" />
     <NavLink label="History" to="/history" />

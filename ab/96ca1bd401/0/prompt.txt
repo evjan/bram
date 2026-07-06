@@ -1,0 +1,232 @@
+Look at this repo, which is a recent fork from judell/bram where I'm just trying to switch it from GitHub to Entire. However, as I've been using Bram I've not found it to help me be mindful as the author states. Have one subagent read the code in this repo, and one read the README and the blog posts that it links to. Then synthesize the information and tell me: how is Bram supposed to make me more mindful when doing agentic engineering vs just using Claude Code without Bram? How am I e.g. supposed to be more aware of the code that it spits out as per the "“Doctor, it hurts when agents create unreviewable PRs.” “Don’t do that.”" blog post. Tell me what Jon Udell claims in his code and articles and tell me if what you find agrees with it or not.
+
+---
+
+<task-notification>
+<task-id>a1d6325dc4509529c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-peter-code-bram/e980a79d-ebb6-4c9b-9a05-a48db7378932/tasks/a1d6325dc4509529c.output</output-file>
+<status>completed</status>
+<summary>Agent "Read Bram README and blog posts" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have enough to compile a thorough, cited report.
+
+---
+
+# Jon Udell's claims: how Bram makes agentic coding more mindful
+
+Sources: the Bram README (`/Users/peter/code/bram/README.md`) plus the four blog posts it links, all on `blog.jonudell.net`. The key post the user named is the June 28 "unreviewable PRs" post.
+
+## The problem: unreviewable PRs
+
+Udell's starting pain is agent output no human can meaningfully review, and the industry's reflex of automating the review away.
+
+- "When agents raise PRs with thousands of lines of LLM-written adds/deletes/edits, people can't make sense of them." (unreviewable-PRs post)
+- The critiqued industry fix: "The solution? Throw more agents at the problem: reviewer agents that scan what coding agents have produced, identify problems, and triage them." (unreviewable-PRs post) — the title's joke ("Doctor, it hurts…" / "Don't do that") is the rebuttal: don't generate unreviewable PRs in the first place.
+
+Framed more broadly in the June 2 git/GitHub post: agent-assisted development is "chaotic," and Bram exists to make it "safe, orderly, and accountable."
+
+## Core claim: stay fully engaged, read the code as it's written
+
+The central mindfulness claim is that the workflow keeps the human continuously engaged rather than rubber-stamping a giant diff at the end.
+
+- "as I use Bram to bootstrap itself, I am fully engaged thanks to the workflow embodied in the tool." (unreviewable-PRs post)
+- "I have yet to write a single line of Rust! But I read the Rust code that Claude Code and Codex write for me, as they write it. I understand the nature and purpose of that code, and I push back when things don't smell right." (unreviewable-PRs post)
+
+The README compresses this into the tagline "Bram runs agents mindfully" (README line 7).
+
+## The worklist and small reviewable increments
+
+The worklist is the mechanism that keeps diffs small enough to actually review, and forces deliberation at each transition.
+
+- "Bram's workflow helps do that by breaking problems into small testable chunks and processing them in an orderly way." (unreviewable-PRs post)
+- "It helps you think clearly about the work you are doing, and proceed in well-defined chunks and sequences." (git/GitHub post)
+- The three-phase gated flow: "Things you are working on show up on the Worklist and pass through three phases: proposed → applied → committed. The arrows between the phases are approval gates where you can dwell and iterate with your agents on what you are planning to build, or what you have built and are testing." (git/GitHub post)
+
+The README mirrors this exactly (lines 75-85): "proposed → applied → committed… approval gates where you can dwell and iterate," and notes that by default *every* change request flows through the worklist (with explicit opt-outs).
+
+## How Bram makes you more aware of the agent's code
+
+Two levers: a self-created scope contract, and a legible display that beats the raw terminal.
+
+Scope contract (from "Vibe coding as a team sport," June 17):
+- At the To-Apply gate you "Approve, Iterate, or Drop." Before that gate: "Up to this point Bram has made no changes to tracked files in the repository. Now it begins to do so, constrained by a self-created list of the files it expects to touch." — i.e., the agent commits up front to which files it will change, so surprises are visible.
+- "When the agent proposes a change, the diff is easier to read than in the terminal," and while agents work "you can open and review the item's plan."
+
+Legibility (from "What is the terminal?," July 1, and the team-sport post): Bram grew out of watching non-coders who "did not enjoy reading the terminal to try making sense of what Claude Code was doing." Bram gives "a more legible display of: agent messages, your messages, pasted screenshots, diffs, tool calls and results," "echoes agent responses more readably than they appear in the terminal," and "reports recent tool uses as a compact list of links." It also makes git/GitHub commands "fluent without having to remember command syntax," so attention goes to decisions rather than syntax.
+
+## Accountability, durable context, and the auditable trail
+
+Udell's mindfulness argument is partly social: pull the private LLM chat context out into shared, reviewable spaces.
+
+- "Chat sessions build context that's private to LLMs, not shared with a team of people and agents. Bram lifts that context into two kinds of shared spaces: the local worklist and the GitHub repository." (unreviewable-PRs post)
+- "It makes context durable in GitHub, so prior work (and discussion about work) is available to people and agents as new work intersects with old." (git/GitHub post)
+- "Decisions and tactics aren't squirreled away in [a] dot file on a per-machine-per-user basis. They are accessible to the whole team both interactively and by means of gh APIs that were formerly daunting but now easily wielded by agents on our behalf." (git/GitHub post)
+
+The README echoes the accountability thesis (line 13): GitHub is "great for accountability… orderly and well-documented collaboration that leaves an auditable trail."
+
+## Reframing "human in the loop"
+
+Udell explicitly rejects the passive framing that mindfulness is usually pitched against.
+
+- "I dislike the phrase 'human in the loop' because it cedes authority to the machines. Let's flip the narrative. It's our loop, we work the same way we always have, now we recruit agents to join the team." (unreviewable-PRs post)
+
+The team-sport post extends "our loop" to multiple people and agents: agents introduce themselves and comment on shared GitHub issues, so "your team now includes not only you and your agents but also your human team members and their agents" — vibe coding as "a team sport."
+
+## Notes / caveats
+
+- The "What is the terminal?" (July 1) post is mostly about legibility and the terminal being "now optional"; it does not add worklist/mindfulness claims beyond the display argument.
+- The README also links one non-Udell "Elsewhere" post (waltzweb.wordpress.com, "GitHub for today's hybrid teams") — I did not fetch it since the task targets Udell's claims; flag if you want it read too.
+- All quotes above are as returned by fetches of the live posts; where exactness matters for publication, worth a final eyeball against the source URLs (the June 2 post has a minor typo in the original: "dot file").
+
+Source URLs:
+- https://blog.jonudell.net/2026/06/28/doctor-it-hurts-when-agents-create-unreviewable-prs-dont-do-that/
+- https://blog.jonudell.net/2026/06/02/how-to-make-best-use-of-git-and-github-for-ai-assisted-software-development/
+- https://blog.jonudell.net/2026/06/17/vibe-coding-as-a-team-sport/
+- https://blog.jonudell.net/2026/07/01/what-is-the-terminal/</result>
+<usage><subagent_tokens>81105</subagent_tokens><tool_uses>8</tool_uses><duration_ms>117027</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ae8df8a897a3cd62e</task-id>
+<tool-use-id>toolu_01E5CR7uFREmLu9hzsHef7P4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-peter-code-bram/e980a79d-ebb6-4c9b-9a05-a48db7378932/tasks/ae8df8a897a3cd62e.output</output-file>
+<status>completed</status>
+<summary>Agent "Read Bram repo code" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have the full picture. Here is the report.
+
+## How Bram structurally forces human review into the agent loop
+
+Bram wraps Claude Code / Codex in a Tauri shell whose entire design converts "agent silently edits files" into "agent must propose, wait, and be gated." The mechanisms split cleanly into **ENFORCED** (a hook or Rust host physically blocks/reverts the action) and **CONVENTION** (CLAUDE.md / conventions.md instruct, but nothing blocks).
+
+---
+
+### 1. The worklist lifecycle — the core gate
+
+Lifecycle: **propose → user triages → approve → apply → (separate) commit → prune**. Prose lives in `resources/worklist-drafts/&lt;id&gt;.md`; metadata in `resources/worklist.json`. The two-stage split (`proposed` = "TO APPLY", `applied` = "TO COMMIT") gives the user two distinct veto points: once before code is touched, once before it lands as a commit (`app/tools/components/Workspace.xmlui:579`).
+
+**ENFORCED:**
+
+- **No file edit without coverage.** `app/__shell/worklist-guard.py:588-600` (Claude PreToolUse) denies any `Write`/`Edit` to a project file unless (a) the path is listed in a `proposed`/`applied` worklist item (`worklist_covered_files`, lib line 297-316), (b) a fresh 1h `direct-edit` bypass record exists (`fresh_bypass`, :319-333), or (c) the last user message contains a literal opt-out phrase (`_OPT_OUT_PATTERNS`, :179-187 — "just do it", "skip the worklist", etc.). Otherwise `sys.exit(2)` blocks the tool call (`deny_coverage`, :336-361). The Codex equivalent `app/shell/worklist-guard-codex.py` covers `apply_patch`, `Bash` (to stop `sed -i`/`tee` end-runs), and `mcp__filesystem__*` writes.
+- **Prose can't hide in the metadata index.** Both guards reject a `worklist.json` write that puts non-empty inline `before`/`after` on a proposed item (`worklist_items_with_inline_prose` / `deny_inline_prose`, :267-294, :426-447). Forces review prose into the draft file.
+- **Agents can't self-advance state.** Direct edits to `worklist.json` that remove an item or change its `status` are denied (`deny_mechanical_worklist_change`, :450-482). State transitions must go through `POST /__worklist/mutate`.
+- **Optimistic-concurrency version guard.** Every `worklist.json` write must bump the top-level `version` by exactly 1 or it's denied as `stale-worklist-version` (:380-409, :570-577) — prevents concurrent-writer clobber between agent and host.
+- **Watcher reverts unauthorized prunes.** Even if a write slips past the hook, the filesystem watcher calls `maybe_enforce_worklist_policy` (lib `src-tauri/src/lib.rs:23300`); an item removal not backed by a matching auth record causes the host to rewrite the prior file contents back to disk (`:23356-23368`, "reverting unauthorized removal ... via watcher fallback"). Defense-in-depth behind the hook.
+
+**Authorization is structural, not a text signal:**
+- The `approved:`/`drop:` line the user's button emits is NOT authority by itself. The host records clicked ids into `resources/.worklist-authorization.json` with a `kind`. `/__worklist/resolve` is the only channel that hands the agent the recorded item bodies, and records are **consumed on first read** (`handle_worklist_resolve`, lib:25922; `consume_worklist_authorization` at :26002).
+- `/__worklist/mutate` re-validates: `advance` requires an `approved` auth record covering every id; `prune` requires `drop` (or `approved` for post-commit prune) — `validate_worklist_mutate_authorization` (:26243-26268), and post-commit prune additionally requires the items be `applied` status (`validate_post_commit_prune_status`, :26279-26298).
+
+**CONVENTION:** "Default: every change request goes through the worklist ... size doesn't matter" (conventions.md). The propose-first discipline itself is instruction; the hook only enforces coverage *once the agent tries to write*. Investigation work is told to stay out of the worklist and Drop if nothing to commit.
+
+---
+
+### 2. The commit gate
+
+**ENFORCED** by `handle_worklist_commit` (lib:26725):
+- Requires an `approved` auth covering every id (`ensure_worklist_commit_authorized`, :26313-26331).
+- **Stages only the approved items' files** and refuses to commit if *any unrelated file is already staged* — `ensure_no_unrelated_staged_files` (:26776, :26788) returns "refusing worklist commit because unrelated files are staged." This prevents an agent from sweeping stray changes into an approved commit.
+- Path traversal / absolute paths rejected (`validate_worklist_commit_paths`, :26333).
+- Commits with the exact approved file list, then prunes the items in the same call.
+
+So a commit is scoped to exactly what the user approved — the agent cannot broaden it.
+
+---
+
+### 3. Commit / git etiquette — mostly CONVENTION
+
+These shape behavior via CLAUDE.md/conventions.md instructions (no hook enforces them):
+- **"Don't nudge toward commit approval"** — a TO COMMIT item sits indefinitely; agent describes state factually and stops.
+- **"Don't infer commit/drop/advance from feedback"** — "looks good"/"it works" are explicitly NOT authorization. (This is *reinforced* structurally: the opt-out regex `:179-187` deliberately omits passive-approval phrases, so even the hook won't treat "go ahead" as a bypass.)
+- **Hold the commit while a related TO APPLY is in flight**; **warn when a new item entangles a TO COMMIT** (files-overlap check); **suggest a branch** before risky/multi-commit work; **notice squashable sibling commits**.
+- **Close-on-commit** IS partly enforced: `closesIssues` drives a confirm dialog (`Workspace.xmlui:853+`), and issue closing goes through the verified host route `handle_issue_close_json` / `gh_issue_close_with_commit` (lib:7014-7096), which pushes-then-verifies GitHub sees the commit before closing and refuses (`commit-not-visible`) rather than blindly closing. The Push button auto-rebases on non-fast-forward.
+- **ENFORCED anti-footgun:** the guard blocks the `gh ... --body @file` antipattern on any Bash call (`is_gh_body_at_antipattern`, worklist-guard.py:96-105, :492-513).
+
+---
+
+### 4. Visibility tabs — what the user SEES (the "mindfulness" surface)
+
+The agent pane (`app/tools/Main.xmlui:333-341`) is a fixed set of read-mostly windows onto the agent, each backed by a host DataSource route:
+
+- **Worklist** (`Workspace.xmlui`) — pending items with TO APPLY / TO COMMIT badges, per-item Approve / Iterate / Drop buttons, and an **inline diff** of the actual on-disk change (`DiffView`, :765-772) plus before/after prose. This is the primary review surface: the user reads the diff before approving.
+- **Transcript** (`Transcript.xmlui`) — renders the live session's events (user turns, tool calls with summaries) from `/__sessions/list` + JSONL, so the user watches what the agent did.
+- **Commits** (`Commits.xmlui`) — `/__commits`, `/__git/status`; shows unpushed count, Push (auto-rebasing) and Pull buttons, commit search. (Note: conventions tell the agent NOT to quote unpushed counts in chat — the tab is the source of truth.)
+- **Sessions / History** — browse/rename/delete past sessions and turns.
+- **Context** (`Context.xmlui`) — searchable view of CLAUDE.md + memory + hooks + settings, so the user can see what instructions are shaping the agent.
+- **Status** (`Status.xmlui`) — `/__coordination-status` dashboard: worklist state, inflight sentinel, hooks, authorization, turn-completion detector, session size. This is where the user diagnoses whether the gate machinery itself is healthy.
+- **Issues** — GitHub issues (polls every 30s).
+
+**Skip worklist** button (`Main.xmlui:461`) is the sanctioned escape hatch — it prepends the `skip-worklist:` prefix and the host writes a one-turn direct-edit bypass, so the user *deliberately* opts out per-turn rather than the agent deciding to.
+
+---
+
+### 5. The inflight sentinel — a visible "agent is mid-cycle" lock
+
+`resources/.inflight-claim.json`, written/cleared only by host handlers (`write_inflight_claim_sentinel` lib:18467, cleared by `/__worklist/mutate`), drives the Worklist spinner. A stuck spinner is described in conventions as "the convention enforcing itself" — it signals the user that an approve/drop/iterate cycle hasn't mechanically completed, so the loop can't silently proceed. Host completion detectors (Claude JSONL `stop_reason:end_turn`, Codex `task_complete`, PTY silence) clear it, but only after checking JSONL says the turn is actually final (`[agent-status] op=skip-sentinel-clear ... reason=jsonl-non-final`).
+
+---
+
+### 6. Permission-menu surfacing — keeps native prompts visible
+
+`app/__shell/permission-menu-hook.py` is OBSERVE-ONLY: on Claude's `PermissionRequest`/`AskUserQuestion` it POSTs the pending permission dialog to `/__menu/permission` so the agent pane can render the permission choice as data (instead of the user having to read the raw xterm grid). It never decides — the human still answers. This means Claude Code's own tool-permission prompts remain a human checkpoint, surfaced cleanly.
+
+---
+
+### Summary: ENFORCED vs CONVENTION
+
+**Physically blocked/reverted (hooks + Rust host):**
+- File edits without worklist coverage / bypass / opt-out phrase (both agents, incl. Bash &amp; MCP end-runs on Codex).
+- Inline prose in the metadata index.
+- Agent self-advancing worklist state (mutate is the only channel; auth consumed on read; watcher reverts unauthorized prunes).
+- Version-bump concurrency guard.
+- Commits scoped to approved files only; refuses unrelated staged files.
+- Issue-close verified against GitHub before closing.
+- `gh --body @` antipattern.
+
+**Asked-for behavior only (instructions):**
+- Propose-first as the default posture (the hook only bites at write time).
+- Don't nudge toward / don't infer commit approval (reinforced by the opt-out regex deliberately excluding passive phrases).
+- Branch suggestions, squash detection, entanglement warnings, matching prose verbosity, referring to items by id.
+
+The net effect vs raw Claude Code: an agent that in a bare terminal would edit-and-move-on is here forced to write a reviewable proposal, surface a real diff in the Worklist tab, stop, and wait for an explicit button-click that the host records and consumes — with a filesystem watcher reverting anything that slips the hook. The human is inserted at propose-time, apply-time, and commit-time, and can watch the whole thing through the Transcript/Commits/Status tabs.
+
+Key files: `app/__shell/worklist-guard.py`, `app/shell/worklist-guard-codex.py`, `app/__shell/permission-menu-hook.py`, `src-tauri/src/lib.rs` (routes ~25922-26844, revert ~23300-23369), `app/tools/Main.xmlui`, `app/tools/components/Workspace.xmlui`, and the design philosophy in `/Users/peter/code/bram/CLAUDE.md` + `app/__shell/conventions.md`.</result>
+<usage><subagent_tokens>99555</subagent_tokens><tool_uses>13</tool_uses><duration_ms>181639</duration_ms></usage>
+</task-notification>
+
+---
+
+Check it yeah
+
+---
+
+Look at the entire checkpoints as well to veirfy this
+
+---
+
+Ok I've moved the files here. Now how do I install Bram onto this machine so that it runs my version and not the upstream one?
+
+---
+
+Ok I've moved the files here. Now how do I install Bram onto this machine so that it runs my version and not the upstream one?
+
+---
+
+<task-notification>
+<task-id>bbz8an20e</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-peter-code-bram/e980a79d-ebb6-4c9b-9a05-a48db7378932/tasks/bbz8an20e.output</output-file>
+<status>completed</status>
+<summary>Background command "Full Bram build from source" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+Can we add a symlink to the executable in e.g. ~/bin or something?
+
+---
+
+approved: {"items":[{"id":"rename-issues-ui-to-trails","feedback":""}]}

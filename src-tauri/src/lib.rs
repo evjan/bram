@@ -6491,6 +6491,189 @@ fn git_log_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Result<
 // can't drift. Bump if the repo ever approaches this many issues.
 const GH_ISSUE_LIST_LIMIT: usize = 500;
 
+// ── Entire trails as the Issues-tab source (issue → trail migration) ──
+// The Issues tab's read path is sourced from `entire trail list` instead of
+// `gh issue`. Trails map onto the issue JSON shape the frontend already
+// consumes, so no XMLUI change is needed this phase. Write path
+// (comment/close) is NOT migrated here — trails have code *findings* and a
+// status lifecycle, not issue-style comments, and close entangles with the
+// GitHub close-on-commit flow; both are deferred to a follow-up.
+
+fn trail_status_to_state(status: &str) -> &'static str {
+    // Issue state is OPEN/CLOSED; trail status is open/draft/merged/closed.
+    match status {
+        "merged" | "closed" => "CLOSED",
+        _ => "OPEN",
+    }
+}
+
+// Map one `entire trail list --json` object to the issue JSON shape the
+// Issues tab binds to. Trails carry no issue-style comments (findings are a
+// separate concept), so `comments` is empty this phase.
+fn trail_to_issue(trail: &serde_json::Value) -> serde_json::Value {
+    use serde_json::json;
+    let labels: Vec<serde_json::Value> = trail
+        .get("labels")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|l| match l {
+                    serde_json::Value::String(s) => json!({ "name": s }),
+                    other => other.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    json!({
+        "number": trail.get("number").and_then(|v| v.as_u64()).unwrap_or(0),
+        "title": trail.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+        "body": trail.get("body").and_then(|v| v.as_str()).unwrap_or(""),
+        "state": trail_status_to_state(
+            trail.get("status").and_then(|v| v.as_str()).unwrap_or("open"),
+        ),
+        "author": json!({
+            "login": trail.get("author").and_then(|a| a.get("login")).and_then(|v| v.as_str()).unwrap_or(""),
+        }),
+        "createdAt": trail.get("created_at").and_then(|v| v.as_str()).unwrap_or(""),
+        "updatedAt": trail.get("updated_at").and_then(|v| v.as_str()).unwrap_or(""),
+        "labels": labels,
+        "url": trail.get("url").and_then(|v| v.as_str()).unwrap_or(""),
+        "comments": [],
+    })
+}
+
+fn trails_list_raw<R: tauri::Runtime>(app: &AppHandle<R>) -> Vec<serde_json::Value> {
+    entire_json_array(
+        app,
+        &["trail", "list", "--status", "any", "--json"],
+        "entire trail list",
+    )
+}
+
+fn trails_list<R: tauri::Runtime>(app: &AppHandle<R>, limit: usize) -> Result<Vec<u8>, String> {
+    let mut issues: Vec<serde_json::Value> =
+        trails_list_raw(app).iter().map(trail_to_issue).collect();
+    issues.sort_by_key(|i| std::cmp::Reverse(i.get("number").and_then(|v| v.as_u64()).unwrap_or(0)));
+    issues.truncate(limit);
+    serde_json::to_vec(&issues).map_err(|e| e.to_string())
+}
+
+// `entire trail show` has no --json, so resolve a single trail from the list.
+fn trail_view<R: tauri::Runtime>(app: &AppHandle<R>, number: u64) -> Result<Vec<u8>, String> {
+    let found = trails_list_raw(app)
+        .into_iter()
+        .find(|t| t.get("number").and_then(|v| v.as_u64()) == Some(number));
+    let issue = match found {
+        Some(t) => {
+            let mut mapped = trail_to_issue(&t);
+            if let Some(obj) = mapped.as_object_mut() {
+                obj.insert("crossReferences".to_string(), serde_json::Value::Array(vec![]));
+            }
+            mapped
+        }
+        None => serde_json::json!({}),
+    };
+    serde_json::to_vec(&issue).map_err(|e| e.to_string())
+}
+
+// Local grep over trail title + body + author, mirroring gh_issues_search's
+// envelope: { results: [{...issue, hits:[{line,snippet,field}]}], truncated }.
+fn trails_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Result<Vec<u8>, String> {
+    use serde_json::json;
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(b"{\"results\":[],\"truncated\":false}".to_vec());
+    }
+    let needle = q.to_lowercase();
+    const MAX_HITS: usize = 200;
+    let issues: Vec<serde_json::Value> =
+        trails_list_raw(app).iter().map(trail_to_issue).collect();
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut total_hits = 0usize;
+    let mut truncated = false;
+    for issue in issues {
+        if total_hits >= MAX_HITS {
+            truncated = true;
+            break;
+        }
+        let title = issue.get("title").and_then(|v| v.as_str()).unwrap_or("");
+        let body = issue.get("body").and_then(|v| v.as_str()).unwrap_or("");
+        let author = issue
+            .get("author")
+            .and_then(|v| v.get("login"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let mut hits: Vec<serde_json::Value> = Vec::new();
+        if title.to_lowercase().contains(&needle) {
+            hits.push(json!({ "line": 0, "snippet": title.trim().chars().take(200).collect::<String>(), "field": "title" }));
+            total_hits += 1;
+        }
+        if total_hits < MAX_HITS && author.to_lowercase().contains(&needle) {
+            hits.push(json!({ "line": 0, "snippet": author, "field": "author" }));
+            total_hits += 1;
+        }
+        for (i, line) in body.lines().enumerate() {
+            if total_hits >= MAX_HITS {
+                truncated = true;
+                break;
+            }
+            if line.to_lowercase().contains(&needle) {
+                hits.push(json!({ "line": i + 1, "snippet": line.trim().chars().take(200).collect::<String>(), "field": "body" }));
+                total_hits += 1;
+            }
+        }
+        if hits.is_empty() {
+            continue;
+        }
+        let mut out = issue.clone();
+        if let Some(obj) = out.as_object_mut() {
+            obj.insert("hits".into(), serde_json::Value::Array(hits));
+        }
+        results.push(out);
+    }
+    serde_json::to_vec(&json!({ "results": results, "truncated": truncated }))
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod trail_issue_tests {
+    use super::{trail_status_to_state, trail_to_issue};
+    use serde_json::json;
+
+    #[test]
+    fn maps_trail_to_issue_shape() {
+        let trail = json!({
+            "number": 1829,
+            "title": "Refine picker",
+            "body": "line one\nneedle here",
+            "status": "merged",
+            "author": { "login": "dipree" },
+            "created_at": "2026-07-04T14:00:00Z",
+            "updated_at": "2026-07-04T20:00:00Z",
+            "labels": ["bug"],
+            "url": "https://entire.io/gh/x/y/trails/1829"
+        });
+        let issue = trail_to_issue(&trail);
+        assert_eq!(issue["number"], 1829);
+        assert_eq!(issue["title"], "Refine picker");
+        assert_eq!(issue["state"], "CLOSED"); // merged -> CLOSED
+        assert_eq!(issue["author"]["login"], "dipree");
+        assert_eq!(issue["createdAt"], "2026-07-04T14:00:00Z");
+        assert_eq!(issue["updatedAt"], "2026-07-04T20:00:00Z");
+        assert_eq!(issue["labels"][0]["name"], "bug"); // string label -> {name}
+        assert!(issue["comments"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn status_maps_to_issue_state() {
+        assert_eq!(trail_status_to_state("open"), "OPEN");
+        assert_eq!(trail_status_to_state("draft"), "OPEN");
+        assert_eq!(trail_status_to_state("merged"), "CLOSED");
+        assert_eq!(trail_status_to_state("closed"), "CLOSED");
+    }
+}
+
+#[allow(dead_code)] // pre-migration gh read path; write path (comment/close) still uses gh
 fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>, limit: usize) -> Result<Vec<u8>, String> {
     let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
     let repo_slug = repo_owner_name(app);
@@ -6542,6 +6725,7 @@ fn gh_issues_list<R: tauri::Runtime>(app: &AppHandle<R>, limit: usize) -> Result
 // shape as Commits search: { results: [{...fields, hits: [{line, snippet,
 // field}]}], truncated }. On any gh failure returns the empty envelope so
 // the frontend renders cleanly.
+#[allow(dead_code)] // superseded by trails_search
 fn gh_issues_search<R: tauri::Runtime>(app: &AppHandle<R>, query: &str) -> Result<Vec<u8>, String> {
     use serde_json::json;
     let q = query.trim();
@@ -6782,6 +6966,7 @@ mod issue_search_tests {
 // Shell out to `gh issue view <number> --json ...` and return the raw JSON
 // bytes. Same failure envelope as gh_issues_list — empty object on any
 // error so the frontend can render something rather than 500.
+#[allow(dead_code)] // superseded by trail_view
 fn gh_issue_view<R: tauri::Runtime>(app: &AppHandle<R>, number: u64) -> Result<Vec<u8>, String> {
     let root = project_root(Some(app)).ok_or_else(|| "no project root".to_string())?;
     let n = number.to_string();
@@ -24933,7 +25118,7 @@ fn route_request<R: tauri::Runtime>(
                 break;
             }
         }
-        return match gh_issues_list(app, limit) {
+        return match trails_list(app, limit) {
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
             Err(e) => {
                 eprintln!("[http /__issues] {}", e);
@@ -24950,7 +25135,7 @@ fn route_request<R: tauri::Runtime>(
                 break;
             }
         }
-        return match gh_issues_search(app, &q) {
+        return match trails_search(app, &q) {
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
             Err(e) => {
                 eprintln!("[http /__issues/search q={}] {}", q, e);
@@ -24970,7 +25155,7 @@ fn route_request<R: tauri::Runtime>(
         if number == 0 {
             return (400, "text/plain; charset=utf-8", b"missing number".to_vec());
         }
-        return match gh_issue_view(app, number) {
+        return match trail_view(app, number) {
             Ok(bytes) => (200, "application/json; charset=utf-8", bytes),
             Err(e) => {
                 eprintln!("[http /__issue number={}] {}", number, e);

@@ -1,0 +1,21 @@
+approved: {"items":[{"id":"migrate-github-gh-to-entire-trails","feedback":""}]}
+
+---
+
+entirehq/entire.io has trails
+
+---
+
+Worth a Phase-2 refinement: derive the session label from the first user prompt (via --transcript/session info) rather than the earliest checkpoint's message, so titles stay stable across condensation. Want me to propose that as a worklist item?
+
+---
+
+Read and follow this Bram turn: @resources/outbound-turns/1783202716441-turn.json @/Users/peterevjan/.cache/bram/paste/1783202701578-327fa919.png (end of Bram turn)
+
+---
+
+approved: {"items":[{"id":"migrate-github-gh-to-entire-trails","feedback":""}]}
+
+---
+
+Stop let's figure out the prepare-commit-msg issue instead. Find the root cause and fix it
